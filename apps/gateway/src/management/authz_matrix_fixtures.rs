@@ -25,6 +25,12 @@ impl Targets {
             .bind(provider).execute(pool).await.unwrap();
         sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model) VALUES($1,$2,$3,'matrix-disabled')")
             .bind(deployment).bind(model).bind(provider).execute(pool).await.unwrap();
+        let change: Uuid =
+            sqlx::query_scalar("SELECT id FROM configuration_changes WHERE deployment_id=$1")
+                .bind(deployment)
+                .fetch_one(pool)
+                .await
+                .unwrap();
         let execution = Uuid::new_v4();
         let video_execution = Uuid::new_v4();
         for execution in [execution, video_execution] {
@@ -74,6 +80,7 @@ impl Targets {
             ("model", model.to_string()),
             ("provider", provider.to_string()),
             ("deployment", deployment.to_string()),
+            ("change", change.to_string()),
             ("execution", execution.to_string()),
             ("root", execution.to_string()),
             ("session", session_id.to_string()),
@@ -145,6 +152,24 @@ impl Targets {
         ] {
             rows.insert(name, create(f, actor, &path, body).await);
         }
+        let imported = create(
+            f,
+            &f.admin,
+            "/api/v1/platform/provider-cost-imports",
+            super::super::provider_cost_tests::upload(),
+        )
+        .await;
+        let mapped = create(f, &f.admin, "/api/v1/platform/provider-cost-mappings", json!({"account_id":"organization_placeholder","supersedes":null,"evidence_reference":"matrix:empty","bindings":[]})).await;
+        let reconciled = create(
+            f,
+            &f.admin,
+            "/api/v1/platform/provider-reconciliations",
+            json!({"import_id":imported,"mapping_id":mapped}),
+        )
+        .await;
+        rows.insert("provider-cost-import", imported);
+        rows.insert("provider-cost-mapping", mapped);
+        rows.insert("provider-reconciliation", reconciled);
         Self(rows)
     }
     pub(super) fn concrete(&self, path: &str, f: &Fixture) -> String {
@@ -154,6 +179,12 @@ impl Targets {
             } else {
                 "workspace-report-schedule"
             }]
+        } else if path.contains("/provider-cost-imports") {
+            &self.0["provider-cost-import"]
+        } else if path.contains("/provider-cost-mappings") {
+            &self.0["provider-cost-mapping"]
+        } else if path.contains("/provider-reconciliations") {
+            &self.0["provider-reconciliation"]
         } else if path.contains("/alerts/webhooks") {
             &self.0["webhook"]
         } else if path.contains("/files") {
@@ -196,6 +227,7 @@ impl Targets {
             &f.member.user_id.to_string()
         };
         let mut result = path
+            .replace("{run}", &Uuid::new_v4().to_string())
             .replace("{id}", id)
             .replace("{ws}", &f.team.to_string())
             .replace("{user}", &f.member.user_id.to_string())
@@ -206,6 +238,7 @@ impl Targets {
             "key",
             "model",
             "deployment",
+            "change",
             "execution",
             "root",
             "hold",

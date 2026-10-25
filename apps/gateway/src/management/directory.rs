@@ -60,7 +60,9 @@ struct DirectoryQuery {
 // Display-only shared-workspace metadata: member_count counts users holding at
 // least one non-revoked grant (the rows of the members endpoint, suspended users
 // included); cost_center resolves the current allocation pointer by name.
-const SHARED_WORKSPACE_JSON: &str = "jsonb_build_object('id',w.id,'name',w.name,'kind',w.kind,'cost_center_id',w.cost_center_id,'cost_center',CASE WHEN c.id IS NULL THEN NULL ELSE jsonb_build_object('id',c.id,'name',c.name,'code',c.code) END,'member_count',(SELECT count(DISTINCT g.user_id) FROM workspace_membership_grants g WHERE g.workspace_id=w.id AND g.revoked_at IS NULL),'disabled_at',w.disabled_at,'created_at',w.created_at) FROM workspaces w LEFT JOIN cost_centers c ON c.id=w.cost_center_id";
+// `discoverable` (#83 slice A) names the write-only PUT's current state; callers are
+// always filtered to kind IN ('team','project'), so it's never read for personal workspaces.
+const SHARED_WORKSPACE_JSON: &str = "jsonb_build_object('id',w.id,'name',w.name,'kind',w.kind,'cost_center_id',w.cost_center_id,'cost_center',CASE WHEN c.id IS NULL THEN NULL ELSE jsonb_build_object('id',c.id,'name',c.name,'code',c.code) END,'member_count',(SELECT count(DISTINCT g.user_id) FROM workspace_membership_grants g WHERE g.workspace_id=w.id AND g.revoked_at IS NULL),'disabled_at',w.disabled_at,'discoverable',w.discoverable,'created_at',w.created_at) FROM workspaces w LEFT JOIN cost_centers c ON c.id=w.cost_center_id";
 async fn workspaces(
     State(s): State<Store>,
     Extension(u): Extension<ManagementPrincipal>,

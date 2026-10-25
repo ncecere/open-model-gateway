@@ -1,4 +1,5 @@
 mod access;
+mod access_requests;
 mod admin_tokens;
 mod alerts;
 mod audit_export;
@@ -9,9 +10,10 @@ pub(crate) mod branding;
 mod catalogs;
 mod compare;
 mod deployment_configuration;
+mod deployment_history;
 mod directory;
 mod files;
-mod governance;
+pub(crate) mod governance;
 mod group_mapping_preview;
 mod key_safety;
 mod keys;
@@ -23,6 +25,7 @@ mod models_ux;
 #[cfg(test)]
 #[path = "../management_openapi/mod.rs"]
 mod openapi;
+mod provider_costs;
 mod requests;
 pub(crate) mod resources;
 mod scheduled_reports;
@@ -126,6 +129,10 @@ const REASONS: &[(&str, &str)] = &[
     (branding::LOGO_DIMENSIONS, "logo_dimensions"),
     (alerts::PERSONAL_BUILTIN_ONLY, "personal_alerts_built_in"),
     (alerts::RULE_LIMIT, "alert_rule_limit"),
+    (
+        scheduled_reports::LIMIT_REACHED,
+        "report_schedule_limit_reached",
+    ),
     (alerts::KIND_FIXED, "alert_rule_kind_fixed"),
     (INSTALLATION_LIMITS_REMOVED, "installation_limits_removed"),
     (PRECONDITION_FAILED, "precondition_failed"),
@@ -615,6 +622,7 @@ pub fn public_router() -> Router<Store> {
 /// 2 MiB request limit.
 pub fn upload_router(identity: IdentityState) -> Router<Store> {
     files::upload_routes()
+        .merge(provider_costs::upload_routes())
         .route_layer(middleware::from_fn_with_state(
             identity.store().clone(),
             authorization::require_route_access,
@@ -627,7 +635,9 @@ pub fn upload_router(identity: IdentityState) -> Router<Store> {
 fn routes() -> Router<Store> {
     Router::new()
         .merge(scheduled_reports::routes())
+        .merge(access_requests::routes())
         .merge(admin_tokens::routes())
+        .merge(provider_costs::routes())
         .merge(directory::routes())
         .merge(group_mapping_preview::routes())
         .merge(resources::platform_routes())

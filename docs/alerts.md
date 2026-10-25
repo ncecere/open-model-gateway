@@ -26,7 +26,7 @@ All money is exact integer micro-USD. Spend is never estimated from floats, and 
 | `admission_ceiling` | **One workspace or key near its admission ceiling** (scoped admission serializes one workspace's, and one key's, admissions on that scope's totals rows, so a single scope tops out at a few hundred requests/s however many replicas run; see [operations](operations.md#per-scope-admission-ceiling)). Per workspace and per key lineage over the last `window_minutes` (5–10) complete UTC minutes: admissions stayed at or above `ceiling_requests_per_second` in **every** minute, or at least 100 admissions were made and 5 % or more of them waited at least `ceiling_lock_wait_ms` (10, 25, 50, 100, 250, 500, 1000 or 2500) for their scope locks, that is a lock-wait p95 at or above the threshold. Set either threshold or both. One incident per scope; it resolves when the condition clears. Admissions are the interactive ones the minute rate counters count (async jobs excluded); waits come from each replica's counts, flushed every 5 s (`admission_lock_waits`, kept an hour), so the last minute can miss a few seconds. | Installation only |
 | `batch_stalled` | One incident per unfinished batch whose last progress (a finished line, or new provider counts) is older than `window_minutes` (5–1440). It resolves on progress or when the batch ends. A gateway-run batch legitimately waiting for its routes (time window, live traffic, server load, concurrency, its turn) is not stalled; the clock starts when the wait ends ([scheduling](batches.md#scheduling-on-self-hosted-models)). Unreadable server metrics do not count as a wait. | Installation (Team/Project batches); workspace |
 
-## Aged unknown-hold review alerts (#101, slice C)
+## Aged unknown-hold review alerts (#101)
 
 Built in, never a configurable rule: `aged_unknown_hold` fires at **24 hours**
 (warning, level 1) and **168 hours** (critical, level 2). Age uses database time
@@ -66,16 +66,80 @@ email the new kind. An old lease holder simply omits this tick. A new binary
 without the migration records a failed built-in evaluation rather than crashing.
 Existing runtime grants suffice. No read audit action is added; incidents and
 `usage.reconciled` remain the record. Nothing is refunded, released or written
-off by an alert. **Email recipients/send-time checks and dedicated counters
-arrive in slice D**; this slice creates a fired `alert_deliveries` row for each
-new incident, never a resolved delivery. Those rows already consume the shared
-[100-delivery/24-hour bucket allowance](#workspace-email-generation-limit-277),
-even before recipient resolution is implemented. Shared incidents use their
-workspace bucket. The anonymous personal aggregate has
+off by an alert.
+
+**Email (slice D): Platform Admins only**, at most 50 eligible addresses per
+incident, for both shared-workspace incidents and the anonymous personal
+aggregate. Auditors, shared-workspace owners/admins, members and personal owners
+are not email recipients solely for those roles, even when they can see an
+incident in-app. No rule, listed address or workspace membership can grant
+email authority. The effective platform role excludes disabled, cleaned and
+unentitled accounts. Removing a Platform Admin's workspace membership does not
+remove their platform email authority; revoking their Admin role does.
+
+Only firing and escalation enqueue email; clearing and superseding stay silent.
+The existing [recipient outbox](#recipient-outbox-46) snapshots recipients once
+and rechecks live Admin authority, account state, entitlement and the original
+address immediately before every claim, including retries. It also requires an
+open incident and enabled scope with a hold still in the incident's age band:
+warning needs a 24-hour hold and no 168-hour hold; critical needs a 168-hour hold.
+Reconciliation, workspace disablement or a changed band can therefore suppress
+mail before the evaluator retires the incident. A critical incident can remain
+open with only younger aged holds, but it cannot send critical mail then.
+Newly eligible Admins or changed addresses are not added to an existing snapshot.
+An already-claimed send may finish after authority changes, as for all outbox
+mail. Retry backoff, lease fencing and possible crash-after-acceptance duplicates
+are unchanged; no database transaction spans SMTP.
+
+Aged-hold email subjects identify **Aged unknown hold** and the body labels the
+kind **Built-in aged unknown-hold alert**, not a budget alert. The body states
+that retained floors are not upper bounds, nothing is refunded or released,
+and holds are never added to spend: settlement requires a Platform Admin to
+reconcile with evidence. It links to Notifications and the platform Holds tab
+(`/admin/costs?tab=holds`). Links use `GATEWAY_PUBLIC_URL` when configured;
+otherwise they show relative navigation paths alongside the existing instruction
+to open the gateway.
+
+The anonymous personal email says **Installation** and contains only static
+wording, severity and firing time, plus the existing installation label and
+those identity-free links. It contains no personal workspace name/id, owner,
+key, request, upstream identity, count or monetary amount. Shared emails may name the
+Team/Project, never an owner, key or request. Shared aged incidents remain
+webhook-ineligible; the anonymous fired webhook projection above is unchanged.
+
+Every fired `alert_deliveries` row consumes the shared
+[100-delivery/24-hour bucket allowance](#workspace-email-generation-limit-277).
+Shared incidents use their workspace bucket. The anonymous personal aggregate has
 `alert_events.workspace_id = NULL`, so it uses the nil installation bucket,
 not any owner's personal-workspace bucket. Excess rows are terminal
 `suppressed`; incidents, cooldowns and the aggregate's eligible fired webhook
-remain intact. Critical escalations have no exemption.
+remain intact. Critical escalations have no exemption. Suppressed deliveries
+never snapshot recipients or reach SMTP. No new migration, configuration, JSON
+write extractor or audit action is introduced by slice D.
+
+**Metrics:** `gateway_aged_hold_alerts_total{result}` is a low-cardinality
+**System** counter family in the golden/OTLP classification inventory, with
+only these fixed values:
+
+- `fired`: initial incidents, including those first observed as critical.
+- `escalated`: critical incidents whose subject has a recorded warning in
+  incident history. Superseding and critical firing need not occur in the same
+  tick: a cooldown, per-tick cap or installation daily cap can defer firing.
+  A critical subject with no warning history counts as `fired`, not `escalated`.
+- `cleared`: obsolete incidents retired as cleared, not superseded.
+- `deferred`: ticks detecting at least one otherwise eligible candidate beyond
+  the per-tick or installation daily incident cap. This is a bounded backlog
+  signal (one extra candidate probe), **not** a count of all deferred scopes;
+  repeated ticks may observe the same backlog. Cooldown-only waits do not count.
+- `suppressed`: new aged-hold email deliveries refused by the bucket quota;
+  these also count as `fired` or `escalated` because the incident still exists.
+
+Counters publish only after the fenced evaluator transaction commits. Evaluator
+failures reuse `gateway_alert_rule_failures_total`; SMTP outcomes reuse
+`gateway_alert_email_attempts_total{outcome}` and the existing delivery gauges,
+whose **Traffic** classification is unchanged. No workspace, owner, key or
+recipient labels are added. The existing unknown-reservation gauge and rule
+remain unchanged; there is no new scrape-time aged-hold gauge.
 
 ## Authorized key-expiry reminders (#100)
 
@@ -103,7 +167,7 @@ A budget or installation spend alert fires at the highest threshold reached. Whe
 
 ## Evaluation
 
-`serve` runs a background evaluator every `GATEWAY_ALERT_INTERVAL_SECONDS` (default `60`; `0` disables it; at most `86400`; anything else fails startup). One-shot: `open-model-gateway alerts evaluate --once` evaluates every rule, sends pending email and prints counts.
+`serve` runs a background evaluator every `GATEWAY_ALERT_INTERVAL_SECONDS` (default `60`; `0` disables it; at most `86400`; anything else fails startup). This loop also dispatches the shared email outbox, including scheduled-report links (#102C); `0` pauses all automatic email dispatch, while report generation continues. Reports have run-owned envelopes, not alert incidents, and use the same fair buckets and retry/send capacity. Their `report_pending` state is invisible to older alert workers. See [authorized report delivery](governance-api.md#authorized-link-delivery-and-reads). One-shot: `open-model-gateway alerts evaluate --once` evaluates every rule, sends pending email and prints counts.
 
 - **Idempotent.** At most one open incident per rule (or built-in alert) and subject, enforced by a partial unique index. Repeated evaluation never fires twice; an incident resolves once (a trigger refuses re-resolution, edits and deletion).
 - **Bounded.** One replica evaluates at a time: a short claim transaction takes a transaction advisory lock with `try` (others skip that tick), then each rule is evaluated and reconciled in its own short transaction that waits for the same lock, so no snapshot spans the whole pass and vacuum is not held back. Statements time out after 10 seconds. A failing rule neither resolves its incidents nor affects other rules. At most 2000 rules and 5000 budget conditions per rule are considered.
@@ -111,12 +175,12 @@ A budget or installation spend alert fires at the highest threshold reached. Whe
 - **Admission ceiling rules read** the minute rate counters (`rate_minute_counters`, the window's rows; a few hundred thousand at most) and the flushed lock waits; at most 100 scopes per evaluation, busiest first.
 - **No admission impact.** The evaluator reads with the runtime role and never takes the installation lock.
 - Turning a rule off, deleting it (soft delete; its history stays) or disabling its workspace closes its open incidents as `rule_disabled`, without email.
-- **Key-expiry reminders** run once per tick (not per rule: there is no rule), in their own fenced, bounded transaction, immediately after the rule loop.
+- **Key-expiry reminders and aged unknown-hold alerts** each run once per tick (not per rule: there is no rule), in separate fenced, bounded transactions after the rule loop.
 
 ## Delivery
 
 - **In-app.** Visibility follows live authority, not a stored recipient list: installation incidents for Platform Admins and Auditors; workspace incidents for that workspace's current owners and admins (and for platform readers when the rule notifies Platform Admins); built-in incidents for the personal owner. Losing a role removes the incidents from that person's feed. The feed covers the last 90 days.
-- **Email** through the [Admin › Settings › Email](settings.md#email) relay when one is set up, when an incident fires and when it clears: to the rule's recipients (workspace admins, Platform Admins and up to 10 validated addresses) or, for built-in budget alerts, the owner (the SCIM safeguard goes to Platform Admins). Disabled users get nothing. Messages contain the summary, a scope label (Installation, the Team/Project or connection name, "Your personal workspace"), the rule name and time, and a link to Notifications when `GATEWAY_PUBLIC_URL` is set.
+- **Email** through the [Admin › Settings › Email](settings.md#email) relay when one is set up, when an incident fires and when it clears (key-expiry and aged unknown-hold incidents are fire-only; aged unknown holds notify Platform Admins only): to the rule's recipients (workspace admins, Platform Admins and up to 10 validated addresses) or, for built-in budget alerts, the owner (the SCIM safeguard goes to Platform Admins). Disabled users get nothing. Messages contain the summary, a scope label (Installation, the Team/Project or connection name, "Your personal workspace"), the rule name and time, and a link to Notifications when `GATEWAY_PUBLIC_URL` is set.
 ### Workspace email generation limit (#277)
 
 Each workspace can generate **100 email deliveries per rolling 24 hours**, across all rules and built-ins, counting firing and clearing separately. The bucket comes from the incident's `workspace_id`; incidents without one share the nil-UUID installation bucket. This is not a global counter touched by every workspace. Each admitted delivery conservatively reserves **50 recipient slots**, at most 5,000 reserved slots per bucket/window, even if it eventually has fewer recipients or no configured relay. There are **no refunds** for failed, ineligible, recipient-less or unconfigured deliveries. Retries and possible crash duplicates remain subject to the existing outbox rules; the slot reservation is not an exactly-once SMTP guarantee.
@@ -145,6 +209,7 @@ Old outbox-aware workers still select only `status='pending'`, so they never sna
 
 - Outcomes retain the existing transition statuses: `pending`, `sent`, `partial`, `failed`, `not_configured`, `no_recipients`, plus terminal `suppressed` for the workspace generation limit, and sanitized error categories. Additive incident metadata reports total recipient `attempt_count`, `retrying`, `waiting`, `next_attempt_at` and `exhausted` counts. No recipient identifiers appear in the API. The incident History table shows Waiting, Retrying or Exhausted and the next due time/count. A host-policy refusal is terminal and retains the public `connection` category; SMTP 4xx/5xx both retain `rejected`, distinguished by retry scheduling. Unsupported client/relay capabilities (such as missing required STARTTLS or compatible AUTH) and malformed SMTP replies also use terminal `rejected`, never a connection retry.
 - A durable per-recipient outbox snapshots the initially eligible addresses **once**, as delivery-scoped SHA-256 fingerprints, not stored addresses. The normalized address and optional internal-user link are captured atomically by the eligibility query; the immutable link keeps disablement effective even if account cleanup or an email change erases the old address before the snapshot is persisted. Before each claim it intersects that snapshot with live rule/recipient eligibility; newly added recipients are not included. Successful recipients are recorded immediately and never deliberately resent when another recipient fails. Revoked workspace admins and disabled/unentitled internal users lose future eligibility, including when a disabled internal user's address was explicitly listed. Explicit external addresses remain admin-chosen. Personal built-in alerts remain owner-only. A send already authorized and claimed may finish while authority changes.
+- **Aged unknown-hold incidents (#101) use this same outbox**, with the Admin-only, open-incident and live-band checks described above. In-app visibility is not email authority; the personal incident remains an identity-free installation aggregate.
 - **Key-expiry reminders (#100) use this same outbox,** with the same `(delivery, recipient fingerprint)` idempotency: a reminder's recipients (the key's own live-authority recipients, never a rule) are snapshotted once and rechecked live on every claim exactly like any other alert kind. A reminder that becomes obsolete before its claim is leased (key revoked/disabled/expired, workspace disabled, holder lost membership, band changed, incident resolved) is excluded by that recheck and is never sent; it is recorded in the snapshot (so `recipients` still counts it) but never counted `sent` or `failed`. There is no separate authority-locking mechanism for this kind: the outbox's existing before-the-claim recheck, not a lock held across the SMTP handoff, is what makes an obsolete reminder unsendable.
 - Each replica commits a short `SKIP LOCKED` claim **before SMTP**, recording the attempt and a 90-second lease with owner and unique token. No database connection, installation lock or admission lock spans mail I/O. Whole sends have a 40-second ceiling (and cannot extend beyond their lease); stale completions cannot overwrite a successor. Each invocation/tick processes at most 25 recipient attempts. Due times and expiry use the database clock.
 - **Fair dispatch (#253):** each workspace has a delivery bucket; installation-scope events share the nil-UUID bucket. Within each tick the worker gives the next slot to a due bucket with the fewest slots served, breaking ties by least recently served across ticks (never-served first), then its oldest due delivery and bucket id. Initialization-only, revoked-recipient and missing-SMTP steps also consume a slot. A lone bucket can use all 25 slots; a busy workspace cannot monopolize the tick while quieter buckets are due. Selection first walks distinct buckets on the partial pending index without locks, then tries up to 32 candidates with `SKIP LOCKED`. Fairness across replicas is approximate; recipient leases and live authorization are unchanged. The evaluator process remembers at most 4,096 buckets' last-served instants, evicting the oldest when full. This in-memory history may reset on restart or lease failover; multi-replica fairness remains approximate. Each claim captures one database timestamp for its due checks and indexed creation-time range, skipping expired rows even before cleanup catches up. A claim statement timeout ends dispatch for this tick with a warning (other errors still follow the outbox failure path); bounded cleanup runs before claims. The 60-second evaluator send budget and 24-hour delivery cutoff still apply; fair scheduling does not guarantee delivery before expiry.

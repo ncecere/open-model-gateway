@@ -16,6 +16,7 @@ async fn db_collector_label_keys_match_golden(pool: sqlx::PgPool) {
         "gateway_db_pool_connections",
         "gateway_reservations_held",
         "gateway_alert_email_deliveries",
+        "gateway_report_email_recipients",
         "gateway_alert_webhook_deliveries",
         "gateway_alert_webhook_oldest_waiting_seconds",
         "gateway_alert_delivery_pending_buckets",
@@ -89,6 +90,25 @@ async fn otlp_self_metrics_are_precreated_fixed_enums_and_record_counts() {
     assert!(after.contains("gateway_otlp_metrics_rejected_points_total 9007199254740993"));
 }
 
+#[tokio::test]
+async fn aged_hold_counters_have_only_fixed_results_and_no_identifiers() {
+    let m = Metrics::new();
+    for result in ["fired", "escalated", "cleared", "deferred", "suppressed"] {
+        m.observe_aged_hold_alerts(result, 2);
+    }
+    let text = m.render(None).await;
+    let samples: Vec<_> = text
+        .lines()
+        .filter(|line| line.starts_with("gateway_aged_hold_alerts_total{"))
+        .collect();
+    assert_eq!(samples.len(), 5);
+    for result in ["fired", "escalated", "cleared", "deferred", "suppressed"] {
+        assert!(samples.contains(
+            &format!("gateway_aged_hold_alerts_total{{result=\"{result}\"}} 2").as_str()
+        ));
+    }
+}
+
 pub(crate) fn fresh_registry() -> &'static Metrics {
     // ScopeLockWait requires a static registry; each caller gets its own.
     Box::leak(Box::new(Metrics::new()))
@@ -119,6 +139,7 @@ pub(crate) fn populated_registry() -> &'static Metrics {
     m.observe_admission_phases(PhaseTimer::start(), "admitted");
     m.observe_settlement_phases(PhaseTimer::start(), "settled");
     m.observe_alert_run("ok", 0);
+    m.observe_aged_hold_alerts("fired", 1);
     m.observe_alert_delivery("delivered");
     m.observe_deadlock_retry("reconciliation");
     drop(m.scope_lock_wait("rows", "admission"));
@@ -141,6 +162,7 @@ pub(crate) fn populated_registry() -> &'static Metrics {
     m.set_lease_held("metrics", true);
     m.observe_lease_term("metrics");
     m.observe_background_run("metrics", "ok");
+    m.set_report_queue(0, false, 0);
     m.set_partition_months("requests", 2);
     m.observe_rollup_hours("new", 1);
     m.observe_alert_webhook("sent");
@@ -154,6 +176,10 @@ pub(crate) fn populated_registry() -> &'static Metrics {
         .set(0);
     m.alert_delivery_queue
         .get_or_create(&[("state", "retrying".into())])
+        .set(0);
+    m.observe_report_delivery("sent", 1);
+    m.report_delivery_queue
+        .get_or_create(&[("state", "waiting".into())])
         .set(0);
     m.alert_webhook_queue
         .get_or_create(&[("state", "waiting".into())])

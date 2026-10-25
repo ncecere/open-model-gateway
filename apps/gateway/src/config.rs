@@ -19,6 +19,9 @@ pub struct Config {
     pub metrics_listen: Option<SocketAddr>,
     /// Optional independent OTLP push transport; never a readiness dependency.
     pub metrics_export: MetricsExportConfig,
+    /// Optional, disabled-by-default OTLP operational logs (#294); never a
+    /// readiness dependency and never a tracing-subscriber bridge.
+    pub logs_export: LogsExportConfig,
     /// `GATEWAY_DATABASE_MAX_CONNECTIONS` (default 10) per replica.
     pub database_max_connections: u32,
     /// Optional `GATEWAY_REPORTING_DATABASE_URL`: a read-only reporting
@@ -101,6 +104,7 @@ impl TraceConfig {
                     "/v1/traces",
                     environment,
                     Duration::from_secs(2),
+                    true,
                 )
             })
             .transpose()?;
@@ -171,6 +175,7 @@ impl MetricsExportConfig {
                     "/v1/metrics",
                     environment,
                     Duration::from_secs(5),
+                    true,
                 )
             })
             .transpose()?;
@@ -208,6 +213,96 @@ impl MetricsExportConfig {
             headers,
             interval: Duration::from_secs(interval),
             traffic,
+        })
+    }
+}
+
+/// Operator-only, disabled-by-default OTLP operational logs settings (#294).
+/// Typed events only: no tracing-subscriber bridge, `OTEL_*` setting or
+/// schema migration. Never Debug: headers contain secrets. Parsing does not
+/// spawn a task, draw process entropy or send anything.
+#[derive(Clone)]
+pub struct LogsExportConfig {
+    pub endpoint: Option<(reqwest::Url, reqwest::Client)>,
+    pub headers: reqwest::header::HeaderMap,
+    pub min_severity: crate::ops_log::Severity,
+}
+
+impl LogsExportConfig {
+    pub const URL: &'static str = "GATEWAY_LOGS_OTLP_URL";
+    pub const HEADERS: &'static str = "GATEWAY_LOGS_OTLP_HEADERS_ENV";
+    pub const MIN_SEVERITY: &'static str = "GATEWAY_LOGS_OTLP_MIN_SEVERITY";
+
+    pub fn from_env(environment: Environment) -> Result<Self> {
+        let mut values = std::collections::HashMap::new();
+        for key in [Self::URL, Self::HEADERS, Self::MIN_SEVERITY] {
+            match std::env::var(key) {
+                Ok(value) => {
+                    values.insert(key.to_owned(), value);
+                }
+                Err(std::env::VarError::NotPresent) => {}
+                Err(_) => bail!("{key} is not valid Unicode"),
+            }
+        }
+        // The audit OTLP destination is read directly (never captured in the
+        // snapshot above): collision detection must see the live setting,
+        // not a stale one, even though logs settings themselves are pinned.
+        Self::from_lookup(
+            |key| values.get(key).cloned().or_else(|| std::env::var(key).ok()),
+            environment,
+        )
+    }
+
+    pub fn from_lookup(
+        get: impl Fn(&str) -> Option<String>,
+        environment: Environment,
+    ) -> Result<Self> {
+        let url = get(Self::URL);
+        for key in [Self::HEADERS, Self::MIN_SEVERITY] {
+            anyhow::ensure!(
+                url.is_some() || get(key).is_none(),
+                "{key} requires GATEWAY_LOGS_OTLP_URL"
+            );
+        }
+        let endpoint = url
+            .map(|value| {
+                crate::otlp::endpoint(
+                    Self::URL,
+                    &value,
+                    "/v1/logs",
+                    environment,
+                    Duration::from_secs(2),
+                    // The logs exporter's own resolver/client never emits the
+                    // typed event it transports (no feedback).
+                    false,
+                )
+            })
+            .transpose()?;
+        if let Some((url, _)) = &endpoint
+            && let Some(audit) = get(crate::audit_export::OTLP_URL_ENV)
+                .and_then(|value| reqwest::Url::parse(&value).ok())
+        {
+            anyhow::ensure!(
+                *url != audit,
+                "{} must not match {} (URL equality cannot detect a collector alias; route operational and audit logs through separately routed credentials/pipelines)",
+                Self::URL,
+                crate::audit_export::OTLP_URL_ENV
+            );
+        }
+        let headers = get(Self::HEADERS)
+            .map(|name| crate::otlp::headers(Self::HEADERS, &name, &get))
+            .transpose()?
+            .unwrap_or_default();
+        let min_severity = match get(Self::MIN_SEVERITY) {
+            None => crate::ops_log::Severity::Warn,
+            Some(value) => crate::ops_log::Severity::parse(&value).ok_or_else(|| {
+                anyhow::anyhow!("{} must be info, warn or error", Self::MIN_SEVERITY)
+            })?,
+        };
+        Ok(Self {
+            endpoint,
+            headers,
+            min_severity,
         })
     }
 }
@@ -376,6 +471,7 @@ impl Config {
         // Validate metrics before generic allowlist checks: its diagnostics
         // name only the setting, never the selected secret variable or value.
         let metrics_export = MetricsExportConfig::from_env(environment)?;
+        let logs_export = LogsExportConfig::from_env(environment)?;
         let webhook_names = env_list("GATEWAY_ALERT_WEBHOOK_SECRET_ENV_ALLOWLIST")?;
         disjoint_allowlists(
             &secret_env_allowlist,
@@ -479,6 +575,7 @@ impl Config {
             inference_limits,
             metrics_listen,
             metrics_export,
+            logs_export,
             database_max_connections,
             reporting_database_url,
             reporting_max_lag,
@@ -617,6 +714,10 @@ fn disjoint_allowlists(
 #[cfg(test)]
 #[path = "metrics_export_config_tests.rs"]
 mod metrics_export_config_tests;
+
+#[cfg(test)]
+#[path = "logs_export_config_tests.rs"]
+mod logs_export_config_tests;
 
 #[cfg(test)]
 mod allowlist_tests {

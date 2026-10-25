@@ -10,6 +10,34 @@ Use incident History's Waiting/Retrying/Exhausted, waiting count and next due ti
 
 `gateway_alert_email_attempts_total{outcome="sent|transient_failure|permanent_failure"}` counts recorded attempt outcomes. `gateway_alert_email_deliveries{state="retrying|failed|exhausted|suppressed"}` counts pending deliveries created in the last 24 hours and terminal failures/exhaustion/suppression completed in the last 24 hours (the metrics lease holder exports the installation aggregate). The completion window keeps newly expired/cleaned-up failures visible beyond the 15-minute alert window, even when they were created over 24 hours ago. Cleanup without a send does not increment the attempt counter. Failed and exhausted overlap; do not add them. The [example Prometheus rules](../deploy/monitoring/prometheus-rules.yml) include `GatewayAlertEmailPersistentFailure`. Send it through an independent operations channel, not a recursive email-failure incident inside the gateway. Missing SMTP is `not_configured`, not a retry loop. `suppressed` means the workspace's [email generation allowance](alerts.md#workspace-email-generation-limit-277) was full; the incident remains in-app, and no email retry is scheduled. It is not an SMTP failure and is not included in the persistent-failure rule. No metric labels, incident API fields or logs contain outbox fingerprints/recipient addresses. Fingerprints are pseudonymous personal data; restrict database access and backups accordingly.
 
+## Scheduled report rollout and rehearsal (#102)
+
+Scheduled reports reuse SMTP and the shared alert/email dispatcher. Configure **Admin → Settings → Email**, its host/secret allowlists and TLS policy, and the operator-controlled HTTPS `GATEWAY_PUBLIC_URL` before resuming schedules (loopback HTTP is development/test only). The dashboard's missing-configuration warning reports presence, not successful relay acceptance; use the existing Email test. `GATEWAY_ALERT_INTERVAL_SECONDS=0` stops report delivery as well as alerts, **not report generation**. Pause schedules to stop both future generation and remaining unclaimed deliveries. Claimed SMTP attempts may finish. Do not send operational failure alerts through this report queue.
+
+Deploy the complete migration lineage, including **0061 schedules, 0063 generation and 0065 delivery**, on the explicitly selected database only. Apply with the matching migrator, then `grants apply` and `grants verify`; run gateways with `gateway_runtime`, never owner credentials. This UI/CSV slice has no new migration or write grant; new reads reuse explicit SELECT ACLs and are covered by the runtime-role handler probe. Stop old workers before the schema upgrade; mixed-schema binaries are unsupported. 0065 preserves #277 quota admission for alerts and makes report envelopes quota-exempt, not recipient-guard-exempt. Large existing outboxes need a maintenance window for its transactional indexes. `serve` never migrates, resets or replays history. After a migration, rollback requires the backup/restore procedure, not an old image against the new schema.
+
+**Coordinator rehearsal gate (not a claim of completed execution):**
+
+1. Use a fresh disposable PostgreSQL 17 database or the isolated `dev-omg` environment; never an existing installation or another namespace. Back up and rehearse the full ordered prefix, grants/refusal probes and exact-lineage readiness. Exercise two replicas, stale generation fencing and lease takeover; retain results in CI/the PR, not bespoke evidence files.
+2. Run the real-PostgreSQL scheduled-report tests, including CSV bounds, hostile CSV labels, expiry/pruning, cross-scope IDs, member/Auditor refusals and live revocation; run `enterprise_runtime_allowlist_and_rollback_probes` explicitly on the disposable cluster. Run both independent security reviews (one adversarial) before merge.
+3. Run `npx playwright test -c tests/browser/playwright.config.ts --project=scheduled-reports`. It includes the `journey` dependency, creates paused schedules through the real UI, resumes them, seeds only the disposable schedule's due cursor, and waits for the normal fenced worker. It opens **both exact email routes**, downloads CSV, checks Auditor read-only/member/personal refusals, pause/delete and accessibility. Screenshots are written under `target/browser-tests/scheduled-reports/` at 1440 and 390 pixels. This is not a unit-test substitute.
+4. With a disposable loopback SMTP receiver, complete the delivery acceptance tests: generic link-only body, unchanged address identity, revocation suppression, partial success, bounded retry/exhaustion, crash-after-acceptance duplicates and alert/report fairness. Follow a link through sign-in, then revoke access and confirm a fresh page read/download is refused. No paid provider is needed.
+5. Inspect the metrics below with a backlog/failure/suppression fixture. Verify unknown values and full totals against the recorded snapshot, never current live usage. Confirm a 90-day-expired payload is not returned before or after pruning. Pause or delete every rehearsal schedule; remove the disposable cluster environment with `dev-env down`.
+
+The browser fixture's due-cursor SQL is test-only, guarded to the `omg_browser_` database family. There is no operator replay/generate API and no reason to rewrite production cursors.
+
+Existing report metric families are low-cardinality **System** in the golden inventory; none label schedule, workspace, user, address or snapshot content:
+
+| Family | Interpretation |
+| --- | --- |
+| `gateway_report_due_backlog`, `gateway_report_due_backlog_capped` | Due active schedules sampled by the scheduler holder, saturated at 1,024; capped=1 means a lower bound. |
+| `gateway_report_oldest_due_lag_seconds` | Oldest initialized due lag at the database cutoff; missing calendars do not invent a lag. |
+| `gateway_report_generation_outcomes_total{category}` | Process-observed committed `success`, `timeout`, `snapshot_too_large`, `history_unavailable`, `authority_lost`, `other`. |
+| `gateway_report_email_attempts_total{outcome}` | Fixed `sent`, `transient_failure`, `permanent_failure` send outcomes. |
+| `gateway_report_email_recipients{state}` | Latest 1,024 envelopes created within 24 hours, exported by the metrics holder: waiting/leased backlog, failed/exhausted failure, ineligible authorization suppression, sent/not_configured. Not an unlimited queue total. |
+
+Counter resets and gauge sampling/lease ownership matter when alerting; aggregate across replicas appropriately and pair absence with lease/collector-health signals. See [snapshot and authorization semantics](cost-reporting.md#scheduled-reports).
+
 ## OTLP metrics (#99)
 
 Each configured `serve` replica runs one optional OTLP/HTTP **JSON** metrics worker, independent of traces and the Prometheus listener. It renders the same scrape-derived metrics (including database-backed gauges and metrics-lease-holder omissions), then takes a bounded snapshot. No scrape listener is required; existing Prometheus scraping is unchanged. Export begins after the first interval, not during startup.
@@ -48,6 +76,36 @@ Watch these System metrics (Prometheus names below; OTLP counters omit `_total`)
 - `gateway_otlp_metrics_dropped_total{reason="series_limit|body_limit|label|unclassified|invalid_value"}`: points omitted locally. These and delivery outcomes appear in the **next** snapshot, never a recursive export.
 
 The metrics exporter's own diagnostics are fixed-enum `metrics exporter state changed` warnings only on transitions into or out of an outage, not every failed push. Those warnings include no destination, header names/values, transport error text or collector response text. A DNS/egress policy refusal is additionally logged at WARN by the shared egress layer with purpose, host and resolved address, one warning per attempt (see [#321](https://github.com/ncecere/open-model-gateway/issues/321)). Monitor silence at the receiver too: a failed exporter cannot report its current failure through that same destination.
+
+## OTLP operational logs (#294)
+
+Each configured `serve` replica may also run one optional OTLP/HTTP **JSON** operational-logs worker: typed, closed infrastructure events only, disabled by default. There is **no tracing-subscriber bridge**: ordinary `tracing` calls, prompts, responses, request/execution ids, model names and collector/error text never leave the process through this transport. Seven fixed event kinds exist, each with a fixed body, severity and catalogue attributes (fixed enums only):
+
+| Event (`event.name=omg.ops.<name>`) | Severity | Meaning |
+|---|---|---|
+| `exporter_degraded` | WARN | The traces or metrics exporter (`signal=traces\|metrics`) entered an outage: a failed exchange or a partial-success rejection. Audit-exporter transitions are excluded; audit stays on its own pipeline. |
+| `exporter_recovered` | INFO (opt-in) | The first fully accepted exchange after an outage. |
+| `egress_refused` | WARN | A complete outbound refusal by the [address policy](#outbound-connections), by `purpose`. The logs exporter's own resolver/client never emits this event (no feedback); every other purpose, including audit, is unaffected. |
+| `lease_lost` | WARN | This replica observed a work lease's takeover or local-trust expiry, once per lost term; a graceful shutdown release never emits this. |
+| `config_listener_down` | WARN | The configuration change LISTEN connection's first failure or a connected-to-disconnected transition; rearmed on the next successful connection. An unconfigured listener never emits this. |
+| `finalization_needs_reconciliation` | ERROR | An inference, realtime or async-job finalization write failed on an existing failed-accounting branch, by `finalizer=generation_finish\|generation_cancel\|realtime_finish\|realtime_cancel\|job_fail\|job_cancel`. Only `generation_finish` may carry a hexadecimal `traceId`, from the same shared-admission-proven correlation traces already use; personal, pre-admission, realtime and job events stay uncorrelated. |
+| `background_job_failed` | WARN | A leased or unleased singleton background job's run failed or timed out, by `job` (the eleven background jobs) and `failure=error\|timeout`. |
+
+### Settings
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GATEWAY_LOGS_OTLP_URL` | unset (disabled) | Full collector URL with exactly `/v1/logs`. Verified HTTPS with public roots, no credentials, query or fragment. HTTP is allowed only on development loopback. Must not normalize-equal the active `GATEWAY_AUDIT_OTLP_URL`: URL equality cannot detect a collector alias, so route operational and audit logs through separately routed credentials/pipelines. |
+| `GATEWAY_LOGS_OTLP_HEADERS_ENV` | unset | Name of a dedicated secret variable holding `Key=Value,Key2=Value2` collector headers; the same bounds and dedicated-pointer rules as the metrics/trace headers. Requires the URL. |
+| `GATEWAY_LOGS_OTLP_MIN_SEVERITY` | `warn` | `info`, `warn` or `error`. Recovery (`exporter_recovered`) is INFO and hidden unless set to `info`. Requires the URL. |
+
+`OTEL_*` settings are never read. Reuses the shared endpoint/header validation, export transport (no proxy, redirect, retry or TLS relaxation) and the [outbound address policy](#outbound-connections), including the development-loopback-only HTTP tightening (#313). Invalid settings stop startup.
+
+### Bounds, privacy and shutdown
+
+One worker; a 1,024-record `try_send` queue; records capped at 512 bytes; batches of at most 100 records/64 KiB every 5 seconds (overdue ticks skipped, never replayed). A per-variant limiter admits at most one event every 30 seconds (burst one); the next admitted event of that variant carries an `omg.ops.suppressed_count` integer attribute for the ones skipped in between. Severity filtering happens before limiting: an event below the floor is never counted as suppressed. Producers only perform bounded atomic operations and a non-blocking send; encoding and the HTTP exchange happen only on the worker, off every request/background hot path. Shutdown closes admission immediately (no new event enqueues), then allows the current exchange and one immediate final batch within the **same shared 3-second traces/metrics/logs drain budget** used by the other exporters, concurrently, not an additional serial phase. Records the collector refuses in a partial-success acknowledgement are counted, not retried.
+
+Watch `gateway_otlp_logs_pushes_total{outcome}`, `gateway_otlp_logs_rejected_records_total`, `gateway_otlp_logs_dropped_total{reason="queue_full\|record_limit\|body_limit\|delivery\|shutdown"}` and `gateway_otlp_logs_suppressed_total{event}`. These are System families, with the same resource attributes (including `service.instance.id`) as [OTLP metrics](#otlp-metrics-99); exporter self-observations never recursively generate another operational-log event.
 
 ## Configuration reference
 
@@ -611,6 +669,8 @@ Reports (`cost-report`, `cost-summary`, `costs`, `usage-export`), usage (`usage/
 `0030_partition_history.sql` and `0031_partition_audit.sql` (scale plan P6) partition request history by UTC month without rewriting it (except the ledger, below); `0032_usage_rollups.sql` adds hourly usage rollups and `0033_partition_archive.sql` operator archival. Drain traffic (step 3) like every migration. For large installations, run `open-model-gateway partitions prepare` with the migrator **before** the drain: it builds the new keys with `CREATE INDEX CONCURRENTLY` while the old release keeps serving, so the drained window only validates and swaps. After step 4 run `open-model-gateway budget verify`, `open-model-gateway partitions status` and `open-model-gateway rollups run --once` (catch-up of existing history; `serve` continues it every minute). Details and measurements: [History partitions](#history-partitions-rollups-and-archival-p6).
 
 `0034_history_parent_checks.sql` (decision gate D3) replaces the foreign keys from executions and reservations to workspaces, keys, deployments, price versions, cost centers and batch jobs with insert-time checks that do not lock the parent, and makes those parents impossible to delete, truncate or re-key (triggers, for every role). It changes no history row and takes only brief metadata locks (35 ms on 2 M and 43 ms on 10 M seeded attempts). Drain traffic (step 3) like every migration, reapply `runtime-grants.sql` (no new privilege), then run `open-model-gateway history verify` once (it should report `finding_count: 0`). Operator scripts that deleted an unreferenced workspace, key, deployment or cost center now fail: disable, revoke or archive instead. Details: [MultiXacts and history parent checks](#multixacts-and-history-parent-checks).
+
+`0067_configuration_history.sql` (#86) captures every deployment state change in a database trigger. Stop every older replica before migrating (step 3): an older replica that changes a deployment after 0067 still has its change captured, but attributed to System, with its own audit event shown as a second history entry.
 
 ## History partitions, rollups and archival (P6)
 

@@ -135,7 +135,7 @@ pub fn start(store: Store, retention_days: Option<i32>) -> tokio::task::JoinHand
                 singleton(
                     &store,
                     crate::leases::Lease::Maintenance,
-                    "lock_wait_prune",
+                    crate::ops_log::Job::LockWaitPrune,
                     |fence| {
                         let store = store.clone();
                         async move {
@@ -160,7 +160,7 @@ pub fn start(store: Store, retention_days: Option<i32>) -> tokio::task::JoinHand
                 singleton(
                     &store,
                     crate::leases::Lease::Maintenance,
-                    "rate_prune",
+                    crate::ops_log::Job::RatePrune,
                     |fence| {
                         let store = store.clone();
                         async move {
@@ -184,7 +184,7 @@ pub fn start(store: Store, retention_days: Option<i32>) -> tokio::task::JoinHand
                 singleton(
                     &store,
                     crate::leases::Lease::Maintenance,
-                    "login_attempt_prune",
+                    crate::ops_log::Job::LoginAttemptPrune,
                     |fence| {
                         let store = store.clone();
                         async move {
@@ -204,7 +204,7 @@ pub fn start(store: Store, retention_days: Option<i32>) -> tokio::task::JoinHand
                 singleton(
                     &store,
                     crate::leases::Lease::Maintenance,
-                    "session_prune",
+                    crate::ops_log::Job::SessionPrune,
                     |fence| {
                         let store = store.clone();
                         async move {
@@ -220,7 +220,7 @@ pub fn start(store: Store, retention_days: Option<i32>) -> tokio::task::JoinHand
                 singleton(
                     &store,
                     crate::leases::Lease::Maintenance,
-                    "storage_usage",
+                    crate::ops_log::Job::StorageUsage,
                     |fence| {
                         let store = store.clone();
                         async move {
@@ -238,7 +238,7 @@ pub fn start(store: Store, retention_days: Option<i32>) -> tokio::task::JoinHand
                     singleton(
                         &store,
                         crate::leases::Lease::Compaction,
-                        "compaction",
+                        crate::ops_log::Job::Compaction,
                         |fence| {
                             let store = store.clone();
                             async move {
@@ -267,7 +267,7 @@ pub fn start(store: Store, retention_days: Option<i32>) -> tokio::task::JoinHand
 pub(crate) async fn singleton<T, F, Fut>(
     store: &Store,
     lease: crate::leases::Lease,
-    job: &'static str,
+    job: crate::ops_log::Job,
     work: F,
 ) -> Option<T>
 where
@@ -282,8 +282,26 @@ where
         }
         None => match tokio::time::timeout(timeout, work(None)).await {
             Ok(Ok(value)) => Some(value),
-            _ => {
-                tracing::warn!(job, "background job run incomplete; retrying next interval");
+            Ok(Err(_)) => {
+                tracing::warn!(
+                    job = job.as_str(),
+                    "background job run incomplete; retrying next interval"
+                );
+                crate::ops_log::emit(crate::ops_log::OpsEvent::BackgroundJobFailed {
+                    job,
+                    failure: crate::ops_log::BackgroundFailure::Error,
+                });
+                None
+            }
+            Err(_) => {
+                tracing::warn!(
+                    job = job.as_str(),
+                    "background job run incomplete; retrying next interval"
+                );
+                crate::ops_log::emit(crate::ops_log::OpsEvent::BackgroundJobFailed {
+                    job,
+                    failure: crate::ops_log::BackgroundFailure::Timeout,
+                });
                 None
             }
         },

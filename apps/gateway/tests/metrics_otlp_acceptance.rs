@@ -868,6 +868,8 @@ fn verify_receipt(
         "gateway_lock_deadlock_retries",
         "gateway_metrics_collection_errors",
         "gateway_usage_rollup_hours",
+        // #102: report email send outcomes exist only after a send attempt.
+        "gateway_report_email_attempts",
     ] {
         assert!(
             expected_system.remove(dormant),
@@ -884,6 +886,14 @@ fn verify_receipt(
             "gateway_background_runs",
             "gateway_history_partition_months_ahead",
             "gateway_work_lease_terms",
+            // #102: set only by the leased report scheduler's bounded check.
+            "gateway_report_due_backlog",
+            "gateway_report_due_backlog_capped",
+            "gateway_report_oldest_due_lag_seconds",
+            // #102: collected only by the Metrics lease holder's refresh.
+            "gateway_report_email_recipients",
+            // #101: observed only by the leased aged-hold alert evaluation.
+            "gateway_aged_hold_alerts",
         ] {
             assert!(
                 expected_system.remove(lease_dependent),

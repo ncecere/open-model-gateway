@@ -6,6 +6,8 @@ use axum::{
 };
 use sqlx::PgPool;
 use tower::ServiceExt;
+#[path = "access_requests_tests.rs"]
+mod access_requests_tests;
 #[path = "admin_token_revalidation_tests.rs"]
 mod admin_token_revalidation_tests;
 #[path = "admin_tokens_tests.rs"]
@@ -30,6 +32,10 @@ mod catalogs_token_guard_tests;
 mod configuration_matrix_tests;
 #[path = "configuration_tests.rs"]
 mod configuration_tests;
+#[path = "deployment_history_atomicity_tests.rs"]
+mod deployment_history_atomicity_tests;
+#[path = "deployment_history_tests.rs"]
+mod deployment_history_tests;
 #[path = "deployment_preview_tests.rs"]
 mod deployment_preview_tests;
 #[path = "directory/tests.rs"]
@@ -60,10 +66,18 @@ mod personal_data_tests;
 mod portal_tests;
 #[path = "project_tests.rs"]
 mod project_tests;
+#[path = "provider_cost_matching_tests.rs"]
+mod provider_cost_matching_tests;
+#[path = "provider_cost_tests.rs"]
+mod provider_cost_tests;
 #[path = "read_scale_tests.rs"]
 mod read_scale_tests;
 #[path = "resources/tests.rs"]
 mod resource_tests;
+#[path = "scheduled_report_csv_tests.rs"]
+mod scheduled_report_csv_tests;
+#[path = "scheduled_report_read_tests.rs"]
+mod scheduled_report_read_tests;
 #[path = "scheduled_reports_tests.rs"]
 mod scheduled_reports_tests;
 #[path = "session_tests.rs"]
@@ -168,6 +182,7 @@ async fn call(
     body: Value,
 ) -> (StatusCode, Value) {
     let response = routes()
+        .merge(super::provider_costs::upload_routes())
         // Both extensions: a real browser session's middleware inserts both
         // (identity::authenticate_management), and this bypasses that
         // middleware entirely to call a handler directly.

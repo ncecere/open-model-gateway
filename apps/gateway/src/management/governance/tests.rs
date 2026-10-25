@@ -239,8 +239,24 @@ mod db {
         let (status, audit) =
             call(&f, &auditor, "GET", "/api/v1/platform/audit", Value::Null).await;
         assert_eq!(status, StatusCode::OK);
-        let events = audit["data"].as_array().unwrap();
+        // #86: the fixture's deployment insert is captured as a System
+        // `deployment.*` history event; this test is about policy overrides.
+        let events: Vec<&Value> = audit["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| {
+                event["action"]
+                    .as_str()
+                    .is_some_and(|a| a.starts_with("policy."))
+            })
+            .collect();
         assert_eq!(events.len(), 2);
+        assert!(audit["data"].as_array().unwrap().iter().all(|event| {
+            event["action"]
+                .as_str()
+                .is_some_and(|a| a.starts_with("policy.") || a.starts_with("deployment."))
+        }));
         for action in ["policy.override_updated", "policy.override_reset"] {
             assert!(events.iter().any(|event| event["action"] == action
                 && event["workspace_id"] == f.team.workspace_id.to_string()

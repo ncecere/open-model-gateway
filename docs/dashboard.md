@@ -12,6 +12,12 @@ The interface uses locally installed/locked Bitop components and Grounded's **Wo
 
 The selector groups **Personal / Teams / Projects**, switching only accessible workspaces. There is no organization picker/settings or organization navigation. Teams/Projects are siblings; creating them belongs on the Admin directory pages, not in the selector. Platform financial reports can include personal totals, but those records never become selectable foreign private workspaces for key/request browsing.
 
+## Access requests (#83, slice A)
+
+Workspace portal **Request access** (`/access-requests`, alongside Home) lists discoverable Teams/Projects the caller has no live grant on and submits a bounded plain-text reason; its **My requests** tab shows the caller's own request history — by the workspace's **name**, never its raw ID — and lets them withdraw a pending one. That name is the one captured at submission time (`workspace_name_at_request`), so a later rename or the workspace becoming non-discoverable never changes what a past request shows. Reasons are always rendered as text, never HTML. A `429` rate refusal shows one fixed message naming the wait from `Retry-After`; an unknown, hidden or personal target is a generic "not found", indistinguishable from any other.
+
+A shared workspace's owner/admin reviews requests to join it from Workspace Settings › **Access requests**, with Approve/Deny confirmation dialogs; a decision on a request made stale by a later grant or revocation shows a generic conflict message instead of changing anything. The queue shows the requester's **display name and email**, never a raw ID — the same pair that owner/admin already sees for any entitled user through the Members "Add member" picker, so nothing new is disclosed; if the requester has since lost platform entitlement (or is disabled/cleaned), both fields show "Retained identity" instead, exactly as that picker would also exclude them. Platform Admins review every request from Admin › **Access requests** (`/admin/access-requests`), with the same requester identity shown and redacted the same way (matching what `GET /platform/users` already discloses to Platform Admins/Auditors); Auditors can read the same queue but never approve or deny. Platform Admins also set each Team's/Project's **Discoverable** toggle from its Admin detail page (Settings tab); it defaults off. Every control here is presentation only — Rust rechecks authority, discoverability, live membership and stale-request conflicts on every write.
+
 ## Canonical links
 
 Identifiers are UUIDs, not organization paths or public model aliases:
@@ -27,6 +33,7 @@ Identifiers are UUIDs, not organization paths or public model aliases:
 | Workspace overview | `/workspaces/{uuid}` |
 | Workspace keys/models/costs/settings | `/workspaces/{uuid}/keys`, `/models`, `/costs`, `/settings` |
 | Profile/invitation acceptance | `/profile`, `/invitations/accept` |
+| Access requests | `/access-requests` (Workspace portal), `/admin/access-requests` (Admin) |
 
 The router and location helpers are `src/router.tsx` and `src/lib/locations.ts`. Tabs use `?tab=`; catalog search/status/pagination and cost dates/filters are URL-backed. Recognized root navigation metadata is canonicalized, but removed organization URLs/`org` contexts are not retained as an organization compatibility feature. Invalid/unavailable workspace navigation is restored to an authorized destination rather than used to fetch foreign data.
 

@@ -273,6 +273,12 @@ pub struct Policy {
     development: bool,
     private_allow: Networks,
     loopback_only: bool,
+    /// Set only for the operational-logs exporter's own resolver/client, so
+    /// a refusal of its own destination never re-enters the queue it feeds
+    /// (no feedback). Ordinary egress metrics and the stderr warning below
+    /// are unaffected; only the typed `OpsEvent` is suppressed. Default
+    /// `false` so every other purpose emits normally.
+    suppress_ops_events: bool,
 }
 
 impl Policy {
@@ -281,6 +287,7 @@ impl Policy {
             development,
             private_allow,
             loopback_only: false,
+            suppress_ops_events: false,
         }
     }
 
@@ -288,6 +295,12 @@ impl Policy {
     /// a hostname approved as `localhost` resolves to a different address.
     pub(crate) fn only_loopback(mut self) -> Self {
         self.loopback_only = true;
+        self
+    }
+
+    /// Only the logs exporter's own transport uses this: see the field doc.
+    pub(crate) fn without_ops_events(mut self) -> Self {
+        self.suppress_ops_events = true;
         self
     }
 
@@ -309,6 +322,7 @@ impl Policy {
             development: self.development || loopback,
             private_allow: self.private_allow.clone(),
             loopback_only: self.loopback_only,
+            suppress_ops_events: self.suppress_ops_events,
         }
     }
 
@@ -355,6 +369,13 @@ pub fn policy() -> Arc<Policy> {
 
 fn denied(purpose: Purpose, host: &str, ip: IpAddr, policy: &Policy, transition: &AtomicBool) {
     crate::metrics::METRICS.egress_denied(purpose.as_str());
+    // A complete refusal only (never a partial, still-successful answer).
+    // Emit for every purpose, independently of stderr transition tracking;
+    // the closed event carries only the purpose, never a destination.
+    // The logs exporter's own destination is excluded to avoid feedback.
+    if !policy.suppress_ops_events {
+        crate::ops_log::emit(crate::ops_log::OpsEvent::EgressRefused { purpose });
+    }
     if purpose.logging_policy() == LoggingPolicy::TransitionOnly {
         // #321: logged only on the transition into refusal, never the host
         // or resolved address, so a periodic export attempt that keeps
@@ -395,10 +416,15 @@ fn recovered(purpose: Purpose, transition: &AtomicBool) {
     }
 }
 
-/// Keep the addresses the policy allows. Loopback-only policies reject the
-/// entire answer if any address is refused. Otherwise, refusal is counted and
-/// logged only when none remain (dual-stack partial drops are debug logs).
-fn filter(
+/// Keep the addresses the policy allows. Refusal is counted and logged only
+/// when none remain (a dual-stack host with one refused record still works,
+/// and that's not an incident); partial drops are debug logs. A
+/// `loopback_only` policy (development plain HTTP, #313/#325) is the
+/// exception: it never narrows a mixed answer down to its loopback subset,
+/// because a non-loopback record in that answer (a rebound or poisoned
+/// `localhost`, say) is itself the incident, not merely a dropped option.
+/// Such an answer is refused in full.
+pub(crate) fn filter(
     policy: &Policy,
     purpose: Purpose,
     host: &str,
@@ -427,7 +453,16 @@ fn filter_tracked(
 ) -> anyhow::Result<Vec<SocketAddr>> {
     let (allowed, refused): (Vec<_>, Vec<_>) =
         found.iter().copied().partition(|a| policy.allows(a.ip()));
-    if !allowed.is_empty() && (!policy.loopback_only || refused.is_empty()) {
+    if policy.loopback_only && !refused.is_empty() {
+        if let Some(first) = refused.first() {
+            denied(purpose, host, first.ip(), policy, transition);
+        }
+        anyhow::bail!(
+            "{} connection to {host} refused: a mixed DNS answer included a non-loopback address (loopback-only development HTTP)",
+            purpose.as_str()
+        );
+    }
+    if !allowed.is_empty() {
         // #321 round 2 (LOW finding 1): a mixed DNS answer's dropped
         // addresses are a DEBUG diagnostic, but for a `TransitionOnly`
         // purpose (telemetry/OTLP export, the OTLP audit exporter) this is
@@ -660,6 +695,18 @@ mod tests {
 
     fn ip(s: &str) -> IpAddr {
         s.parse().unwrap()
+    }
+
+    #[test]
+    fn without_ops_events_is_logs_exporter_only_and_survives_permit_loopback() {
+        let normal = Policy::default();
+        assert!(!normal.suppress_ops_events);
+        let suppressed = normal.clone().without_ops_events();
+        assert!(suppressed.suppress_ops_events);
+        // permit_loopback (used to build every signal's resolver policy)
+        // must not silently re-enable events for the logs exporter.
+        assert!(suppressed.permit_loopback(true).suppress_ops_events);
+        assert!(!normal.permit_loopback(true).suppress_ops_events);
     }
 
     #[test]

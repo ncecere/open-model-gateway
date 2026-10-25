@@ -6,6 +6,13 @@ use sqlx::PgPool;
 
 use super::generation::{GENERATE, generation_events, generation_rule};
 
+#[path = "aged_hold_email_tests.rs"]
+mod email;
+#[path = "aged_hold_metrics_tests.rs"]
+mod metrics;
+#[path = "aged_hold_reconciliation_tests.rs"]
+mod reconciliation;
+
 async fn tick(s: &Seed, now: DateTime<Utc>) -> Changes {
     let mut tx = s.pool.begin().await.unwrap();
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
@@ -13,7 +20,7 @@ async fn tick(s: &Seed, now: DateTime<Utc>) -> Changes {
         .execute(&mut *tx)
         .await
         .unwrap();
-    let result = aged_hold_tick(&mut tx, now).await.unwrap();
+    let (result, _) = aged_hold_tick(&mut tx, now).await.unwrap();
     tx.commit().await.unwrap();
     result
 }
@@ -100,7 +107,7 @@ async fn aged_hold_generation_prelocks_before_retirement_and_opposite_rule_order
             .await
             .unwrap();
         barrier.wait().await;
-        let changes = aged_hold_tick(&mut tx, now).await.unwrap();
+        let (changes, _) = aged_hold_tick(&mut tx, now).await.unwrap();
         tx.commit().await.unwrap();
         changes
     };

@@ -431,6 +431,11 @@ impl RealtimeSession {
         .and_then(|r| r);
         if result.is_err() {
             tracing::error!(execution_id = %self.id, "realtime finalization failed; reconciliation required");
+            // Realtime events remain uncorrelated (#294): no trace id.
+            crate::ops_log::emit(crate::ops_log::OpsEvent::FinalizationNeedsReconciliation {
+                finalizer: crate::ops_log::Finalizer::RealtimeFinish,
+                trace: None,
+            });
         }
         // Health is advisory: only provider-side failures count against it.
         let provider_error = error.filter(|e| {
@@ -470,6 +475,10 @@ impl Drop for RealtimeSession {
             runtime.spawn(async move {
                 if !matches!(timeout(Duration::from_secs(3), repository.realtime_finish(&record)).await, Ok(Ok(()))) {
                     tracing::error!(execution_id = %record.id, "cancelled realtime finalization failed; reconciliation required");
+                    crate::ops_log::emit(crate::ops_log::OpsEvent::FinalizationNeedsReconciliation {
+                        finalizer: crate::ops_log::Finalizer::RealtimeCancel,
+                        trace: None,
+                    });
                 }
             });
         }

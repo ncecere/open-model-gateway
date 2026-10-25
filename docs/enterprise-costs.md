@@ -2,7 +2,7 @@
 
 ## What the gateway measures
 
-Cloud and local deployments use configured rates and provider-reported token evidence. Local models are not implicitly free: an explicit zero rate is different from a missing rate. GPU, electricity, infrastructure amortization, taxes and vendor-specific extra fees are not metered here. Reports are configured-rate estimates, not provider invoices or a customer billing system.
+Cloud and local deployments use configured rates and provider-reported token evidence. Local models are not implicitly free: an explicit zero rate is different from a missing rate. GPU, electricity, infrastructure amortization, taxes and vendor-specific extra fees are not metered here. Reports are configured-rate estimates, not provider invoices or a customer billing system. The separate [provider-reported cost reconciliation API](provider-cost-reconciliation.md) retains uploaded Anthropic Cost Reports and aggregate comparisons without rewriting estimates; it does not verify invoices.
 
 The installation has no organization accounting layer. Activity belongs to Personal, Team or Project workspaces, with one execution per actual admitted upstream attempt. A request with explicit fallback can have several attempts and costs; root-request counts distinguish it from attempt counts. Embeddings are input-only: budget reservation uses the hard input ceiling, output is semantic zero, and missing input evidence is unresolved.
 

@@ -1,4 +1,17 @@
 -- Enterprise ACL assertions, followed by executable rollback-only probes.
+DO $$ DECLARE c text; BEGIN
+ IF NOT has_table_privilege('gateway_runtime','public.access_requests','SELECT') OR NOT has_column_privilege('gateway_runtime','public.access_requests','status','UPDATE') OR NOT has_column_privilege('gateway_runtime','public.workspaces','discoverable','UPDATE') THEN RAISE EXCEPTION 'request operations unavailable'; END IF;
+ IF has_table_privilege('gateway_runtime','public.access_requests','INSERT,UPDATE,DELETE,TRUNCATE') OR has_table_privilege('gateway_runtime','public.access_request_applications','INSERT,UPDATE,DELETE,TRUNCATE') OR has_any_column_privilege('gateway_runtime','public.access_request_applications','UPDATE') THEN RAISE EXCEPTION 'request history mutable'; END IF;
+ FOREACH c IN ARRAY ARRAY['id','requester','workspace_id','target_kind','requested_role','reason','idempotency_digest','payload_digest','created_at','expires_at','workspace_name_at_request'] LOOP
+  IF has_column_privilege('gateway_runtime','public.access_requests',c,'UPDATE') THEN RAISE EXCEPTION 'mutable request identity: %',c; END IF;
+ END LOOP;
+ FOREACH c IN ARRAY ARRAY['id','status','target_kind','requested_role','created_at','expires_at','decided_by','decided_at','workspace_name_at_request'] LOOP
+  IF has_column_privilege('gateway_runtime','public.access_requests',c,'INSERT') THEN RAISE EXCEPTION 'request initialization bypass: %',c; END IF;
+ END LOOP;
+ IF has_function_privilege('gateway_runtime','public.access_request_reason_cleanup()','EXECUTE') THEN RAISE EXCEPTION 'cleanup trigger callable'; END IF;
+ IF NOT has_function_privilege('gateway_runtime','public.scrub_access_request_reasons()','EXECUTE') THEN RAISE EXCEPTION 'bounded request reason cleanup unavailable'; END IF;
+ IF has_column_privilege('gateway_runtime','public.workspace_membership_grants','access_request_changed_at','UPDATE') THEN RAISE EXCEPTION 'membership change clock mutable'; END IF;
+END $$;
 DO $$ DECLARE r record; t text; BEGIN
  SELECT * INTO STRICT r FROM pg_roles WHERE rolname='gateway_runtime';
  IF r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls THEN RAISE EXCEPTION 'privileged runtime attributes'; END IF;
@@ -6,7 +19,7 @@ DO $$ DECLARE r record; t text; BEGIN
  IF EXISTS(SELECT FROM pg_database WHERE datname=current_database() AND datdba=r.oid) OR EXISTS(SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relowner=r.oid) THEN RAISE EXCEPTION 'runtime owns objects'; END IF;
  IF has_database_privilege('gateway_runtime','postgres','CONNECT') OR has_database_privilege('gateway_runtime','template1','CONNECT') THEN RAISE EXCEPTION 'maintenance database access'; END IF;
  IF has_schema_privilege('gateway_runtime','public','CREATE') OR has_database_privilege('gateway_runtime',current_database(),'CREATE') OR has_database_privilege('gateway_runtime',current_database(),'TEMP') THEN RAISE EXCEPTION 'runtime can create objects'; END IF;
- FOREACH t IN ARRAY ARRAY['_sqlx_migrations','deployment_prices','monetary_ledger','audit_events'] LOOP
+ FOREACH t IN ARRAY ARRAY['_sqlx_migrations','deployment_prices','monetary_ledger','audit_events','provider_cost_imports','provider_cost_lines','provider_cost_mappings','provider_cost_bindings','provider_reconciliations','configuration_changes'] LOOP
   IF has_table_privilege('gateway_runtime','public.'||t,'UPDATE,DELETE,TRUNCATE') OR has_any_column_privilege('gateway_runtime','public.'||t,'UPDATE') THEN RAISE EXCEPTION 'mutable immutable history: %',t; END IF;
  END LOOP;
  IF has_table_privilege('gateway_runtime','public._sqlx_migrations','INSERT') OR has_table_privilege('gateway_runtime','public.installation','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.installation','schema_family','UPDATE') OR has_column_privilege('gateway_runtime','public.installation','id','UPDATE') THEN RAISE EXCEPTION 'runtime can rewrite lineage'; END IF;
@@ -16,6 +29,8 @@ DO $$ DECLARE r record; t text; BEGIN
  FOREACH t IN ARRAY ARRAY['meter_usage','output_image_variant','provider_cost_microusd'] LOOP
   IF has_column_privilege('gateway_runtime','public.monetary_ledger',t,'UPDATE') THEN RAISE EXCEPTION 'mutable ledger evidence: %',t; END IF;
  END LOOP;
+ IF NOT has_table_privilege('gateway_runtime','public.configuration_changes','SELECT,INSERT') OR has_column_privilege('gateway_runtime','public.deployments','revision','UPDATE') THEN RAISE EXCEPTION 'configuration history/revision ACLs'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname IN ('configuration_changes_validate','configuration_changes_no_update','configuration_changes_no_truncate','deployment_configuration_revision','deployment_configuration_capture') AND tgenabled='O' AND NOT tgisinternal)<>5 THEN RAISE EXCEPTION 'configuration history guards missing or disabled'; END IF;
  IF has_column_privilege('gateway_runtime','public.api_keys','governance_key_id','UPDATE') THEN RAISE EXCEPTION 'mutable credential budget lineage'; END IF;
  IF has_any_column_privilege('gateway_runtime','public.policy_budgets','UPDATE') OR has_table_privilege('gateway_runtime','public.policy_budgets','TRUNCATE') THEN RAISE EXCEPTION 'budget rows rewritable in place'; END IF;
  IF has_table_privilege('gateway_runtime','public.key_model_restrictions','UPDATE,DELETE,TRUNCATE') OR has_any_column_privilege('gateway_runtime','public.key_model_restrictions','UPDATE') OR has_any_column_privilege('gateway_runtime','public.key_model_selections','UPDATE') THEN RAISE EXCEPTION 'mutable key restriction provenance'; END IF;
@@ -70,18 +85,36 @@ DO $$ DECLARE r record; t text; BEGIN
  IF has_table_privilege('gateway_runtime','public.scim_users','DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.scim_users','user_id','UPDATE') OR has_column_privilege('gateway_runtime','public.scim_users','created_at','UPDATE') THEN RAISE EXCEPTION 'scim user link removable or re-keyable'; END IF;
  IF has_column_privilege('gateway_runtime','public.scim_groups','id','UPDATE') OR has_any_column_privilege('gateway_runtime','public.scim_group_members','UPDATE') OR has_table_privilege('gateway_runtime','public.scim_groups','TRUNCATE') OR has_table_privilege('gateway_runtime','public.scim_group_members','TRUNCATE') THEN RAISE EXCEPTION 'scim group identity rewritable'; END IF;
  IF has_table_privilege('gateway_runtime','public.scim_state','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.scim_state','singleton','UPDATE') THEN RAISE EXCEPTION 'scim state row replaceable'; END IF;
- -- Scheduled reports (0061): configuration only; retained, immutable scope/creator.
+ -- Scheduled reports (0061/0063/0065): configuration, publication and shared delivery.
+ IF NOT has_column_privilege('gateway_runtime','public.alert_deliveries','report_run_id','INSERT') OR has_column_privilege('gateway_runtime','public.alert_deliveries','report_run_id','UPDATE') THEN RAISE EXCEPTION 'report delivery lineage ACL'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgrelid='public.alert_deliveries'::regclass AND tgname IN ('alert_delivery_set_bucket','alert_delivery_report_bucket','alert_delivery_generation_immutable') AND tgenabled='O' AND NOT tgisinternal)<>3 THEN RAISE EXCEPTION 'report/alert generation guards missing or disabled'; END IF;
+ IF NOT EXISTS(SELECT FROM pg_constraint WHERE conrelid='public.alert_deliveries'::regclass AND conname='alert_deliveries_source' AND convalidated) OR NOT EXISTS(SELECT FROM pg_constraint WHERE conrelid='public.alert_deliveries'::regclass AND conname='alert_deliveries_source_state' AND convalidated) THEN RAISE EXCEPTION 'report delivery source guards missing'; END IF;
  IF NOT has_table_privilege('gateway_runtime','public.report_schedules','SELECT') OR has_table_privilege('gateway_runtime','public.report_schedules','INSERT,UPDATE,DELETE,TRUNCATE') THEN RAISE EXCEPTION 'report schedule table ACL'; END IF;
- FOREACH t IN ARRAY ARRAY['id','scope_kind','workspace_id','cost_center_id','created_by','configuration_revision','created_at','updated_at','next_run_at','last_period_end'] LOOP
+ FOREACH t IN ARRAY ARRAY['id','scope_kind','workspace_id','cost_center_id','created_by','configuration_revision','created_at','updated_at'] LOOP
   IF has_column_privilege('gateway_runtime','public.report_schedules',t,'UPDATE') THEN RAISE EXCEPTION 'mutable report schedule identity/cursor: %',t; END IF;
  END LOOP;
- FOREACH t IN ARRAY ARRAY['id','configuration_revision','recipient_revision','created_at','updated_at','deleted_at','next_run_at','last_period_end'] LOOP
+ FOREACH t IN ARRAY ARRAY['id','configuration_revision','recipient_revision','created_at','updated_at','deleted_at','next_run_at','next_period_end','last_period_end'] LOOP
   IF has_column_privilege('gateway_runtime','public.report_schedules',t,'INSERT') THEN RAISE EXCEPTION 'report schedule initial state bypass: %',t; END IF;
  END LOOP;
  IF NOT has_column_privilege('gateway_runtime','public.report_schedules','cadence','UPDATE') OR NOT has_column_privilege('gateway_runtime','public.report_schedules','deleted_at','UPDATE') OR NOT has_column_privilege('gateway_runtime','public.report_schedules','recipient_revision','UPDATE') OR NOT has_column_privilege('gateway_runtime','public.report_schedules','created_by','INSERT') THEN RAISE EXCEPTION 'report schedules not maintainable'; END IF;
  IF NOT has_table_privilege('gateway_runtime','public.report_schedule_recipients','SELECT,DELETE') OR NOT has_column_privilege('gateway_runtime','public.report_schedule_recipients','user_id','INSERT') OR has_any_column_privilege('gateway_runtime','public.report_schedule_recipients','UPDATE') OR has_table_privilege('gateway_runtime','public.report_schedule_recipients','TRUNCATE') THEN RAISE EXCEPTION 'report recipient ACL'; END IF;
  IF (SELECT count(*) FROM pg_trigger WHERE tgname IN ('report_schedules_guard','report_schedules_no_delete','report_schedules_no_truncate','report_schedule_recipients_no_update','report_schedule_recipients_no_truncate') AND tgenabled='O' AND NOT tgisinternal)<>5 THEN RAISE EXCEPTION 'report schedule guards missing or disabled'; END IF;
  IF NOT EXISTS(SELECT FROM work_leases WHERE name='report_scheduler') THEN RAISE EXCEPTION 'report scheduler lease missing'; END IF;
+ FOREACH t IN ARRAY ARRAY['report_runs','report_snapshots','report_generation_outcomes'] LOOP
+  IF NOT has_table_privilege('gateway_runtime','public.'||t,'SELECT') OR has_table_privilege('gateway_runtime','public.'||t,'INSERT,UPDATE,DELETE,TRUNCATE') OR has_any_column_privilege('gateway_runtime','public.'||t,'UPDATE') THEN RAISE EXCEPTION 'report append-only ACL: %',t; END IF;
+ END LOOP;
+ IF NOT has_column_privilege('gateway_runtime','public.report_runs','claim_token','INSERT') OR NOT has_column_privilege('gateway_runtime','public.report_snapshots','body','INSERT') OR NOT has_column_privilege('gateway_runtime','public.report_schedules','next_period_end','UPDATE') THEN RAISE EXCEPTION 'report generation not maintainable'; END IF;
+ IF has_column_privilege('gateway_runtime','public.report_runs','created_at','INSERT') OR has_column_privilege('gateway_runtime','public.report_runs','configuration','INSERT') OR has_column_privilege('gateway_runtime','public.report_generation_claims','schedule_id','UPDATE') OR has_table_privilege('gateway_runtime','public.report_generation_claims','DELETE,TRUNCATE') THEN RAISE EXCEPTION 'report lineage bypass'; END IF;
+ IF has_column_privilege('gateway_runtime','public.report_snapshots','expires_at','INSERT') THEN RAISE EXCEPTION 'report retention clock bypass'; END IF;
+ IF NOT has_column_privilege('gateway_runtime','public.report_generation_outcomes','category','INSERT') OR has_column_privilege('gateway_runtime','public.report_generation_outcomes','created_at','INSERT') THEN RAISE EXCEPTION 'report outcome ACL'; END IF;
+ IF NOT has_function_privilege('gateway_runtime','public.omg_report_prune_snapshots(integer)','EXECUTE') THEN RAISE EXCEPTION 'report expiry unavailable'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname IN ('report_schedules_z_calendar_guard','report_claim_identity_guard','report_claims_no_delete','report_claims_no_truncate','report_run_guard','report_runs_immutable','report_runs_no_truncate','report_snapshots_immutable','report_snapshots_no_truncate') AND tgenabled='O' AND NOT tgisinternal)<>9 THEN RAISE EXCEPTION 'report generation guards missing or disabled'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname IN ('report_generation_outcomes_immutable','report_generation_outcomes_no_truncate') AND tgenabled='O' AND NOT tgisinternal)<>2 THEN RAISE EXCEPTION 'report outcome guards missing or disabled'; END IF;
+ -- 0064: every provider-reported history table is SELECT/INSERT only.
+ FOREACH t IN ARRAY ARRAY['provider_cost_imports','provider_cost_lines','provider_cost_mappings','provider_cost_bindings','provider_reconciliations'] LOOP
+  IF NOT has_table_privilege('gateway_runtime','public.'||t,'SELECT,INSERT') THEN RAISE EXCEPTION 'provider cost history unavailable: %',t; END IF;
+  IF (SELECT count(*) FROM pg_trigger WHERE tgrelid=('public.'||t)::regclass AND tgenabled='O' AND NOT tgisinternal AND tgfoid='public.immutable_history'::regproc)<>2 THEN RAISE EXCEPTION 'provider cost append-only guards missing: %',t; END IF;
+ END LOOP;
  -- Webhooks (0057): explicit column ACLs, generated identity and frozen bytes.
  FOREACH t IN ARRAY ARRAY['alert_webhook_destinations','alert_webhook_outbox'] LOOP
   IF NOT has_table_privilege('gateway_runtime','public.'||t,'SELECT') OR has_table_privilege('gateway_runtime','public.'||t,'INSERT,UPDATE,DELETE,TRUNCATE') THEN RAISE EXCEPTION 'webhook table privileges: %',t; END IF;
@@ -167,7 +200,7 @@ DO $$ DECLARE r record; t text; BEGIN
   IF has_column_privilege('gateway_runtime','public.batch_route_waits',t,'UPDATE') THEN RAISE EXCEPTION 'mutable batch demand identity: %',t; END IF;
  END LOOP;
  IF has_table_privilege('gateway_runtime','public.batch_route_waits','TRUNCATE') THEN RAISE EXCEPTION 'batch demand truncatable'; END IF;
- IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units','valid_model_protocols_base','valid_cost_components_base','valid_price_lines_base','valid_upstream_job_id','rate_reserved_tokens','rate_contribution','omg_scope_key','omg_type_key','omg_scope_lock_audit_order','omg_lock_scopes','omg_admission_locks','omg_lock_scope_rows','omg_catalog_lock_mode','omg_scope_lock_exclusive','omg_config_bump','omg_lease_acquire','omg_lease_fence','omg_lease_complete','omg_lease_release','omg_ensure_partitions','omg_partition_coverage','omg_partition_bounds','omg_month_start','omg_next_month','omg_usage_aggregate','omg_usage_rows','omg_admin_tokens_revoke_owner','omg_admin_tokens_require_read_committed','omg_admin_tokens_require_owner_lock','valid_admin_token_scopes','valid_admin_token_allowlist','alert_webhook_summary','alert_webhook_payload','alert_delivery_lock_buckets','alert_delivery_recent_count')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
+ IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units','valid_model_protocols_base','valid_cost_components_base','valid_price_lines_base','valid_upstream_job_id','rate_reserved_tokens','rate_contribution','omg_scope_key','omg_type_key','omg_scope_lock_audit_order','omg_lock_scopes','omg_admission_locks','omg_lock_scope_rows','omg_catalog_lock_mode','omg_scope_lock_exclusive','omg_config_bump','omg_lease_acquire','omg_lease_fence','omg_lease_complete','omg_lease_release','omg_ensure_partitions','omg_partition_coverage','omg_partition_bounds','omg_month_start','omg_next_month','omg_usage_aggregate','omg_usage_rows','omg_admin_tokens_revoke_owner','omg_admin_tokens_require_read_committed','omg_admin_tokens_require_owner_lock','valid_admin_token_scopes','valid_admin_token_allowlist','alert_webhook_summary','alert_webhook_payload','omg_report_prune_snapshots','alert_delivery_lock_buckets','alert_delivery_recent_count','scrub_access_request_reasons')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
  -- Change notifications (0028): seeded topics, forward-only versions, triggers present.
  IF has_table_privilege('gateway_runtime','public.config_versions','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.config_versions','topic','UPDATE') THEN RAISE EXCEPTION 'configuration topics mutable'; END IF;
  IF NOT has_table_privilege('gateway_runtime','public.config_versions','SELECT') OR NOT has_column_privilege('gateway_runtime','public.config_versions','version','UPDATE') THEN RAISE EXCEPTION 'configuration versions not maintainable by runtime'; END IF;
@@ -293,11 +326,35 @@ DO $$ BEGIN
  END;
 END $$;
 SELECT version,checksum,success FROM public._sqlx_migrations ORDER BY version;
+-- Executable provider-cost INSERT and refusal probes, all rollback-only.
+DO $$ DECLARE
+ u uuid:=gen_random_uuid(); imp uuid:=gen_random_uuid(); mapping uuid:=gen_random_uuid();
+ conn uuid:=gen_random_uuid(); account text:='acl-'||gen_random_uuid(); t text;
+BEGIN
+ INSERT INTO users(id,email) VALUES(u,'provider-cost-'||u||'@example.invalid');
+ INSERT INTO provider_connections(id,name,provider,credential_ref) VALUES(conn,'ACL cost scope','anthropic','env:PLACEHOLDER');
+ INSERT INTO provider_cost_imports(id,account_id,period_start,period_end,exported_at,actor_user_id,evidence_reference,evidence_json,fingerprint,line_count)
+  VALUES(imp,account,'2025-08-01T00:00:00Z','2025-08-02T00:00:00Z','2025-08-03T00:00:00Z',u,'opaque:acl','{}',decode(repeat('48',32),'hex'),1);
+ INSERT INTO provider_cost_lines(import_id,line_number,source_page,source_pointer,bucket_start,bucket_end,dimensions,original_amount,amount_microusd,conversion_residual_microusd,dimension_key)
+  VALUES(imp,1,0,'/data/0/results/0','2025-08-01T00:00:00Z','2025-08-02T00:00:00Z','{"currency":"USD"}','-0.00015',-2,'0.5',repeat('48',32));
+ INSERT INTO provider_cost_mappings(id,account_id,evidence_reference,actor_user_id,binding_count) VALUES(mapping,account,'opaque:acl',u,1);
+ INSERT INTO provider_cost_bindings(mapping_id,binding_number,connection_id,effective_start,effective_end,exclusive,non_omg_traffic,attested,evidence_reference,model_mappings)
+  VALUES(mapping,1,conn,'2025-08-01','2025-08-02',false,true,true,'opaque:acl','[]');
+ INSERT INTO provider_reconciliations(id,account_id,import_id,mapping_id,actor_user_id,snapshot) VALUES(gen_random_uuid(),account,imp,mapping,u,'{}');
+ FOREACH t IN ARRAY ARRAY['provider_cost_imports','provider_cost_lines','provider_cost_mappings','provider_cost_bindings','provider_reconciliations'] LOOP
+  EXECUTE format('SELECT count(*) FROM %I',t);
+  BEGIN EXECUTE format('UPDATE %1$I SET %2$I=%2$I',t,CASE WHEN t='provider_cost_lines' THEN 'original_amount' WHEN t='provider_cost_bindings' THEN 'evidence_reference' ELSE 'id' END); RAISE EXCEPTION 'provider cost UPDATE allowed: %',t; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN EXECUTE format('DELETE FROM %I',t); RAISE EXCEPTION 'provider cost DELETE allowed: %',t; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN EXECUTE format('TRUNCATE %I CASCADE',t); RAISE EXCEPTION 'provider cost TRUNCATE allowed: %',t; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ END LOOP;
+END $$;
+SET CONSTRAINTS provider_cost_import_complete,provider_cost_mapping_complete IMMEDIATE;
+SET CONSTRAINTS provider_cost_import_complete,provider_cost_mapping_complete DEFERRED;
 -- Take the normal management lock before any probe can touch an existing
 -- saved destination (including the rollback-only full-capacity case).
 SELECT lock_installation();
--- Report configuration probes: runtime may manage configuration, never identity,
--- cursors, retained tombstones or a recipient outside the fifty scoped slots.
+-- Report probes: runtime may manage configuration/cursors, never immutable
+-- lineage, snapshots, retained tombstones or recipients outside fifty slots.
 DO $$ DECLARE who uuid:=gen_random_uuid(); schedule uuid; col text; BEGIN
  INSERT INTO users(id,email) VALUES(who,'report-acl-'||who||'@example.invalid');
  INSERT INTO report_schedules(scope_kind,created_by,cadence,timezone,delivery_time) VALUES('installation',who,'weekly','UTC','09:00') RETURNING id INTO schedule;
@@ -309,7 +366,7 @@ DO $$ DECLARE who uuid:=gen_random_uuid(); schedule uuid; col text; BEGIN
  UPDATE report_schedules SET recipient_revision=recipient_revision+1 WHERE id=schedule;
  IF (SELECT configuration_revision FROM report_schedules WHERE id=schedule)<>3 THEN RAISE EXCEPTION 'report recipient change not versioned'; END IF;
  BEGIN UPDATE report_schedules SET recipient_revision=recipient_revision-1 WHERE id=schedule; RAISE EXCEPTION 'report recipient revision decreased'; EXCEPTION WHEN raise_exception THEN IF SQLERRM NOT LIKE 'report recipient revision must%' THEN RAISE; END IF; END;
- FOREACH col IN ARRAY ARRAY['id','scope_kind','workspace_id','cost_center_id','created_by','configuration_revision','created_at','updated_at','next_run_at','last_period_end'] LOOP
+ FOREACH col IN ARRAY ARRAY['id','scope_kind','workspace_id','cost_center_id','created_by','configuration_revision','created_at','updated_at'] LOOP
   BEGIN EXECUTE format('UPDATE report_schedules SET %1$I=%1$I WHERE id=$1',col) USING schedule; RAISE EXCEPTION 'report identity/cursor update allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  END LOOP;
  BEGIN INSERT INTO report_schedules(scope_kind,created_by,cadence,timezone,delivery_time,configuration_revision) VALUES('installation',who,'weekly','UTC','09:00',5); RAISE EXCEPTION 'report revision insert allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
@@ -322,6 +379,31 @@ DO $$ DECLARE who uuid:=gen_random_uuid(); schedule uuid; col text; BEGIN
  DELETE FROM report_schedule_recipients WHERE schedule_id=schedule;
  UPDATE report_schedules SET state='paused',deleted_at=clock_timestamp() WHERE id=schedule;
  BEGIN UPDATE report_schedules SET deleted_at=NULL WHERE id=schedule; RAISE EXCEPTION 'deleted schedule resurrected'; EXCEPTION WHEN raise_exception THEN IF SQLERRM NOT LIKE 'immutable report schedule%' THEN RAISE; END IF; END;
+END $$;
+-- 0065 shared envelopes keep report lineage insert-only. No existing rows
+-- are changed by these refusal probes, including on a live installation.
+DO $$ BEGIN
+ BEGIN UPDATE alert_deliveries SET report_run_id=report_run_id; RAISE EXCEPTION 'report delivery identity mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN INSERT INTO alert_deliveries(id,report_run_id,transition) VALUES(gen_random_uuid(),gen_random_uuid(),'fired'); RAISE EXCEPTION 'unpublished report delivery allowed'; EXCEPTION WHEN no_data_found THEN NULL; END;
+ BEGIN INSERT INTO alert_deliveries(id,event_id,report_run_id,transition) VALUES(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'fired'); RAISE EXCEPTION 'mixed-source delivery allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+ BEGIN INSERT INTO alert_deliveries(id,report_run_id,transition,initialized) VALUES(gen_random_uuid(),gen_random_uuid(),'fired',true); RAISE EXCEPTION 'preinitialized report delivery allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+ -- The report trigger is invoked by INSERT, never callable with runtime's
+ -- own authority; quota metadata remains immutable under the shared ACL.
+ IF has_function_privilege('gateway_runtime','public.report_delivery_set_bucket()','EXECUTE') THEN RAISE EXCEPTION 'report trigger directly executable'; END IF;
+ BEGIN UPDATE alert_deliveries SET quota_charged=true WHERE report_run_id IS NOT NULL; RAISE EXCEPTION 'report quota metadata mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+END $$;
+-- 0063 refusal probes never take/steal the running scheduler's lease. The
+-- successful primary snapshot + fenced publication path runs in the disposable
+-- runtime-role integration test, not against an operator's live report queue.
+DO $$ DECLARE stmt text; BEGIN
+ FOREACH stmt IN ARRAY ARRAY['UPDATE report_runs SET configuration_revision=2','DELETE FROM report_runs','TRUNCATE report_runs','UPDATE report_snapshots SET body=''{}''','DELETE FROM report_snapshots','TRUNCATE report_snapshots','UPDATE report_generation_claims SET schedule_id=gen_random_uuid()','DELETE FROM report_generation_claims','TRUNCATE report_generation_claims','UPDATE report_generation_outcomes SET category=''other''','DELETE FROM report_generation_outcomes','TRUNCATE report_generation_outcomes'] LOOP
+  BEGIN EXECUTE stmt; RAISE EXCEPTION 'report immutable operation allowed: %',stmt; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ END LOOP;
+ IF public.omg_report_prune_snapshots(0)<>0 THEN RAISE EXCEPTION 'zero-cap report prune'; END IF;
+ BEGIN
+  INSERT INTO report_runs(schedule_id,period_start,period_end,configuration_revision,claim_token,lease_holder,lease_epoch,skipped_intervals,observed_at) VALUES(gen_random_uuid(),now()-interval '7 days',now(),1,gen_random_uuid(),gen_random_uuid(),-1,0,now());
+  RAISE EXCEPTION 'unfenced report publication allowed';
+ EXCEPTION WHEN SQLSTATE '55006' THEN NULL; END;
 END $$;
 -- Webhook executable probes run as runtime and roll back with everything below.
 DO $$ DECLARE receiver uuid; ev uuid:=gen_random_uuid(); col text; gen bigint; BEGIN
@@ -441,6 +523,18 @@ BEGIN
  IF NOT workspace_model_allowed(ws,m) OR EXISTS(SELECT FROM key_model_selections WHERE workspace_id=ws) THEN RAISE EXCEPTION 'direct access/key resurrection invariant'; END IF;
  INSERT INTO provider_connections(id,name,provider,credential_ref,endpoint) VALUES(pc,'Rollback local','openai_compatible','none','http://127.0.0.1:19091/v1');
  INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model) VALUES(d,m,pc,'disabled-probe');
+ -- #86: real invoker-rights history writes and immutable evidence probes.
+ IF (SELECT revision FROM deployments WHERE id=d)<>1 OR (SELECT count(*) FROM configuration_changes WHERE deployment_id=d AND revision=1 AND before_enabled IS NULL AND NOT after_enabled)<>1 THEN RAISE EXCEPTION 'deployment creation history missing'; END IF;
+ UPDATE deployments SET enabled=true WHERE id=d;
+ UPDATE deployments SET enabled=true WHERE id=d;
+ IF (SELECT revision FROM deployments WHERE id=d)<>2 OR (SELECT count(*) FROM configuration_changes WHERE deployment_id=d)<>2 THEN RAISE EXCEPTION 'deployment change/no-op history incorrect'; END IF;
+ IF NOT EXISTS(SELECT FROM configuration_changes c JOIN audit_events a ON (a.id,a.created_at)=(c.audit_event_id,c.audit_created_at) WHERE c.deployment_id=d AND c.revision=2 AND NOT c.before_enabled AND c.after_enabled) THEN RAISE EXCEPTION 'history audit identity or values missing'; END IF;
+ changed := gen_random_uuid();
+ BEGIN INSERT INTO configuration_changes(id,created_at,audit_event_id,audit_created_at,target_kind,deployment_id,schema_version,before_enabled,after_enabled,revision) VALUES(changed,now(),changed,now(),'deployment',d,1,false,true,3); RAISE EXCEPTION 'orphan history allowed'; EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+ BEGIN UPDATE configuration_changes SET after_enabled=false WHERE deployment_id=d; RAISE EXCEPTION 'history update allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN DELETE FROM configuration_changes WHERE deployment_id=d; RAISE EXCEPTION 'history deletion allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN TRUNCATE configuration_changes; RAISE EXCEPTION 'history truncation allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN UPDATE deployments SET revision=0 WHERE id=d; RAISE EXCEPTION 'revision rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  -- Bedrock identity modes (0008): reference shapes, identity/endpoint replacement, immutable region.
  INSERT INTO provider_connections(id,name,provider,credential_ref,region) VALUES(gen_random_uuid(),'Rollback Bedrock','bedrock','aws:role:arn:aws:iam::123456789012:role/gateway/bedrock;external_id=probe-external;session_name=gateway-probe','us-east-1');
  UPDATE provider_connections SET credential_ref='aws:profile:bedrock-prod',endpoint='https://vpce-0probe.bedrock-runtime.us-east-1.vpce.amazonaws.com' WHERE name='Rollback Bedrock';
@@ -1017,6 +1111,31 @@ BEGIN
   -- Business-action audit attribution: an admin-token-attributed row reads
   -- back the token id, like every other audit_events column.
   INSERT INTO audit_events(id,actor_user_id,action,resource_type,resource_id,admin_token_id) VALUES(gen_random_uuid(),tu,'provider.updated','provider',gen_random_uuid(),ta);
+ END;
+ -- Access requests (0066): real runtime writes, frozen identity/linkage and self-decision refusal.
+ DECLARE ru uuid:=gen_random_uuid(); decider uuid:=gen_random_uuid(); ws uuid:=gen_random_uuid(); req uuid; grant_id uuid:=gen_random_uuid(); BEGIN
+  INSERT INTO users(id,email) VALUES(ru,'request-'||ru||'@example.invalid'),(decider,'decider-'||decider||'@example.invalid');
+  INSERT INTO workspaces(id,name,kind,discoverable) VALUES(ws,'Request probe','team',true);
+  INSERT INTO access_requests(requester,workspace_id,reason,idempotency_digest,payload_digest) VALUES(ru,ws,'Probe',decode(repeat('ab',32),'hex'),decode(repeat('cd',32),'hex')) RETURNING id INTO req;
+  -- UX fix (#83): the server, not the runtime caller, captures the workspace name at INSERT.
+  IF (SELECT workspace_name_at_request FROM access_requests WHERE id=req)<>'Request probe' THEN RAISE EXCEPTION 'workspace name not captured at request'; END IF;
+  BEGIN UPDATE access_requests SET workspace_name_at_request='rewrite' WHERE id=req; RAISE EXCEPTION 'workspace name at request mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  IF scrub_access_request_reasons()<>0 THEN RAISE EXCEPTION 'active requester reason scrubbed'; END IF;
+  BEGIN UPDATE workspace_membership_grants SET access_request_changed_at=now(); RAISE EXCEPTION 'membership clock rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE access_requests SET reason='rewrite' WHERE id=req; RAISE EXCEPTION 'request reason mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE access_requests SET expires_at=now() WHERE id=req; RAISE EXCEPTION 'request expiry mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN DELETE FROM access_requests WHERE id=req; RAISE EXCEPTION 'request removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE access_requests SET status='approved',decided_by=ru WHERE id=req; RAISE EXCEPTION 'request self-decision allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  -- The configuration probe above forced ALL constraints IMMEDIATE; the
+  -- application pair is checked as the gateway commits it: deferred, then once.
+  SET CONSTRAINTS access_requests_application,access_request_applications_check DEFERRED;
+  INSERT INTO workspace_membership_grants(id,workspace_id,user_id,role,source) VALUES(grant_id,ws,ru,'member','manual');
+  INSERT INTO access_request_applications(request_id,workspace_id,requester,membership_grant_id) VALUES(req,ws,ru,grant_id);
+  UPDATE access_requests SET status='approved',decided_by=decider WHERE id=req;
+  SET CONSTRAINTS access_requests_application,access_request_applications_check IMMEDIATE;
+  BEGIN UPDATE access_requests SET status='pending',decided_by=NULL,decided_at=NULL WHERE id=req; RAISE EXCEPTION 'request reopened'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE access_request_applications SET membership_grant_id=gen_random_uuid() WHERE request_id=req; RAISE EXCEPTION 'application mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN DELETE FROM access_request_applications WHERE request_id=req; RAISE EXCEPTION 'application removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  END;
  -- Work leases (0029): election, renewal, fencing, release and takeover as runtime.
  DECLARE me uuid:=gen_random_uuid(); other uuid:=gen_random_uuid(); term bigint; BEGIN

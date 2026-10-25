@@ -11,6 +11,7 @@ struct DeploymentState {
     model_id: Uuid,
     public_name: String,
     enabled: bool,
+    revision: i64,
     model_enabled: bool,
     connection_enabled: bool,
     provider: String,
@@ -37,7 +38,6 @@ struct AffectedWorkspace {
 struct PreviewSnapshot {
     change: DeploymentChange,
     observed_at: chrono::DateTime<chrono::Utc>,
-    catalog_version: i64,
     dependency_versions: Value,
     other_serving_routes: i64,
     workspaces: Vec<AffectedWorkspace>,
@@ -48,8 +48,8 @@ impl PreviewSnapshot {
         tx: &mut Transaction<'_, Postgres>,
         change: DeploymentChange,
     ) -> Result<Self, ApiError> {
-        let (observed_at, catalog_version, dependency_versions) = sqlx::query_as::<_, (chrono::DateTime<chrono::Utc>, i64, Value)>(
-            "SELECT transaction_timestamp(),(SELECT version FROM config_versions WHERE topic='catalog'),(SELECT jsonb_object_agg(topic,version::text) FROM config_versions WHERE topic IN ('catalog','access'))",
+        let (observed_at, dependency_versions) = sqlx::query_as::<_, (chrono::DateTime<chrono::Utc>, Value)>(
+            "SELECT transaction_timestamp(),(SELECT jsonb_object_agg(topic,version::text) FROM config_versions WHERE topic IN ('catalog','access'))",
         ).fetch_one(&mut **tx).await?;
         let other_serving_routes = sqlx::query_scalar(&format!(
             "SELECT count(*) FROM deployments d WHERE d.model_id=$1 AND d.id<>$2 AND {}",
@@ -82,7 +82,6 @@ impl PreviewSnapshot {
         Ok(Self {
             change,
             observed_at,
-            catalog_version,
             dependency_versions,
             other_serving_routes,
             workspaces,
@@ -96,7 +95,7 @@ impl PreviewSnapshot {
         let gained = !c.serving_before && c.serving_after;
         json!({
             "target": {"kind":"deployment","id":c.before.id},
-            "expected_revision": format!("catalog:{}", self.catalog_version),
+            "expected_revision": c.before.revision.to_string(),
             "diff": if c.before.enabled == c.enabled { vec![] } else { vec![json!({"field":"enabled","before":c.before.enabled,"after":c.enabled})] },
             "serving_routes_gained": if gained { vec![c.before.id] } else { vec![] },
             "serving_routes_lost": if lost { vec![c.before.id] } else { vec![] },
@@ -108,7 +107,7 @@ impl PreviewSnapshot {
                 "Configuration estimate, not a reservation. Apply revalidates live configuration and authority; this preview does not authorize a commit.",
                 "Serving eligibility is configuration-only, not a price, health, quota or admission guarantee. Existing admitted requests may finish.",
                 "Affected workspace details and counts cover active shared workspaces with current model selections only. Personal workspace effects are omitted.",
-                "The expected revision is the installation catalog configuration version, not a per-deployment revision. Existing apply routes do not enforce preview preconditions."
+                "The expected revision is the deployment enablement revision. Existing apply routes do not enforce preview preconditions."
             ]
         })
     }
@@ -141,7 +140,7 @@ impl DeploymentChange {
             &resources::platform_role_snapshot(tx, u.user_id()).await?,
         )?;
         let before = sqlx::query_as::<_, DeploymentState>(
-            "SELECT d.id,d.model_id,m.public_name,d.enabled,m.enabled model_enabled,p.enabled connection_enabled,p.provider,m.supported_protocols FROM deployments d JOIN models m ON m.id=d.model_id JOIN provider_connections p ON p.id=d.provider_connection_id WHERE d.id=$1",
+            "SELECT d.id,d.model_id,m.public_name,d.enabled,d.revision,m.enabled model_enabled,p.enabled connection_enabled,p.provider,m.supported_protocols FROM deployments d JOIN models m ON m.id=d.model_id JOIN provider_connections p ON p.id=d.provider_connection_id WHERE d.id=$1",
         ).bind(id).fetch_optional(&mut **tx).await?.ok_or_else(missing)?;
         Self::validate(before, input.enabled)
     }

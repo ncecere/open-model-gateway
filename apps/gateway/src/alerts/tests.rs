@@ -11,6 +11,8 @@ mod aged_hold;
 mod fair_dispatch;
 #[path = "generation_tests.rs"]
 mod generation;
+#[path = "report_generation_bound_tests.rs"]
+mod report_generation_bounds;
 
 async fn expiry_now(s: &Seed) -> DateTime<Utc> {
     sqlx::query_scalar("SELECT clock_timestamp()")

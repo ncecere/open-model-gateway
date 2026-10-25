@@ -267,6 +267,7 @@ async fn issue_313_real_http_client_posts_once_to_localhost_and_accepts_bounded_
             true,
             Duration::from_secs(1),
             EXCHANGE,
+            true,
         )
         .expect("development localhost export client must construct");
         let headers = super::parse_otlp_headers(
@@ -366,6 +367,7 @@ fn issue_313_real_http_client_constructor_refuses_public_literal_before_transpor
         true,
         Duration::from_secs(1),
         Duration::from_secs(2),
+        true,
     )
     .expect_err("HTTP public literal must fail during client construction");
     let reason = error.to_string();

@@ -336,6 +336,18 @@
       "scope": "platform:read",
       "token_policy": "Scope"
     },
+    "GET /api/v1/platform/deployments/{id}/configuration/history": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/platform/deployments/{id}/configuration/history/{change}": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
     "GET /api/v1/platform/holds": {
       "access": "PlatformRead",
       "operation": {},
@@ -438,6 +450,48 @@
       "scope": "platform:read",
       "token_policy": "Scope"
     },
+    "GET /api/v1/platform/provider-cost-imports": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/platform/provider-cost-imports/{id}": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/platform/provider-cost-imports/{id}/lines": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/platform/provider-cost-mappings": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/platform/provider-cost-mappings/{id}": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/platform/provider-reconciliations": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/platform/provider-reconciliations/{id}": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
     "GET /api/v1/platform/providers": {
       "access": "PlatformRead",
       "operation": {},
@@ -449,6 +503,30 @@
       "operation": {},
       "scope": "platform:read",
       "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/report-schedules/{id}/runs": {
+      "access": "PlatformRead",
+      "operation": {
+        "summary": "Latest 1–100 immutable occurrences and generation outcomes (default 20); no-store"
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/platform/report-schedules/{id}/runs/{run}": {
+      "access": "PlatformRead",
+      "operation": {
+        "summary": "Live-authorized immutable aggregate snapshot; expired metadata has snapshot null; no-store"
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/platform/report-schedules/{id}/runs/{run}/csv": {
+      "access": "PlatformRead",
+      "operation": {
+        "summary": "Live-authorized aggregate CSV; at most 1000 rows; formula-safe, no-store; expired 410, oversized 422"
+      },
+      "scope": null,
+      "token_policy": "Denied"
     },
     "GET /api/v1/platform/server-policy": {
       "access": "PlatformRead",
@@ -768,6 +846,30 @@
       "scope": "platform:read",
       "token_policy": "Scope"
     },
+    "GET /api/v1/workspaces/{ws}/report-schedules/{id}/runs": {
+      "access": "WorkspaceReportAdmin",
+      "operation": {
+        "summary": "Latest 1–100 immutable occurrences and generation outcomes (default 20); no-store"
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/report-schedules/{id}/runs/{run}": {
+      "access": "WorkspaceReportAdmin",
+      "operation": {
+        "summary": "Owner-private personal or shared owner/admin aggregate snapshot; expired metadata has snapshot null; no-store"
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/report-schedules/{id}/runs/{run}/csv": {
+      "access": "WorkspaceReportAdmin",
+      "operation": {
+        "summary": "Live-authorized aggregate CSV; at most 1000 rows; formula-safe, no-store; expired 410, oversized 422"
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
     "GET /api/v1/workspaces/{ws}/requests": {
       "access": "WorkspaceMember",
       "operation": {},
@@ -1015,6 +1117,24 @@
       "token_policy": "Denied"
     },
     "POST /api/v1/platform/oidc/group-mappings/{id}/preview": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/platform/provider-cost-imports": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/platform/provider-cost-mappings": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/platform/provider-reconciliations": {
       "access": "PlatformWrite",
       "operation": {},
       "scope": null,

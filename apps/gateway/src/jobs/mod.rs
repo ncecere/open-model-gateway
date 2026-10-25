@@ -467,6 +467,11 @@ impl Attempt {
             .is_err()
         {
             tracing::error!(execution_id = %self.id, "job attempt finalization failed; reconciliation required");
+            // Job events remain uncorrelated (#294): no trace id.
+            crate::ops_log::emit(crate::ops_log::OpsEvent::FinalizationNeedsReconciliation {
+                finalizer: crate::ops_log::Finalizer::JobFail,
+                trace: None,
+            });
         }
         error
     }
@@ -486,6 +491,10 @@ impl Drop for Attempt {
             runtime.spawn(async move {
                 if crate::governance::finish(&store, &record).await.is_err() {
                     tracing::error!(execution_id = %record.id, "cancelled job attempt finalization failed; reconciliation required");
+                    crate::ops_log::emit(crate::ops_log::OpsEvent::FinalizationNeedsReconciliation {
+                        finalizer: crate::ops_log::Finalizer::JobCancel,
+                        trace: None,
+                    });
                 }
             });
         }

@@ -30,6 +30,33 @@ use error::InferenceError;
 use repository::{AttemptTelemetry, ExecutionFinish, ExecutionStart, InferenceRepository, Outcome};
 use types::{ApiProtocol, ChatEvent, ChatRequest, ProviderOutput, Usage};
 
+/// Opaque proof that a trace id came from this module's own
+/// shared-admission-proven `log_trace_id` provenance (#98, #294): computed
+/// only right after a shared-workspace admission has already committed for
+/// this request (see the call site below), never for a personal workspace
+/// or while telemetry is disabled. No crate-wide raw constructor: the
+/// private `from_provenance` is reachable only from this module and its
+/// submodules, never from `ops_log`, `leases`, `jobs` or any other module.
+/// `as_str` is read-only and does not let a caller mint a new value from it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LogTraceId(String);
+impl LogTraceId {
+    fn from_provenance(hex: String) -> Self {
+        Self(hex)
+    }
+    /// Test fixtures only: compiled out of every production build, so this
+    /// is never a production forgery path.
+    #[cfg(test)]
+    pub(crate) fn for_test(hex: &str) -> Self {
+        Self(hex.to_owned())
+    }
+    /// Read-only: the existing hexadecimal value, for stderr diagnostics and
+    /// the wire `traceId` field. Never lets a caller mint a new value.
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// `gen_ai.operation.name` of a protocol routed through the shared engine.
 fn operation_of(protocol: ApiProtocol) -> telemetry::Operation {
     match protocol {
@@ -700,7 +727,10 @@ impl Engine {
             // Logging-only correlation (#98): known only once a
             // shared-workspace admission has already committed for this
             // request; never for personal workspaces.
-            let log_trace_id = telemetry.trace_from_eligibility().map(hex::encode);
+            let log_trace_id = telemetry
+                .trace_from_eligibility()
+                .map(hex::encode)
+                .map(LogTraceId::from_provenance);
             let mut guard = ExecutionGuard::new(
                 self.repository.clone(),
                 execution_id,
@@ -1005,7 +1035,7 @@ struct ExecutionGuard {
     /// already committed for this request, `None` for a personal workspace
     /// (never logged) or while telemetry is disabled. Never affects
     /// accounting; `x-request-id` is unchanged.
-    log_trace_id: Option<String>,
+    log_trace_id: Option<LogTraceId>,
 }
 fn millis(d: Duration) -> u64 {
     d.as_millis().min(u64::MAX as u128) as u64
@@ -1018,7 +1048,7 @@ impl ExecutionGuard {
         deployment_id: Uuid,
         started: Instant,
         permit: SharedPermit,
-        log_trace_id: Option<String>,
+        log_trace_id: Option<LogTraceId>,
     ) -> Self {
         Self {
             repository,
@@ -1088,7 +1118,14 @@ impl ExecutionGuard {
         })
         .and_then(|result| result);
         if result.is_err() {
-            tracing::error!(execution_id = %self.id, trace_id = self.log_trace_id.as_deref(), "inference finalization failed; reconciliation required");
+            tracing::error!(execution_id = %self.id, trace_id = self.log_trace_id.as_ref().map(LogTraceId::as_str), "inference finalization failed; reconciliation required");
+            // Only generation finalization (this call) may carry a trace id,
+            // from the same already shared-admission-proven provenance; the
+            // value is already the opaque type, never re-minted here.
+            crate::ops_log::emit(crate::ops_log::OpsEvent::FinalizationNeedsReconciliation {
+                finalizer: crate::ops_log::Finalizer::GenerationFinish,
+                trace: self.log_trace_id.clone(),
+            });
         }
         // Health is advisory; a failed health write never discards a durably accounted response.
         if self.health_observation
@@ -1102,7 +1139,7 @@ impl ExecutionGuard {
                 Ok(Ok(()))
             )
         {
-            tracing::warn!(execution_id=%self.id, trace_id = self.log_trace_id.as_deref(), "routing health update failed");
+            tracing::warn!(execution_id=%self.id, trace_id = self.log_trace_id.as_ref().map(LogTraceId::as_str), "routing health update failed");
         }
         result
     }
@@ -1124,7 +1161,13 @@ impl Drop for ExecutionGuard {
                     crate::metrics::METRICS.observe_settlement(crate::metrics::Settlement::Held);
                 }
                 if !matches!(finished, Ok(Ok(()))) {
-                    tracing::error!(execution_id = %record.id, trace_id = log_trace_id.as_deref(), "cancelled inference finalization failed; reconciliation required");
+                    tracing::error!(execution_id = %record.id, trace_id = log_trace_id.as_ref().map(LogTraceId::as_str), "cancelled inference finalization failed; reconciliation required");
+                    // Cancellation never carries a trace id (#294): only the
+                    // explicit `finish` path above is generation-finalization-proven.
+                    crate::ops_log::emit(crate::ops_log::OpsEvent::FinalizationNeedsReconciliation {
+                        finalizer: crate::ops_log::Finalizer::GenerationCancel,
+                        trace: None,
+                    });
                 }
             });
         }

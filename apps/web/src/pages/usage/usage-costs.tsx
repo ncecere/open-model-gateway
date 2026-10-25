@@ -9,11 +9,13 @@
  * offers member breakdowns to ordinary members or in Personal, and Admin sees
  * personal workspaces as totals only (no keys or request records are fetched).
  */
+import { ScheduledReports } from "../scheduled-reports";
+import { canReadReports } from "../../lib/scheduled-reports";
 import type { Session, Workspace } from "../../lib/api";
 import { platformPath } from "../../lib/api";
 import { chartMetrics, exploreQuery, periodLabel, usageContext, usagePeriod, type ChartMetric, type ExploreResponse, type UsagePeriod } from "../../lib/usage";
 import { ToolbarField } from "../../components/templates/filter-toolbar";
-import { ErrorNotice, Heading, NativeSelect, Stack, useApi } from "../../components/ui";
+import { ErrorNotice, Heading, NativeSelect, SectionHeadings, Stack, useApi } from "../../components/ui";
 import { Tabs, TabsList, Tab, TabsPanel } from "../../components/ui/tabs/tabs";
 import { PeriodControl, scopeLine, useUsageSearch, type UsageNav } from "./shared";
 import { UsageFilterBar, useFilterOptions } from "./filters";
@@ -28,8 +30,8 @@ import { PageHeader } from "../../components/ui/page-header/page-header";
 import s from "../shared.module.css";
 import u from "./usage.module.css";
 
-type Tab = "overview" | "explore" | "records" | "holds";
-const tabOf = (tab?: string): Tab | "chart" => tab === "explore" || tab === "records" || tab === "holds" || tab === "chart" ? tab : "overview";
+type Tab = "overview" | "explore" | "records" | "holds" | "scheduled-reports";
+const tabOf = (tab?: string): Tab | "chart" => tab === "explore" || tab === "records" || tab === "holds" || tab === "chart" || tab === "scheduled-reports" ? tab : "overview";
 
 export function Costs({ session, workspace }: { session: Session; workspace: Workspace }) { return <UsageCosts session={session} workspace={workspace} />; }
 export function PlatformCosts({ session }: { session: Session }) { return <UsageCosts session={session} />; }
@@ -41,17 +43,18 @@ export function UsageCosts({ session, workspace }: { session: Session; workspace
   const workspaceFilter = workspace ? undefined : nav.search.workspace_id;
   // One inline filter bar for every tab and the chart page (URL-backed; Records adds the accounting state).
   // Holds has no period or filters: it fetches none of their option lists.
-  const periodData = tab === "holds" ? undefined : period;
-  const options = useFilterOptions(workspace, ctx, periodData, workspaceFilter, nav.search.key_id, nav.search.model_id, tab !== "holds");
+  const timeless = tab === "holds" || tab === "scheduled-reports";
+  const periodData = timeless ? undefined : period;
+  const options = useFilterOptions(workspace, ctx, periodData, workspaceFilter, nav.search.key_id, nav.search.model_id, !timeless);
   // Workspace scope: the cost center is a fact about the page (the platform assigns it), not a filter.
   const centers = options.costCenters.filter(c => c.value !== "unallocated"), centerFact = workspace && centers.length ? centers.length === 1 ? `Cost center: ${String(centers[0]!.label)}` : `${centers.length} cost centers` : undefined;
   // One plain line that wraps like text (separate "· …" spans started wrapped lines with a dot on a phone).
   const scopeText = [scopeLine(workspace), period && periodLabel(period), centerFact].filter(Boolean).join(" · ");
   // Holds are not period-bound (the queue has no filters): its subtitle names who the list covers, never a period.
-  const header = (title: string) => <Heading title={title} description={tab === "holds" ? holdsScopeText(workspace) : scopeText} />;
+  const header = (title: string) => <Heading title={title} description={timeless ? holdsScopeText(workspace) : scopeText} />;
   const periodControl = <PeriodControl key={`${period?.start_date}-${period?.end_date}-${period?.preset}`} period={period} navigate={nav.navigate} />;
   // Admin: narrow every tab to one workspace (a leading toolbar control with its own chip).
-  const scoped = !workspace && session.capabilities.platform_read && !!period, spaces = useWorkspaceScope(periodData, scoped && tab !== "holds");
+  const scoped = !workspace && session.capabilities.platform_read && !!period, spaces = useWorkspaceScope(periodData, scoped && !timeless);
   const scope = scoped && <WorkspaceScope spaces={spaces} nav={nav} />;
   const scopeChips = scoped && workspaceFilter ? [{ key: "workspace", label: "Workspace", text: spaces.find(w => w.id === workspaceFilter)?.label ?? "Selected workspace", onRemove: () => nav.navigate({ workspace_id: undefined }) }] : [];
   // One FilterToolbar row; it collapses in place behind "Filters (n)" on a phone (no sheet). An invalid custom period
@@ -69,10 +72,11 @@ export function UsageCosts({ session, workspace }: { session: Session; workspace
     {header("Usage & costs")}
     <Tabs value={tab} onValueChange={v => nav.navigate({ tab: v === "overview" ? undefined : String(v), metric: undefined })}>
       <Stack gap={6}>
-      <TabsList variant="pills" overflow="scroll" aria-label="Usage & costs views"><Tab value="overview">Overview</Tab><Tab value="explore">Explore</Tab><Tab value="records">{workspace ? "Cost records" : "By workspace"}</Tab><Tab value="holds">Holds</Tab></TabsList>
-      {tab !== "holds" && filters}
+      <TabsList variant="pills" overflow="scroll" aria-label="Usage & costs views"><Tab value="overview">Overview</Tab><Tab value="explore">Explore</Tab><Tab value="records">{workspace ? "Cost records" : "By workspace"}</Tab><Tab value="holds">Holds</Tab>{canReadReports(session, workspace) && <Tab value="scheduled-reports">Scheduled reports</Tab>}</TabsList>
+      {!timeless && filters}
+      {tab === "scheduled-reports" && <TabsPanel value="scheduled-reports"><SectionHeadings><ScheduledReports session={session} workspace={workspace} /></SectionHeadings></TabsPanel>}
       <TabsPanel value="holds"><HoldsTab session={session} workspace={workspace} /></TabsPanel>
-      {tab === "holds" ? null : invalid || !period ? <ErrorNotice error={invalid} /> : <>
+      {timeless ? null : invalid || !period ? <ErrorNotice error={invalid} /> : <>
       <TabsPanel value="overview"><UsageOverviewTab workspace={workspace} ctx={ctx} period={period} nav={nav} workspaceFilter={workspaceFilter} accounting={showsAccounting(workspace) || session.capabilities.platform_read} /></TabsPanel>
       <TabsPanel value="explore"><UsageExploreTab workspace={workspace} ctx={ctx} period={period} nav={nav} workspaceFilter={workspaceFilter} /></TabsPanel>
       <TabsPanel value="records">{workspace ? <WorkspaceRecords session={session} workspace={workspace} ctx={ctx} period={period} nav={nav} /> : <PlatformRecords session={session} ctx={ctx} period={period} nav={nav} workspaceFilter={workspaceFilter} cols={platformCols} />}</TabsPanel>

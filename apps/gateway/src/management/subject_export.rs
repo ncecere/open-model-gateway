@@ -187,6 +187,7 @@ async fn export_mine(
             .expect("midnight")
             .and_utc(),
     );
+    let access_requests = capped(&mut tx, "SELECT id,workspace_id,workspace_name_at_request,target_kind,requested_role,status,reason,created_at,expires_at,decided_by,decided_at FROM access_requests WHERE requester=$1 ORDER BY created_at,id", LIST_CAP, |q|q.bind(me)).await?;
     let roles = capped(&mut tx, ROLES, LIST_CAP, |q| q.bind(me)).await?;
     let memberships = capped(&mut tx, "SELECT w.id AS workspace_id,w.name,w.kind,g.role,g.source,g.created_at,g.revoked_at FROM workspace_membership_grants g JOIN workspaces w ON w.id=g.workspace_id WHERE g.user_id=$1 UNION ALL SELECT w.id,w.name,w.kind,'owner','personal',w.created_at,NULL FROM workspaces w WHERE w.kind='personal' AND w.owner_user_id=$1 ORDER BY 6", LIST_CAP, |q| q.bind(me)).await?;
     let keys = capped(&mut tx, "SELECT k.id,k.name,k.workspace_id,k.created_at,k.expires_at,k.revoked_at,k.disabled_at FROM api_keys k WHERE k.issued_to_user_id=$1 ORDER BY k.created_at,k.id", LIST_CAP, |q| q.bind(me)).await?;
@@ -209,6 +210,7 @@ async fn export_mine(
         "api_keys": keys,
         "sessions": sessions,
         "requests": requests,
+        "access_requests": access_requests,
         "files": files,
         "audit": audit_entries,
         "notes": [
@@ -262,6 +264,7 @@ async fn export_platform(s: &Store, u: &impl Actor, user: Uuid) -> Result<Respon
         .bind(user)
         .fetch_one(&mut *tx)
         .await?;
+    let access_requests = capped(&mut tx, "SELECT r.id,r.workspace_id,r.workspace_name_at_request,r.target_kind,r.requested_role,r.status,r.reason,r.created_at,r.expires_at,r.decided_by,r.decided_at FROM access_requests r JOIN workspaces w ON w.id=r.workspace_id WHERE r.requester=$1 AND w.kind IN ('team','project') ORDER BY r.created_at,r.id", LIST_CAP, |q|q.bind(user)).await?;
     let roles = capped(&mut tx, ROLES, LIST_CAP, |q| q.bind(user)).await?;
     let memberships = capped(&mut tx, "SELECT w.id AS workspace_id,w.name,w.kind,g.role,g.source,g.created_at,g.revoked_at FROM workspace_membership_grants g JOIN workspaces w ON w.id=g.workspace_id WHERE g.user_id=$1 AND w.kind IN ('team','project') ORDER BY g.created_at", LIST_CAP, |q| q.bind(user)).await?;
     // The platform audit view's scope: no workspace, or a team or project.
@@ -274,6 +277,7 @@ async fn export_platform(s: &Store, u: &impl Actor, user: Uuid) -> Result<Respon
         "subject": profile,
         "platform_roles": roles,
         "shared_memberships": memberships,
+        "access_requests": access_requests,
         "audit": audit_entries,
         "notes": ["What Platform Admins can see: no personal workspace, keys, sessions or requests."],
     });

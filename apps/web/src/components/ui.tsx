@@ -5,6 +5,7 @@ import { parseCheckboxValues, validateFields, type Field, type Option, type Valu
 import { Combobox, type ComboboxOption } from "./ui/combobox/combobox";
 import { detailTime } from "../lib/format";
 import { issuanceRefusal } from "../lib/key-issuance";
+import { accessRequestRefusal } from "../lib/access-requests";
 import { DataTable, type DataTableColumn } from "./ui/data-table/data-table";
 import type { Facet } from "./ui/filter-bar/filter-bar";
 import { FilterToolbar } from "./templates/filter-toolbar";
@@ -33,7 +34,7 @@ import s from "../pages/shared.module.css";
 export { Button, Input, NativeSelect, Textarea, FormField, Alert, Stack, Inline };
 export { StatCard } from "./ui/stat-card/stat-card";
 /** A refused key creation or rotation (#253) is a named warning with the retry time, never a generic failure. */
-const refusalNotice = (error: unknown) => { const refusal = issuanceRefusal(error); return refusal ? { title: "Key issuance limit reached", message: refusal.message, tone: "warning" as const } : undefined; };
+const refusalNotice = (error: unknown) => { const issuance = issuanceRefusal(error); if (issuance) return { title: "Key issuance limit reached", message: issuance.message, tone: "warning" as const }; return accessRequestRefusal(error); };
 export function ErrorNotice({ error, retry }: { error: unknown; retry?: () => void }) { return <ErrorAlert error={error} title={refusalNotice(error)?.title ?? (error instanceof ApiError && error.status === 403 ? "Access denied" : error instanceof ApiError && error.status === 404 ? "Not found" : "Unable to complete request")} describe={refusalNotice} onRetry={retry} />; }
 /** `titleAs` keeps heading order valid where the empty state follows the page h1 directly. */
 export function Empty({ title = "Nothing here yet", children, titleAs = "h3" }: { title?: string; children?: ReactNode; titleAs?: "h2" | "h3" | "p" }) { return <EmptyState title={title} description={children} titleAs={titleAs} />; }
@@ -71,7 +72,7 @@ export function useChoices<T>(path: string, enabled = true) {
 }
 export type Column<T> = { title: string; render: (row: T) => ReactNode; hidden?: boolean; narrow?: boolean; numeric?: boolean };
 const columnsOf = <T,>(columns: Column<T>[]): DataTableColumn<T>[] => columns.map((col, i) => ({ id: col.title, header: col.title, cell: col.render, rowHeader: i === 0, hideable: i !== 0, defaultHidden: col.hidden, defaultHiddenNarrow: col.narrow, numeric: col.numeric }));
-export function Table<T>({ rows, columns, rowKey, label }: { rows: T[]; columns: Column<T>[]; rowKey: (row: T) => string; label: string }) { return <DataTable caption={label} stack columns={columnsOf(columns)} data={rows} getRowId={rowKey} columnsMenu columnsMenuMin={5} />; }
+export function Table<T>({ rows, columns, rowKey, label, empty }: { rows: T[]; columns: Column<T>[]; rowKey: (row: T) => string; label: string; /** Replaces the default "No rows." message with the shared empty-state component. */ empty?: ReactNode }) { return <DataTable caption={label} stack columns={columnsOf(columns)} data={rows} getRowId={rowKey} columnsMenu columnsMenuMin={5} empty={empty} />; }
 /** An offset-paged collection; with search and/or the status filter, a FilterToolbar above it (both in the URL). */
 export function CollectionTable<T>({ path, columns, rowKey, label, empty, pageSize = 50, searchable = false, statusFilter = false }: { path: string; columns: Column<T>[]; rowKey: (row: T) => string; label: string; empty: string; pageSize?: number; searchable?: boolean; statusFilter?: boolean }) {
   const navigation = useDashboardNavigation();

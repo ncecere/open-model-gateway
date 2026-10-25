@@ -136,7 +136,9 @@ async fn concurrent_seeds_are_idempotent(pool: PgPool) {
     let (a, b) = tokio::join!(seed_data(&store), seed_data(&store));
     assert_ne!(a.unwrap(), b.unwrap());
     assert_eq!(count(&pool, "users").await, 4);
-    assert_eq!(count(&pool, "audit_events").await, 1);
+    // One bootstrap audit plus one database-captured creation per deployment.
+    assert_eq!(count(&pool, "configuration_changes").await, 4);
+    assert_eq!(count(&pool, "audit_events").await, 5);
 }
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn failed_seed_rolls_back_entire_fixture(pool: PgPool) {

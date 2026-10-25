@@ -15,7 +15,8 @@ export type DirectoryUser = PlatformUser & { last_sign_in_at?: string | null; sh
 export type SharedMembership = { workspace_id: string; name: string; kind: Exclude<WorkspaceKind, "personal">; disabled_at?: string | null; role: Role; sources: RoleGrant["source"][]; grants?: { role: Role; source: RoleGrant["source"] }[] };
 export type UserRecord = DirectoryUser & { first_sign_in_at?: string | null; /** Live dashboard sessions (a count only, #79). */ active_sessions?: number; /** Active legal holds on this person (#75), a count. */ legal_holds?: number; shared_memberships?: SharedMembership[] };
 /** GET /platform/workspaces rows: shared workspaces with display-only counts and the allocation by name. */
-export type DirectoryWorkspace = Workspace & { member_count?: number; cost_center?: { id: string; name: string; code: string } | null };
+/** `discoverable`: Team/Project only, Platform Admin-controlled (#83); absent from older gateways. */
+export type DirectoryWorkspace = Workspace & { member_count?: number; cost_center?: { id: string; name: string; code: string } | null; discoverable?: boolean };
 
 const cap = (value: string) => value ? `${value[0].toUpperCase()}${value.slice(1)}` : value;
 export const platformRoleLabels: Record<PlatformRole, string> = { admin: "Platform admin", auditor: "Platform auditor", user: "Platform user" };
@@ -93,7 +94,8 @@ export function splitUsage(rows: Breakdown[], shared: Map<string, { name: string
  * (from a newer gateway) falls back to the code itself.
  */
 export const auditActionLabels: Record<string, string> = {
-  "report_schedule.created": "Created report schedule", "report_schedule.updated": "Changed report schedule", "report_schedule.paused": "Paused report schedule", "report_schedule.resumed": "Resumed report schedule", "report_schedule.deleted": "Deleted report schedule",
+  "report_schedule.created": "Created report schedule", "report_schedule.updated": "Changed report schedule", "report_schedule.paused": "Paused report schedule", "report_schedule.resumed": "Resumed report schedule", "report_schedule.deleted": "Deleted report schedule", "report_schedule.authority_paused": "Paused report schedule (lost access)", "report.generated": "Generated scheduled report", "report.generation_failed": "Scheduled report generation failed",
+  "report.delivery_outcome": "Recorded report delivery outcome",
   "admin_token.created": "Created admin API token", "admin_token.revoked": "Revoked admin API token",
   "alert_rule.created": "Created alert rule", "alert_rule.updated": "Changed alert rule", "alert_rule.deleted": "Deleted alert rule",
   "alert_webhook.created": "Created webhook", "alert_webhook.updated": "Changed webhook", "alert_webhook.disabled": "Disabled webhook", "alert_webhook.deleted": "Deleted webhook",
@@ -126,6 +128,8 @@ export const auditActionLabels: Record<string, string> = {
   "settings.logo_uploaded": "Uploaded logo", "settings.logo_removed": "Removed logo",
   "service_account.created": "Created service account", "service_account.updated": "Changed service account",
   "usage.reconciled": "Reconciled usage",
+  "provider_cost.imported": "Imported provider-reported costs", "provider_cost.mapped": "Attested provider cost mapping", "provider_cost.reconciled": "Reconciled provider-reported costs",
+  "access_request.created": "Submitted access request", "access_request.approved": "Approved access request", "access_request.denied": "Denied access request", "access_request.withdrawn": "Withdrew access request", "access_request.expired": "Expired access request", "access_request.applied": "Applied access request", "workspace.discoverability_set": "Changed workspace discoverability",
   "user.provisioned": "Provisioned user", "user.updated": "Changed user", "user.suspended": "Suspended user", "subject.exported": "Exported own data", "user.exported": "Exported user record", "user.personal_data_removed": "Removed personal data", "legal_hold.placed": "Placed legal hold", "legal_hold.released": "Released legal hold", "audit_export.tested": "Sent a test audit export", "user.sessions_revoked": "Signed out all sessions of user", "session.revoked": "Signed out own session", "session.others_revoked": "Signed out own other sessions", "user.reactivated": "Reactivated user", "user.bootstrap_role": "Granted first admin role", "user.cleaned": "Cleaned up departed user",
   "workspace.created": "Created workspace", "workspace.updated": "Changed workspace", "workspace.manual_membership_set": "Set manual membership", "workspace.manual_membership_revoked": "Removed manual membership",
 };

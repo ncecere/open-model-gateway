@@ -15,6 +15,9 @@ pub struct Readiness {
     pub schema: bool,
 }
 
+/// Next-due time and schedule id of the scheduler's last keyset page (per process).
+pub(crate) type ReportScanFrontier = (chrono::DateTime<chrono::Utc>, uuid::Uuid);
+
 #[derive(Clone)]
 pub struct Store {
     pub(crate) pool: PgPool,
@@ -30,6 +33,9 @@ pub struct Store {
     /// Advisory scheduling only: no recipient or durable lease authority.
     pub(crate) alert_dispatch:
         std::sync::Arc<std::sync::Mutex<std::collections::HashMap<uuid::Uuid, std::time::Instant>>>,
+    /// Advisory report scan frontier; reset on restart/failover. No authority
+    /// or claim ownership depends on this per-process keyset cursor.
+    pub(crate) report_dispatch: std::sync::Arc<std::sync::Mutex<Option<ReportScanFrontier>>>,
     /// Admission protocol (`GATEWAY_ADMISSION_MODE`, see
     /// `governance::locks`): scoped locks (default) or the former
     /// installation row lock.
@@ -104,6 +110,7 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "deployment_routing",
     "deployment_health",
     "audit_events",
+    "configuration_changes",
     "installation_settings",
     // 0011 alerts
     "alert_rules",
@@ -111,9 +118,13 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "alert_deliveries",
     "alert_reads",
     "alert_recipient_outbox",
-    // 0061 scheduled report configuration (#102); no worker in this slice.
+    // 0061/0063 scheduled reports (#102): configuration and fenced generation.
     "report_schedules",
     "report_schedule_recipients",
+    "report_generation_claims",
+    "report_runs",
+    "report_snapshots",
+    "report_generation_outcomes",
     // 0057 platform alert webhooks (#45)
     "alert_webhook_destinations",
     "alert_webhook_outbox",
@@ -173,6 +184,16 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "admin_api_tokens",
     // 0052 admin API token authentication and audit (#37 PR2)
     "admin_token_attempts",
+    // 0064 provider-reported cost reconciliation (#48)
+    "provider_cost_imports",
+    "provider_cost_lines",
+    "provider_cost_mappings",
+    "provider_cost_bindings",
+    "provider_reconciliations",
+    // 0066 self-service membership requests (#83). UUID defaults create no
+    // sequences; functions/triggers/indexes are not relation-preflight inputs.
+    "access_requests",
+    "access_request_applications",
 ];
 /// Partitioned parents (0030/0031). Any partition of one of these in
 /// `public` (`pg_class.relispartition`; month partitions are created ahead of
@@ -345,6 +366,7 @@ impl Store {
             alert_webhooks: Default::default(),
             lock_gates: std::sync::Arc::new(gates),
             alert_dispatch: Default::default(),
+            report_dispatch: Default::default(),
             admission_mode: mode,
             reporting: None,
             reporting_max_lag: std::time::Duration::from_secs(30),
@@ -672,6 +694,19 @@ mod tests {
         let (first, second) = tokio::join!(store.migrate_enterprise(), store.migrate_enterprise());
         first.unwrap();
         second.unwrap();
+        // The current schema (including 0066) must survive a fresh migration,
+        // startup preflight and a later migrate, not just SQLx's test setup.
+        for relation in ["access_requests", "access_request_applications"] {
+            assert!(
+                sqlx::query_scalar::<_, bool>("SELECT to_regclass($1) IS NOT NULL")
+                    .bind(relation)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+            );
+        }
+        store.preflight_enterprise().await.unwrap();
+        store.migrate_enterprise().await.unwrap();
         assert!(store.is_ready().await);
         sqlx::query("UPDATE _sqlx_migrations SET checksum='\\x00'::bytea")
             .execute(&pool)

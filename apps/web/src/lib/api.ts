@@ -125,6 +125,13 @@ export type PlatformOverviewData = {
   glance: { entitled_users: number; teams: number; projects: number; ready_models: number; attempts_7d: string; known_cost_7d_microusd: string };
 };
 export type Deployment = { id: string; model_id: string; model_public_name?: string; provider_connection_id: string; provider_name?: string; upstream_model: string; enabled: boolean };
+export type DeploymentConfigurationChange = {
+  id: string; created_at: string; target: { kind: "deployment"; id: string };
+  actor: { id: string | null; label: string; admin_token_id: string | null };
+  action: string; schema_version: number | null; revision: string | null;
+  values_available: boolean; before: { enabled: boolean } | null; after: { enabled: boolean } | null;
+};
+export type DeploymentHistoryPage = { data: DeploymentConfigurationChange[]; next_cursor: string | null };
 /** Browser-only configuration observation, not an apply authorization or reservation. */
 export type DeploymentPreview = {
   target: { kind: "deployment"; id: string };

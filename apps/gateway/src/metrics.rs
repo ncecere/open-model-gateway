@@ -46,7 +46,7 @@ const RESERVATION_REFRESH: Duration = Duration::from_secs(15);
 
 // Pending work is bounded by its admission window; terminal failures must
 // remain visible for a full observation window after completion/cleanup.
-const ALERT_DELIVERY_COUNTS: &str = "SELECT recent.*,pending.* FROM (SELECT count(*) FILTER(WHERE retrying),count(*) FILTER(WHERE exhausted>0),count(*) FILTER(WHERE status IN ('failed','partial')),count(*) FILTER(WHERE status='suppressed') FROM alert_deliveries WHERE (status='pending' AND created_at>clock_timestamp()-interval '24 hours') OR (status<>'pending' AND completed_at>clock_timestamp()-interval '24 hours')) recent CROSS JOIN (SELECT count(DISTINCT bucket_id),floor(greatest(0,coalesce(extract(epoch FROM clock_timestamp()-min(created_at)),0)))::bigint FROM alert_deliveries WHERE status='pending') pending";
+const ALERT_DELIVERY_COUNTS: &str = "SELECT recent.*,pending.* FROM (SELECT count(*) FILTER(WHERE retrying),count(*) FILTER(WHERE exhausted>0),count(*) FILTER(WHERE status IN ('failed','partial')),count(*) FILTER(WHERE status='suppressed') FROM alert_deliveries WHERE event_id IS NOT NULL AND ((status='pending' AND created_at>clock_timestamp()-interval '24 hours') OR (status<>'pending' AND completed_at>clock_timestamp()-interval '24 hours'))) recent CROSS JOIN (SELECT count(DISTINCT bucket_id),floor(greatest(0,coalesce(extract(epoch FROM clock_timestamp()-min(created_at)),0)))::bigint FROM alert_deliveries WHERE status='pending') pending";
 
 // Shared with the retained-history EXPLAIN harness: measure the exact collector SQL.
 // Separate branches can use the existing waiting/leased partial indexes and
@@ -216,6 +216,7 @@ pub struct Metrics {
     reservations: Family<L1, Gauge>,
     alert_runs: Family<L1, Counter>,
     alert_rule_failures: Counter,
+    aged_hold_alerts: Family<L1, Counter>,
     alert_delivery_attempts: Family<L1, Counter>,
     alert_delivery_queue: Family<L1, Gauge>,
     alert_webhook_attempts: Family<L1, Counter>,
@@ -253,6 +254,10 @@ pub struct Metrics {
     otlp_metrics_pushes: [Counter; crate::otlp::Delivery::COUNT],
     otlp_metrics_dropped: [Counter; crate::metrics_export::DropReason::COUNT],
     otlp_metrics_rejected_points: Counter,
+    otlp_logs_pushes: [Counter; crate::otlp::Delivery::COUNT],
+    otlp_logs_dropped: [Counter; crate::ops_log::DropReason::COUNT],
+    otlp_logs_rejected_records: Counter,
+    otlp_logs_suppressed: [Counter; crate::ops_log::OpsEvent::COUNT],
     audit_export_queued: Gauge,
     audit_export_oldest:
         prometheus_client::metrics::gauge::Gauge<f64, std::sync::atomic::AtomicU64>,
@@ -260,6 +265,12 @@ pub struct Metrics {
     leases_held: Family<L1, Gauge>,
     lease_terms: Family<L1, Counter>,
     background_runs: Family<L2, Counter>,
+    report_outcomes: Family<L1, Counter>,
+    report_delivery_attempts: Family<L1, Counter>,
+    report_delivery_queue: Family<L1, Gauge>,
+    report_backlog: Family<L0, Gauge>,
+    report_backlog_capped: Family<L0, Gauge>,
+    report_oldest_due_lag: Family<L0, Gauge>,
     partition_months: Family<L1, Gauge>,
     history_findings: Gauge,
     rollup_hours: Family<L1, Counter>,
@@ -377,6 +388,27 @@ impl Metrics {
                 )])
                 .clone()
         });
+        let logs_pushes = Family::<L1, Counter>::default();
+        let otlp_logs_pushes = std::array::from_fn(|i| {
+            logs_pushes
+                .get_or_create(&[("outcome", crate::otlp::Delivery::ALL[i].as_str().to_owned())])
+                .clone()
+        });
+        let logs_drops = Family::<L1, Counter>::default();
+        let otlp_logs_dropped = std::array::from_fn(|i| {
+            logs_drops
+                .get_or_create(&[(
+                    "reason",
+                    crate::ops_log::DropReason::ALL[i].as_str().to_owned(),
+                )])
+                .clone()
+        });
+        let logs_suppressed = Family::<L1, Counter>::default();
+        let otlp_logs_suppressed = std::array::from_fn(|i| {
+            logs_suppressed
+                .get_or_create(&[("event", crate::ops_log::OpsEvent::SLUGS[i].to_owned())])
+                .clone()
+        });
         let metrics = Self {
             http_requests: Family::default(),
             http_duration: Family::new_with_constructor(request_buckets),
@@ -392,6 +424,7 @@ impl Metrics {
             reservations: Family::default(),
             alert_runs: Family::default(),
             alert_rule_failures: Counter::default(),
+            aged_hold_alerts: Family::default(),
             alert_delivery_attempts: Family::default(),
             alert_delivery_queue: Family::default(),
             alert_webhook_attempts: Family::default(),
@@ -429,12 +462,22 @@ impl Metrics {
             otlp_metrics_pushes,
             otlp_metrics_dropped,
             otlp_metrics_rejected_points: Counter::default(),
+            otlp_logs_pushes,
+            otlp_logs_dropped,
+            otlp_logs_rejected_records: Counter::default(),
+            otlp_logs_suppressed,
             audit_export_queued: Gauge::default(),
             audit_export_oldest: Default::default(),
             config_listener: Gauge::default(),
             leases_held: Family::default(),
             lease_terms: Family::default(),
             background_runs: Family::default(),
+            report_outcomes: Family::default(),
+            report_delivery_attempts: Family::default(),
+            report_delivery_queue: Family::default(),
+            report_backlog: Family::default(),
+            report_backlog_capped: Family::default(),
+            report_oldest_due_lag: Family::default(),
             partition_months: Family::default(),
             history_findings: Gauge::default(),
             rollup_hours: Family::default(),
@@ -514,6 +557,11 @@ impl Metrics {
             "alert_evaluations",
             "Alert evaluator runs by result (ok, skipped, failed)",
             metrics.alert_runs.clone(),
+        );
+        registry.register(
+            "aged_hold_alerts",
+            "Committed aged unknown-hold fires, escalations, clears, deferred ticks and email suppressions",
+            metrics.aged_hold_alerts.clone(),
         );
         registry.register(
             "alert_rule_failures",
@@ -671,6 +719,26 @@ impl Metrics {
             metrics.otlp_metrics_rejected_points.clone(),
         );
         registry.register(
+            "otlp_logs_pushes",
+            "Operational-log export exchanges, by fixed outcome (no retries)",
+            logs_pushes,
+        );
+        registry.register(
+            "otlp_logs_dropped",
+            "Operational-log records dropped locally, by fixed reason",
+            logs_drops,
+        );
+        registry.register(
+            "otlp_logs_rejected_records",
+            "Operational-log records rejected by the collector partialSuccess acknowledgement",
+            metrics.otlp_logs_rejected_records.clone(),
+        );
+        registry.register(
+            "otlp_logs_suppressed",
+            "Operational-log events suppressed by the per-variant rate limiter, by fixed event",
+            logs_suppressed,
+        );
+        registry.register(
             "audit_export_queued",
             "Audit events queued for export, not yet accepted by the receiver",
             metrics.audit_export_queued.clone(),
@@ -719,6 +787,38 @@ impl Metrics {
             "background_runs",
             "Singleton background job runs on this replica by job and result (ok, failed, fenced: the lease term ended)",
             metrics.background_runs.clone(),
+        );
+        for category in crate::scheduled_reports::Outcome::ALL {
+            metrics
+                .report_outcomes
+                .get_or_create(&[("category", category.as_str().to_owned())])
+                .inc_by(0);
+        }
+        registry.register(
+            "report_generation_outcomes",
+            "Scheduled report generation outcomes, fixed categories only; no scope identifiers",
+            metrics.report_outcomes.clone(),
+        );
+        registry.register(
+            "report_email_attempts",
+            "Report recipient send outcomes; fixed categories only",
+            metrics.report_delivery_attempts.clone(),
+        );
+        registry.register("report_email_recipients", "Recipient states in the latest 1024 report deliveries created within 24 hours; ineligible means authorization suppression", metrics.report_delivery_queue.clone());
+        registry.register(
+            "report_due_backlog",
+            "Active due schedules, saturated at 1024; includes uninitialized calendars",
+            metrics.report_backlog.clone(),
+        );
+        registry.register(
+            "report_due_backlog_capped",
+            "Whether due backlog exceeds the 1024-schedule bounded sample",
+            metrics.report_backlog_capped.clone(),
+        );
+        registry.register(
+            "report_oldest_due_lag_seconds",
+            "Oldest initialized active due schedule lag at the scheduler's last bounded check",
+            metrics.report_oldest_due_lag.clone(),
         );
         registry.register(
             "history_partition_months_ahead",
@@ -808,6 +908,45 @@ impl Metrics {
 
     pub fn otlp_metrics_rejected(&self, n: u64) {
         self.otlp_metrics_rejected_points.inc_by(n);
+    }
+
+    /// Fixed outcomes shared with the trace/metrics transports; never a destination or error string.
+    pub(crate) fn otlp_logs_push(&self, outcome: crate::otlp::Delivery) {
+        self.otlp_logs_pushes[outcome as usize].inc();
+    }
+
+    pub(crate) fn otlp_logs_drop(&self, reason: crate::ops_log::DropReason, n: u64) {
+        self.otlp_logs_dropped[reason as usize].inc_by(n);
+    }
+
+    pub(crate) fn otlp_logs_rejected(&self, n: u64) {
+        self.otlp_logs_rejected_records.inc_by(n);
+    }
+
+    /// `index` is an `OpsEvent` discriminant (see `OpsEvent::SLUGS`), not an
+    /// arbitrary caller-chosen string.
+    pub(crate) fn otlp_logs_suppressed(&self, index: usize, n: u64) {
+        self.otlp_logs_suppressed[index].inc_by(n);
+    }
+
+    /// Pushes so far for one outcome (tests).
+    pub fn otlp_logs_push_count(&self, outcome: crate::otlp::Delivery) -> u64 {
+        self.otlp_logs_pushes[outcome as usize].get()
+    }
+
+    /// Drops so far for one reason (tests).
+    pub fn otlp_logs_drop_count(&self, reason: crate::ops_log::DropReason) -> u64 {
+        self.otlp_logs_dropped[reason as usize].get()
+    }
+
+    /// Collector-rejected records so far (tests).
+    pub fn otlp_logs_rejected_count(&self) -> u64 {
+        self.otlp_logs_rejected_records.get()
+    }
+
+    /// Suppressed-by-the-limiter count so far for one `OpsEvent` index (tests).
+    pub fn otlp_logs_suppressed_count(&self, index: usize) -> u64 {
+        self.otlp_logs_suppressed[index].get()
     }
 
     pub(crate) fn trace_drop(&self, reason: crate::telemetry::DropReason, n: u64) {
@@ -922,6 +1061,28 @@ impl Metrics {
             .inc();
     }
 
+    pub(crate) fn observe_report_delivery(&self, outcome: &'static str, n: u64) {
+        self.report_delivery_attempts
+            .get_or_create(&[("outcome", outcome.to_owned())])
+            .inc_by(n);
+    }
+    pub(crate) fn observe_report_outcome(&self, category: crate::scheduled_reports::Outcome) {
+        self.report_outcomes
+            .get_or_create(&[("category", category.as_str().to_owned())])
+            .inc();
+    }
+    pub(crate) fn set_report_queue(&self, backlog: i64, capped: bool, lag: i64) {
+        self.report_backlog.get_or_create(&[]).set(backlog);
+        self.report_backlog_capped
+            .get_or_create(&[])
+            .set(i64::from(capped));
+        self.report_oldest_due_lag.get_or_create(&[]).set(lag);
+    }
+    pub(crate) fn clear_report_queue(&self) {
+        self.report_backlog.clear();
+        self.report_backlog_capped.clear();
+        self.report_oldest_due_lag.clear();
+    }
     pub(crate) fn observe_background_run(&self, job: &'static str, result: &'static str) {
         self.background_runs
             .get_or_create(&[("job", job.to_owned()), ("result", result.to_owned())])
@@ -1108,6 +1269,18 @@ impl Metrics {
             .inc();
     }
 
+    /// System-health signal, never labeled by workspace, owner or recipient.
+    pub(crate) fn observe_aged_hold_alerts(&self, result: &'static str, count: u64) {
+        if matches!(
+            result,
+            "fired" | "escalated" | "cleared" | "deferred" | "suppressed"
+        ) {
+            self.aged_hold_alerts
+                .get_or_create(&[("result", result.to_owned())])
+                .inc_by(count);
+        }
+    }
+
     pub fn observe_alert_delivery(&self, outcome: &'static str) {
         self.alert_delivery_attempts
             .get_or_create(&[("outcome", outcome.to_owned())])
@@ -1271,6 +1444,7 @@ impl Metrics {
         {
             self.reservations.clear();
             self.alert_delivery_queue.clear();
+            self.report_delivery_queue.clear();
             self.alert_webhook_queue.clear();
             self.alert_webhook_oldest.clear();
             self.alert_pending_buckets.clear();
@@ -1315,6 +1489,14 @@ impl Metrics {
                 }
             }
             _ => self.collection_error("alert_email"),
+        }
+        match tokio::time::timeout(Duration::from_secs(2), sqlx::query_as::<_,(String,i64)>("SELECT q.state,count(*) FROM (SELECT id FROM alert_deliveries WHERE report_run_id IS NOT NULL AND created_at>clock_timestamp()-interval '24 hours' ORDER BY created_at DESC,id LIMIT 1024) d JOIN alert_recipient_outbox q ON q.delivery_id=d.id GROUP BY q.state").fetch_all(pool)).await {
+            Ok(Ok(rows)) => {
+                for state in ["waiting","leased","sent","failed","ineligible","exhausted","not_configured"] {
+                    self.report_delivery_queue.get_or_create(&[("state",state.to_owned())]).set(rows.iter().find(|(s,_)|s==state).map_or(0,|(_,n)|*n));
+                }
+            }
+            _ => self.collection_error("report_email"),
         }
         match tokio::time::timeout(
             Duration::from_secs(2),
@@ -1434,6 +1616,38 @@ mod tests {
     use axum::body::{Body, HttpBody, to_bytes};
     use tower::ServiceExt;
 
+    #[test]
+    fn scheduled_reports_metrics_are_system_and_identifier_free() {
+        let m = Metrics::new();
+        m.observe_report_outcome(crate::scheduled_reports::Outcome::Timeout);
+        m.set_report_queue(1024, true, 42);
+        m.observe_report_delivery("permanent_failure", 1);
+        for state in ["exhausted", "ineligible"] {
+            m.report_delivery_queue
+                .get_or_create(&[("state", state.into())])
+                .set(1);
+        }
+        let mut out = String::new();
+        encode(&mut out, &m.registry).unwrap();
+        assert!(out.contains("gateway_report_generation_outcomes_total{category=\"timeout\"} 1"));
+        assert!(out.contains("gateway_report_due_backlog{} 1024"));
+        assert!(out.contains("gateway_report_due_backlog_capped{} 1"));
+        assert!(out.contains("gateway_report_oldest_due_lag_seconds{} 42"));
+        assert!(
+            out.contains("gateway_report_email_attempts_total{outcome=\"permanent_failure\"} 1")
+        );
+        for state in ["exhausted", "ineligible"] {
+            assert!(out.contains(&format!(
+                "gateway_report_email_recipients{{state=\"{state}\"}} 1"
+            )));
+        }
+        let report_families: Vec<_> = include_str!("metrics_families.golden")
+            .lines()
+            .filter(|line| line.starts_with("gateway_report_"))
+            .collect();
+        assert_eq!(report_families.len(), 6);
+        assert!(report_families.iter().all(|line| line.ends_with(" System")));
+    }
     #[test]
     fn listener_is_optional_and_never_the_public_port() {
         let public: SocketAddr = "127.0.0.1:8080".parse().unwrap();

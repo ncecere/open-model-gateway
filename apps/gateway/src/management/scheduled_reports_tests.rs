@@ -1,6 +1,8 @@
 //! #102 slice A: real PostgreSQL and served-router authorization, no SMTP worker.
 use super::*;
 use crate::route_policy::{self, TokenPolicy};
+#[path = "scheduled_reports_cap_tests.rs"]
+mod caps;
 #[path = "scheduled_reports_review_tests.rs"]
 mod review;
 const PLATFORM: &str = "/api/v1/platform/report-schedules";
@@ -322,11 +324,8 @@ async fn scheduled_reports_historical_cost_center_scope_and_recipient_cap(pool: 
         assert_eq!(status, StatusCode::OK, "{v}");
         assert_eq!(v["scope_kind"], kind);
         assert_eq!(v["cost_center_id"], cc.to_string());
-        assert_eq!(
-            v["next_run_at"],
-            Value::Null,
-            "scheduler is not implemented in slice A"
-        );
+        let next = v["next_run_at"].as_str().expect("calendar initialized");
+        assert!(next.parse::<chrono::DateTime<chrono::Utc>>().is_ok());
     }
     let mut body = input(&[f.owner.user_id]);
     body["cost_center_id"] = json!(cc);

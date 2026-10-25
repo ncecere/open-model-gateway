@@ -304,7 +304,7 @@ async fn singleton_jobs_run_once_per_tick_across_three_replicas(pool: PgPool) {
                 run_singleton(
                     l,
                     Lease::Lifecycle,
-                    "test",
+                    crate::ops_log::Job::Lifecycle,
                     Duration::from_secs(5),
                     |fence| async move {
                         let mut tx = store.pool.begin().await?;
@@ -357,7 +357,7 @@ async fn lifecycle_cleanup_runs_once_with_three_replicas(pool: PgPool) {
                 run_singleton(
                     l,
                     Lease::Lifecycle,
-                    "lifecycle",
+                    crate::ops_log::Job::Lifecycle,
                     Duration::from_secs(10),
                     |fence| async move {
                         crate::lifecycle::cleanup_inactive_accounts_fenced(&store, Some(&fence))

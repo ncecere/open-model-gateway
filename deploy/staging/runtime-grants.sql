@@ -17,6 +17,18 @@ DO $$ DECLARE c record; BEGIN
  END LOOP;
 END $$;
 GRANT USAGE ON SCHEMA public TO gateway_runtime;
+-- 0064/#48 immutable provider-reported evidence, never invoice settlement.
+GRANT SELECT,INSERT ON public.provider_cost_imports,public.provider_cost_lines,
+ public.provider_cost_mappings,public.provider_cost_bindings,public.provider_reconciliations TO gateway_runtime;
+-- #83: server-owned clocks, immutable identities and application linkage.
+GRANT SELECT ON public.access_requests,public.access_request_applications TO gateway_runtime;
+GRANT INSERT(requester,workspace_id,reason,idempotency_digest,payload_digest) ON public.access_requests TO gateway_runtime;
+GRANT UPDATE(status,decided_by,decided_at) ON public.access_requests TO gateway_runtime;
+GRANT INSERT(request_id,workspace_id,requester,membership_grant_id) ON public.access_request_applications TO gateway_runtime;
+GRANT UPDATE(discoverable) ON public.workspaces TO gateway_runtime;
+-- Bounded, hold-aware reason erasure only for users already cleaned; no
+-- arbitrary IDs/text and still no UPDATE(reason) or membership clock rewrite.
+GRANT EXECUTE ON FUNCTION public.scrub_access_request_reasons() TO gateway_runtime;
 GRANT SELECT(version,checksum,success) ON public._sqlx_migrations TO gateway_runtime;
 GRANT SELECT ON public.installation,public.users,public.oidc_identities,
  public.platform_role_grants,public.effective_platform_roles,public.cost_centers,
@@ -33,6 +45,8 @@ GRANT SELECT ON public.installation,public.users,public.oidc_identities,
  public.inference_executions,public.governance_reservations,public.monetary_ledger,
  public.routing_policies,public.deployment_routing,public.deployment_health,public.audit_events
  TO gateway_runtime;
+-- #86: append-only deployment configuration evidence; revision is trigger-only.
+GRANT SELECT,INSERT ON public.configuration_changes TO gateway_runtime;
 -- Aged unknown-hold review queue (#101 A): reviewed, no grant change. Its
 -- read-only snapshot uses the existing SELECT on workspaces, keys, executions,
 -- reservations, monetary_ledger and deployment_prices; no new write operation.
@@ -142,6 +156,13 @@ GRANT UPDATE(consecutive_failures,open_until,last_observed_at) ON public.deploym
 -- SELECT/INSERT and resolution-only UPDATE cover the new kind; existing
 -- SELECT on reservations, ledger and budget_totals covers read-only probes.
 -- No new reservation/ledger UPDATE or DELETE authority is introduced.
+-- #101 D: reviewed, no grant changes. Email claims read the same enabled
+-- scopes/unknown-ledger age and effective_platform_roles, using existing
+-- SELECT grants. Delivery INSERT RETURNING status and resolution UPDATE
+-- RETURNING subject/resolution also use existing alert table SELECT grants.
+-- Escalation classification reads warning history with the existing
+-- alert_events SELECT grant, including when firing is deferred across ticks.
+-- The recipient outbox's snapshot/retry/fencing writes are unchanged.
 -- Alerts (0011). Rules are soft-deleted (deleted_at), never removed; scope,
 -- workspace and kind are fixed at creation. Incidents are inserted by the
 -- evaluator and only ever resolved once (resolved_at/resolution; a trigger
@@ -183,8 +204,14 @@ GRANT SELECT ON public.alert_recipient_outbox TO gateway_runtime;
 GRANT INSERT(delivery_id,fingerprint,internal_user_id) ON public.alert_recipient_outbox TO gateway_runtime;
 GRANT UPDATE(state,attempt_count,next_attempt_at,lease_owner,lease_token,lease_expires_at,error)
  ON public.alert_recipient_outbox TO gateway_runtime;
--- 0061 scheduled report configuration only. No run/snapshot/delivery writes.
--- Scope, creator, creation time, revision and scheduler cursor are not writable.
+-- 0061/0063/0065 report configuration, generation and delivery. 0065 reuses
+-- alert_deliveries/alert_recipient_outbox SELECT/INSERT and bounded outcome
+-- UPDATE grants above; report_run_id is insert-only, trigger-validated lineage.
+-- 0065's report_delivery_set_bucket is an invoker trigger (no EXECUTE grant).
+-- 0059's quota_charged/suppression_reason/created_at remain non-updatable;
+-- report INSERTs are forced uncharged without changing alert admission grants.
+-- No new table privileges or destination/address write API.
+-- Scope, creator, creation time and configuration revision are not writable.
 GRANT SELECT ON public.report_schedules,public.report_schedule_recipients TO gateway_runtime;
 GRANT INSERT(scope_kind,workspace_id,cost_center_id,created_by,cadence,timezone,delivery_time,state)
  ON public.report_schedules TO gateway_runtime;
@@ -192,6 +219,22 @@ GRANT INSERT(scope_kind,workspace_id,cost_center_id,created_by,cadence,timezone,
 -- scheduler cursor; configuration_revision itself stays trigger-owned.
 GRANT UPDATE(cadence,timezone,delivery_time,state,deleted_at,recipient_revision) ON public.report_schedules TO gateway_runtime;
 GRANT INSERT(schedule_id,slot,user_id),DELETE ON public.report_schedule_recipients TO gateway_runtime;
+GRANT UPDATE(next_run_at,next_period_end,last_period_end) ON public.report_schedules TO gateway_runtime;
+-- #102D recent-run/outcome and immutable snapshot/CSV reads reuse these SELECTs
+-- plus installation_settings/alert_deliveries SELECT; no new write authority.
+-- runtime_privileges exercises the live browser handlers under this role.
+GRANT SELECT ON public.report_generation_claims,public.report_runs,public.report_snapshots TO gateway_runtime;
+GRANT INSERT(schedule_id,token,configuration_revision,period_start,period_end,skipped_intervals,expires_at),
+ UPDATE(token,configuration_revision,period_start,period_end,skipped_intervals,expires_at)
+ ON public.report_generation_claims TO gateway_runtime;
+GRANT INSERT(schedule_id,period_start,period_end,configuration_revision,claim_token,lease_holder,lease_epoch,skipped_intervals,observed_at)
+ ON public.report_runs TO gateway_runtime;
+GRANT INSERT(run_id,body) ON public.report_snapshots TO gateway_runtime;
+GRANT SELECT ON public.report_generation_outcomes TO gateway_runtime;
+GRANT INSERT(schedule_id,run_id,configuration_revision,claim_token,period_start,period_end,category)
+ ON public.report_generation_outcomes TO gateway_runtime;
+-- Only expired payloads, <=100/tick. Deduplication metadata is never removed.
+GRANT EXECUTE ON FUNCTION public.omg_report_prune_snapshots(integer) TO gateway_runtime;
 -- 0057 platform webhook destinations and retained outbox. Generated identity,
 -- capacity slots, creation clocks and initial queue state are default/trigger-only.
 GRANT SELECT ON public.alert_webhook_destinations,public.alert_webhook_outbox TO gateway_runtime;

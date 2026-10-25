@@ -27,6 +27,7 @@ import { modelReadiness, modelSectionFor, notServingReason, protocolEndpoints, p
 import { parseCheckboxValues, type Field } from "../lib/forms";
 import { ResourceLink } from "../components/navigation-link";
 import { DeploymentReviewDialog, DeploymentStatusActions } from "../components/deployment-preview";
+import { DeploymentConfigurationTabs } from "../components/deployment-history";
 import { LabBadge, LabIcon, ProviderIcon, TitleWithIcon, WithIcon } from "../components/provider-icon";
 import { Alert, Badge, Button, DateTime, ErrorNotice, useAction, useApi, useApiScope, useChoices, useCollection } from "../components/ui";
 import { Badge as BitopBadge } from "../components/ui/badge/badge";
@@ -358,9 +359,11 @@ export function RoutePage({ session, route: d, path, tab }: { session: Session; 
       <StatTile label="Priority / weight" value={routing.data ? `${routing.data.routing.priority} / ${routing.data.routing.weight}` : routing.isPending ? "…" : null} hint={routing.data ? passiveHealth(routing.data.health) : undefined} />
       <StatTile label="Data policy" value={<DataPolicyBadge policy={policy.policy} label={policy.label} size="md" />} hint={policy.detail} />
     </StatTileGrid>
-    <SectionNavLayout nav={<SectionNav items={sections.map(({ id, label, icon }) => ({ id, label, icon }))} />}>
-      <div className={m.sections}>{sections.map(section => <Card key={section.id} id={section.id} title={section.title} titleAs="h2" description={section.description} actions={section.actions}><SectionHeadings>{section.content}</SectionHeadings></Card>)}</div>
-    </SectionNavLayout>
+    <DeploymentConfigurationTabs key={d.id} id={d.id} tab={tab}>
+      <SectionNavLayout nav={<SectionNav items={sections.map(({ id, label, icon }) => ({ id, label, icon }))} />}>
+        <div className={m.sections}>{sections.map(section => <Card key={section.id} id={section.id} title={section.title} titleAs="h2" description={section.description} actions={section.actions}><SectionHeadings>{section.content}</SectionHeadings></Card>)}</div>
+      </SectionNavLayout>
+    </DeploymentConfigurationTabs>
   </Stack>;
 }
 function RoutePriceTile({ price, meters }: { price: Price | null | undefined; meters: RouteMeter[] }) {

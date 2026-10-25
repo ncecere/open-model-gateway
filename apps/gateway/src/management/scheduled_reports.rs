@@ -1,11 +1,37 @@
-//! #102 slice A: browser-only configuration. No scheduler or email side effects.
+//! #102: browser-only configuration and live-authorized occurrence reads.
 use super::*;
+#[path = "scheduled_report_csv.rs"]
+mod csv;
 
 pub(super) fn routes() -> Router<Store> {
     Router::new()
         .route(
+            "/api/v1/platform/report-schedules/{id}/runs",
+            get(platform_runs),
+        )
+        .route(
+            "/api/v1/workspaces/{ws}/report-schedules/{id}/runs",
+            get(workspace_runs),
+        )
+        .route(
+            "/api/v1/platform/report-schedules/{id}/runs/{run}/csv",
+            get(platform_csv),
+        )
+        .route(
+            "/api/v1/workspaces/{ws}/report-schedules/{id}/runs/{run}/csv",
+            get(workspace_csv),
+        )
+        .route(
             "/api/v1/platform/report-schedules",
             get(platform_list).post(platform_create),
+        )
+        .route(
+            "/api/v1/platform/report-schedules/{id}/runs/{run}",
+            get(platform_run),
+        )
+        .route(
+            "/api/v1/workspaces/{ws}/report-schedules/{id}/runs/{run}",
+            get(workspace_run),
         )
         .route(
             "/api/v1/platform/report-schedules/{id}",
@@ -162,6 +188,33 @@ async fn eligible(
     }
     Ok(())
 }
+pub(super) const LIMIT_REACHED: &str = "The report schedule limit for this scope has been reached";
+/// The existing installation management row serializes creates/resumes across
+/// different actors; caller also holds the live authority locks. Paused rows
+/// count, tombstones do not. Keep the count itself bounded on legacy populations.
+async fn capacity(
+    tx: &mut Transaction<'_, Postgres>,
+    kind: &str,
+    ws: Option<Uuid>,
+    owner: Uuid,
+    creating: bool,
+) -> Result<(), ApiError> {
+    let (predicate, scope, cap) = match kind {
+        "personal" => (
+            "scope_kind='personal' AND created_by=$1",
+            Some(owner),
+            10i64,
+        ),
+        "workspace" => ("workspace_id=$1", ws, 50),
+        _ => ("workspace_id IS NULL AND $1::uuid IS NULL", None, 100),
+    };
+    let count: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM (SELECT 1 FROM report_schedules WHERE deleted_at IS NULL AND ({predicate}) LIMIT $2) bounded"))
+        .bind(scope).bind(cap+1).fetch_one(&mut **tx).await?;
+    if count > cap || (creating && count == cap) {
+        return Err(ApiError(StatusCode::CONFLICT, LIMIT_REACHED));
+    }
+    Ok(())
+}
 const JSON_ROW: &str = "jsonb_build_object('id',s.id,'scope_kind',s.scope_kind,'workspace_id',s.workspace_id,'cost_center_id',s.cost_center_id,'created_by',s.created_by,'cadence',s.cadence,'timezone',s.timezone,'delivery_time',left(s.delivery_time::text,5),'state',s.state,'configuration_revision',s.configuration_revision::text,'created_at',s.created_at,'updated_at',s.updated_at,'next_run_at',s.next_run_at,'last_period_end',s.last_period_end,'recipient_user_ids',coalesce((SELECT jsonb_agg(r.user_id ORDER BY r.slot) FROM report_schedule_recipients r WHERE r.schedule_id=s.id),'[]'::jsonb))";
 async fn row(
     tx: &mut Transaction<'_, Postgres>,
@@ -221,9 +274,11 @@ async fn create(
         }
     }
     eligible(&mut tx, &kind, ws, &b.recipient_user_ids).await?;
+    capacity(&mut tx, &kind, ws, u.user_id, true).await?;
     let id:Uuid = sqlx::query_scalar("INSERT INTO report_schedules(scope_kind,workspace_id,cost_center_id,created_by,cadence,timezone,delivery_time,state) VALUES($1,$2,$3,$4,$5,$6,$7::text::time,$8) RETURNING id")
         .bind(&kind).bind(ws).bind(b.cost_center_id).bind(u.user_id).bind(&b.cadence).bind(&b.timezone).bind(&b.delivery_time).bind(&b.state).fetch_one(&mut *tx).await?;
     recipients(&mut tx, id, &b.recipient_user_ids).await?;
+    crate::scheduled_reports::initialize(&mut tx, id).await?;
     audit(
         &mut tx,
         &u,
@@ -285,6 +340,14 @@ async fn update(
     if recipients_set || (state == "active" && old["state"] != "active") {
         eligible(&mut tx, kind, ws, &users).await?;
     }
+    if state == "active" && old["state"] != "active" {
+        let creator: Uuid = old["created_by"]
+            .as_str()
+            .ok_or_else(invalid)?
+            .parse()
+            .map_err(|_| invalid())?;
+        capacity(&mut tx, kind, ws, creator, false).await?;
+    }
     let recipients_changed = users.iter().collect::<std::collections::HashSet<_>>()
         != old_users.iter().collect::<std::collections::HashSet<_>>();
     sqlx::query("UPDATE report_schedules SET cadence=$2,timezone=$3,delivery_time=$4::text::time,state=$5,recipient_revision=recipient_revision+CASE WHEN $6 THEN 1 ELSE 0 END WHERE id=$1 AND deleted_at IS NULL")
@@ -292,6 +355,7 @@ async fn update(
     if recipients_changed {
         recipients(&mut tx, id, &users).await?;
     }
+    crate::scheduled_reports::initialize(&mut tx, id).await?;
     let action = if old["state"] != state {
         if state == "paused" {
             "report_schedule.paused"
@@ -335,7 +399,13 @@ struct List {
 fn list_limit() -> i64 {
     50
 }
-async fn list(s: Store, u: BrowserPrincipal, ws: Option<Uuid>, q: List) -> ApiResult {
+async fn list(
+    s: Store,
+    u: BrowserPrincipal,
+    ws: Option<Uuid>,
+    q: List,
+    config: Option<settings::SignIn>,
+) -> ApiResult {
     let mut tx = resources::read_snapshot(&s).await?;
     authority(&mut tx, &u, ws, false).await?;
     if !(1..=100).contains(&q.limit) {
@@ -362,9 +432,11 @@ async fn list(s: Store, u: BrowserPrincipal, ws: Option<Uuid>, q: List) -> ApiRe
     } else {
         None
     };
+    let smtp: bool = sqlx::query_scalar("SELECT smtp_host IS NOT NULL AND smtp_from_address IS NOT NULL FROM installation_settings WHERE singleton").fetch_one(&mut *tx).await?;
+    let public_url = config.is_some_and(|c| c.0.sign_in_summary()["public_url"].as_str().is_some());
     tx.commit().await?;
     Ok(Json(
-        json!({"data":values,"has_more":has_more,"next_cursor":next}),
+        json!({"data":values,"has_more":has_more,"next_cursor":next,"configuration":{"smtp_configured":smtp,"public_url_configured":public_url}}),
     ))
 }
 async fn get_one(s: Store, u: BrowserPrincipal, ws: Option<Uuid>, id: Uuid) -> ApiResult {
@@ -374,20 +446,131 @@ async fn get_one(s: Store, u: BrowserPrincipal, ws: Option<Uuid>, id: Uuid) -> A
     tx.commit().await?;
     Ok(Json(value))
 }
+async fn run_value(
+    s: Store,
+    u: BrowserPrincipal,
+    ws: Option<Uuid>,
+    id: Uuid,
+    run: Uuid,
+) -> Result<Value, ApiError> {
+    // Always primary, never a reporting replica or authorization cached at
+    // enqueue/send time. A link is an identifier, not a capability.
+    let mut tx = resources::read_snapshot(&s).await?;
+    authority(&mut tx, &u, ws, false).await?;
+    let value: Value = sqlx::query_scalar("SELECT jsonb_build_object('id',r.id,'schedule_id',r.schedule_id,'period_start',r.period_start,'period_end',r.period_end,'configuration_revision',r.configuration_revision::text,'observed_at',r.observed_at,'expires_at',r.expires_at,'expired',r.expires_at<=clock_timestamp() OR p.run_id IS NULL OR p.expires_at<=clock_timestamp(),'snapshot',CASE WHEN r.expires_at>clock_timestamp() AND p.expires_at>clock_timestamp() THEN p.body END,'delivery', (SELECT jsonb_build_object('status',d.status,'recipients',d.recipients,'sent',d.sent,'failed',d.failed,'waiting',d.waiting) FROM alert_deliveries d WHERE d.report_run_id=r.id)) FROM report_runs r JOIN report_schedules s ON s.id=r.schedule_id LEFT JOIN report_snapshots p ON p.run_id=r.id WHERE r.id=$1 AND s.id=$2 AND s.workspace_id IS NOT DISTINCT FROM $3 AND s.deleted_at IS NULL")
+        .bind(run).bind(id).bind(ws).fetch_optional(&mut *tx).await?.ok_or_else(missing)?;
+    tx.commit().await?;
+    Ok(value)
+}
+async fn read_run(
+    s: Store,
+    u: BrowserPrincipal,
+    ws: Option<Uuid>,
+    id: Uuid,
+    run: Uuid,
+) -> Result<Response, ApiError> {
+    let value = run_value(s, u, ws, id, run).await?;
+    Ok((
+        [
+            (axum::http::header::CACHE_CONTROL, "no-store"),
+            (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        Json(value),
+    )
+        .into_response())
+}
+async fn platform_run(
+    State(s): State<Store>,
+    Extension(u): Extension<BrowserPrincipal>,
+    Path((id, run)): Path<(Uuid, Uuid)>,
+) -> Result<Response, ApiError> {
+    read_run(s, u, None, id, run).await
+}
+async fn workspace_run(
+    State(s): State<Store>,
+    Extension(u): Extension<BrowserPrincipal>,
+    Path((ws, id, run)): Path<(Uuid, Uuid, Uuid)>,
+) -> Result<Response, ApiError> {
+    read_run(s, u, Some(ws), id, run).await
+}
 async fn platform_list(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
     Query(q): Query<List>,
+    config: Option<Extension<settings::SignIn>>,
 ) -> ApiResult {
-    list(s, u, None, q).await
+    list(s, u, None, q, config.map(|Extension(c)| c)).await
 }
 async fn workspace_list(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
     Path(ws): Path<Uuid>,
     Query(q): Query<List>,
+    config: Option<Extension<settings::SignIn>>,
 ) -> ApiResult {
-    list(s, u, Some(ws), q).await
+    list(s, u, Some(ws), q, config.map(|Extension(c)| c)).await
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Recent {
+    #[serde(default = "recent_limit")]
+    limit: i64,
+}
+fn recent_limit() -> i64 {
+    20
+}
+async fn recent_runs(
+    s: Store,
+    u: BrowserPrincipal,
+    ws: Option<Uuid>,
+    id: Uuid,
+    q: Recent,
+) -> Result<Response, ApiError> {
+    if !(1..=100).contains(&q.limit) {
+        return Err(invalid());
+    }
+    let mut tx = resources::read_snapshot(&s).await?;
+    authority(&mut tx, &u, ws, false).await?;
+    row(&mut tx, ws, id).await?;
+    let data: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('id',r.id,'schedule_id',r.schedule_id,'period_start',r.period_start,'period_end',r.period_end,'observed_at',r.observed_at,'expires_at',r.expires_at,'expired',r.expires_at<=clock_timestamp(),'skipped_intervals',r.skipped_intervals::text,'delivery',(SELECT jsonb_build_object('status',d.status,'recipients',d.recipients,'sent',d.sent,'failed',d.failed,'waiting',d.waiting) FROM alert_deliveries d WHERE d.report_run_id=r.id)) FROM report_runs r WHERE r.schedule_id=$1 ORDER BY r.period_end DESC,r.id LIMIT $2").bind(id).bind(q.limit).fetch_all(&mut *tx).await?;
+    // The append-only outcomes include failed generations, which have no run.
+    let outcomes: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('category',category,'created_at',created_at,'period_start',period_start,'period_end',period_end) FROM report_generation_outcomes WHERE schedule_id=$1 ORDER BY created_at DESC,id LIMIT $2").bind(id).bind(q.limit).fetch_all(&mut *tx).await?;
+    tx.commit().await?;
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(json!({"data":data,"outcomes":outcomes,"limit":q.limit})),
+    )
+        .into_response())
+}
+async fn platform_runs(
+    State(s): State<Store>,
+    Extension(u): Extension<BrowserPrincipal>,
+    Path(id): Path<Uuid>,
+    Query(q): Query<Recent>,
+) -> Result<Response, ApiError> {
+    recent_runs(s, u, None, id, q).await
+}
+async fn workspace_runs(
+    State(s): State<Store>,
+    Extension(u): Extension<BrowserPrincipal>,
+    Path((ws, id)): Path<(Uuid, Uuid)>,
+    Query(q): Query<Recent>,
+) -> Result<Response, ApiError> {
+    recent_runs(s, u, Some(ws), id, q).await
+}
+async fn platform_csv(
+    State(s): State<Store>,
+    Extension(u): Extension<BrowserPrincipal>,
+    Path((id, run)): Path<(Uuid, Uuid)>,
+) -> Result<Response, ApiError> {
+    Ok(csv::download(run_value(s, u, None, id, run).await?))
+}
+async fn workspace_csv(
+    State(s): State<Store>,
+    Extension(u): Extension<BrowserPrincipal>,
+    Path((ws, id, run)): Path<(Uuid, Uuid, Uuid)>,
+) -> Result<Response, ApiError> {
+    Ok(csv::download(run_value(s, u, Some(ws), id, run).await?))
 }
 async fn platform_get(
     State(s): State<Store>,

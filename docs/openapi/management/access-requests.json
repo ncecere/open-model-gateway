@@ -1,0 +1,77 @@
+{
+  "operations": {
+    "GET /api/v1/access-request-targets": {
+      "access": "Browser",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/me/access-requests": {
+      "access": "Browser",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/me/access-requests/{id}": {
+      "access": "Browser",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/platform/access-requests": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/access-requests": {
+      "access": "WorkspaceAdmin",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/me/access-requests": {
+      "access": "Browser",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/me/access-requests/{id}/withdraw": {
+      "access": "Browser",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/platform/access-requests/{id}/approve": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/platform/access-requests/{id}/deny": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/workspaces/{ws}/access-requests/{id}/approve": {
+      "access": "WorkspaceAdmin",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/workspaces/{ws}/access-requests/{id}/deny": {
+      "access": "WorkspaceAdmin",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "PUT /api/v1/platform/workspaces/{ws}/discoverable": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    }
+  },
+  "schemas": {}
+}

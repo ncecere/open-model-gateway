@@ -102,6 +102,42 @@ macro_rules! route {
 pub(crate) const ROUTES: &[Route] = &[
     route!(
         "GET",
+        "/api/v1/platform/report-schedules/{id}/runs",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/workspaces/{ws}/report-schedules/{id}/runs",
+        WorkspaceReportAdmin,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/report-schedules/{id}/runs/{run}/csv",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/workspaces/{ws}/report-schedules/{id}/runs/{run}/csv",
+        WorkspaceReportAdmin,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/report-schedules/{id}/runs/{run}",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/workspaces/{ws}/report-schedules/{id}/runs/{run}",
+        WorkspaceReportAdmin,
+        DENIED
+    ),
+    route!(
+        "GET",
         "/api/v1/platform/report-schedules",
         PlatformRead,
         DENIED
@@ -179,6 +215,117 @@ pub(crate) const ROUTES: &[Route] = &[
     route!("GET PUT PATCH DELETE", "/scim/v2/Groups/{id}", Scim, DENIED),
     route!("*", "/scim", Scim, DENIED),
     route!("*", "/scim/{*rest}", Scim, DENIED),
+    route!(
+        "GET",
+        "/api/v1/platform/provider-cost-imports",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "POST",
+        "/api/v1/platform/provider-cost-imports",
+        PlatformWrite,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/provider-cost-imports/{id}",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/provider-cost-imports/{id}/lines",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/provider-cost-mappings",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "POST",
+        "/api/v1/platform/provider-cost-mappings",
+        PlatformWrite,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/provider-cost-mappings/{id}",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/provider-reconciliations",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "POST",
+        "/api/v1/platform/provider-reconciliations",
+        PlatformWrite,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/provider-reconciliations/{id}",
+        PlatformRead,
+        DENIED
+    ),
+    route!("GET", "/api/v1/access-request-targets", Browser, DENIED),
+    route!("GET POST", "/api/v1/me/access-requests", Browser, DENIED),
+    route!("GET", "/api/v1/me/access-requests/{id}", Browser, DENIED),
+    route!(
+        "POST",
+        "/api/v1/me/access-requests/{id}/withdraw",
+        Browser,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/workspaces/{ws}/access-requests",
+        WorkspaceAdmin,
+        DENIED
+    ),
+    route!(
+        "POST",
+        "/api/v1/workspaces/{ws}/access-requests/{id}/approve",
+        WorkspaceAdmin,
+        DENIED
+    ),
+    route!(
+        "POST",
+        "/api/v1/workspaces/{ws}/access-requests/{id}/deny",
+        WorkspaceAdmin,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/access-requests",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "POST",
+        "/api/v1/platform/access-requests/{id}/approve",
+        PlatformWrite,
+        DENIED
+    ),
+    route!(
+        "POST",
+        "/api/v1/platform/access-requests/{id}/deny",
+        PlatformWrite,
+        DENIED
+    ),
+    route!(
+        "PUT",
+        "/api/v1/platform/workspaces/{ws}/discoverable",
+        PlatformWrite,
+        DENIED
+    ),
     route!("GET", "/api/v1/me", Browser, DENIED),
     route!("GET", "/api/v1/me/summary", Browser, DENIED),
     route!("GET", "/api/v1/me/keys", Browser, DENIED),
@@ -979,6 +1126,18 @@ pub(crate) const ROUTES: &[Route] = &[
         "POST",
         "/api/v1/platform/deployments/{id}/configuration/preview",
         PlatformWrite,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/deployments/{id}/configuration/history",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/deployments/{id}/configuration/history/{change}",
+        PlatformRead,
         DENIED
     ),
     route!("GET", "/api/v1/platform/holds", PlatformRead, PLATFORM_READ),
