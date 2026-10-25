@@ -60,7 +60,7 @@ test("platform admin maps SSO groups to roles and memberships", async ({ browser
     // #89: a mapping change is reviewed (impact preview) before it is saved.
     await dialog.getByRole("button", { name: "Review changes" }).click();
     await expect(dialog).toBeHidden();
-    const review = page.getByRole("dialog", { name: /SSO group mapping/ }).filter({ has: page.getByRole("button", { name: "Continue to confirmation" }) });
+    const review = page.getByRole("dialog", { name: "Review changes" });
     await review.getByRole("button", { name: "Continue to confirmation" }).click();
     const confirm = page.getByRole("dialog", { name: /^Create this SSO group mapping\?$/ });
     await confirm.getByRole("button", { name: "Create mapping" }).click();
