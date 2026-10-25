@@ -471,11 +471,17 @@ async fn cancelled_transaction_begins_never_leak_into_the_next_snapshot(pool: Pg
             // can still report the stale "idle in transaction" for a few
             // instructions after that, since it settles via the reused
             // backend's own next report, not this query's snapshot).
-            let no_lingering_transaction: bool =
-                sqlx::query_scalar("SELECT now() = statement_timestamp()")
+            // Simple-query protocol: one message, so outside a transaction its
+            // implicit transaction and the statement start together. (The
+            // extended protocol's Bind and Execute can differ.)
+            let no_lingering_transaction: bool = {
+                use sqlx::Row;
+                sqlx::raw_sql("SELECT now() = statement_timestamp()")
                     .fetch_one(&one)
                     .await
-                    .unwrap();
+                    .unwrap()
+                    .get(0)
+            };
             assert!(
                 no_lingering_transaction,
                 "{path} cancelled after {pendings} polls left the connection inside an open \
