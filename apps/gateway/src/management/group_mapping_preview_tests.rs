@@ -543,6 +543,214 @@ async fn roster_overflow_marks_the_preview_incomplete(pool: PgPool) {
     );
 }
 
+/// Capped-roster false-loss fix (#89): an unchanged PATCH on a mapping
+/// whose SCIM group exceeds the (test-lowered) roster cap must never show
+/// a loss for any existing holder, capped-out or not -- the real
+/// unchanged write revokes nothing, and reconciliation re-derives exactly
+/// the same grants for every one of them.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn an_unchanged_patch_on_an_overflowing_mapping_shows_no_losses(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let issuer = "https://idp.example.test";
+    let a = inert_user(&pool, "cap1@example.test").await;
+    let b = inert_user(&pool, "cap2@example.test").await;
+    let c = inert_user(&pool, "cap3@example.test").await;
+    let d = inert_user(&pool, "cap4@example.test").await;
+    scim_group(&pool, "overflow-unchanged", &[a, b, c, d]).await;
+    let (status, created) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        "/api/v1/platform/oidc/group-mappings",
+        json!({"issuer":issuer,"group_value":"overflow-unchanged","target_kind":"platform","platform_role":"user","enabled":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let map = id(&created);
+    // Reconcile every member for real, including whichever one the
+    // (test-lowered) roster cap would truncate out of the roster array.
+    for user in [a, b, c, d] {
+        let mut tx = crate::db::begin(&pool).await.unwrap();
+        crate::lifecycle::apply_group_grants(
+            &mut tx,
+            user,
+            issuer,
+            &["overflow-unchanged".to_owned()],
+            Some(&["overflow-unchanged".to_owned()]),
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+    }
+    // A PATCH that changes nothing.
+    let (status, preview) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        &path_for(map),
+        json!({"issuer":issuer,"group_value":"overflow-unchanged","target_kind":"platform","platform_role":"user","enabled":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["complete"], false, "{preview}");
+    assert_eq!(
+        preview["diff"]["platform_role_lost"],
+        json!([]),
+        "an unchanged mapping must never show a loss, capped roster or not: {preview}"
+    );
+    assert_eq!(preview["counts"]["lost"], 0, "{preview}");
+
+    // Real path: the PATCH changes nothing, so reconciliation re-derives
+    // exactly the same grant for every holder, including the capped-out one.
+    let digest = preview["digest"].as_str().unwrap().to_owned();
+    assert_eq!(
+        call_if_match(
+            &f.s,
+            &f.admin,
+            "PATCH",
+            &format!("/api/v1/platform/oidc/group-mappings/{map}"),
+            json!({"issuer":issuer,"group_value":"overflow-unchanged","target_kind":"platform","platform_role":"user","enabled":true}),
+            &digest,
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    for user in [a, b, c, d] {
+        let mut tx = crate::db::begin(&pool).await.unwrap();
+        crate::lifecycle::apply_group_grants(
+            &mut tx,
+            user,
+            issuer,
+            &["overflow-unchanged".to_owned()],
+            Some(&["overflow-unchanged".to_owned()]),
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        let role: String = sqlx::query_scalar(
+            "SELECT role FROM platform_role_grants WHERE user_id=$1 AND source='group' AND revoked_at IS NULL",
+        )
+        .bind(user)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            role, "user",
+            "the real unchanged PATCH revoked nothing for {user}"
+        );
+    }
+}
+
+/// Capped-roster false-loss fix (#89): a role upgrade on a mapping whose
+/// SCIM group exceeds the (test-lowered) roster cap must show every
+/// existing holder gaining the new role, including the capped-out one --
+/// never a false suspension or loss.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn a_role_upgrade_on_an_overflowing_mapping_never_shows_a_false_loss(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let issuer = "https://idp.example.test";
+    let a = inert_user(&pool, "up1@example.test").await;
+    let b = inert_user(&pool, "up2@example.test").await;
+    let c = inert_user(&pool, "up3@example.test").await;
+    let d = inert_user(&pool, "up4@example.test").await;
+    scim_group(&pool, "overflow-upgrade", &[a, b, c, d]).await;
+    let (status, created) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        "/api/v1/platform/oidc/group-mappings",
+        json!({"issuer":issuer,"group_value":"overflow-upgrade","target_kind":"platform","platform_role":"user","enabled":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let map = id(&created);
+    for user in [a, b, c, d] {
+        let mut tx = crate::db::begin(&pool).await.unwrap();
+        crate::lifecycle::apply_group_grants(
+            &mut tx,
+            user,
+            issuer,
+            &["overflow-upgrade".to_owned()],
+            Some(&["overflow-upgrade".to_owned()]),
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+    }
+    let (status, preview) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        &path_for(map),
+        json!({"platform_role":"admin"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["complete"], false, "{preview}");
+    assert_eq!(
+        preview["diff"]["platform_role_lost"],
+        json!([]),
+        "an upgrade is never a loss for any holder, capped roster or not: {preview}"
+    );
+    let gained = users_in(&preview["diff"]["platform_role_gained"]);
+    for user in [a, b, c, d] {
+        assert!(
+            gained.contains(&user),
+            "{user} missing from gained: {preview}"
+        );
+        let entry = entry_for(&preview["diff"]["platform_role_gained"], user);
+        assert_eq!(entry["before"], "user");
+        assert_eq!(entry["after"], "admin");
+        assert_eq!(entry["would_be_suspended"], false);
+    }
+
+    // Real path: apply the upgrade, then reconcile every holder.
+    let digest = preview["digest"].as_str().unwrap().to_owned();
+    assert_eq!(
+        call_if_match(
+            &f.s,
+            &f.admin,
+            "PATCH",
+            &format!("/api/v1/platform/oidc/group-mappings/{map}"),
+            json!({"platform_role":"admin"}),
+            &digest,
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    for user in [a, b, c, d] {
+        let mut tx = crate::db::begin(&pool).await.unwrap();
+        crate::lifecycle::apply_group_grants(
+            &mut tx,
+            user,
+            issuer,
+            &["overflow-upgrade".to_owned()],
+            Some(&["overflow-upgrade".to_owned()]),
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        let role: String = sqlx::query_scalar(
+            "SELECT role FROM platform_role_grants WHERE user_id=$1 AND source='group' AND revoked_at IS NULL",
+        )
+        .bind(user)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(role, "admin", "matches the previewed upgrade for {user}");
+        assert!(
+            sqlx::query_scalar::<_, bool>("SELECT disabled_at IS NULL FROM users WHERE id=$1")
+                .bind(user)
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            "{user} must never be suspended by an upgrade"
+        );
+    }
+}
+
 /// Review item 7: a user who already holds the role via a manual grant
 /// does not appear to "gain" anything -- the net effective role is unchanged.
 #[sqlx::test(migrations = "./enterprise_migrations")]
