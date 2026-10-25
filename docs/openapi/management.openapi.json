@@ -721,11 +721,27 @@
         "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
         "x-omg-schema-status": "incomplete"
       },
+      "get_api_v1_platform_report_schedules_by_id_runsRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_api_v1_platform_report_schedules_by_id_runsResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
       "get_api_v1_platform_report_schedules_by_id_runs_by_runRequest": {
         "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
         "x-omg-schema-status": "incomplete"
       },
       "get_api_v1_platform_report_schedules_by_id_runs_by_runResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_api_v1_platform_report_schedules_by_id_runs_by_run_csvRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_api_v1_platform_report_schedules_by_id_runs_by_run_csvResponse": {
         "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
         "x-omg-schema-status": "incomplete"
       },
@@ -1169,11 +1185,27 @@
         "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
         "x-omg-schema-status": "incomplete"
       },
+      "get_api_v1_workspaces_by_ws_report_schedules_by_id_runsRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_api_v1_workspaces_by_ws_report_schedules_by_id_runsResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
       "get_api_v1_workspaces_by_ws_report_schedules_by_id_runs_by_runRequest": {
         "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
         "x-omg-schema-status": "incomplete"
       },
       "get_api_v1_workspaces_by_ws_report_schedules_by_id_runs_by_runResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_api_v1_workspaces_by_ws_report_schedules_by_id_runs_by_run_csvRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_api_v1_workspaces_by_ws_report_schedules_by_id_runs_by_run_csvResponse": {
         "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
         "x-omg-schema-status": "incomplete"
       },
@@ -5158,6 +5190,40 @@
         "x-omg-token-policy": "Denied"
       }
     },
+    "/api/v1/platform/report-schedules/{id}/runs": {
+      "get": {
+        "operationId": "get_api_v1_platform_report_schedules_by_id_runs",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          }
+        },
+        "security": [
+          {
+            "browserSession": []
+          }
+        ],
+        "summary": "Latest 1–100 immutable occurrences and generation outcomes (default 20); no-store",
+        "x-omg-access": "PlatformRead",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_api_v1_platform_report_schedules_by_id_runsRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_api_v1_platform_report_schedules_by_id_runsResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
     "/api/v1/platform/report-schedules/{id}/runs/{run}": {
       "get": {
         "operationId": "get_api_v1_platform_report_schedules_by_id_runs_by_run",
@@ -5189,12 +5255,55 @@
             "browserSession": []
           }
         ],
+        "summary": "Live-authorized immutable aggregate snapshot; expired metadata has snapshot null; no-store",
         "x-omg-access": "PlatformRead",
         "x-omg-request-schema": {
           "$ref": "#/components/schemas/get_api_v1_platform_report_schedules_by_id_runs_by_runRequest"
         },
         "x-omg-response-schema": {
           "$ref": "#/components/schemas/get_api_v1_platform_report_schedules_by_id_runs_by_runResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/api/v1/platform/report-schedules/{id}/runs/{run}/csv": {
+      "get": {
+        "operationId": "get_api_v1_platform_report_schedules_by_id_runs_by_run_csv",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          }
+        },
+        "security": [
+          {
+            "browserSession": []
+          }
+        ],
+        "summary": "Live-authorized aggregate CSV; at most 1000 rows; formula-safe, no-store; expired 410, oversized 422",
+        "x-omg-access": "PlatformRead",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_api_v1_platform_report_schedules_by_id_runs_by_run_csvRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_api_v1_platform_report_schedules_by_id_runs_by_run_csvResponse"
         },
         "x-omg-token-policy": "Denied"
       }
@@ -8943,6 +9052,48 @@
         "x-omg-token-policy": "Denied"
       }
     },
+    "/api/v1/workspaces/{ws}/report-schedules/{id}/runs": {
+      "get": {
+        "operationId": "get_api_v1_workspaces_by_ws_report_schedules_by_id_runs",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ws",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          }
+        },
+        "security": [
+          {
+            "browserSession": []
+          }
+        ],
+        "summary": "Latest 1–100 immutable occurrences and generation outcomes (default 20); no-store",
+        "x-omg-access": "WorkspaceReportAdmin",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_api_v1_workspaces_by_ws_report_schedules_by_id_runsRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_api_v1_workspaces_by_ws_report_schedules_by_id_runsResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
     "/api/v1/workspaces/{ws}/report-schedules/{id}/runs/{run}": {
       "get": {
         "operationId": "get_api_v1_workspaces_by_ws_report_schedules_by_id_runs_by_run",
@@ -8982,12 +9133,63 @@
             "browserSession": []
           }
         ],
+        "summary": "Owner-private personal or shared owner/admin aggregate snapshot; expired metadata has snapshot null; no-store",
         "x-omg-access": "WorkspaceReportAdmin",
         "x-omg-request-schema": {
           "$ref": "#/components/schemas/get_api_v1_workspaces_by_ws_report_schedules_by_id_runs_by_runRequest"
         },
         "x-omg-response-schema": {
           "$ref": "#/components/schemas/get_api_v1_workspaces_by_ws_report_schedules_by_id_runs_by_runResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/api/v1/workspaces/{ws}/report-schedules/{id}/runs/{run}/csv": {
+      "get": {
+        "operationId": "get_api_v1_workspaces_by_ws_report_schedules_by_id_runs_by_run_csv",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ws",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          }
+        },
+        "security": [
+          {
+            "browserSession": []
+          }
+        ],
+        "summary": "Live-authorized aggregate CSV; at most 1000 rows; formula-safe, no-store; expired 410, oversized 422",
+        "x-omg-access": "WorkspaceReportAdmin",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_api_v1_workspaces_by_ws_report_schedules_by_id_runs_by_run_csvRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_api_v1_workspaces_by_ws_report_schedules_by_id_runs_by_run_csvResponse"
         },
         "x-omg-token-policy": "Denied"
       }
