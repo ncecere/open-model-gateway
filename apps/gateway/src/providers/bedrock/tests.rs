@@ -122,6 +122,7 @@ fn message(role: Role, text: &str) -> Message {
 }
 fn request() -> ChatRequest {
     ChatRequest {
+        messages_options: None,
         model: "public-model".into(),
         messages: vec![
             message(Role::System, "instructions"),

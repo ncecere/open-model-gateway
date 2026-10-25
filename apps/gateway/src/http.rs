@@ -475,6 +475,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn messages_outer_rejections_keep_anthropic_shapes_with_beta_query() {
+        for (method, bytes, status) in [("POST", 2 * 1024 * 1024 + 1, 413), ("GET", 0, 405)] {
+            let response = app()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri("/v1/messages?beta=true")
+                        .header("content-length", bytes)
+                        .body(Body::from(vec![b'x'; bytes]))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), status);
+            let bytes = to_bytes(response.into_body(), 2048).await.unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(value["type"], "error");
+            assert!(value["error"]["message"].as_str().unwrap().len() <= 1024);
+        }
+    }
+
+    #[tokio::test]
     async fn liveness_does_not_need_database_and_overrides_request_id() {
         let response = app()
             .oneshot(

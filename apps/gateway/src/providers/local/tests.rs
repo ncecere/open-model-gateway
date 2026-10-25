@@ -85,6 +85,7 @@ impl Mock {
 }
 fn request(stream: bool) -> ChatRequest {
     ChatRequest {
+        messages_options: None,
         model: "public".into(),
         messages: vec![Message {
             role: Role::User,
@@ -198,7 +199,7 @@ async fn all_profiles_mock_chat_and_embedding_contracts_with_pinned_host() {
         assert_eq!(r.usage.input_tokens, Some(4));
         assert_eq!(r.usage.output_tokens, Some(0));
         assert!(!adapter.supports_protocol(ApiProtocol::Responses));
-        assert!(!adapter.supports_protocol(ApiProtocol::Messages));
+        assert!(adapter.supports_protocol(ApiProtocol::Messages));
         assert_eq!(resolver.0.load(Ordering::SeqCst), 0);
         let c = mock.capture.lock().unwrap();
         for (h, uri, v) in c.iter() {

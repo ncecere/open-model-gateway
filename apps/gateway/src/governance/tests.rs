@@ -396,6 +396,7 @@ pub(crate) mod db {
     }
     pub fn request() -> ChatRequest {
         ChatRequest {
+            messages_options: None,
             model: "company/smart".into(),
             messages: vec![],
             tools: vec![],

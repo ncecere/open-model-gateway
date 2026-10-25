@@ -128,6 +128,7 @@ fn target() -> Deployment {
 
 fn request(stream: bool) -> ChatRequest {
     ChatRequest {
+        messages_options: None,
         model: "public-model".into(),
         messages: vec![Message {
             role: Role::User,

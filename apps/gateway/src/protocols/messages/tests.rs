@@ -1,6 +1,6 @@
 use super::*;
 #[test]
-fn version_is_exact_and_beta_is_rejected() {
+fn version_is_exact_and_beta_is_accepted() {
     let mut h = HeaderMap::new();
     assert!(!valid_version(&h));
     h.insert("anthropic-version", "2023-06-01".parse().unwrap());
@@ -11,7 +11,7 @@ fn version_is_exact_and_beta_is_rejected() {
     assert!(!valid_version(&h));
     h.insert("anthropic-version", "2023-06-01".parse().unwrap());
     h.insert("anthropic-beta", "future".parse().unwrap());
-    assert!(!valid_version(&h));
+    assert!(valid_version(&h));
 }
 fn parse(v: Value) -> Result<ChatRequest> {
     serde_json::from_value::<Request>(v)
@@ -34,7 +34,6 @@ fn strict_text_tool_subset() {
         json!({"metadata":{"other":"x"}}),
         json!({"temperature":1.1}),
         json!({"max_tokens":0}),
-        json!({"system":[{"type":"text","text":"x","cache_control":{"type":"ephemeral"}}]}),
     ] {
         let mut v =
             json!({"model":"m","max_tokens":32,"messages":[{"role":"user","content":"hello"}]});
@@ -88,7 +87,7 @@ fn empty_successful_tool_result_defaults_are_absent_only() {
         parse(request(
             json!({"type":"tool_result","tool_use_id":"call-ping","is_error":true})
         )),
-        Err(InferenceError::Unsupported)
+        Err(InferenceError::InvalidField("tool_result.is_error"))
     ));
     for block in [
         json!({"type":"tool_result","tool_use_id":"call-ping","content":null}),

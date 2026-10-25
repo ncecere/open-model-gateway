@@ -392,3 +392,5 @@ fn error_response(e: InferenceError) -> Response {
 }
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod frontend_tests;
