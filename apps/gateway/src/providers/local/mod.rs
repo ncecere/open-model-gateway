@@ -176,6 +176,10 @@ impl ProviderAdapter for LocalAdapter {
         }
     }
     fn supports_chat_request(&self, request: &ChatRequest) -> bool {
+        // Messages strict fields must reach validate_chat_request so the
+        // refusal names `strict` before admission, rather than disappearing at
+        // the coarse gate as a generic unsupported capability. This is not
+        // strict support: the Messages field policy still refuses the field.
         self.capabilities().supports(request)
             && (request.messages_options.is_some()
                 || !request.tools.iter().any(|t| t.strict == Some(true)))

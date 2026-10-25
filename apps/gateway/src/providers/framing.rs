@@ -46,6 +46,18 @@ pub(super) async fn body_limit(response: reqwest::Response, limit: usize) -> Res
 /// Read only a small bounded error envelope to classify context overflow.
 /// Never return, log or retain upstream text; all public messages are constants.
 pub(super) async fn generation_status(response: reqwest::Response) -> Result<reqwest::Response> {
+    generation_status_with(response, classified_error).await
+}
+pub(super) async fn anthropic_generation_status(
+    response: reqwest::Response,
+) -> Result<reqwest::Response> {
+    generation_status_with(response, anthropic_error).await
+}
+type ErrorClassifier = fn(&Value) -> Option<InferenceError>;
+async fn generation_status_with(
+    response: reqwest::Response,
+    classify: ErrorClassifier,
+) -> Result<reqwest::Response> {
     if response.status().is_success() {
         return Ok(response);
     }
@@ -55,7 +67,7 @@ pub(super) async fn generation_status(response: reqwest::Response) -> Result<req
     }
     if matches!(code, 400 | 413 | 422) {
         if let Ok(value) = body_limit(response, 16 * 1024).await
-            && let Some(error) = classified_error(&value)
+            && let Some(error) = classify(&value)
         {
             return Err(error);
         }
@@ -67,31 +79,35 @@ pub(super) async fn generation_status(response: reqwest::Response) -> Result<req
 /// Classify known error semantics, discarding all diagnostic text immediately.
 pub(super) fn classified_error(value: &Value) -> Option<InferenceError> {
     let error = &value["error"];
-    let code = error["code"].as_str().or_else(|| error["type"].as_str());
-    let message = error["message"]
-        .as_str()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if matches!(
-        code,
-        Some("context_length_exceeded" | "prompt_too_long" | "too_many_tokens")
-    ) || [
-        "prompt is too long",
-        "maximum context length",
-        "context length exceeded",
-        "too many input tokens",
-        "input is too long",
-    ]
-    .iter()
-    .any(|s| message.contains(s))
-    {
-        return Some(InferenceError::ContextLength);
-    }
+    // An explicit code wins, even when unknown/non-string. Do not let a
+    // secondary type or quoted client text reinterpret its meaning.
+    let code = match error.get("code").filter(|v| !v.is_null()) {
+        Some(code) => code.as_str()?,
+        None => error["type"].as_str()?,
+    };
     match code {
-        Some("overloaded_error" | "overloaded") => Some(InferenceError::Overloaded),
-        Some("rate_limit_error" | "rate_limit_exceeded") => Some(InferenceError::Busy),
+        "context_length_exceeded" | "prompt_too_long" | "too_many_tokens" => {
+            Some(InferenceError::ContextLength)
+        }
+        "overloaded_error" | "overloaded" => Some(InferenceError::Overloaded),
+        "rate_limit_error" | "rate_limit_exceeded" => Some(InferenceError::Busy),
         _ => None,
     }
+}
+/// Anthropic documents context overflow as invalid_request_error with a
+/// `prompt is too long:` prefix, rather than a dedicated structured code.
+/// This exception is native-only, never a generic substring search.
+pub(super) fn anthropic_error(value: &Value) -> Option<InferenceError> {
+    if let Some(error) = classified_error(value) {
+        return Some(error);
+    }
+    let error = &value["error"];
+    if error.get("code").is_some_and(|v| !v.is_null()) || error["type"] != "invalid_request_error" {
+        return None;
+    }
+    let message = error["message"].as_str()?;
+    (message == "prompt is too long" || message.starts_with("prompt is too long:"))
+        .then_some(InferenceError::ContextLength)
 }
 pub(super) fn check_sse(response: &reqwest::Response) -> Result<()> {
     if !response

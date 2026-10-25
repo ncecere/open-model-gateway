@@ -134,7 +134,7 @@ impl ProviderAdapter for AnthropicAdapter {
             .await
             .map_err(transport)?;
         let response = if request.messages_options.is_some() {
-            super::framing::generation_status(response).await?
+            super::framing::anthropic_generation_status(response).await?
         } else {
             status(response.status())?;
             response
@@ -337,7 +337,7 @@ impl State {
         let mut events = vec![];
         if value["type"] == "error" {
             return Err(
-                super::framing::classified_error(&value).unwrap_or(InferenceError::InvalidUpstream)
+                super::framing::anthropic_error(&value).unwrap_or(InferenceError::InvalidUpstream)
             );
         }
         match value["type"].as_str() {

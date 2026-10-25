@@ -601,14 +601,14 @@ fn sdk_messages_error<E: ProvideErrorMetadata>(
             service.code(),
             Some("ValidationException" | "validationException")
         ) && service.message().is_some_and(|m| {
-            [
-                "too many input tokens",
-                "input is too long",
-                "prompt is too long",
-                "maximum context length",
-            ]
-            .iter()
-            .any(|s| m.to_ascii_lowercase().contains(s))
+            // Native validation envelope only; a quoted client phrase in an
+            // unrelated diagnostic is not proof of context overflow.
+            let message = m.to_ascii_lowercase();
+            message.starts_with("input is too long for requested model")
+                || message == "too many input tokens"
+                || message.starts_with("too many input tokens:")
+                || message == "prompt is too long"
+                || message.starts_with("prompt is too long:")
         }) {
             return InferenceError::ContextLength;
         }

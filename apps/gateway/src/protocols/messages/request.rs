@@ -284,12 +284,23 @@ impl Request {
             if blocks.is_empty() || blocks.len() > 256 {
                 return Err(invalid("messages.content"));
             }
+            // One wire assistant turn must remain one canonical turn: all
+            // parallel calls need to precede their correlated tool results.
+            // Text is consolidated within this wire message, never across it.
+            let mut turn = Message {
+                role,
+                content: None,
+                tool_calls: vec![],
+                tool_call_id: None,
+            };
             for block in blocks {
                 match block["type"].as_str() {
                     Some("text") => {
                         object(block, &["type", "text", "cache_control"], "text")?;
                         cache(block, &mut options)?;
-                        messages.push(message(role, string(&block["text"])?));
+                        turn.content
+                            .get_or_insert_with(String::new)
+                            .push_str(&string(&block["text"])?);
                     }
                     Some("image") => image(block, &mut options)?,
                     Some("thinking") if role == Role::Assistant => {
@@ -315,15 +326,10 @@ impl Request {
                         if id.is_empty() || !name(&n) || !block["input"].is_object() {
                             return Err(invalid("tool_use"));
                         }
-                        messages.push(Message {
-                            role,
-                            content: None,
-                            tool_call_id: None,
-                            tool_calls: vec![ToolCall {
-                                id,
-                                name: n,
-                                arguments: block["input"].to_string(),
-                            }],
+                        turn.tool_calls.push(ToolCall {
+                            id,
+                            name: n,
+                            arguments: block["input"].to_string(),
                         });
                     }
                     Some("tool_result") if role == Role::User => {
@@ -353,6 +359,12 @@ impl Request {
                             .map(|v| text_blocks(v, &mut options, true).map(|v| v.concat()))
                             .transpose()?
                             .unwrap_or_default();
+                        // Canonical tool results each carry one correlation id.
+                        // Keep any preceding user text in its original order;
+                        // adapters retain their normal correlation validation.
+                        if let Some(text) = turn.content.take() {
+                            messages.push(message(role, text));
+                        }
                         messages.push(Message {
                             role: Role::Tool,
                             content: Some(content),
@@ -365,6 +377,9 @@ impl Request {
                     ) => return Err(invalid("tools.type")),
                     _ => return Err(invalid("messages.content.type")),
                 }
+            }
+            if turn.content.is_some() || !turn.tool_calls.is_empty() {
+                messages.push(turn);
             }
         }
         // Image-only input has no text representation. Preserve its empty

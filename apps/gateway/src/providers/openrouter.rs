@@ -3,9 +3,10 @@
 //! - The key is a server-held `env:` reference; inference credentials are
 //!   never forwarded. Optional `HTTP-Referer`/`X-Title` come from server config.
 //! - Redirects, ambient proxies and implicit retries are disabled.
-//! - Non-success bodies are never read: OpenRouter error bodies carry the
-//!   account `user_id` and embedded provider errors. 200 bodies carrying an
-//!   `error` object are mapped by code only.
+//! - Non-success bodies are dropped except bounded structured context-error
+//!   classification for Messages validation responses. Error bodies can carry
+//!   account `user_id` and provider diagnostics: never log or forward them.
+//!   HTTP status meanings and embedded error codes outrank diagnostic text.
 //! - Every request sets `provider.data_collection` (default `"deny"`). Free
 //!   (`:free`) endpoints may train on prompts and are unavailable under deny
 //!   (upstream 404 → `upstream_rejected`).
@@ -270,13 +271,16 @@ impl OpenRouterAdapter {
             builder = builder.header("X-Title", title.clone());
         }
         let response = builder.send().await.map_err(transport)?;
-        if messages {
-            return super::framing::generation_status(response).await;
-        }
         if !response.status().is_success() {
-            // Dropping the response without reading it: error bodies are never
-            // parsed, logged or forwarded.
-            return Err(status_error(response.status().as_u16()));
+            let code = response.status().as_u16();
+            // Keep this provider's status meanings (notably account credit,
+            // moderation and timeout) before considering an error body. Only
+            // validation envelopes may refine a refusal to context overflow.
+            if messages && matches!(code, 400 | 413 | 422) {
+                return super::framing::generation_status(response).await;
+            }
+            // Other error bodies are never parsed, logged or forwarded.
+            return Err(status_error(code));
         }
         Ok(response)
     }
@@ -323,13 +327,13 @@ fn embedded_error(value: &Value) -> Result<()> {
     if empty(&value["error"]) {
         return Ok(());
     }
-    if let Some(error) = super::framing::classified_error(value) {
-        return Err(error);
-    }
-    Err(value["error"]["code"]
+    if let Some(code) = value["error"]["code"]
         .as_u64()
         .and_then(|c| u16::try_from(c).ok())
-        .map_or(InferenceError::UpstreamUnavailable, status_error))
+    {
+        return Err(status_error(code));
+    }
+    Err(super::framing::classified_error(value).unwrap_or(InferenceError::UpstreamUnavailable))
 }
 
 async fn read(response: reqwest::Response) -> Result<Vec<u8>> {
