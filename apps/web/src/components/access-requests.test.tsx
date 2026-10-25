@@ -140,6 +140,14 @@ describe("Workspace access requests queue (#83 slice A): owner/admin approval", 
     await user.click(within(dialog).getByRole("button", { name: "Deny" }));
     expect(await within(dialog).findByText("Request is no longer applicable")).toBeTruthy();
   });
+  it("shows a fixed placeholder, never a raw ID, once the server redacts an ineligible requester's identity", async () => {
+    serve({ [workspaceAccessRequestsPath(team.id)]: () => Response.json({ data: [request({ requester_display_name: null, requester_email: null })] }) });
+    mount(<WorkspaceAccessRequestQueue session={session} workspace={team} />);
+    await screen.findByText("Retained identity");
+    expect(screen.queryByText("Outsider Person")).toBeNull();
+    expect(screen.queryByText("outsider")).toBeNull();
+    expect(screen.getByRole("button", { name: "Actions for Retained identity" })).toBeTruthy();
+  });
   it("never lets a workspace admin approve or deny their own request", async () => {
     serve({ [workspaceAccessRequestsPath(team.id)]: () => Response.json({ data: [request({ requester: session.user.id })] }) });
     mount(<WorkspaceAccessRequestQueue session={session} workspace={team} />);

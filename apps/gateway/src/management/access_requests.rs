@@ -16,7 +16,13 @@ const PROJECTION: &str = "jsonb_build_object('id',r.id,'requester',r.requester,'
 /// beyond what those existing, equally scoped reads already show the same viewers. It is used
 /// only for the workspace- and platform-scoped queues, never for the requester's own `mine`/
 /// `detail` reads, so a non-approver never receives another requester's identity.
-const PROJECTION_WITH_REQUESTER: &str = "jsonb_build_object('id',r.id,'requester',r.requester,'requester_display_name',ru.display_name,'requester_email',ru.email,'target_kind',r.target_kind,'workspace_id',r.workspace_id,'workspace_name_at_request',r.workspace_name_at_request,'requested_role',r.requested_role,'status',r.status,'reason',r.reason,'created_at',r.created_at,'expires_at',r.expires_at,'decided_by',r.decided_by,'decided_at',r.decided_at,'membership_grant_id',(SELECT membership_grant_id FROM access_request_applications a WHERE a.request_id=r.id))";
+///
+/// The `CASE WHEN` guard below mirrors `members::candidates`' own WHERE clause exactly
+/// (disabled, cleaned, no email, or no current platform entitlement): a requester outside
+/// that picker's reach gets both fields redacted to `NULL` here too, so this projection never
+/// discloses more than that picker actually would for the requester's *current* state, not
+/// just their state at submission.
+const PROJECTION_WITH_REQUESTER: &str = "jsonb_build_object('id',r.id,'requester',r.requester,'requester_display_name',CASE WHEN ru.disabled_at IS NULL AND ru.cleaned_at IS NULL AND ru.email IS NOT NULL AND EXISTS(SELECT 1 FROM effective_platform_roles er WHERE er.user_id=ru.id) THEN ru.display_name END,'requester_email',CASE WHEN ru.disabled_at IS NULL AND ru.cleaned_at IS NULL AND ru.email IS NOT NULL AND EXISTS(SELECT 1 FROM effective_platform_roles er WHERE er.user_id=ru.id) THEN ru.email END,'target_kind',r.target_kind,'workspace_id',r.workspace_id,'workspace_name_at_request',r.workspace_name_at_request,'requested_role',r.requested_role,'status',r.status,'reason',r.reason,'created_at',r.created_at,'expires_at',r.expires_at,'decided_by',r.decided_by,'decided_at',r.decided_at,'membership_grant_id',(SELECT membership_grant_id FROM access_request_applications a WHERE a.request_id=r.id))";
 fn conflict() -> ApiError {
     ApiError(StatusCode::CONFLICT, "Request is no longer applicable")
 }

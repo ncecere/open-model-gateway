@@ -22,7 +22,10 @@ export type AccessRequestTarget = { id: string; name: string; kind: Exclude<Work
  *   platform-scoped approval queues (never on the requester's own `mine`/detail reads). Approvers
  *   there already see the same pair for any entitled user, through the Members "Add member"
  *   picker (owner/admin) or the platform user directory (Platform Admin/Auditor); this only
- *   avoids forcing them to look a raw requester ID up separately.
+ *   avoids forcing them to look a raw requester ID up separately. Both fields are server-redacted
+ *   to `null` once the requester is no longer eligible for that picker (disabled, cleaned or no
+ *   current platform entitlement), so a queue never discloses more about someone than the
+ *   matching picker currently would.
  */
 export type AccessRequest = {
   id: string;

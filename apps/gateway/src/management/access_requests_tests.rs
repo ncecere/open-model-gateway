@@ -436,6 +436,12 @@ async fn access_requests_reason_export_cleanup_and_holds(pool: PgPool) {
         export["access_requests"]["items"][0]["reason"],
         "Please add me"
     );
+    // UX fix (#83): the frozen workspace name is a submission detail, not a secret; it belongs
+    // in the subject export alongside everything else about this request.
+    assert_eq!(
+        export["access_requests"]["items"][0]["workspace_name_at_request"],
+        "Team"
+    );
     let hold = Uuid::new_v4();
     sqlx::query("INSERT INTO legal_holds(id,user_id,reference) VALUES($1,$2,'REQUEST-HOLD')")
         .bind(hold)
@@ -487,6 +493,17 @@ async fn access_requests_reason_export_cleanup_and_holds(pool: PgPool) {
             .await
             .unwrap(),
         None
+    );
+    // Requester cleanup erases the reason, never the frozen workspace name.
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT workspace_name_at_request FROM access_requests WHERE id=$1"
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        "Team"
     );
 }
 
@@ -856,6 +873,94 @@ async fn access_requests_queue_identity_and_frozen_workspace_name(pool: PgPool) 
     )
     .await;
     assert_eq!(after_rename["workspace_name_at_request"], json!("Team"));
+    // Free the one-pending-request-per-target slot before submitting another for the same
+    // workspace/requester, or the second submission would just hit that conflict (409) instead
+    // of inserting a new row.
+    assert_eq!(
+        call(
+            &f.s,
+            &f.outsider,
+            "POST",
+            &format!("/api/v1/me/access-requests/{id}/withdraw"),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
     let (_, r2) = submit(&f, &f.outsider, f.team, "identity-check-after-rename").await;
     assert_eq!(r2["workspace_name_at_request"], json!("Team Renamed"));
+}
+
+/// Adversarial review (#83 UX fix): the Members "Add member" picker (`members::candidates`)
+/// excludes a disabled/cleaned/unentitled user, so an approval queue that joined `users`
+/// unconditionally would disclose *more* than that picker ever would once a requester loses
+/// entitlement after submitting. Both fields must redact to `null` the moment that happens,
+/// for every approver scope, not just at submission time.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn access_requests_redacts_requester_identity_once_picker_ineligible(pool: PgPool) {
+    let f = fixture(&pool).await;
+    discover(&pool, f.team).await;
+    let (_, r) = submit(&f, &f.outsider, f.team, "redaction-check").await;
+    let id = request_id(&r);
+
+    // Before any entitlement loss: both the workspace and platform queues disclose the pair,
+    // exactly as before.
+    let (_, before) = call(
+        &f.s,
+        &f.owner,
+        "GET",
+        &format!("/api/v1/workspaces/{}/access-requests", f.team),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(
+        before["data"][0]["requester_email"],
+        json!(f.outsider.email)
+    );
+
+    // Losing platform entitlement makes the requester ineligible for the Members picker too.
+    sqlx::query("UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1")
+        .bind(f.outsider.user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let (_, queue) = call(
+        &f.s,
+        &f.owner,
+        "GET",
+        &format!("/api/v1/workspaces/{}/access-requests", f.team),
+        Value::Null,
+    )
+    .await;
+    let row = &queue["data"][0];
+    assert_eq!(row["id"], json!(id));
+    assert!(row["requester_display_name"].is_null());
+    assert!(row["requester_email"].is_null());
+    // Never redacts the request's own (non-identity) fields.
+    assert_eq!(row["workspace_name_at_request"], json!("Team"));
+    assert_eq!(row["reason"], json!("Please add me"));
+
+    for actor in [&f.admin, &f.auditor] {
+        let (_, queue) = call(
+            &f.s,
+            actor,
+            "GET",
+            "/api/v1/platform/access-requests",
+            Value::Null,
+        )
+        .await;
+        let row = queue["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == json!(id))
+            .unwrap();
+        assert!(
+            row["requester_display_name"].is_null(),
+            "platform queue must redact an unentitled requester's name too"
+        );
+        assert!(row["requester_email"].is_null());
+    }
 }

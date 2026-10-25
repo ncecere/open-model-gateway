@@ -74,10 +74,13 @@ export function AccessRequestsPage({ tab, onTabChange }: { tab?: string; onTabCh
 }
 
 /**
- * The requester's label for an approval queue row: display name, else email, else the opaque
- * ID as a last resort for an older gateway that hasn't deployed this field yet.
+ * The requester's label for an approval queue row: display name, else email, else the same
+ * "Retained identity" placeholder `PersonIdentity` already renders for the cell itself. The
+ * server redacts both fields to `null` once the requester is no longer eligible for the
+ * Members picker (disabled, cleaned or unentitled), so this never falls back to the opaque
+ * requester ID either way.
  */
-const requesterLabel = (r: AccessRequest) => r.requester_display_name?.trim() || r.requester_email || r.requester;
+const requesterLabel = (r: AccessRequest) => r.requester_display_name?.trim() || r.requester_email || "Retained identity";
 /** A pending request's decision row actions: never the requester, approve/deny only while pending. */
 function decisionActions(r: AccessRequest, selfId: string, writable: boolean, decide: (r: AccessRequest, approve: boolean) => void) {
   if (r.status !== "pending") return [];
