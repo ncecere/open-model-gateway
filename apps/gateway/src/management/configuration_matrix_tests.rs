@@ -335,6 +335,20 @@ async fn every_json_management_write_rejects_unknown_fields_after_valid_control(
         json!({"enabled":false})
     );
     case!(
+        "group_mapping_preview::preview_new_mapping",
+        "POST",
+        format!("{platform}/oidc/group-mappings/preview"),
+        &f.admin,
+        json!({"issuer":"https://idp.example.test","group_value":"matrix-preview","target_kind":"platform","platform_role":"user","enabled":false})
+    );
+    case!(
+        "group_mapping_preview::preview_existing_mapping",
+        "POST",
+        format!("{platform}/oidc/group-mappings/{mapping}/preview"),
+        &f.admin,
+        json!({"issuer":"https://idp.example.test","group_value":"matrix-preview","target_kind":"platform","platform_role":"user","enabled":false})
+    );
+    case!(
         "directory::create_cost_center",
         "POST",
         format!("{platform}/cost-centers"),
