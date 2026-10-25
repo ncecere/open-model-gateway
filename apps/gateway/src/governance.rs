@@ -359,6 +359,42 @@ fn checked_cost(input: u64, output: u64, i: i64, o: i64) -> Result<i64, billing:
             .and_then(|b| a.checked_add(b).ok_or(billing::BillingError::Overflow))
     })
 }
+/// Native cache hints require explicitly priced reads and TTL writes. The existing
+/// v2/v3 bound independently reserves the *full input ceiling* for each priced
+/// cache category, including the highest requested write rate, plus output.
+/// This intentionally conservative bound also covers per-component rounding;
+/// settlement still uses disjoint observed allocations, never aggregate+parts.
+fn require_native_cache_price(
+    price: Option<&Price>,
+    controls: &[serde_json::Value],
+) -> Result<(), InferenceError> {
+    if controls.is_empty() {
+        return Ok(());
+    }
+    let incompatible = || InferenceError::InvalidField("cache_control");
+    let rates = match price {
+        Some(p) if p.pricing_version == 2 => p.rates()?,
+        Some(p) if p.pricing_version == 3 => billing::v3::cache_rates(&p.lines()?.0),
+        _ => return Err(incompatible()), // No price or v1 cannot price TTL writes.
+    };
+    // Any cached prompt can become a cache hit on a later request, regardless
+    // of its write TTL. A finite write hold alone cannot price that settlement.
+    if !matches!(rates.read, CacheRate::Priced { .. }) {
+        return Err(incompatible());
+    }
+    for control in controls {
+        let rate = match control.get("ttl").and_then(serde_json::Value::as_str) {
+            None | Some("5m") => rates.write_5m,
+            Some("1h") => rates.write_1h,
+            _ => return Err(incompatible()),
+        };
+        if !matches!(rate, CacheRate::Priced { .. }) {
+            return Err(incompatible());
+        }
+    }
+    Ok(())
+}
+
 /// Budget window of one policy budget. Each scope (type default, workspace
 /// override, workspace local, key lineage) may hold at most
 /// one budget per period; every applicable budget is enforced over its own
@@ -555,6 +591,7 @@ pub async fn admit(
         lease_seconds,
         None,
         u32::MAX,
+        Some(request),
     )
     .await
     .map(|_| ())
@@ -586,6 +623,7 @@ pub async fn admit_generation(
         lease_seconds,
         Some(deployment),
         output_limit,
+        Some(request),
     )
     .await
 }
@@ -638,6 +676,7 @@ pub async fn admit_embeddings_for_deployment(
         lease_seconds,
         Some(deployment),
         u32::MAX,
+        None,
     )
     .await
     .map(|_| ())
@@ -661,6 +700,7 @@ pub async fn admit_workload_for_deployment(
         lease_seconds,
         Some(deployment),
         u32::MAX,
+        None,
     )
     .await
     .map(|_| ())
@@ -672,6 +712,7 @@ async fn admit_checked(
     lease_seconds: i64,
     expected: Option<&Deployment>,
     output_limit: u32,
+    generation_request: Option<&ChatRequest>,
 ) -> Result<crate::inference::repository::GenerationAdmission, InferenceError> {
     let mut timer = crate::metrics::PhaseTimer::start();
     let result = locks::retry_deadlocks!(
@@ -683,6 +724,7 @@ async fn admit_checked(
             lease_seconds,
             expected,
             output_limit,
+            generation_request,
             &mut timer
         )
         .await
@@ -701,6 +743,7 @@ async fn admit_unobserved(
     lease_seconds: i64,
     expected: Option<&Deployment>,
     output_limit: u32,
+    generation_request: Option<&ChatRequest>,
     timer: &mut crate::metrics::PhaseTimer,
 ) -> Result<crate::inference::repository::GenerationAdmission, InferenceError> {
     if !(1..=86_400).contains(&lease_seconds) {
@@ -792,6 +835,14 @@ async fn admit_unobserved(
     {
         return Err(InferenceError::Configuration);
     }
+    // Only the live, validated native deployment forwards these hints. Check
+    // its immutable pinned price under the catalog lock, before any execution,
+    // reservation, counters or totals are written. Translated routes drop hints.
+    if current.provider == "anthropic"
+        && let Some(options) = generation_request.and_then(|r| r.messages_options.as_deref())
+    {
+        require_native_cache_price(price.as_ref(), &options.cache_controls)?;
+    }
     let now = store.admission_override().unwrap_or(database_now);
     let lease = now
         .checked_add_signed(chrono::TimeDelta::seconds(lease_seconds))
@@ -801,6 +852,18 @@ async fn admit_unobserved(
         workload.output = OutputReservation::Requested(admission.max_output_tokens);
     }
     let (tokens, held) = reservation_bounds(price.as_ref(), &workload)?;
+    if held.is_none()
+        && current.provider == "anthropic"
+        && generation_request.is_some_and(|r| {
+            r.messages_options
+                .as_ref()
+                .is_some_and(|o| !o.cache_controls.is_empty())
+        })
+    {
+        // A cache-enabled native request needs a finite conservative hold even
+        // without a budget; unrelated unknown cache rates cannot erase it.
+        return Err(InferenceError::InvalidField("cache_control"));
+    }
     // A pricing-v3 price that cannot bound this attempt (a possibly-used meter
     // without a line, an explicit unknown, or no `max_units`) is refused under
     // any budget with `price_unbounded`. v1/v2 keep their legacy
@@ -1973,6 +2036,8 @@ async fn resolve_usage_once(
     sqlx::query("INSERT INTO audit_events(id,workspace_id,actor_user_id,action,resource_type,resource_id,metadata,admin_token_id) VALUES($1,$2,$3,'usage.reconciled','execution',$4,'{}',$5)").bind(Uuid::new_v4()).bind(workspace).bind(actor.user_id).bind(execution).bind(actor.token_id).execute(&mut *tx).await.map_err(storage)?;
     tx.commit().await.map_err(storage)
 }
+#[cfg(all(test, feature = "integration-tests"))]
+mod anthropic_cache_tests;
 #[cfg(all(test, feature = "integration-tests"))]
 mod audio_tests;
 #[cfg(all(test, feature = "integration-tests"))]

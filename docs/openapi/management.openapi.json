@@ -168,6 +168,14 @@
         "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
         "x-omg-schema-status": "incomplete"
       },
+      "delete_api_v1_platform_report_schedules_by_idRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "delete_api_v1_platform_report_schedules_by_idResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
       "delete_api_v1_platform_settings_general_logoRequest": {
         "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
         "x-omg-schema-status": "incomplete"
@@ -261,6 +269,14 @@
         "x-omg-schema-status": "incomplete"
       },
       "delete_api_v1_workspaces_by_ws_models_by_modelResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "delete_api_v1_workspaces_by_ws_report_schedules_by_idRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "delete_api_v1_workspaces_by_ws_report_schedules_by_idResponse": {
         "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
         "x-omg-schema-status": "incomplete"
       },
@@ -688,6 +704,22 @@
         "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
         "x-omg-schema-status": "incomplete"
       },
+      "get_api_v1_platform_report_schedulesRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_api_v1_platform_report_schedulesResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_api_v1_platform_report_schedules_by_idRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_api_v1_platform_report_schedules_by_idResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
       "get_api_v1_platform_server_policyRequest": {
         "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
         "x-omg-schema-status": "incomplete"
@@ -1112,6 +1144,22 @@
         "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
         "x-omg-schema-status": "incomplete"
       },
+      "get_api_v1_workspaces_by_ws_report_schedulesRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_api_v1_workspaces_by_ws_report_schedulesResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_api_v1_workspaces_by_ws_report_schedules_by_idRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_api_v1_workspaces_by_ws_report_schedules_by_idResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
       "get_api_v1_workspaces_by_ws_requestsRequest": {
         "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
         "x-omg-schema-status": "incomplete"
@@ -1248,6 +1296,14 @@
         "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
         "x-omg-schema-status": "incomplete"
       },
+      "patch_api_v1_platform_report_schedules_by_idRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "patch_api_v1_platform_report_schedules_by_idResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
       "patch_api_v1_platform_users_by_userRequest": {
         "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
         "x-omg-schema-status": "incomplete"
@@ -1277,6 +1333,14 @@
         "x-omg-schema-status": "incomplete"
       },
       "patch_api_v1_workspaces_by_ws_keys_by_keyResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "patch_api_v1_workspaces_by_ws_report_schedules_by_idRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "patch_api_v1_workspaces_by_ws_report_schedules_by_idResponse": {
         "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
         "x-omg-schema-status": "incomplete"
       },
@@ -1456,6 +1520,14 @@
         "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
         "x-omg-schema-status": "incomplete"
       },
+      "post_api_v1_platform_report_schedulesRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_api_v1_platform_report_schedulesResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
       "post_api_v1_platform_settings_audit_export_testRequest": {
         "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
         "x-omg-schema-status": "incomplete"
@@ -1605,6 +1677,14 @@
         "x-omg-schema-status": "incomplete"
       },
       "post_api_v1_workspaces_by_ws_modelsResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_api_v1_workspaces_by_ws_report_schedulesRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_api_v1_workspaces_by_ws_report_schedulesResponse": {
         "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
         "x-omg-schema-status": "incomplete"
       },
@@ -4912,6 +4992,153 @@
           "$ref": "#/components/schemas/patch_api_v1_platform_providers_by_idResponse"
         },
         "x-omg-token-policy": "Scope"
+      }
+    },
+    "/api/v1/platform/report-schedules": {
+      "get": {
+        "operationId": "get_api_v1_platform_report_schedules",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          }
+        },
+        "security": [
+          {
+            "browserSession": []
+          }
+        ],
+        "x-omg-access": "PlatformRead",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_api_v1_platform_report_schedulesRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_api_v1_platform_report_schedulesResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      },
+      "post": {
+        "operationId": "post_api_v1_platform_report_schedules",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          }
+        },
+        "security": [
+          {
+            "browserSession": [],
+            "csrfToken": [],
+            "origin": []
+          }
+        ],
+        "x-omg-access": "PlatformWrite",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_report_schedulesRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_report_schedulesResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/api/v1/platform/report-schedules/{id}": {
+      "delete": {
+        "operationId": "delete_api_v1_platform_report_schedules_by_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          }
+        },
+        "security": [
+          {
+            "browserSession": [],
+            "csrfToken": [],
+            "origin": []
+          }
+        ],
+        "x-omg-access": "PlatformWrite",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/delete_api_v1_platform_report_schedules_by_idRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/delete_api_v1_platform_report_schedules_by_idResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      },
+      "get": {
+        "operationId": "get_api_v1_platform_report_schedules_by_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          }
+        },
+        "security": [
+          {
+            "browserSession": []
+          }
+        ],
+        "x-omg-access": "PlatformRead",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_api_v1_platform_report_schedules_by_idRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_api_v1_platform_report_schedules_by_idResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      },
+      "patch": {
+        "operationId": "patch_api_v1_platform_report_schedules_by_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          }
+        },
+        "security": [
+          {
+            "browserSession": [],
+            "csrfToken": [],
+            "origin": []
+          }
+        ],
+        "x-omg-access": "PlatformWrite",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/patch_api_v1_platform_report_schedules_by_idRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/patch_api_v1_platform_report_schedules_by_idResponse"
+        },
+        "x-omg-token-policy": "Denied"
       }
     },
     "/api/v1/platform/server-policy": {
@@ -8465,6 +8692,195 @@
         },
         "x-omg-response-schema": {
           "$ref": "#/components/schemas/put_api_v1_workspaces_by_ws_policyResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/api/v1/workspaces/{ws}/report-schedules": {
+      "get": {
+        "operationId": "get_api_v1_workspaces_by_ws_report_schedules",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ws",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          }
+        },
+        "security": [
+          {
+            "browserSession": []
+          }
+        ],
+        "x-omg-access": "WorkspaceReportAdmin",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_api_v1_workspaces_by_ws_report_schedulesRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_api_v1_workspaces_by_ws_report_schedulesResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      },
+      "post": {
+        "operationId": "post_api_v1_workspaces_by_ws_report_schedules",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ws",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          }
+        },
+        "security": [
+          {
+            "browserSession": [],
+            "csrfToken": [],
+            "origin": []
+          }
+        ],
+        "x-omg-access": "WorkspaceReportAdmin",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_api_v1_workspaces_by_ws_report_schedulesRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_api_v1_workspaces_by_ws_report_schedulesResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/api/v1/workspaces/{ws}/report-schedules/{id}": {
+      "delete": {
+        "operationId": "delete_api_v1_workspaces_by_ws_report_schedules_by_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ws",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          }
+        },
+        "security": [
+          {
+            "browserSession": [],
+            "csrfToken": [],
+            "origin": []
+          }
+        ],
+        "x-omg-access": "WorkspaceReportAdmin",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/delete_api_v1_workspaces_by_ws_report_schedules_by_idRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/delete_api_v1_workspaces_by_ws_report_schedules_by_idResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      },
+      "get": {
+        "operationId": "get_api_v1_workspaces_by_ws_report_schedules_by_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ws",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          }
+        },
+        "security": [
+          {
+            "browserSession": []
+          }
+        ],
+        "x-omg-access": "WorkspaceReportAdmin",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_api_v1_workspaces_by_ws_report_schedules_by_idRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_api_v1_workspaces_by_ws_report_schedules_by_idResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      },
+      "patch": {
+        "operationId": "patch_api_v1_workspaces_by_ws_report_schedules_by_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ws",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          }
+        },
+        "security": [
+          {
+            "browserSession": [],
+            "csrfToken": [],
+            "origin": []
+          }
+        ],
+        "x-omg-access": "WorkspaceReportAdmin",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/patch_api_v1_workspaces_by_ws_report_schedules_by_idRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/patch_api_v1_workspaces_by_ws_report_schedules_by_idResponse"
         },
         "x-omg-token-policy": "Denied"
       }

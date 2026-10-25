@@ -119,6 +119,7 @@ fn access_name(access: Access) -> &'static str {
         Access::WorkspaceKey => "WorkspaceKey",
         Access::WorkspaceKeyRotate => "WorkspaceKeyRotate",
         Access::WorkspaceAdmin => "WorkspaceAdmin",
+        Access::WorkspaceReportAdmin => "WorkspaceReportAdmin",
         Access::WorkspaceAdminOrReader => "WorkspaceAdminOrReader",
         Access::WorkspacePlatformWrite => "WorkspacePlatformWrite",
     }

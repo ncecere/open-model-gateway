@@ -78,6 +78,10 @@ fn issue_313_http_accepts_loopback_dns_answers_and_literals() {
 }
 
 fn assert_http_dns_refused(addresses: &[&str]) {
+    // #352: refuses Purpose::Telemetry destinations, which a `Capture`
+    // session elsewhere asserts an exact count of; see
+    // `log_capture_test`'s doc comment.
+    let _lock = crate::log_capture_test::exclusive();
     let general = general_policy();
     for &address in addresses {
         assert!(
@@ -108,6 +112,9 @@ fn issue_313_http_rejects_allowlisted_private_dns_answers() {
 }
 
 fn assert_http_mixed_dns_refused(non_loopback: &[&str]) {
+    // #352: refuses Purpose::Telemetry destinations; see
+    // `log_capture_test`'s doc comment.
+    let _lock = crate::log_capture_test::exclusive();
     for &address in non_loopback {
         // Test both orders: one permitted loopback must not mask a bad answer.
         for answers in [["127.0.0.1", address], [address, "::1"]] {
@@ -141,6 +148,9 @@ fn issue_313_http_rejects_mixed_loopback_and_reserved_dns_answers() {
 }
 
 fn assert_http_literals_refused(addresses: &[&str]) {
+    // #352: refuses Purpose::Telemetry destinations; see
+    // `log_capture_test`'s doc comment.
+    let _lock = crate::log_capture_test::exclusive();
     for &address in addresses {
         let literal = url("http", address);
         let general = general_policy();
@@ -165,6 +175,9 @@ fn issue_313_http_rejects_allowlisted_private_literals() {
 
 #[test]
 fn issue_313_https_preserves_input_policy_decisions_for_every_address_class() {
+    // #352: refuses Purpose::Telemetry destinations (the REFUSED class);
+    // see `log_capture_test`'s doc comment.
+    let _lock = crate::log_capture_test::exclusive();
     for general in [
         Policy::default(),
         Policy::new(true, Networks::default()),
@@ -341,6 +354,9 @@ async fn issue_313_real_http_client_posts_once_to_localhost_and_accepts_bounded_
 #[test]
 fn issue_313_real_http_client_constructor_refuses_public_literal_before_transport() {
     use std::time::Duration;
+    // #352: refuses a Purpose::Telemetry destination; see
+    // `log_capture_test`'s doc comment.
+    let _lock = crate::log_capture_test::exclusive();
 
     // Construction only: never send, resolve, or connect to this public IP,
     // even if the regression returns a client instead of a policy refusal.

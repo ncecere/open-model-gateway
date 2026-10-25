@@ -67,6 +67,7 @@ impl ProviderAdapter for RetryFixture {
             return Err(InferenceError::UpstreamUnavailable);
         }
         Ok(ProviderOutput::Complete(ChatResponse {
+            messages_content: None,
             content: Some("recovered".into()),
             tool_calls: vec![],
             finish_reason: FinishReason::Stop,

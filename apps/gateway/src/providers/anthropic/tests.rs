@@ -12,7 +12,7 @@ impl SecretResolver for Resolver {
         Secret::new("mock-key".into())
     }
 }
-fn target() -> Deployment {
+pub(super) fn target() -> Deployment {
     Deployment {
         id: uuid::Uuid::new_v4(),
         provider: "anthropic".into(),
@@ -126,9 +126,9 @@ pub(super) fn stream() -> Vec<Value> {
         json!({"type":"message_stop"}),
     ]
 }
-struct Mock {
-    adapter: AnthropicAdapter,
-    capture: Arc<Mutex<Vec<(HeaderMap, Uri, Value)>>>,
+pub(super) struct Mock {
+    pub(super) adapter: AnthropicAdapter,
+    pub(super) capture: Arc<Mutex<Vec<(HeaderMap, Uri, Value)>>>,
     task: tokio::task::JoinHandle<()>,
 }
 impl Drop for Mock {
@@ -137,7 +137,7 @@ impl Drop for Mock {
     }
 }
 impl Mock {
-    async fn new(status: u16, content: Option<Vec<u8>>) -> Self {
+    pub(super) async fn new(status: u16, content: Option<Vec<u8>>) -> Self {
         let capture = Arc::new(Mutex::new(vec![]));
         let c = capture.clone();
         let app = Router::new().fallback(move |headers: HeaderMap, uri: Uri, bytes: Bytes| {
@@ -279,10 +279,12 @@ async fn no_argument_tool_defaults_preserve_messages_wire() {
         assert!(body["tools"][0].get("strict").is_none());
         assert_eq!(body["messages"][1]["content"][0]["id"], "ping-call");
         assert_eq!(body["messages"][1]["content"][0]["input"], json!({}));
-        assert_eq!(
-            body["messages"][2]["content"][0],
-            json!({"type":"tool_result","tool_use_id":"ping-call","content":""})
-        );
+        let result = &body["messages"][2]["content"][0];
+        assert_eq!(result["type"], "tool_result");
+        assert_eq!(result["tool_use_id"], "ping-call");
+        assert_eq!(result["content"], "");
+        // Native Messages retains explicit false; omission stays omitted.
+        assert!(result.get("is_error").is_none_or(|v| v == false));
     }
 }
 #[tokio::test]

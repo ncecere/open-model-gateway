@@ -70,6 +70,18 @@ DO $$ DECLARE r record; t text; BEGIN
  IF has_table_privilege('gateway_runtime','public.scim_users','DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.scim_users','user_id','UPDATE') OR has_column_privilege('gateway_runtime','public.scim_users','created_at','UPDATE') THEN RAISE EXCEPTION 'scim user link removable or re-keyable'; END IF;
  IF has_column_privilege('gateway_runtime','public.scim_groups','id','UPDATE') OR has_any_column_privilege('gateway_runtime','public.scim_group_members','UPDATE') OR has_table_privilege('gateway_runtime','public.scim_groups','TRUNCATE') OR has_table_privilege('gateway_runtime','public.scim_group_members','TRUNCATE') THEN RAISE EXCEPTION 'scim group identity rewritable'; END IF;
  IF has_table_privilege('gateway_runtime','public.scim_state','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.scim_state','singleton','UPDATE') THEN RAISE EXCEPTION 'scim state row replaceable'; END IF;
+ -- Scheduled reports (0061): configuration only; retained, immutable scope/creator.
+ IF NOT has_table_privilege('gateway_runtime','public.report_schedules','SELECT') OR has_table_privilege('gateway_runtime','public.report_schedules','INSERT,UPDATE,DELETE,TRUNCATE') THEN RAISE EXCEPTION 'report schedule table ACL'; END IF;
+ FOREACH t IN ARRAY ARRAY['id','scope_kind','workspace_id','cost_center_id','created_by','configuration_revision','created_at','updated_at','next_run_at','last_period_end'] LOOP
+  IF has_column_privilege('gateway_runtime','public.report_schedules',t,'UPDATE') THEN RAISE EXCEPTION 'mutable report schedule identity/cursor: %',t; END IF;
+ END LOOP;
+ FOREACH t IN ARRAY ARRAY['id','configuration_revision','recipient_revision','created_at','updated_at','deleted_at','next_run_at','last_period_end'] LOOP
+  IF has_column_privilege('gateway_runtime','public.report_schedules',t,'INSERT') THEN RAISE EXCEPTION 'report schedule initial state bypass: %',t; END IF;
+ END LOOP;
+ IF NOT has_column_privilege('gateway_runtime','public.report_schedules','cadence','UPDATE') OR NOT has_column_privilege('gateway_runtime','public.report_schedules','deleted_at','UPDATE') OR NOT has_column_privilege('gateway_runtime','public.report_schedules','recipient_revision','UPDATE') OR NOT has_column_privilege('gateway_runtime','public.report_schedules','created_by','INSERT') THEN RAISE EXCEPTION 'report schedules not maintainable'; END IF;
+ IF NOT has_table_privilege('gateway_runtime','public.report_schedule_recipients','SELECT,DELETE') OR NOT has_column_privilege('gateway_runtime','public.report_schedule_recipients','user_id','INSERT') OR has_any_column_privilege('gateway_runtime','public.report_schedule_recipients','UPDATE') OR has_table_privilege('gateway_runtime','public.report_schedule_recipients','TRUNCATE') THEN RAISE EXCEPTION 'report recipient ACL'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname IN ('report_schedules_guard','report_schedules_no_delete','report_schedules_no_truncate','report_schedule_recipients_no_update','report_schedule_recipients_no_truncate') AND tgenabled='O' AND NOT tgisinternal)<>5 THEN RAISE EXCEPTION 'report schedule guards missing or disabled'; END IF;
+ IF NOT EXISTS(SELECT FROM work_leases WHERE name='report_scheduler') THEN RAISE EXCEPTION 'report scheduler lease missing'; END IF;
  -- Webhooks (0057): explicit column ACLs, generated identity and frozen bytes.
  FOREACH t IN ARRAY ARRAY['alert_webhook_destinations','alert_webhook_outbox'] LOOP
   IF NOT has_table_privilege('gateway_runtime','public.'||t,'SELECT') OR has_table_privilege('gateway_runtime','public.'||t,'INSERT,UPDATE,DELETE,TRUNCATE') THEN RAISE EXCEPTION 'webhook table privileges: %',t; END IF;
@@ -97,6 +109,9 @@ DO $$ DECLARE r record; t text; BEGIN
  FOREACH t IN ARRAY ARRAY['state','attempt_count','next_attempt_at','lease_owner','lease_token','lease_expires_at','error'] LOOP
   IF has_column_privilege('gateway_runtime','public.alert_recipient_outbox',t,'INSERT') THEN RAISE EXCEPTION 'outbox initial state bypass'; END IF;
   IF NOT has_column_privilege('gateway_runtime','public.alert_recipient_outbox',t,'UPDATE') THEN RAISE EXCEPTION 'outbox not maintainable'; END IF;
+ END LOOP;
+ FOREACH t IN ARRAY ARRAY['quota_charged','suppression_reason','created_at'] LOOP
+  IF has_column_privilege('gateway_runtime','public.alert_deliveries',t,'UPDATE') THEN RAISE EXCEPTION 'mutable alert generation metadata'; END IF;
  END LOOP;
  IF has_any_column_privilege('gateway_runtime','public.alert_reads','UPDATE') THEN RAISE EXCEPTION 'read marks rewritable'; END IF;
  FOREACH t IN ARRAY ARRAY['id','scope','workspace_id','kind','created_by','created_at'] LOOP
@@ -152,7 +167,7 @@ DO $$ DECLARE r record; t text; BEGIN
   IF has_column_privilege('gateway_runtime','public.batch_route_waits',t,'UPDATE') THEN RAISE EXCEPTION 'mutable batch demand identity: %',t; END IF;
  END LOOP;
  IF has_table_privilege('gateway_runtime','public.batch_route_waits','TRUNCATE') THEN RAISE EXCEPTION 'batch demand truncatable'; END IF;
- IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units','valid_model_protocols_base','valid_cost_components_base','valid_price_lines_base','valid_upstream_job_id','rate_reserved_tokens','rate_contribution','omg_scope_key','omg_type_key','omg_scope_lock_audit_order','omg_lock_scopes','omg_admission_locks','omg_lock_scope_rows','omg_catalog_lock_mode','omg_scope_lock_exclusive','omg_config_bump','omg_lease_acquire','omg_lease_fence','omg_lease_complete','omg_lease_release','omg_ensure_partitions','omg_partition_coverage','omg_partition_bounds','omg_month_start','omg_next_month','omg_usage_aggregate','omg_usage_rows','omg_admin_tokens_revoke_owner','omg_admin_tokens_require_read_committed','omg_admin_tokens_require_owner_lock','valid_admin_token_scopes','valid_admin_token_allowlist','alert_webhook_summary','alert_webhook_payload')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
+ IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units','valid_model_protocols_base','valid_cost_components_base','valid_price_lines_base','valid_upstream_job_id','rate_reserved_tokens','rate_contribution','omg_scope_key','omg_type_key','omg_scope_lock_audit_order','omg_lock_scopes','omg_admission_locks','omg_lock_scope_rows','omg_catalog_lock_mode','omg_scope_lock_exclusive','omg_config_bump','omg_lease_acquire','omg_lease_fence','omg_lease_complete','omg_lease_release','omg_ensure_partitions','omg_partition_coverage','omg_partition_bounds','omg_month_start','omg_next_month','omg_usage_aggregate','omg_usage_rows','omg_admin_tokens_revoke_owner','omg_admin_tokens_require_read_committed','omg_admin_tokens_require_owner_lock','valid_admin_token_scopes','valid_admin_token_allowlist','alert_webhook_summary','alert_webhook_payload','alert_delivery_lock_buckets','alert_delivery_recent_count')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
  -- Change notifications (0028): seeded topics, forward-only versions, triggers present.
  IF has_table_privilege('gateway_runtime','public.config_versions','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.config_versions','topic','UPDATE') THEN RAISE EXCEPTION 'configuration topics mutable'; END IF;
  IF NOT has_table_privilege('gateway_runtime','public.config_versions','SELECT') OR NOT has_column_privilege('gateway_runtime','public.config_versions','version','UPDATE') THEN RAISE EXCEPTION 'configuration versions not maintainable by runtime'; END IF;
@@ -281,6 +296,33 @@ SELECT version,checksum,success FROM public._sqlx_migrations ORDER BY version;
 -- Take the normal management lock before any probe can touch an existing
 -- saved destination (including the rollback-only full-capacity case).
 SELECT lock_installation();
+-- Report configuration probes: runtime may manage configuration, never identity,
+-- cursors, retained tombstones or a recipient outside the fifty scoped slots.
+DO $$ DECLARE who uuid:=gen_random_uuid(); schedule uuid; col text; BEGIN
+ INSERT INTO users(id,email) VALUES(who,'report-acl-'||who||'@example.invalid');
+ INSERT INTO report_schedules(scope_kind,created_by,cadence,timezone,delivery_time) VALUES('installation',who,'weekly','UTC','09:00') RETURNING id INTO schedule;
+ INSERT INTO report_schedule_recipients(schedule_id,slot,user_id) VALUES(schedule,1,who);
+ UPDATE report_schedules SET cadence='monthly',state='paused' WHERE id=schedule;
+ IF (SELECT configuration_revision FROM report_schedules WHERE id=schedule)<>2 THEN RAISE EXCEPTION 'report revision not advanced'; END IF;
+ UPDATE report_schedules SET state=state WHERE id=schedule;
+ IF (SELECT configuration_revision FROM report_schedules WHERE id=schedule)<>2 THEN RAISE EXCEPTION 'report no-op advanced revision'; END IF;
+ UPDATE report_schedules SET recipient_revision=recipient_revision+1 WHERE id=schedule;
+ IF (SELECT configuration_revision FROM report_schedules WHERE id=schedule)<>3 THEN RAISE EXCEPTION 'report recipient change not versioned'; END IF;
+ BEGIN UPDATE report_schedules SET recipient_revision=recipient_revision-1 WHERE id=schedule; RAISE EXCEPTION 'report recipient revision decreased'; EXCEPTION WHEN raise_exception THEN IF SQLERRM NOT LIKE 'report recipient revision must%' THEN RAISE; END IF; END;
+ FOREACH col IN ARRAY ARRAY['id','scope_kind','workspace_id','cost_center_id','created_by','configuration_revision','created_at','updated_at','next_run_at','last_period_end'] LOOP
+  BEGIN EXECUTE format('UPDATE report_schedules SET %1$I=%1$I WHERE id=$1',col) USING schedule; RAISE EXCEPTION 'report identity/cursor update allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ END LOOP;
+ BEGIN INSERT INTO report_schedules(scope_kind,created_by,cadence,timezone,delivery_time,configuration_revision) VALUES('installation',who,'weekly','UTC','09:00',5); RAISE EXCEPTION 'report revision insert allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN INSERT INTO report_schedule_recipients(schedule_id,slot,user_id) VALUES(schedule,51,who); RAISE EXCEPTION 'report recipient cap bypass'; EXCEPTION WHEN check_violation THEN NULL; END;
+ BEGIN INSERT INTO report_schedule_recipients(schedule_id,slot,user_id) VALUES(schedule,2,who); RAISE EXCEPTION 'report duplicate recipient allowed'; EXCEPTION WHEN unique_violation THEN NULL; END;
+ BEGIN INSERT INTO report_schedule_recipients(schedule_id,slot,user_id) VALUES(schedule,2,gen_random_uuid()); RAISE EXCEPTION 'report external recipient allowed'; EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+ BEGIN UPDATE report_schedule_recipients SET slot=2 WHERE schedule_id=schedule; RAISE EXCEPTION 'report recipient rewritten'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN DELETE FROM report_schedules WHERE id=schedule; RAISE EXCEPTION 'report schedule removed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN TRUNCATE report_schedules CASCADE; RAISE EXCEPTION 'report schedule truncated'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ DELETE FROM report_schedule_recipients WHERE schedule_id=schedule;
+ UPDATE report_schedules SET state='paused',deleted_at=clock_timestamp() WHERE id=schedule;
+ BEGIN UPDATE report_schedules SET deleted_at=NULL WHERE id=schedule; RAISE EXCEPTION 'deleted schedule resurrected'; EXCEPTION WHEN raise_exception THEN IF SQLERRM NOT LIKE 'immutable report schedule%' THEN RAISE; END IF; END;
+END $$;
 -- Webhook executable probes run as runtime and roll back with everything below.
 DO $$ DECLARE receiver uuid; ev uuid:=gen_random_uuid(); col text; gen bigint; BEGIN
  -- Make one capacity slot available in this rollback-only probe even on a full installation.
@@ -583,6 +625,10 @@ BEGIN
   INSERT INTO alert_deliveries(id,event_id,transition) VALUES(gen_random_uuid(),ev,'fired');
   IF EXISTS(SELECT 1 FROM alert_deliveries WHERE event_id=ev AND bucket_id<>ws) THEN RAISE EXCEPTION 'legacy insert missed workspace bucket'; END IF;
   BEGIN UPDATE alert_deliveries SET bucket_id=gen_random_uuid() WHERE event_id=ev; RAISE EXCEPTION 'delivery bucket rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  IF NOT EXISTS(SELECT FROM alert_deliveries WHERE event_id=ev AND quota_charged AND suppression_reason IS NULL) THEN RAISE EXCEPTION 'runtime generation admission not charged'; END IF;
+  BEGIN UPDATE alert_deliveries SET quota_charged=false WHERE event_id=ev; RAISE EXCEPTION 'quota refund allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE alert_deliveries SET suppression_reason=NULL WHERE event_id=ev; RAISE EXCEPTION 'suppression rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE alert_deliveries SET created_at=clock_timestamp()-interval '25 hours' WHERE event_id=ev; RAISE EXCEPTION 'generation clock rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   INSERT INTO alert_recipient_outbox(delivery_id,fingerprint) SELECT id,sha256('probe'::bytea) FROM alert_deliveries WHERE event_id=ev;
   UPDATE alert_deliveries SET initialized=true WHERE event_id=ev;
   UPDATE alert_recipient_outbox SET state='leased',attempt_count=1,lease_owner=gen_random_uuid(),lease_token=gen_random_uuid(),lease_expires_at=now()+interval '90 seconds' WHERE delivery_id IN(SELECT id FROM alert_deliveries WHERE event_id=ev);
@@ -986,5 +1032,24 @@ BEGIN
   BEGIN INSERT INTO work_leases(name) VALUES('probe'); RAISE EXCEPTION 'lease creation allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   BEGIN DELETE FROM work_leases; RAISE EXCEPTION 'lease removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  END;
+END $$;
+-- 0059 executable admission probes, as runtime, on a fresh isolated bucket.
+DO $$ DECLARE ws uuid:=gen_random_uuid(); r uuid:=gen_random_uuid(); d uuid; suppressed_id uuid; BEGIN
+ INSERT INTO workspaces(id,name,kind) VALUES(ws,'Generation ACL probe','team');
+ INSERT INTO alert_rules(id,scope,workspace_id,kind,name,budget_layers,thresholds)
+  VALUES(r,'workspace',ws,'budget_threshold','Generation ACL probe',ARRAY['local'],ARRAY[100]);
+ WITH events AS (INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary)
+  SELECT gen_random_uuid(),r,'budget_threshold',i::text,100,'critical',ws,'Generation probe' FROM generate_series(1,101) i RETURNING id)
+ INSERT INTO alert_deliveries(id,event_id,transition) SELECT gen_random_uuid(),id,'fired' FROM events;
+ IF (SELECT count(*) FROM alert_deliveries WHERE bucket_id=ws AND quota_charged)<>100
+  OR (SELECT count(*) FROM alert_deliveries WHERE bucket_id=ws AND status='pending')<>100 THEN RAISE EXCEPTION 'runtime generation limit bypass'; END IF;
+ SELECT id INTO STRICT suppressed_id FROM alert_deliveries WHERE bucket_id=ws AND status='suppressed'
+  AND suppression_reason='workspace_generation_limit' AND NOT quota_charged AND recipients=0 AND attempt_count=0 AND completed_at IS NOT NULL;
+ SELECT id INTO STRICT d FROM alert_deliveries WHERE bucket_id=ws AND status='pending' LIMIT 1;
+ INSERT INTO alert_recipient_outbox(delivery_id,fingerprint) SELECT d,sha256(i::text::bytea) FROM generate_series(1,50) i;
+ BEGIN INSERT INTO alert_recipient_outbox(delivery_id,fingerprint) VALUES(d,sha256('51'::bytea)); RAISE EXCEPTION '51st alert recipient allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+ BEGIN INSERT INTO alert_recipient_outbox(delivery_id,fingerprint) VALUES(suppressed_id,sha256('suppressed'::bytea)); RAISE EXCEPTION 'suppressed recipient snapshot allowed'; EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'alert recipient snapshot already closed' THEN RAISE; END IF; END;
+ BEGIN UPDATE alert_deliveries SET quota_charged=false WHERE id=d; RAISE EXCEPTION 'runtime quota refund allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN UPDATE alert_deliveries SET suppression_reason=NULL WHERE id=suppressed_id; RAISE EXCEPTION 'runtime suppression rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
 END $$;
 ROLLBACK;

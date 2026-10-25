@@ -59,6 +59,8 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         "admin_api_tokens",
         "alert_webhook_destinations",
         "alert_webhook_outbox",
+        "report_schedules",
+        "report_schedule_recipients",
     ] {
         assert_eq!(
             sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
@@ -96,6 +98,7 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
     dashboard_sessions_run_as_runtime(&pool).await;
     admin_tokens_run_as_runtime(&pool).await;
     alert_webhooks_run_as_runtime(&pool).await;
+    scheduled_reports_run_as_runtime(&pool).await;
     key_issuance_runs_as_runtime(&pool).await;
     // Last: its unknown batch hold would change the installation-wide totals above.
     async_jobs_run_as_runtime(&pool).await;
@@ -103,6 +106,67 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         .execute(&mut *connection)
         .await
         .unwrap();
+}
+
+async fn scheduled_reports_run_as_runtime(pool: &PgPool) {
+    let runtime = runtime_pool(pool).await;
+    let user = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,email) VALUES($1,'report-runtime@example.test')")
+        .bind(user)
+        .execute(pool)
+        .await
+        .unwrap();
+    let mut tx = runtime.begin().await.unwrap();
+    let id: uuid::Uuid = sqlx::query_scalar("INSERT INTO report_schedules(scope_kind,created_by,cadence,timezone,delivery_time) VALUES('installation',$1,'weekly','UTC','09:00') RETURNING id").bind(user).fetch_one(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO report_schedule_recipients(schedule_id,slot,user_id) VALUES($1,1,$2)")
+        .bind(id)
+        .bind(user)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE report_schedules SET cadence='monthly',state='paused' WHERE id=$1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT configuration_revision FROM report_schedules WHERE id=$1"
+        )
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap(),
+        2
+    );
+    sqlx::query("DELETE FROM report_schedule_recipients WHERE schedule_id=$1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE report_schedules SET state='paused',deleted_at=clock_timestamp() WHERE id=$1",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    tx.rollback().await.unwrap();
+    for statement in [
+        "UPDATE report_schedules SET id=gen_random_uuid()",
+        "UPDATE report_schedules SET created_by=gen_random_uuid()",
+        "UPDATE report_schedules SET scope_kind='installation'",
+        "UPDATE report_schedules SET configuration_revision=4",
+        "UPDATE report_schedules SET next_run_at=now()",
+        "DELETE FROM report_schedules",
+        "TRUNCATE report_schedules CASCADE",
+        "UPDATE report_schedule_recipients SET user_id=gen_random_uuid()",
+    ] {
+        assert!(
+            sqlx::query(statement).execute(&runtime).await.is_err(),
+            "runtime refusal: {statement}"
+        );
+    }
 }
 
 /// #85: all preview SELECTs and model-visibility functions work under the
@@ -1870,6 +1934,7 @@ mod jobs_fake {
     }
     fn answer() -> ChatResponse {
         ChatResponse {
+            messages_content: None,
             content: Some("probe".into()),
             tool_calls: vec![],
             finish_reason: FinishReason::Stop,

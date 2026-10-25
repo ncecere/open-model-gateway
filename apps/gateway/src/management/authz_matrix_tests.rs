@@ -586,7 +586,9 @@ async fn every_route_refuses_lower_principals_and_unverified_mutations(pool: PgP
                     }
                     Access::WorkspaceKey => !matches!(label, "owner" | "workspace-admin"),
                     Access::WorkspaceKeyRotate => label != "owner",
-                    Access::WorkspaceAdmin => !matches!(label, "owner" | "workspace-admin"),
+                    Access::WorkspaceAdmin | Access::WorkspaceReportAdmin => {
+                        !matches!(label, "owner" | "workspace-admin")
+                    }
                     Access::WorkspaceAdminOrReader => {
                         matches!(label, "member" | "other-workspace-member")
                     }
@@ -622,6 +624,7 @@ async fn every_route_refuses_lower_principals_and_unverified_mutations(pool: PgP
                     | Access::WorkspaceKey
                     | Access::WorkspaceKeyRotate
                     | Access::WorkspaceAdmin
+                    | Access::WorkspaceReportAdmin
                     | Access::WorkspaceAdminOrReader
                     | Access::WorkspacePlatformWrite
             ) {

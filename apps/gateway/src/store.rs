@@ -111,6 +111,9 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "alert_deliveries",
     "alert_reads",
     "alert_recipient_outbox",
+    // 0061 scheduled report configuration (#102); no worker in this slice.
+    "report_schedules",
+    "report_schedule_recipients",
     // 0057 platform alert webhooks (#45)
     "alert_webhook_destinations",
     "alert_webhook_outbox",
@@ -214,6 +217,7 @@ async fn migration_lock(connection: &mut PgConnection) -> sqlx::Result<()> {
 const CONCURRENT_INDEXES: &[&str] = &[
     "api_keys_workspace_created",
     "alert_deliveries_pending_bucket",
+    "alert_deliveries_generation_window",
     "alert_webhook_outbox_completed",
 ];
 
@@ -591,6 +595,17 @@ impl Store {
 #[cfg(test)]
 mod lineage_tests {
     use super::*;
+    #[test]
+    fn scheduled_report_lineage_compares_embedded_versions_not_contiguous_numbers() {
+        let expected: &[(i64, &[u8])] = &[(57, b"previous"), (61, b"reports")];
+        let mut applied = vec![(57, b"previous".to_vec(), true)];
+        assert!(lineage_matches(&applied, expected, false));
+        assert!(!lineage_matches(&applied, expected, true));
+        applied.push((61, b"reports".to_vec(), true));
+        assert!(lineage_matches(&applied, expected, true));
+        applied.insert(1, (58, b"not embedded".to_vec(), true));
+        assert!(!lineage_matches(&applied, expected, false));
+    }
     #[test]
     fn upgrades_accept_only_a_recognized_nonempty_successful_prefix() {
         let expected: &[(i64, &[u8])] = &[(1, b"first"), (2, b"second")];

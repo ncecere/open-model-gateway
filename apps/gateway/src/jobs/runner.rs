@@ -1477,6 +1477,7 @@ impl InferenceRepository for LineRepository {
             deployment,
             price,
             output_limit,
+            Some(request),
         )
         .await
     }
@@ -1503,6 +1504,7 @@ impl InferenceRepository for LineRepository {
             deployment,
             None,
             u32::MAX,
+            None,
         )
         .await
         .map(|_| ())
@@ -1526,6 +1528,7 @@ impl InferenceRepository for LineRepository {
             deployment,
             None,
             u32::MAX,
+            None,
         )
         .await
         .map(|_| ())
