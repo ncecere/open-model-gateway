@@ -1540,3 +1540,164 @@ async fn key_issuance_budget_and_view_follow_real_router_authorization(pool: PgP
         );
     }
 }
+
+/// #337 (#282/#320 follow-up): the workspace-existence fix in
+/// `resources::workspace_authority` -- a foreign personal workspace must
+/// answer exactly like an unknown one -- already covers an admin-token
+/// principal, for two independent reasons this sweep proves on the real
+/// served router against real PostgreSQL rows:
+///
+/// - Every `TokenPolicy::Scope` workspace route reaches
+///   `resources::workspace_boundary_snapshot`/`access_inner` through the
+///   same generic `Actor` helper a browser session uses
+///   (`every_workspace_route_hides_foreign_personal_like_unknown` above),
+///   keyed on `Actor::user_id`, which for a token resolves to its owner.
+///   The personal-kind-vs-missing-row branch in `workspace_authority` never
+///   distinguishes the two cases for that owner, so the two answers are
+///   already byte-identical with no code change needed.
+/// - Every `TokenPolicy::Denied` workspace route (`/keys`, `/requests`, and
+///   every other workspace-member/key/admin route) is refused by
+///   `authorization::handle_admin_token` before `ws` is even extracted from
+///   the path: `required_scope` is `None`, so the function never reaches
+///   `workspace_param`, `database_access` or any row lookup. That refusal
+///   cannot depend on whether `ws` is a real foreign workspace or a random
+///   UUID, so it is trivially identical for both -- the exact
+///   "role/token-policy refusal before any lookup" case #337 asks this
+///   sweep to document and cover.
+///
+/// `tests/browser/admin-tokens.spec.ts`'s existing 403 assertions for a
+/// `platform:read` token against `/workspaces/{alexPersonal}/keys` and
+/// `/requests` are this second case: unchanged, because they already match
+/// what an unknown workspace id gets from the same `Denied` routes.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn admin_token_principals_hide_foreign_personal_like_unknown(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let mock = MockProvider::start(None).await;
+    let identity = mock.state(pool.clone()).await;
+    let engine = crate::inference::Engine::new(
+        std::sync::Arc::new(f.s.clone()),
+        crate::providers::ProviderRegistry::default(),
+        crate::inference::EngineLimits::default(),
+    )
+    .unwrap();
+    let app = crate::http::router_with_identity(f.s.clone(), None, engine, identity);
+    let unknown = Uuid::new_v4();
+    let all_scope_strings: Vec<&str> = TokenScope::ALL.iter().map(|s| s.as_str()).collect();
+    let mut scoped_tokens = std::collections::HashMap::new();
+    for scope in TokenScope::ALL {
+        let (_, token) = mint(&pool, f.admin.user_id, &[scope.as_str()], None).await;
+        scoped_tokens.insert(scope.as_str(), token);
+    }
+    let (_, all_scopes_token) = mint(&pool, f.admin.user_id, &all_scope_strings, None).await;
+    async fn fetch(
+        app: &Router,
+        method: &str,
+        path: &str,
+        token: &str,
+        seq: u32,
+    ) -> (StatusCode, axum::body::Bytes) {
+        let mut req = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::from("{}"))
+            .unwrap();
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(synthetic_peer(seq)));
+        let response = app.clone().oneshot(req).await.unwrap();
+        let status = response.status();
+        (
+            status,
+            to_bytes(response.into_body(), 1024 * 1024).await.unwrap(),
+        )
+    }
+    let mut checked = std::collections::BTreeSet::new();
+    let mut failures = Vec::new();
+    let mut seq = 0u32;
+    let workspace_routes: Vec<_> = ROUTES
+        .iter()
+        .filter(|r| {
+            r.path == "/api/v1/workspaces/{ws}" || r.path.starts_with("/api/v1/workspaces/{ws}/")
+        })
+        .collect();
+    for route in &workspace_routes {
+        let personal_path = route.path.replace("{ws}", &f.personal.to_string());
+        let unknown_path = route.path.replace("{ws}", &unknown.to_string());
+        assert!(!personal_path.contains('{'), "unexpanded {}", route.path);
+        let token: &str = match route.token_policy {
+            TokenPolicy::Denied | TokenPolicy::BrowserAdminOnly => &all_scopes_token,
+            TokenPolicy::Scope(scope) => &scoped_tokens[scope.as_str()],
+        };
+        for method in route.methods.split_whitespace().flat_map(|m| {
+            if m == "GET" {
+                vec!["GET", "HEAD"]
+            } else {
+                vec![m]
+            }
+        }) {
+            let mut replies = Vec::new();
+            for path in [&personal_path, &unknown_path] {
+                seq += 1;
+                replies.push(fetch(&app, method, path, token, seq).await);
+            }
+            // Every Scope-policy route reaches the same `workspace_authority`
+            // decision #320 already made identical for a foreign personal
+            // workspace and an unknown one; every Denied route refuses
+            // before any workspace lookup, for either `ws` alike.
+            let expected_status = match route.token_policy {
+                TokenPolicy::Denied | TokenPolicy::BrowserAdminOnly => StatusCode::FORBIDDEN,
+                TokenPolicy::Scope(_) => StatusCode::NOT_FOUND,
+            };
+            if replies[0] != replies[1] || replies[1].0 != expected_status {
+                failures.push(format!(
+                    "{method} {}: personal={:?}, unknown={:?}",
+                    route.path, replies[0], replies[1]
+                ));
+            }
+            if method == "HEAD" {
+                assert!(replies.iter().all(|(_, body)| body.is_empty()));
+            } else {
+                for (_, body) in &replies {
+                    let error: Value = serde_json::from_slice(body).unwrap();
+                    assert!(
+                        error["error"].is_object(),
+                        "{method} {}: {error}",
+                        route.path
+                    );
+                }
+            }
+            checked.insert((route.path, method));
+        }
+    }
+    let expected: usize = workspace_routes
+        .iter()
+        .map(|r| {
+            r.methods
+                .split_whitespace()
+                .map(|m| if m == "GET" { 2 } else { 1 })
+                .sum::<usize>()
+        })
+        .sum();
+    assert!(expected > 0, "workspace route inventory must not be empty");
+    assert_eq!(checked.len(), expected);
+    assert!(
+        failures.is_empty(),
+        "admin-token workspace existence oracle:\n{}",
+        failures.join("\n")
+    );
+    // Positive control: the same platform:read scope genuinely reaches a
+    // real handler for a workspace this owner is entitled to read as
+    // Platform Admin (a shared workspace, not personal) -- never a blanket
+    // refusal dressed up as "identical to unknown".
+    seq += 1;
+    let (status, _) = fetch(
+        &app,
+        "GET",
+        &format!("/api/v1/workspaces/{}", f.team),
+        &scoped_tokens["platform:read"],
+        seq,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
