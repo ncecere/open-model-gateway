@@ -273,9 +273,10 @@ fn error_body(e: InferenceError) -> Value {
 }
 pub(super) fn status(e: InferenceError) -> StatusCode {
     match e {
-        InferenceError::UpstreamUnavailable
-        | InferenceError::Overloaded
-        | InferenceError::RouteCoolingDown(_) => StatusCode::from_u16(529).unwrap(),
+        // Only a provider-reported overload is Anthropic's 529; an unavailable
+        // upstream or a cooling route keeps the gateway status the official
+        // SDK retry contracts depend on.
+        InferenceError::Overloaded => StatusCode::from_u16(529).unwrap(),
         _ => super::http_status(e),
     }
 }
