@@ -29,7 +29,7 @@ async fn native_fidelity_exact_upstream_wire_and_headers() {
         let mut request = native(wire.clone());
         request.messages_options.as_mut().unwrap().beta_headers = vec![
             "interleaved-thinking-2025-05-14, context-management-2025-06-27".into(),
-            "fine-grained-tool-streaming-2025-05-14".into(),
+            "claude-code-20250219, extended-cache-ttl-2025-04-11, effort-2025-11-24".into(),
         ];
         mock.adapter.execute(&target(), request).await.unwrap();
         let capture = mock.capture.lock().unwrap();
@@ -46,7 +46,7 @@ async fn native_fidelity_exact_upstream_wire_and_headers() {
                 .collect::<Vec<_>>(),
             vec![
                 "interleaved-thinking-2025-05-14, context-management-2025-06-27",
-                "fine-grained-tool-streaming-2025-05-14"
+                "claude-code-20250219, extended-cache-ttl-2025-04-11, effort-2025-11-24"
             ]
         );
         wire.as_object_mut().unwrap().remove("metadata");

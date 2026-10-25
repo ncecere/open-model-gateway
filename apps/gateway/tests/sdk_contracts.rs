@@ -187,7 +187,7 @@ async fn real_client_sdks_accept_all_three_protocols(pool: sqlx::PgPool) {
         let options = r.messages_options.as_ref().unwrap();
         assert_eq!(
             options.beta_headers,
-            ["interleaved-thinking-2025-05-14, context-management-2025-06-27"]
+            ["claude-code-20250219, extended-cache-ttl-2025-04-11, effort-2025-11-24"]
         );
         assert_eq!(options.thinking.as_ref().unwrap()["type"], "adaptive");
         assert_eq!(options.cache_controls[0]["ttl"], "1h");

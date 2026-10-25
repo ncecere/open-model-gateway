@@ -991,7 +991,7 @@ fn steering_headers(attacker: &Upstream) -> Vec<(String, String)> {
 /// A header the protocol itself reads is refused when it is wrong; every other
 /// one is ignored.
 fn header_expect(t: &Target, name: &str) -> Expect {
-    if t.messages() && matches!(name, "anthropic-version" | "anthropic-beta") {
+    if t.messages() && name == "anthropic-version" {
         return Rejected(400, "invalid_request_error");
     }
     Forwarded
@@ -1372,6 +1372,30 @@ async fn no_json_inference_input_can_steer_the_upstream(pool: PgPool) {
 
         // Request headers: ignored, except those the protocol itself reads.
         for (name, value) in steering_headers(&w.attacker) {
+            if t.messages() && name == "anthropic-beta" {
+                // An unfamiliar beta is data in this one reviewed header. It
+                // must not move the destination or any other upstream header.
+                let (status, text) =
+                    send(&w.app, post(&[(name.clone(), value.clone())], &body)).await;
+                assert_eq!(
+                    (status.as_u16(), reason(&text)),
+                    (ctl.status, ctl.reason.clone())
+                );
+                let mut hits = w.approved.take();
+                assert_eq!(hits.len(), 1);
+                assert_eq!(hits[0].header("anthropic-beta"), Some(value.as_str()));
+                hits[0].headers.retain(|(n, _)| n != "anthropic-beta");
+                assert_clean(t.label, "bounded verbatim beta", &hits[0], &ctl.hit, &w);
+                assert_eq!(hits[0].body, ctl.hit.body);
+                assert_no_attacker(&w, t.label, "bounded verbatim beta");
+                check(
+                    "denied long-context beta".into(),
+                    post(&[(name, "context-1m-2025-08-07".into())], &body),
+                    Rejected(400, "invalid_request_error"),
+                )
+                .await;
+                continue;
+            }
             let want = header_expect(&t, &name);
             check(name.clone(), post(&[(name, value)], &body), want).await;
         }

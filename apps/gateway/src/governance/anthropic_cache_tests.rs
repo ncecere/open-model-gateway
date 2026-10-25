@@ -172,6 +172,7 @@ async fn native_cache_requires_pinned_ttl_prices_before_reserving_or_dispatching
             })
             .collect();
         let response = client.post(format!("{base}/v1/messages")).bearer_auth(&key.token).header("anthropic-version","2023-06-01")
+            .header("anthropic-beta", "claude-code-20250219, extended-cache-ttl-2025-04-11")
             .json(&json!({"model":"company/smart","max_tokens":10,"system":blocks,"messages":[{"role":"user","content":"hello"}]})).send().await.unwrap();
         let status = response.status();
         let body: Value = response.json().await.unwrap();

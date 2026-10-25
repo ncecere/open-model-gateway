@@ -138,7 +138,7 @@ async fn native_frontend_preserves_beta_values_and_blocks_through_the_engine() {
     );
     input.headers_mut().append(
         "anthropic-beta",
-        "fine-grained-tool-streaming-2025-05-14, token-efficient-tools-2025-02-19"
+        "claude-code-20250219, extended-cache-ttl-2025-04-11, tool-search-2025-10-19"
             .parse()
             .unwrap(),
     );
@@ -163,7 +163,7 @@ async fn native_frontend_preserves_beta_values_and_blocks_through_the_engine() {
             .collect::<Vec<_>>(),
         [
             "interleaved-thinking-2025-05-14",
-            "fine-grained-tool-streaming-2025-05-14, token-efficient-tools-2025-02-19"
+            "claude-code-20250219, extended-cache-ttl-2025-04-11, tool-search-2025-10-19"
         ]
     );
     assert_eq!(body["system"], system);
@@ -174,6 +174,58 @@ async fn native_frontend_preserves_beta_values_and_blocks_through_the_engine() {
             .to_string()
             .contains("inference-key-must-not-leave-gateway")
     );
+}
+
+#[tokio::test]
+async fn denied_betas_use_anthropic_retry_wording_before_admission() {
+    let captures = Captures::default();
+    let mock = upstream(200, json!({"id":"private","type":"message","role":"assistant","model":"private","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":3,"output_tokens":1}}), captures.clone()).await;
+    let adapter = crate::providers::anthropic::AnthropicAdapter::for_test(
+        Arc::new(Resolver),
+        mock.url.clone(),
+    );
+    let (app, repository) = frontend_adapter(Arc::new(adapter));
+    for (values, denied) in [
+        (vec!["context-1m-2025-08-07"], "context-1m-2025-08-07"),
+        (
+            vec![
+                "claude-code-20250219",
+                "effort-2025-11-24, context-1m-2025-08-07, files-api-2025-04-14",
+            ],
+            "context-1m-2025-08-07, files-api-2025-04-14",
+        ),
+    ] {
+        let mut request =
+            wire(json!({"model":"m","max_tokens":32,"messages":[{"role":"user","content":"hi"}]}));
+        request.headers_mut().remove("anthropic-beta");
+        for value in values {
+            request
+                .headers_mut()
+                .append("anthropic-beta", value.parse().unwrap());
+        }
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let bytes = axum::body::to_bytes(response.into_body(), 32768)
+            .await
+            .unwrap();
+        let actual: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            actual,
+            json!({"type":"error","error":{"type":"invalid_request_error","message":format!("Unexpected value(s) `{denied}` for the `anthropic-beta` header. Please consult our documentation at docs.anthropic.com or try again without the header.")}})
+        );
+        assert_eq!(repository.starts.load(Ordering::SeqCst), 0);
+        assert!(captures.lock().unwrap().is_empty());
+    }
+    // Claude Code's capability recovery is a new request without rejected betas.
+    let mut request =
+        wire(json!({"model":"m","max_tokens":32,"messages":[{"role":"user","content":"hi"}]}));
+    request.headers_mut().insert(
+        "anthropic-beta",
+        "claude-code-20250219, effort-2025-11-24".parse().unwrap(),
+    );
+    assert_eq!(app.oneshot(request).await.unwrap().status(), StatusCode::OK);
+    assert_eq!(repository.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(captures.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]

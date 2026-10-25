@@ -229,16 +229,17 @@ for (const stream of [false, true]) {
   const args = { model: "company/smart", max_tokens: 32, messages,
     system: [{ type: "text", text: "instructions", cache_control: { type: "ephemeral", ttl: "1h" } }],
     thinking: { type: "adaptive" }, output_config: { effort: "high" } };
-  const options = { headers: { "anthropic-beta": "interleaved-thinking-2025-05-14, context-management-2025-06-27" } };
+  const options = { headers: { "anthropic-beta": "claude-code-20250219, extended-cache-ttl-2025-04-11, effort-2025-11-24" } };
   if (stream) await ordinaryAnthropic.messages.stream(args, options).finalMessage();
   else await ordinaryAnthropic.messages.create(args, options);
 }
-// Every comma-separated beta token is reviewed; one allowed token cannot
-// smuggle a pricing/capability-changing token, even on translated routes.
-for (const beta of ["context-1m-2025-08-07", "files-api-2025-04-14", "interleaved-thinking-2025-05-14, code-execution-2025-05-22"]) {
-  await assert.rejects(ordinaryAnthropic.messages.create({ model: "company/smart", max_tokens: 32, messages }, { headers: { "anthropic-beta": beta } }), (e) => e.status === 400 && e.message.includes("anthropic-beta"));
+// Betas are an open list, except capabilities/pricing the gateway cannot bound.
+// Anthropic's exact wording enables Claude Code's retry without rejected betas.
+for (const [beta, denied] of [["context-1m-2025-08-07", "context-1m-2025-08-07"], ["files-api-2025-04-14", "files-api-2025-04-14"], ["claude-code-20250219, code-execution-2025-05-22", "code-execution-2025-05-22"]]) {
+  const expected = `Unexpected value(s) \`${denied}\` for the \`anthropic-beta\` header. Please consult our documentation at docs.anthropic.com or try again without the header.`;
+  await assert.rejects(ordinaryAnthropic.messages.create({ model: "company/smart", max_tokens: 32, messages }, { headers: { "anthropic-beta": beta } }), (e) => e.status === 400 && e.message.includes(expected));
 }
-console.log("OpenAI Chat, Responses, and Anthropic Messages SDK contracts passed (JSON + streaming helpers, reviewed beta/cache/thinking grammar)");
+console.log("OpenAI Chat, Responses, and Anthropic Messages SDK contracts passed (JSON + streaming helpers, bounded open betas/cache/thinking grammar)");
 // Files API (gateway-owned store): the official SDK's multipart order works.
 const jsonl = '{"custom_id":"a","method":"POST","url":"/v1/chat/completions","body":{}}\n';
 const uploaded = await openai.files.create({ file: await toFile(Buffer.from(jsonl), "input.jsonl"), purpose: "batch" });

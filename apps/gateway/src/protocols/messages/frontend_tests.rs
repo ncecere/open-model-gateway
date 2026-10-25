@@ -258,7 +258,7 @@ fn beta_is_accepted_with_bounded_verbatim_values() {
 }
 
 #[test]
-fn beta_allowlist_checks_every_token_across_repeated_headers() {
+fn beta_denylist_checks_every_token_across_repeated_headers() {
     for beta in [
         "context-1m-2025-08-07",
         "files-api-2025-04-14",
@@ -267,11 +267,6 @@ fn beta_allowlist_checks_every_token_across_repeated_headers() {
         "web-fetch-2025-09-10",
         "mcp-client-2025-11-20",
         "computer-use-2025-01-24",
-        "output-128k-2025-02-19",
-        "output-300k-2026-03-24",
-        "attacker-beta",
-        "interleaved-thinking-2025-05-14,",
-        "",
     ] {
         let mut h = HeaderMap::new();
         h.append(
@@ -282,7 +277,7 @@ fn beta_allowlist_checks_every_token_across_repeated_headers() {
         assert!(
             matches!(
                 beta_headers(&h),
-                Err(InferenceError::InvalidField("anthropic-beta"))
+                Err(crate::providers::messages::BetaHeaderError::Denied(_))
             ),
             "{beta}"
         );
@@ -307,11 +302,73 @@ fn beta_allowlist_checks_every_token_across_repeated_headers() {
             "32-token bound is across all repeated headers"
         );
     }
-    for beta in crate::providers::messages::ALLOWED_BETAS {
+    for beta in [
+        "claude-code-20250219",
+        "extended-cache-ttl-2025-04-11",
+        "tool-search-2025-10-19",
+        "effort-2025-11-24",
+        "oauth-2025-04-20",
+        "per-turn-effort-2026-01-19",
+        "structured-outputs-2025-11-13",
+        "interleaved-thinking-2025-05-14",
+        "context-management-2025-06-27",
+        "output-128k-2025-02-19",
+        "attacker-beta",
+        "future-version",
+    ] {
         let mut h = HeaderMap::new();
         h.append("anthropic-beta", beta.parse().unwrap());
         assert_eq!(beta_headers(&h).unwrap(), vec![beta.to_string()]);
     }
+}
+
+#[test]
+fn malformed_beta_headers_remain_bounded_and_cannot_inject_headers() {
+    for beta in [
+        "",
+        "claude-code-20250219,",
+        "claude-code-20250219,,oauth-2025-04-20",
+    ] {
+        let mut h = HeaderMap::new();
+        h.append("anthropic-beta", beta.parse().unwrap());
+        assert!(matches!(
+            beta_headers(&h),
+            Err(crate::providers::messages::BetaHeaderError::Invalid)
+        ));
+    }
+    assert!(
+        crate::providers::messages::validate_beta_headers([
+            "claude-code-20250219\r\nHost: attacker.invalid"
+        ])
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn beta_recovery_echo_is_bounded_and_never_used_as_a_log_error() {
+    let token = format!("context-1m-{}", "x".repeat(1024 - "context-1m-".len()));
+    let error =
+        crate::providers::messages::validate_beta_headers(std::iter::repeat_n(token.as_str(), 16))
+            .unwrap_err();
+    assert_eq!(
+        format!("{error:?}"),
+        "Invalid or denied anthropic-beta header"
+    );
+    let crate::providers::messages::BetaHeaderError::Denied(tokens) = error else {
+        panic!()
+    };
+    let response = beta_error_response(&tokens);
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    let message = value["error"]["message"].as_str().unwrap();
+    assert!(message.len() <= 17 * 1024);
+    assert!(
+        message.contains(&tokens.join(", ")),
+        "exact rejected names enable recovery; never truncate them"
+    );
 }
 
 #[tokio::test]
