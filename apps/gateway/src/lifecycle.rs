@@ -144,6 +144,31 @@ pub async fn cleanup_inactive_accounts_fenced(
     Ok(cleaned)
 }
 
+/// #83: at most 100 overdue requests per lifecycle tick. Expiry is also
+/// checked synchronously by every request read/decision; this hook is not an
+/// authorization dependency. Uses the existing fenced lifecycle lease.
+pub async fn expire_access_requests_fenced(
+    store: &Store,
+    fence: Option<&crate::leases::Fence>,
+) -> Result<u64, sqlx::Error> {
+    let due: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM access_requests WHERE status='pending' AND expires_at<=clock_timestamp())")
+        .fetch_one(&store.pool).await?;
+    if !due {
+        return Ok(0);
+    }
+    let mut tx = crate::db::begin(&store.pool).await?;
+    crate::leases::fence(&mut tx, fence).await?;
+    lock(&mut tx).await?;
+    let expired: Vec<(Uuid,Uuid)>=sqlx::query_as("UPDATE access_requests SET status='expired',decided_by=NULL WHERE id IN (SELECT id FROM access_requests WHERE status='pending' AND expires_at<=clock_timestamp() ORDER BY expires_at,id LIMIT 100 FOR UPDATE SKIP LOCKED) AND status='pending' RETURNING id,workspace_id")
+        .fetch_all(&mut *tx).await?;
+    for (id, ws) in &expired {
+        sqlx::query("INSERT INTO audit_events(id,workspace_id,action,resource_type,resource_id,metadata) VALUES($1,$2,'access_request.expired','access_request',$3,'{\"kind\":\"workspace_membership\",\"outcome\":\"expired\"}'::jsonb)")
+            .bind(Uuid::now_v7()).bind(ws).bind(id).execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
+    Ok(expired.len() as u64)
+}
+
 /// Group-provenance grants (`source='group'`) for one issuer; manual/bootstrap grants are
 /// never touched. `scope=None` reconciles every mapping of the issuer (a signed sign-in
 /// claim, plus mappings that no longer exist). `scope=Some(values)` reconciles only

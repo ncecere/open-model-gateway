@@ -215,8 +215,45 @@ async fn manual_member(
     locks::exclusive(tx, scopes).await?;
     resources::revalidate_admin_token_locked(tx, u).await?;
     sqlx::query("UPDATE workspace_membership_grants SET revoked_at=now() WHERE workspace_id=$1 AND user_id=$2 AND source='manual' AND revoked_at IS NULL").bind(ws).bind(user).execute(&mut **tx).await?;
-    sqlx::query("INSERT INTO workspace_membership_grants(id,workspace_id,user_id,role,source) VALUES($1,$2,$3,$4,'manual')").bind(Uuid::new_v4()).bind(ws).bind(user).bind(role).execute(&mut **tx).await?;
+    insert_manual_member(tx, ws, user, role).await?;
     Ok(())
+}
+/// Transaction-aware grant operation shared by manual administration and #83.
+/// Caller holds canonical authority locks before its first write.
+async fn insert_manual_member(
+    tx: &mut Transaction<'_, Postgres>,
+    ws: Uuid,
+    user: Uuid,
+    role: &str,
+) -> Result<Uuid, ApiError> {
+    let id = Uuid::new_v4();
+    sqlx::query("INSERT INTO workspace_membership_grants(id,workspace_id,user_id,role,source) VALUES($1,$2,$3,$4,'manual')")
+        .bind(id).bind(ws).bind(user).bind(role).execute(&mut **tx).await?;
+    Ok(id)
+}
+/// A request never replaces an existing grant (including a stronger or group
+/// role), and never creates entitlement. Authority is checked by the caller.
+pub(super) async fn apply_membership_request(
+    tx: &mut Transaction<'_, Postgres>,
+    ws: Uuid,
+    user: Uuid,
+) -> Result<Uuid, ApiError> {
+    if let Err(e) = resources::platform_role_snapshot(tx, user).await {
+        return Err(if e.0 == StatusCode::FORBIDDEN {
+            ApiError(StatusCode::CONFLICT, "Requester is no longer eligible")
+        } else {
+            e
+        });
+    }
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workspace_membership_grants WHERE workspace_id=$1 AND user_id=$2 AND revoked_at IS NULL)")
+        .bind(ws).bind(user).fetch_one(&mut **tx).await?;
+    if exists {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "Requester already has membership",
+        ));
+    }
+    insert_manual_member(tx, ws, user, "member").await
 }
 pub(super) async fn add_workspace_member(
     State(s): State<Store>,
