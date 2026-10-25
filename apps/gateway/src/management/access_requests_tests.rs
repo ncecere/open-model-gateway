@@ -3,6 +3,42 @@ use super::*;
 #[path = "access_requests_review_tests.rs"]
 mod review;
 
+/// The Admin workspace detail page reads the toggle it just set (#83 UI slice): GET
+/// /platform/workspaces/{ws} reports the live `discoverable` column, defaulting false.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn platform_workspace_detail_reports_discoverable(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let (status, before) = call(
+        &f.s,
+        &f.admin,
+        "GET",
+        &format!("/api/v1/platform/workspaces/{}", f.team),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(before["discoverable"], json!(false));
+    let (status, set) = call(
+        &f.s,
+        &f.admin,
+        "PUT",
+        &format!("/api/v1/platform/workspaces/{}/discoverable", f.team),
+        json!({"discoverable": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{set}");
+    let (status, after) = call(
+        &f.s,
+        &f.admin,
+        "GET",
+        &format!("/api/v1/platform/workspaces/{}", f.team),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(after["discoverable"], json!(true));
+}
+
 async fn discover(pool: &PgPool, ws: Uuid) {
     sqlx::query("UPDATE workspaces SET discoverable=true WHERE id=$1")
         .bind(ws)
