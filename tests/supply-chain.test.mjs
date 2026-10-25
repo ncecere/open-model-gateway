@@ -384,6 +384,7 @@ export function parseToolchainToml(text) {
     const m = lines[i].match(/^(\w+)\s*=\s*(.+)$/);
     if (!m) throw new Error(`rust-toolchain.toml: unparseable line in [toolchain]: ${lines[i]}`);
     const [, key, raw] = m;
+    if (key in table) throw new Error(`rust-toolchain.toml: duplicate key in [toolchain]: ${key}`);
     if (key === "channel" || key === "profile") {
       const sm = raw.match(/^"([^"]*)"$/);
       if (!sm) throw new Error(`rust-toolchain.toml: ${key} must be a plain quoted string, got: ${raw}`);
@@ -423,29 +424,144 @@ export function findDockerfiles(dir = root) {
 }
 const allDockerfiles = () => findDockerfiles().map(p => ({ file: p.slice(root.length), text: readFileSync(p, "utf8") }));
 
-// Every `FROM mirror.gcr.io/library/rust:<version>-bookworm@sha256:<digest>` line in one
-// Dockerfile's text (every build stage, not just the first match).
+// `ARG NAME=value` defaults declared anywhere in a Dockerfile, so a `FROM ${NAME}` stage can
+// be resolved before it is checked. An ARG with no default (supplied only at build time)
+// cannot be resolved here and is left as-is; it will not match a `rust:` reference unless the
+// literal text already does.
+function resolveDockerfileArgs(text) {
+  const args = new Map();
+  for (const line of text.split("\n")) {
+    const m = line.match(/^\s*ARG\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+?)\s*$/);
+    if (m) args.set(m[1], m[2].replace(/^["']|["']$/g, ""));
+  }
+  return args;
+}
+
+function substituteArgs(target, args) {
+  return target.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (whole, braced, bare) => {
+    const name = braced ?? bare;
+    return args.has(name) ? args.get(name) : whole;
+  });
+}
+
+// Recognizes any reference to an image literally named `rust` as the final path segment,
+// case-insensitively, with any registry/path prefix (`rust:...`, `docker.io/rust:...`,
+// `mirror.gcr.io/library/rust:...`). Returns the bare tag, the version it names if the tag is
+// an exact `x.y.z[-suffix]` version (null for a floating or otherwise unsupported form such as
+// `stable`, `stable-bookworm`, `latest`, a date-stamped nightly, or no tag at all), and whether
+// it carries a valid `@sha256:<64 hex>` digest. Returns null for anything that is not a `rust`
+// image reference at all.
+export function extractRustImageRef(ref) {
+  const m = typeof ref === "string" ? ref.match(/(^|\/)rust:(.+)$/i) : null;
+  if (!m) return null;
+  const [tag, digest] = m[2].split("@");
+  const vm = tag.match(/^(\d+\.\d+\.\d+)(-\S+)?$/);
+  return {
+    tag,
+    version: vm ? vm[1] : null,
+    digestOk: !!digest && /^sha256:[0-9a-f]{64}$/.test(digest),
+    digest: digest ? digest.replace(/^sha256:/, "") : null,
+  };
+}
+
+// Every `FROM [--platform=...] <image>` line in one Dockerfile's text that names a `rust`
+// image, in any form (every build stage, not just the first match; ARG-substituted targets
+// resolved against ARG defaults declared anywhere earlier in the same file).
 export function parseDockerfileRustStages(file, text) {
   const out = [];
+  const args = resolveDockerfileArgs(text);
   text.split("\n").forEach((line, i) => {
-    const m = line.match(/^FROM\s+(\S+)/i);
+    const m = line.match(/^FROM\s+(?:--platform=\S+\s+)?(\S+)/i);
     if (!m) return;
-    const rm = m[1].match(/\/library\/rust:(\d+\.\d+\.\d+)-bookworm@sha256:([0-9a-f]{64})$/);
-    if (rm) out.push({ file, line: i + 1, version: rm[1], digest: rm[2] });
+    const target = substituteArgs(m[1], args);
+    const parsed = extractRustImageRef(target);
+    if (parsed) out.push({ file, line: i + 1, ref: target, ...parsed });
   });
   return out;
 }
 
-// Every Rust stage must pin the same version as rust-toolchain.toml, and every Dockerfile
-// pinning that same version must pin the identical digest (it is the same published image).
+// Every job `container:` (string or `{image:...}`) and `services.<name>` (string or
+// `{image:...}`) image reference in one workflow document, regardless of which job declares it.
+export function containerImagesIn(data) {
+  const out = [];
+  for (const [name, job] of jobsOf(data)) {
+    if (typeof job?.container === "string") out.push({ where: `job '${name}' container`, image: job.container });
+    else if (job?.container && typeof job.container === "object" && typeof job.container.image === "string") {
+      out.push({ where: `job '${name}' container.image`, image: job.container.image });
+    }
+    const services = job?.services && typeof job.services === "object" ? job.services : {};
+    for (const [svcName, svc] of Object.entries(services)) {
+      if (typeof svc === "string") out.push({ where: `job '${name}' services.${svcName}`, image: svc });
+      else if (svc && typeof svc === "object" && typeof svc.image === "string") {
+        out.push({ where: `job '${name}' services.${svcName}.image`, image: svc.image });
+      }
+    }
+  }
+  return out;
+}
+
+export function rustStagesFromWorkflowContainers(file, data) {
+  return containerImagesIn(data).flatMap(({ where, image }) => {
+    const parsed = extractRustImageRef(image);
+    return parsed ? [{ file, line: where, ref: image, ...parsed }] : [];
+  });
+}
+
+// Compose files CI actually invokes: a literal `-f <path>` (or `--file <path>`) argument next
+// to `docker compose`/`docker-compose` in a run: script. A path built from a shell variable
+// cannot be resolved here and is skipped, same limitation as the fetch-verified.sh literal-URL
+// check elsewhere in this file.
+const COMPOSE_FILE_FLAG = /\bdocker(?:\s+|-)compose\b[^\n]*?(?:-f|--file)\s+"?([^\s"']+\.ya?ml)"?/g;
+export function composeFilesReferencedIn(script) {
+  return [...new Set([...script.matchAll(COMPOSE_FILE_FLAG)].map(m => m[1]))];
+}
+
+export function rustImagesInCompose(file, text) {
+  const data = toData(parseStrict(text, file));
+  const services = data.services && typeof data.services === "object" ? data.services : {};
+  return Object.entries(services).flatMap(([name, svc]) => {
+    const image = svc && typeof svc === "object" ? svc.image : undefined;
+    if (typeof image !== "string") return [];
+    const parsed = extractRustImageRef(image);
+    return parsed ? [{ file, line: `service '${name}'`, ref: image, ...parsed }] : [];
+  });
+}
+
+// Every Rust image reference anywhere CI can run one: Dockerfile build stages, workflow job
+// `container:`/`services:` images, and compose files CI invokes with `-f`.
+function allRustImageStages() {
+  const stages = allDockerfiles().flatMap(({ file, text }) => parseDockerfileRustStages(file, text));
+  for (const { file, text } of repoFiles()) {
+    const data = toData(parseStrict(text, file));
+    stages.push(...rustStagesFromWorkflowContainers(file, data));
+    for (const [, script] of runScripts(data)) {
+      for (const composePath of composeFilesReferencedIn(script)) {
+        const composeText = readLocalFromRepo(composePath);
+        if (composeText !== null) stages.push(...rustImagesInCompose(composePath, composeText));
+      }
+    }
+  }
+  return stages;
+}
+
+// Every Rust stage must pin the same, exact pinned-channel version by digest (no floating or
+// unsupported tag form), and every reference pinning that version must pin the identical
+// digest (it is the same published image).
 export function rustVersionViolations(stages, channel) {
   const out = [];
   const digestByVersion = new Map();
   for (const s of stages) {
-    if (s.version !== channel) out.push(`${s.file}:${s.line}: pins rust ${s.version}-bookworm, rust-toolchain.toml pins ${channel}`);
-    const seen = digestByVersion.get(s.version);
-    if (seen === undefined) digestByVersion.set(s.version, s.digest);
-    else if (seen !== s.digest) out.push(`${s.file}:${s.line}: digest ${s.digest} for rust:${s.version}-bookworm disagrees with another Dockerfile's ${seen}`);
+    if (!s.version) {
+      out.push(`${s.file}:${s.line}: rust image tag '${s.tag}' is not an exact version (floating or unsupported form)`);
+      continue;
+    }
+    if (!s.digestOk) out.push(`${s.file}:${s.line}: rust:${s.tag} is not pinned by digest`);
+    if (s.version !== channel) out.push(`${s.file}:${s.line}: pins rust ${s.version}, rust-toolchain.toml pins ${channel}`);
+    if (s.digestOk) {
+      const seen = digestByVersion.get(s.version);
+      if (seen === undefined) digestByVersion.set(s.version, s.digest);
+      else if (seen !== s.digest) out.push(`${s.file}:${s.line}: digest ${s.digest} for rust:${s.version} disagrees with another reference's ${seen}`);
+    }
   }
   return out;
 }
@@ -477,7 +593,7 @@ test("rust-toolchain.toml, every Dockerfile's Rust build stage and every dtolnay
   assert.match(channel, /^\d+\.\d+\.\d+$/, "rust-toolchain.toml channel must be an exact x.y.z version, not a floating channel");
   assert.doesNotMatch(channel, FLOATING_RUST_CHANNEL, "rust-toolchain.toml channel must not float");
 
-  const stages = allDockerfiles().flatMap(({ file, text }) => parseDockerfileRustStages(file, text));
+  const stages = allRustImageStages();
   assert.ok(stages.length >= 2, "expected a rust:<version>-bookworm stage in both the root and deploy/loadtest Dockerfiles");
   assert.deepEqual(rustVersionViolations(stages, channel), []);
 
@@ -584,6 +700,56 @@ test("fixtures: mismatched Rust build-stage versions and digests across Dockerfi
   assert.equal(rustVersionViolations([...a, ...wrongVersion], "1.99.1").length, 1, "wrong version must be caught");
   assert.equal(rustVersionViolations([...a], "1.99.1").length, 0, "one matching stage passes");
   assert.equal(rustVersionViolations([...a, ...stageIn("B/Dockerfile", `1.99.1-bookworm@sha256:${"a".repeat(64)}`)], "1.99.1").length, 0, "two Dockerfiles pinning the identical tag and digest pass");
+});
+
+test("fixtures: a Rust image reference in any form (bare, floating tag, undigested, --platform, ARG-substituted) is caught", () => {
+  const channel = "1.99.1";
+  const digest = "a".repeat(64);
+  const stagesOf = text => parseDockerfileRustStages("fixture/Dockerfile", text);
+
+  assert.equal(rustVersionViolations(stagesOf(`FROM rust:1.98.0-bookworm@sha256:${digest} AS build\n`), channel).length, 1, "bare rust: (no registry prefix) wrong version");
+  assert.equal(rustVersionViolations(stagesOf(`FROM mirror.gcr.io/library/rust:stable-bookworm@sha256:${digest} AS build\n`), channel).length, 1, "digest-pinned but floating stable-bookworm tag");
+  assert.equal(rustVersionViolations(stagesOf("FROM rust:1.99.1-bookworm AS build\n"), channel).length, 1, "correct version with no digest at all");
+  assert.equal(rustVersionViolations(stagesOf(`FROM --platform=linux/amd64 rust:1.98.0-bookworm@sha256:${digest} AS build\n`), channel).length, 1, "--platform= flag must not hide the image");
+  assert.equal(rustVersionViolations(stagesOf(`FROM --platform=linux/amd64 rust:1.99.1-bookworm@sha256:${digest} AS build\n`), channel).length, 0, "--platform= flag with a correct pin still passes");
+  assert.equal(rustVersionViolations(stagesOf(`ARG RUST_IMAGE=rust:1.98.0-bookworm@sha256:${digest}\nFROM \${RUST_IMAGE} AS build\n`), channel).length, 1, "ARG-substituted wrong version");
+  assert.deepEqual(rustVersionViolations(stagesOf(`ARG RUST_IMAGE=rust:1.99.1-bookworm@sha256:${digest}\nFROM \${RUST_IMAGE} AS build\n`), channel), [], "ARG-substituted correct pin passes");
+  assert.deepEqual(rustVersionViolations(stagesOf(`FROM mirror.gcr.io/library/rust:1.99.1-bookworm@sha256:${digest} AS build\n`), channel), [], "correctly pinned mirrored reference passes");
+  assert.equal(stagesOf("FROM gcr.io/distroless/cc-debian12:nonroot@sha256:" + digest + "\n").length, 0, "a non-rust base image is not treated as a rust stage");
+});
+
+test("fixtures: a job container, a service image, or an image in a CI-invoked compose file is checked against the pin", () => {
+  const channel = "1.99.1";
+  const digest = "a".repeat(64);
+  const dataOf = text => toData(parseStrict(text, "fixture.yml"));
+  const job = body => `name: f\non: push\njobs:\n  j:\n    runs-on: ubuntu-24.04\n${body}    steps:\n      - run: echo hi\n`;
+
+  let stages = rustStagesFromWorkflowContainers("fixture.yml", dataOf(job("    container: rust:1.98.0\n")));
+  assert.equal(rustVersionViolations(stages, channel).length, 2, "container: bare string, wrong version and no digest at all");
+
+  stages = rustStagesFromWorkflowContainers("fixture.yml", dataOf(job("    container:\n      image: mirror.gcr.io/library/rust:stable\n")));
+  assert.equal(rustVersionViolations(stages, channel).length, 1, "container.image object, floating tag");
+
+  stages = rustStagesFromWorkflowContainers("fixture.yml", dataOf(job(`    services:\n      rustsvc:\n        image: rust:1.98.0-bookworm@sha256:${digest}\n`)));
+  assert.equal(rustVersionViolations(stages, channel).length, 1, "services.<name>.image, wrong version");
+
+  stages = rustStagesFromWorkflowContainers("fixture.yml", dataOf(job(`    container: mirror.gcr.io/library/rust:1.99.1-bookworm@sha256:${digest}\n`)));
+  assert.deepEqual(rustVersionViolations(stages, channel), [], "correctly pinned container: passes");
+
+  const script = `docker compose -f deploy/fixture/compose.yaml up -d\ncurl http://localhost:8080\n`;
+  assert.deepEqual(composeFilesReferencedIn(script), ["deploy/fixture/compose.yaml"]);
+  assert.deepEqual(composeFilesReferencedIn("echo no compose here\n"), []);
+  const composeText = `services:\n  build:\n    image: rust:1.98.0-bookworm@sha256:${digest}\n`;
+  const composeStages = rustImagesInCompose("deploy/fixture/compose.yaml", composeText);
+  assert.equal(rustVersionViolations(composeStages, channel).length, 1, "compose service image, wrong version");
+  const goodComposeText = `services:\n  build:\n    image: mirror.gcr.io/library/rust:1.99.1-bookworm@sha256:${digest}\n`;
+  assert.deepEqual(rustVersionViolations(rustImagesInCompose("deploy/fixture/compose.yaml", goodComposeText), channel), [], "correctly pinned compose image passes");
+});
+
+test("fixtures: duplicate keys and duplicate [toolchain] tables in rust-toolchain.toml are rejected", () => {
+  assert.throws(() => parseToolchainToml('[toolchain]\nchannel = "1.99.1"\nchannel = "1.98.0"\n'), /duplicate key/);
+  assert.throws(() => parseToolchainToml('[toolchain]\ncomponents = ["rustfmt"]\ncomponents = ["clippy"]\nchannel = "1.99.1"\n'), /duplicate key/);
+  assert.throws(() => parseToolchainToml('[toolchain]\nchannel = "1.99.1"\n[toolchain]\nchannel = "1.99.1"\n'), /more than one/);
 });
 
 test("fixtures: Rust toolchain overrides are caught, without false-positiving on unrelated 'stable' tags", () => {
