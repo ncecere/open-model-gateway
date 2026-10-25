@@ -41,6 +41,10 @@ The application TEMP revoke overlaps the separate #295 work; this change stays i
 
 **Upgrade:** this change adds no schema migration or runtime privilege. Explicitly reapply the matching binary's grants as the database/schema/object owner (`gateway_migrator` in staging), then run `grants verify` with a role allowed to `SET ROLE gateway_runtime`; verification now attempts `CREATE TEMP TABLE` and requires its refusal. Use a **dedicated gateway database**: all roles relying on PUBLIC TEMP lose it there, not just runtime. The owner/migrator's privileges and all unrelated databases are unchanged. `serve` never migrates or applies grants automatically. See [database authority](../staging.md#database-authority-and-releases).
 
+## Personal workspace existence privacy (#282)
+
+Workspace-scoped management routes now return the same `404` response for another owner's personal workspace as for an unknown UUID, including for Platform Admins/Auditors. Non-admin platform writes retain their role-first `403` for both. Personal-owner access, Team/Project authorization and platform aggregate reporting are unchanged. No migration or new privilege is required. See [management API refusals](../management-api.md).
+
 ## Transaction isolation independent of PostgreSQL defaults (#281)
 
 Normal gateway transactions now explicitly begin at **READ COMMITTED**, so database, login-role or connection defaults of REPEATABLE READ or SERIALIZABLE cannot leave lock-then-check queries using a stale snapshot. Session defaults are not rewritten, and session read-only policy is still inherited. Intentional reporting snapshots remain REPEATABLE READ and read-only; their bounded-staleness contract and the elevated-isolation refusal guards are unchanged. No migration or new database privilege is needed. See [transaction isolation](../governance.md#transaction-isolation).
