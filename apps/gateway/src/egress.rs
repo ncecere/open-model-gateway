@@ -837,6 +837,10 @@ mod tests {
 
     #[test]
     fn telemetry_literal_and_dns_policies_cannot_bypass_metadata_or_private_approval() {
+        // #352: refuses Purpose::Telemetry destinations, which a `Capture`
+        // session elsewhere asserts an exact count of; see
+        // `log_capture_test`'s doc comment.
+        let _lock = crate::log_capture_test::exclusive();
         let strict = Policy::default();
         let allowed = Policy::new(
             false,
@@ -1015,6 +1019,9 @@ mod tests {
 
     #[test]
     fn configured_ip_literal_endpoints_are_checked_at_startup() {
+        // #352: the Bedrock allowlist case below refuses a Purpose::Provider
+        // destination; see `log_capture_test`'s doc comment.
+        let _lock = crate::log_capture_test::exclusive();
         let strict = Policy::default();
         let env = |pairs: &'static [(&'static str, &'static str)]| {
             move |name: &str| {
@@ -1067,6 +1074,9 @@ mod tests {
 
     #[tokio::test]
     async fn resolution_keeps_only_allowed_addresses() {
+        // #352: refuses a Purpose::Provider destination; see
+        // `log_capture_test`'s doc comment.
+        let _lock = crate::log_capture_test::exclusive();
         // `localhost` resolves to loopback: refused unless development.
         let strict = Policy::default();
         let error = resolve(&strict, Purpose::Oidc, "localhost", 443)
@@ -1102,6 +1112,9 @@ mod tests {
     /// address is never connected to, an allowed one is.
     #[tokio::test]
     async fn a_client_never_connects_to_a_refused_address() {
+        // #352: refuses a Purpose::Provider destination; see
+        // `log_capture_test`'s doc comment.
+        let _lock = crate::log_capture_test::exclusive();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let accepted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -1140,32 +1153,6 @@ mod tests {
         assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
-    /// Captures formatted JSON log lines for one test (same shape as
-    /// `inference::telemetry_tests::Captured`/`management::snapshot_tests::Captured`,
-    /// duplicated locally: those are private to their own modules).
-    #[derive(Clone, Default)]
-    struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
-    impl std::io::Write for Captured {
-        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(b);
-            Ok(b.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
-        type Writer = Captured;
-        fn make_writer(&'a self) -> Self::Writer {
-            self.clone()
-        }
-    }
-    impl Captured {
-        fn text(&self) -> String {
-            String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
-        }
-    }
-
     /// #321 (GitHub issue #321, "Telemetry export: shared egress refusal
     /// logs repeat and name the collector host"): a real HTTP client -
     /// exactly the `reqwest::Client`/`Resolver` path every exporter and
@@ -1180,17 +1167,14 @@ mod tests {
     /// attempt, instead of once on the transition into refusal. An
     /// identical provider-purpose client must keep naming the host and
     /// address on every attempt (unaffected).
+    ///
+    /// #352: captured via `crate::log_capture_test::Capture`, not a
+    /// per-test thread-local subscriber - see that module's doc comment
+    /// for why (this test's DNS resolution runs on a Tokio blocking-pool
+    /// thread, which a thread-local capture would never see).
     #[tokio::test]
     async fn telemetry_refusal_is_transition_only_and_host_free_across_repeated_real_attempts() {
-        let out = Captured::default();
-        let subscriber = tracing_subscriber::fmt()
-            .json()
-            .with_writer(out.clone())
-            .with_ansi(false)
-            .finish();
-        let _guard = tracing::subscriber::set_default(subscriber);
-        tracing::callsite::rebuild_interest_cache();
-
+        let capture = crate::log_capture_test::Capture::start();
         let strict = Policy::default();
         let telemetry_client = reqwest::Client::builder()
             .no_proxy()
@@ -1223,7 +1207,7 @@ mod tests {
             );
         }
 
-        let logged = out.text();
+        let logged = capture.text();
         let telemetry_warnings: Vec<&str> = logged
             .lines()
             .filter(|line| line.contains("\"purpose\":\"telemetry\""))
@@ -1266,17 +1250,11 @@ mod tests {
     /// and the real-DNS, real-client path are already covered above by
     /// `telemetry_refusal_is_transition_only_and_host_free_across_repeated_real_attempts`;
     /// this test only needs to prove the pure recovery state machine.
+    /// #352: captured via `crate::log_capture_test::Capture`, see its doc
+    /// comment.
     #[test]
     fn telemetry_recovery_logs_one_host_free_transition_warning() {
-        let out = Captured::default();
-        let subscriber = tracing_subscriber::fmt()
-            .json()
-            .with_writer(out.clone())
-            .with_ansi(false)
-            .finish();
-        let _guard = tracing::subscriber::set_default(subscriber);
-        tracing::callsite::rebuild_interest_cache();
-
+        let capture = crate::log_capture_test::Capture::start();
         let refused = SocketAddr::new(ip("127.0.0.1"), 4318);
         let allowed = SocketAddr::new(ip("8.8.8.8"), 4318);
         let transition = AtomicBool::new(false);
@@ -1313,7 +1291,7 @@ mod tests {
             );
         }
 
-        let logged = out.text();
+        let logged = capture.text();
         let telemetry_warnings: Vec<&str> = logged
             .lines()
             .filter(|line| line.contains("\"purpose\":\"telemetry\""))
@@ -1337,18 +1315,11 @@ mod tests {
     /// address on every attempt, bypassing the destination-free policy
     /// `denied` already applies to a full refusal. A provider-purpose
     /// client's identical partial drop is unaffected.
+    /// #352: captured via `crate::log_capture_test::Capture`, see its doc
+    /// comment.
     #[test]
     fn telemetry_partial_drop_is_destination_free_but_provider_partial_drop_still_names_it() {
-        let out = Captured::default();
-        let subscriber = tracing_subscriber::fmt()
-            .json()
-            .with_writer(out.clone())
-            .with_ansi(false)
-            .with_max_level(tracing::Level::DEBUG)
-            .finish();
-        let _guard = tracing::subscriber::set_default(subscriber);
-        tracing::callsite::rebuild_interest_cache();
-
+        let capture = crate::log_capture_test::Capture::start();
         let refused = SocketAddr::new(ip("127.0.0.1"), 4318);
         let allowed = SocketAddr::new(ip("8.8.8.8"), 4318);
         assert!(
@@ -1372,7 +1343,7 @@ mod tests {
             .is_ok()
         );
 
-        let logged = out.text();
+        let logged = capture.text();
         let telemetry_drops: Vec<&str> = logged
             .lines()
             .filter(|line| line.contains("\"purpose\":\"telemetry\""))
