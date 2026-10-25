@@ -23,7 +23,10 @@ describe("deployment History", () => {
     expect(screen.getByRole("tab", { name: "Configuration" }).getAttribute("aria-selected")).toBe("true");
   });
   it("shows readable diffs, actors and cursor pagination without writes", async () => {
-    const fetch = vi.fn().mockResolvedValueOnce(Response.json({ data: [change], next_cursor: "cursor" })).mockResolvedValueOnce(Response.json({ data: [{ ...change, id: "old", values_available: false, before: null, after: null, revision: null }], next_cursor: null }));
+    // Newest page for every request without a cursor (going back to "Newer" refetches it).
+    const fetch = vi.fn().mockImplementation((url: string) => Promise.resolve(url.includes("cursor=")
+      ? Response.json({ data: [{ ...change, id: "old", values_available: false, before: null, after: null, revision: null }], next_cursor: null })
+      : Response.json({ data: [change], next_cursor: "cursor" })));
     vi.stubGlobal("fetch", fetch);
     const user = view();
     await screen.findByText("Enabled → Disabled");
