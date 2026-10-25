@@ -22,7 +22,20 @@ claude
 
 Names are resolved exactly as for other gateway requests. They do not need to contain `claude` or identify an Anthropic model. Claude Code's automatic model discovery only lists ids containing `claude`, so configure other models by name rather than relying on discovery. Changing a name does not grant model access or change which provider a deployment uses.
 
-Send one inference credential, not both Bearer and `x-api-key`. The gateway consumes it; upstream requests use the provider connection's own credential. `anthropic-version: 2023-06-01` is required. Native Anthropic routes forward that version and only the beta values the client sends (up to 16 values, 1024 printable ASCII bytes each); the gateway never adds beta features. Translated routes accept these headers without forwarding them. No caller field may choose an upstream host, path or arbitrary header, and `metadata.user_id` stays a gateway client label, never upstream metadata.
+Send one inference credential, not both Bearer and `x-api-key`. The gateway consumes it; upstream requests use the provider connection's own credential. `anthropic-version: 2023-06-01` is required. Native Anthropic routes forward that version and the client's reviewed beta values unchanged; the gateway never adds beta features. Translated Messages routes apply the same beta allowlist without forwarding the headers. No caller field may choose an upstream host, path or arbitrary header, and `metadata.user_id` stays a gateway client label, never upstream metadata.
+
+## Reviewed beta headers and cache pricing
+
+The static beta allowlist is:
+
+- `interleaved-thinking-2025-05-14`
+- `fine-grained-tool-streaming-2025-05-14`
+- `context-management-2025-06-27`
+- `token-efficient-tools-2025-02-19`
+
+Every comma-separated token across repeated headers must match exactly. There are at most 16 header values (1024 header-safe ASCII bytes each, space/tab allowed) and 32 tokens total. Unknown tokens, empty tokens, other date versions, pricing-tier changes and hosted-capability betas return 400 naming `anthropic-beta`, not silent stripping. This includes context-1m, files, web/code/computer/MCP tools, extended output and extended-cache-ttl betas. Claude Code releases may request new betas: open a GitHub issue with the exact name, vendor reference and capability/pricing/bound evidence to request a reviewed addition. There is no wildcard configuration. See the [matrix](protocol-matrix.md#claude-code-field-rules) for sources and review requirements.
+
+For native cache hints, ask the administrator to publish a compatible immutable v2/v3 deployment price: the 5-minute cache-write category must be priced for absent/5-minute TTL, and the 1-hour category for `ttl:1h`. Mixed requests need both; the conservative monetary hold must also be finite. Missing prices, v1 single-rate prices and unknown/not-applicable required categories refuse with 400 naming `cache_control` before any reservation or upstream request. The explicit 1-hour TTL is supported, but a client also requesting the unreviewed extended-cache-ttl beta is refused. Anthropic's usual write prices are 1.25× base input for 5 minutes and 2× for 1 hour; publish the applicable model's rates. Holds use the existing conservative full-input bound for each priced cache category plus `max_tokens`; settlement charges observed disjoint counts without double charging aggregate writes. Cache-enabled batch lines use gateway-run per-line admission rather than native Message Batches.
 
 ## Current behavior and limits
 
@@ -32,5 +45,5 @@ Send one inference credential, not both Bearer and `x-api-key`. The gateway cons
 - Server tools such as web search and code execution return 400 naming `tools.type`, even on native Anthropic routes: their additional charges are not priced yet.
 - Context-length errors become `400 invalid_request_error` with `prompt is too long`, enabling client compaction. Overload is `529 overloaded_error`; rate limits remain 429. Error messages are bounded to 1 KiB and never return upstream diagnostic bodies or secrets.
 - Messages output is bounded to 16 MiB; individual upstream SSE frames remain bounded to 1 MiB. The inbound JSON body remains bounded to 2 MiB.
-- `max_tokens` remains required and includes thinking; it is the unchanged output reservation bound. Missing usage/rates remain unknown and keep holds. Client hints never reset or bypass limits.
+- `max_tokens` remains required and includes thinking; it is the output-token reservation bound. Cache writes use the separate conservative monetary hold described above. Missing usage/rates remain unknown and keep holds. Client hints never reset or bypass limits.
 - `/v1/messages/count_tokens` is not implemented in this delivery (#72). Real Claude Code acceptance and paid-provider verification remain separate (#73); this page does not claim they have passed.
