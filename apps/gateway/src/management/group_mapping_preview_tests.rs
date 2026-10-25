@@ -457,6 +457,18 @@ async fn a_user_suspended_for_entitlement_loss_in_grace_is_shown_as_reactivated(
     let entry = entry_for(&preview["diff"]["platform_role_gained"], user);
     assert_eq!(entry["reactivated"], true);
 
+    // Apply for real: create the mapping the preview proposed, then run
+    // the exact reconciliation path (SCIM group sync) it predicted.
+    let (status, created) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        "/api/v1/platform/oidc/group-mappings",
+        json!({"issuer":issuer,"group_value":"staff","target_kind":"platform","platform_role":"user","enabled":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+
     // Real sync restores entitlement.
     let mut tx = crate::db::begin(&pool).await.unwrap();
     crate::lifecycle::synchronize_scim_groups(
@@ -830,9 +842,22 @@ async fn call_with_sign_in(
     )
 }
 
-/// Review #89 item 2: a mapping proposed under an issuer SCIM is not bound
+/// Review #89 item 2: a mapping stored under an issuer SCIM is not bound
 /// to must never trust `scim_groups` membership, even when `group_value`
 /// matches a real SCIM group pushed under the actual configured issuer.
+/// This exercises the *existing*-mapping delete preview (bypassing
+/// `validate_mapping`, exactly like the real `DELETE` write path does)
+/// rather than proposing a brand-new mapping: the test harness's real OIDC
+/// issuer is necessarily a loopback `http://` address (`MockProvider`
+/// binds an ephemeral local port), which `validate_mapping` legitimately
+/// refuses outside `GATEWAY_ENV=development` for any *freshly proposed*
+/// mapping -- that refusal is the intended production behavior, not a bug
+/// to route around by weakening validation. A stored row's own issuer is
+/// never re-validated on read, so both scenarios can use it. Beyond the
+/// `membership_basis` label itself, the matching case's `complete:false`
+/// (the group has more members than the test's lowered `ROSTER_LIMIT`)
+/// proves the SCIM table was actually queried -- not just a differently-
+/// labeled but still-empty roster.
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn scim_roster_is_never_trusted_for_a_different_issuer(pool: PgPool) {
     let f = fixture(&pool).await;
@@ -850,15 +875,29 @@ async fn scim_roster_is_never_trusted_for_a_different_issuer(pool: PgPool) {
         .as_str()
         .unwrap()
         .to_owned();
-    let user = inert_user(&pool, "scim-member@example.test").await;
-    scim_group(&pool, "staff", &[user]).await;
+    // More members than the (test-lowered) roster cap: only a trusted,
+    // actually-queried SCIM roster hits this overflow.
+    let mut members = Vec::new();
+    for i in 0..4 {
+        members.push(inert_user(&pool, &format!("scim-member-{i}@example.test")).await);
+    }
+    scim_group(&pool, "staff", &members).await;
+
+    let foreign_issuer = "https://not-the-configured-issuer.example.test";
+    let foreign_map = Uuid::new_v4();
+    sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role,enabled) VALUES($1,$2,'staff','platform','user',true)")
+        .bind(foreign_map)
+        .bind(foreign_issuer)
+        .execute(&pool)
+        .await
+        .unwrap();
     let (status, foreign) = call_with_sign_in(
         &f.s,
         &f.admin,
         identity.clone(),
         "POST",
-        PATH,
-        json!({"issuer":"https://not-the-configured-issuer.example.test","group_value":"staff","target_kind":"platform","platform_role":"user","enabled":true}),
+        &path_for(foreign_map),
+        json!({"delete": true}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{foreign}");
@@ -866,21 +905,35 @@ async fn scim_roster_is_never_trusted_for_a_different_issuer(pool: PgPool) {
         foreign["membership_basis"], "last_sign_in_derived",
         "a SCIM roster for a different issuer must never be trusted: {foreign}"
     );
+    assert_eq!(
+        foreign["complete"], true,
+        "the untrusted fallback roster (no existing group grants) never overflows: {foreign}"
+    );
     assert_eq!(foreign["diff"]["platform_role_gained"], json!([]));
 
     // The same group value under the real configured issuer is trusted.
+    let real_map = Uuid::new_v4();
+    sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role,enabled) VALUES($1,$2,'staff','platform','user',true)")
+        .bind(real_map)
+        .bind(&real_issuer)
+        .execute(&pool)
+        .await
+        .unwrap();
     let (status, matching) = call_with_sign_in(
         &f.s,
         &f.admin,
         identity,
         "POST",
-        PATH,
-        json!({"issuer":real_issuer,"group_value":"staff","target_kind":"platform","platform_role":"user","enabled":true}),
+        &path_for(real_map),
+        json!({"delete": true}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{matching}");
     assert_eq!(matching["membership_basis"], "scim");
-    assert!(users_in(&matching["diff"]["platform_role_gained"]).contains(&user));
+    assert_eq!(
+        matching["complete"], false,
+        "the real SCIM roster (4 members, over the test's 3-user cap) was actually read: {matching}"
+    );
 }
 
 /// Review #89 item 1: an ordinary active user (`NULL` `disable_reason`/
@@ -955,6 +1008,173 @@ async fn workspace_gain_requires_live_platform_entitlement(pool: PgPool) {
     assert!(
         !users_in(&preview["diff"]["workspace_membership_gained"]).contains(&user),
         "{preview}"
+    );
+}
+
+/// Adversarial finding (lifecycle.rs, MEDIUM) scenario A: turning a user's
+/// *sole* platform mapping into a workspace mapping must never show a
+/// workspace gain -- applying the edit immediately suspends them for
+/// entitlement loss (their only platform grant is gone), so reconciliation
+/// can never give them effective workspace access, whatever group grant
+/// row it mechanically inserts.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn changing_a_sole_platform_mapping_into_a_workspace_mapping_shows_no_workspace_gain(
+    pool: PgPool,
+) {
+    let f = fixture(&pool).await;
+    let issuer = "https://idp.example.test";
+    let user = inert_user(&pool, "sole-platform@example.test").await;
+    let (status, created) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        "/api/v1/platform/oidc/group-mappings",
+        json!({"issuer":issuer,"group_value":"staff","target_kind":"platform","platform_role":"user","enabled":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let map = id(&created);
+    sqlx::query("INSERT INTO platform_role_grants(user_id,role,source,mapping_id) VALUES($1,'user','group',$2)")
+        .bind(user)
+        .bind(map)
+        .execute(&pool)
+        .await
+        .unwrap();
+    scim_group(&pool, "staff", &[user]).await;
+
+    let (status, preview) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        &path_for(map),
+        json!({"issuer":issuer,"group_value":"staff","target_kind":"workspace","workspace_id":f.team,"workspace_role":"member","enabled":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert!(
+        !users_in(&preview["diff"]["workspace_membership_gained"]).contains(&user),
+        "losing the sole platform entitlement suspends the user; no workspace gain can ever take effect: {preview}"
+    );
+    let digest = preview["digest"].as_str().unwrap().to_owned();
+
+    // Apply for real, then run the reconciliation the preview's "after"
+    // reflects: it does mechanically insert a group-sourced workspace
+    // grant, but the user stays suspended, so it is never effective.
+    assert_eq!(
+        call_if_match(
+            &f.s,
+            &f.admin,
+            "PATCH",
+            &format!("/api/v1/platform/oidc/group-mappings/{map}"),
+            json!({"issuer":issuer,"group_value":"staff","target_kind":"workspace","workspace_id":f.team,"workspace_role":"member","enabled":true}),
+            &digest,
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert!(
+        sqlx::query_scalar::<_, bool>("SELECT disabled_at IS NOT NULL FROM users WHERE id=$1")
+            .bind(user)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        "losing the sole platform entitlement suspends the user"
+    );
+    let mut tx = crate::db::begin(&pool).await.unwrap();
+    crate::lifecycle::apply_group_grants(&mut tx, user, issuer, &["staff".to_owned()], None)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let membership: Option<String> = sqlx::query_scalar(
+        "SELECT role FROM effective_workspace_memberships WHERE workspace_id=$1 AND user_id=$2",
+    )
+    .bind(f.team)
+    .bind(user)
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        membership, None,
+        "matches the preview: no effective workspace access despite a mechanically-inserted group grant row"
+    );
+}
+
+/// Adversarial finding (lifecycle.rs, MEDIUM) scenario B: an
+/// entitlement-loss-suspended user who still holds another, unrelated
+/// platform grant reactivates the instant reconciliation runs -- the
+/// workspace "after" state must reflect that reactivation (derived from
+/// the same real predicate `preview_platform_effect` uses), not the
+/// user's current (suspended) `disabled_at`.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn entitlement_loss_suspended_user_with_a_surviving_platform_grant_shows_workspace_gain(
+    pool: PgPool,
+) {
+    let f = fixture(&pool).await;
+    let issuer = "https://idp.example.test";
+    let user = inert_user(&pool, "surviving-grant@example.test").await;
+    sqlx::query("UPDATE users SET disabled_at=now(),disable_reason='entitlement_loss',cleanup_due_at=now()+interval '29 days' WHERE id=$1")
+        .bind(user)
+        .execute(&pool)
+        .await
+        .unwrap();
+    // Survives whatever caused the disable; reconciliation lifts the
+    // entitlement-loss suspension the instant any platform grant is live.
+    sqlx::query("INSERT INTO platform_role_grants(user_id,role,source) VALUES($1,'user','manual')")
+        .bind(user)
+        .execute(&pool)
+        .await
+        .unwrap();
+    scim_group(&pool, "staff", &[user]).await;
+
+    let (status, preview) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        PATH,
+        json!({"issuer":issuer,"group_value":"staff","target_kind":"workspace","workspace_id":f.team,"workspace_role":"member","enabled":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert!(
+        users_in(&preview["diff"]["workspace_membership_gained"]).contains(&user),
+        "a surviving platform grant reactivates the user during reconciliation, so the workspace gain takes effect: {preview}"
+    );
+
+    // Apply for real: create the mapping, then run the exact reconciliation
+    // (SCIM group sync) the preview predicted.
+    let (status, created) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        "/api/v1/platform/oidc/group-mappings",
+        json!({"issuer":issuer,"group_value":"staff","target_kind":"workspace","workspace_id":f.team,"workspace_role":"member","enabled":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let mut tx = crate::db::begin(&pool).await.unwrap();
+    crate::lifecycle::synchronize_scim_groups(
+        &mut tx,
+        user,
+        issuer,
+        &["staff".to_owned()],
+        &["staff".to_owned()],
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let membership: Option<String> = sqlx::query_scalar(
+        "SELECT role FROM effective_workspace_memberships WHERE workspace_id=$1 AND user_id=$2",
+    )
+    .bind(f.team)
+    .bind(user)
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        membership,
+        Some("member".to_owned()),
+        "matches the previewed workspace gain exactly"
     );
 }
 

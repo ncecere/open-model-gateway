@@ -426,11 +426,19 @@ fn workspace_role_name(rank: i32) -> Option<String> {
 /// edit that moves a mapping to a different workspace shows the old
 /// workspace's loss and the new workspace's gain, never just one.
 /// `effective_workspace_memberships` requires live platform entitlement
-/// too (review #89-4), so both `before` and `after` are forced to `None`
-/// for a user with no current active platform grant or who is currently
-/// disabled -- this reuses that *current* entitlement state for `after` as
-/// well (not cross-referenced against a simultaneous platform-entitlement
-/// change the same edit might also make).
+/// too (review #89-4), so `before` is forced to `None` for a user with no
+/// *current* active platform grant or who is currently disabled (ineligible
+/// for automatic reactivation). `after` instead reuses the exact
+/// `after_rank > 0` predicate of [`preview_platform_effect`] (adversarial
+/// finding, lifecycle.rs): the same `proposal` can itself change the
+/// user's platform entitlement (scenario A -- turning a user's sole
+/// platform mapping into a workspace mapping must not show a workspace
+/// gain, since applying it suspends them first) or a disabled user's grace-
+/// window reactivation can restore it (scenario B -- an entitlement-loss-
+/// suspended user with a *surviving*, unrelated platform grant reactivates
+/// during reconciliation and so still gains the workspace). Using the
+/// user's raw current `disabled_at`/grant state for `after`, as before,
+/// missed both.
 pub(crate) async fn preview_workspace_effect(
     tx: &mut Transaction<'_, Postgres>,
     proposal: &GroupGrantProposal<'_>,
@@ -443,23 +451,33 @@ pub(crate) async fn preview_workspace_effect(
         before_rank: i32,
         after_rank: i32,
     }
-    let sql = "WITH m(id,target_kind,workspace_id,workspace_role,enabled) AS (VALUES ($2::uuid,$3::text,$4::uuid,$5::text,$6::boolean)),
+    let sql = "WITH m(id,target_kind,workspace_id,workspace_role,enabled,platform_role) AS (VALUES ($2::uuid,$3::text,$4::uuid,$5::text,$6::boolean,$7::text)),
          pairs AS (
            SELECT DISTINCT user_id,workspace_id FROM (
              SELECT unnest($1::uuid[]) user_id,$4::uuid workspace_id WHERE $3='workspace' AND $6 AND $4 IS NOT NULL
              UNION
              SELECT g.user_id,g.workspace_id FROM workspace_membership_grants g WHERE g.mapping_id=$2 AND g.source='group' AND g.revoked_at IS NULL
            ) x WHERE workspace_id IS NOT NULL
+         ),
+         after_entitlement AS (
+           SELECT DISTINCT p.user_id,
+             (CASE WHEN usr.disabled_at IS NOT NULL AND NOT coalesce(usr.disable_reason='entitlement_loss' AND usr.cleanup_due_at>now(),false) THEN 0 ELSE
+               greatest(
+                 coalesce((SELECT max(CASE g.role WHEN 'admin' THEN 3 WHEN 'auditor' THEN 2 ELSE 1 END) FROM platform_role_grants g WHERE g.user_id=p.user_id AND g.revoked_at IS NULL AND ($2::uuid IS NULL OR g.mapping_id IS DISTINCT FROM $2)),0),
+                 CASE WHEN p.user_id=ANY($1::uuid[]) AND m.enabled AND m.target_kind='platform' THEN CASE m.platform_role WHEN 'admin' THEN 3 WHEN 'auditor' THEN 2 ELSE 1 END ELSE 0 END
+               )
+             END) > 0 AS entitled
+           FROM pairs p CROSS JOIN m JOIN users usr ON usr.id=p.user_id
          )
          SELECT p.user_id,p.workspace_id,
            CASE WHEN NOT (usr.disabled_at IS NULL AND EXISTS(SELECT 1 FROM platform_role_grants pg WHERE pg.user_id=p.user_id AND pg.revoked_at IS NULL)) THEN 0 ELSE coalesce((SELECT max(CASE g.role WHEN 'owner' THEN 3 WHEN 'admin' THEN 2 ELSE 1 END) FROM workspace_membership_grants g WHERE g.user_id=p.user_id AND g.workspace_id=p.workspace_id AND g.revoked_at IS NULL),0) END AS before_rank,
-           CASE WHEN NOT (usr.disabled_at IS NULL AND EXISTS(SELECT 1 FROM platform_role_grants pg WHERE pg.user_id=p.user_id AND pg.revoked_at IS NULL)) THEN 0 ELSE
+           CASE WHEN NOT ae.entitled THEN 0 ELSE
              greatest(
                coalesce((SELECT max(CASE g.role WHEN 'owner' THEN 3 WHEN 'admin' THEN 2 ELSE 1 END) FROM workspace_membership_grants g WHERE g.user_id=p.user_id AND g.workspace_id=p.workspace_id AND g.revoked_at IS NULL AND ($2::uuid IS NULL OR g.mapping_id IS DISTINCT FROM $2)),0),
                CASE WHEN p.user_id=ANY($1::uuid[]) AND p.workspace_id=$4 AND m.enabled AND m.target_kind='workspace' THEN CASE m.workspace_role WHEN 'admin' THEN 2 ELSE 1 END ELSE 0 END
              )
            END AS after_rank
-         FROM pairs p CROSS JOIN m JOIN users usr ON usr.id=p.user_id JOIN workspaces w ON w.id=p.workspace_id
+         FROM pairs p CROSS JOIN m JOIN users usr ON usr.id=p.user_id JOIN workspaces w ON w.id=p.workspace_id JOIN after_entitlement ae ON ae.user_id=p.user_id
          WHERE usr.cleaned_at IS NULL AND w.disabled_at IS NULL";
     let rows: Vec<Row> = sqlx::query_as(sql)
         .bind(roster)
@@ -468,6 +486,7 @@ pub(crate) async fn preview_workspace_effect(
         .bind(proposal.workspace_id)
         .bind(proposal.workspace_role)
         .bind(proposal.enabled)
+        .bind(proposal.platform_role)
         .fetch_all(&mut **tx)
         .await?;
     let mut gained = Vec::new();
