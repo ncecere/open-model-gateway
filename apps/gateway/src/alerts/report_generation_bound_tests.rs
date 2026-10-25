@@ -1,6 +1,6 @@
 //! #102C composes with #277 after the full migration prefix, on real PostgreSQL.
 use super::{
-    generation::{GENERATE, generation_events},
+    generation::{GENERATE, generation_events, generation_rule},
     *,
 };
 use crate::leases::{Lease, Leases};
@@ -107,7 +107,12 @@ async fn scheduled_reports_delivery_quota_exempt_alerts_still_charged_and_suppre
     let runs = report_runs(&s, Some(s.team), 1, 102).await;
     sqlx::query("INSERT INTO alert_deliveries(id,report_run_id,transition,bucket_id,created_at,quota_charged,suppression_reason) SELECT gen_random_uuid(),id,'fired',$2,'2000-01-01',true,'workspace_generation_limit' FROM unnest($1::uuid[]) id")
         .bind(&runs[..101]).bind(s.personal).execute(&s.pool).await.unwrap();
-    let ids = generation_events(&s, Some(s.team), 101).await;
+    // Workspace-scoped rules are deliberately ineligible for webhooks. Use
+    // an installation rule describing this workspace, as in #277's webhook
+    // oracle: all 101 alerts enqueue webhooks, even the email-suppressed one.
+    let rule = generation_rule(&s, None).await;
+    let ids: Vec<Uuid> = sqlx::query_scalar("INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary) SELECT gen_random_uuid(),$1,'budget_threshold',i::text,100,'critical',$2,'Generation test' FROM generate_series(1,101) i RETURNING id")
+        .bind(rule).bind(s.team).fetch_all(&s.pool).await.unwrap();
     sqlx::query(GENERATE)
         .bind(&ids)
         .execute(&s.pool)

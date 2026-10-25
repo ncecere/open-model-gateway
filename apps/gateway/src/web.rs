@@ -199,6 +199,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn scheduled_report_links_serve_the_spa_not_json() {
+        let (_directory, app) = fixture();
+        let workspace = uuid::Uuid::from_u128(1);
+        let schedule = uuid::Uuid::from_u128(2);
+        let run = uuid::Uuid::from_u128(3);
+        for (scope, expected) in [
+            (
+                None,
+                format!("/admin/report-schedules/{schedule}/runs/{run}"),
+            ),
+            (
+                Some(workspace),
+                format!("/workspaces/{workspace}/report-schedules/{schedule}/runs/{run}"),
+            ),
+        ] {
+            let path = crate::scheduled_reports::delivery::report_path(scope, schedule, run);
+            assert_eq!(path, expected);
+            for method in [Method::GET, Method::HEAD] {
+                let response = app
+                    .clone()
+                    .oneshot(request(&path, method.clone(), "text/html"))
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK, "{method} {path}");
+                assert!(
+                    response.headers()[header::CONTENT_TYPE]
+                        .to_str()
+                        .unwrap()
+                        .starts_with("text/html")
+                );
+                assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+                let body = to_bytes(response.into_body(), 1024).await.unwrap();
+                if method == Method::GET {
+                    assert_eq!(body.as_ref(), b"<!doctype html><title>Gateway</title>");
+                } else {
+                    assert!(body.is_empty());
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn serves_root_assets_and_browser_deep_links() {
         let (_directory, app) = fixture();
         for path in ["/", "/workspaces/example", "/workspaces/example/"] {

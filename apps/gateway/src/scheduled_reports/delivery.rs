@@ -51,17 +51,25 @@ pub(crate) fn public_origin() -> Option<String> {
     .map(|u| u.origin().ascii_serialization())
     .filter(|s| s.len() <= 512)
 }
+/// Browser deep link, following locations.ts's /workspaces/{ws} and /admin
+/// scope conventions. Slice D renders this route and loads the separately
+/// authorized JSON occurrence endpoint; link possession grants no authority.
+pub(crate) fn report_path(workspace: Option<Uuid>, schedule: Uuid, run: Uuid) -> String {
+    let scope = workspace.map_or_else(|| "admin".to_owned(), |ws| format!("workspaces/{ws}"));
+    format!("/{scope}/report-schedules/{schedule}/runs/{run}")
+}
+
 pub(crate) async fn message(
     tx: &mut Transaction<'_, Postgres>,
     run: Uuid,
     origin: &str,
 ) -> sqlx::Result<(String, String)> {
     let (schedule, ws, start, end): (Uuid,Option<Uuid>,DateTime<Utc>,DateTime<Utc>) = sqlx::query_as("SELECT r.schedule_id,s.workspace_id,r.period_start,r.period_end FROM report_runs r JOIN report_schedules s ON s.id=r.schedule_id WHERE r.id=$1").bind(run).fetch_one(&mut **tx).await?;
-    let scope = ws.map_or_else(|| "platform".to_owned(), |ws| format!("workspaces/{ws}"));
+    let path = report_path(ws, schedule, run);
     Ok((
         "Scheduled report available".into(),
         format!(
-            "A scheduled report is available.\r\nPeriod: {} to {} UTC (end exclusive).\r\n\r\nSign in to view the report: {origin}/api/v1/{scope}/report-schedules/{schedule}/runs/{run}\r\nAccess is checked when you open the report; this link grants no access.\r\n",
+            "A scheduled report is available.\r\nPeriod: {} to {} UTC (end exclusive).\r\n\r\nSign in to view the report: {origin}{path}\r\nAccess is checked when you open the report; this link grants no access.\r\n",
             start.format("%Y-%m-%d"),
             end.format("%Y-%m-%d")
         ),

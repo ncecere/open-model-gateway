@@ -6,6 +6,30 @@ use crate::{
 };
 use sqlx::PgPool;
 
+fn decode_quoted_printable(raw: &str) -> String {
+    let joined = raw.replace("=\r\n", "");
+    let bytes = joined.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = bytes
+            .get(i + 1..i + 3)
+            .and_then(|h| std::str::from_utf8(h).ok())
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match (bytes[i], hex) {
+            (b'=', Some(byte)) => {
+                out.push(byte);
+                i += 3;
+            }
+            (byte, _) => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).expect("UTF-8 body")
+}
+
 async fn published(pool: &PgPool, kind: &str) -> (Store, Uuid, Uuid, Uuid, Option<Uuid>) {
     let user = Uuid::new_v4();
     sqlx::query("INSERT INTO users(id,email) VALUES($1,'report@example.test')")
@@ -242,7 +266,7 @@ async fn scheduled_reports_delivery_retry_backoff_expiry_fencing_and_not_configu
             .await
             .unwrap()
     );
-    sqlx::query("UPDATE installation_settings SET smtp_host=NULL WHERE singleton")
+    sqlx::query("UPDATE installation_settings SET smtp_host=NULL,smtp_port=NULL,smtp_tls=NULL,smtp_from_address=NULL,smtp_username=NULL,smtp_password_ref=NULL,smtp_from_name=NULL WHERE singleton")
         .execute(&pool)
         .await
         .unwrap();
@@ -374,12 +398,27 @@ async fn scheduled_reports_delivery_smtp_link_only_and_shared_fair_bucket(pool: 
     assert!(result.is_ok());
     assert!(complete(&store, &c, result).await.unwrap());
     let email = rx.recv().await.unwrap();
+    let (headers, raw_body) = email
+        .data
+        .split_once("\r\n\r\n")
+        .expect("SMTP headers/body");
+    // Long link lines trigger quoted-printable encoding, including soft wraps.
+    // Assert what a mail client displays, not just the encoded SMTP bytes.
+    let decoded = headers
+        .to_ascii_lowercase()
+        .contains("content-transfer-encoding: quoted-printable")
+        .then(|| decode_quoted_printable(raw_body));
+    let body = decoded.as_deref().unwrap_or(raw_body);
     let link = format!(
-        "https://gateway.example.test/api/v1/workspaces/{}/report-schedules/{schedule}/runs/{run}",
+        "https://gateway.example.test/workspaces/{}/report-schedules/{schedule}/runs/{run}",
         ws.unwrap()
     );
-    assert!(email.data.contains(&link), "{}", email.data);
-    assert!(email.data.contains("UTC"));
+    assert!(body.contains(&link), "{body}");
+    assert!(body.contains("UTC"));
+    assert!(
+        body.contains("Access is checked when you open the report; this link grants no access.")
+    );
+    assert!(!body.contains("/api/v1/"));
     for forbidden in [
         "987654321",
         "PRIVATE WORKSPACE",
@@ -387,7 +426,10 @@ async fn scheduled_reports_delivery_smtp_link_only_and_shared_fair_bucket(pool: 
         "text/csv",
         "admin@example.test",
     ] {
-        assert!(!email.data.contains(forbidden));
+        assert!(
+            !email.data.contains(forbidden) && !body.contains(forbidden),
+            "private content in raw or decoded report email: {forbidden}"
+        );
     }
     assert!(email.data.len() < 16 * 1024);
     assert_eq!(email.rcpt_to.len(), 1);
