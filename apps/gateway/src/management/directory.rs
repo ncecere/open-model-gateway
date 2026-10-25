@@ -828,7 +828,7 @@ pub(super) fn mapping_digest(
         h.update(part.as_bytes());
         h.update([0u8]);
     }
-    format!("{:x}", h.finalize())
+    hex::encode(h.finalize())
 }
 /// `If-Match`, when present, must equal [`mapping_digest`] of the row as it
 /// stands right now (under the same `FOR UPDATE` lock the caller already

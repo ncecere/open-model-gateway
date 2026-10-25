@@ -155,7 +155,7 @@ fn users_in(list: &Value) -> std::collections::BTreeSet<Uuid> {
         .map(|v| Uuid::parse_str(v["user_id"].as_str().unwrap()).unwrap())
         .collect()
 }
-fn entry_for<'a>(list: &'a Value, user: Uuid) -> &'a Value {
+fn entry_for(list: &Value, user: Uuid) -> &Value {
     list.as_array()
         .unwrap()
         .iter()

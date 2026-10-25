@@ -188,6 +188,8 @@ async fn preview_existing_mapping(
         existing.workspace_role.as_deref(),
         existing.enabled,
     );
+    // Owns the proposed mapping so the borrowed proposal outlives the branch.
+    let proposed;
     let (issuer, group_value, proposal, fields_changed) = if is_delete {
         let proposal = lifecycle::GroupGrantProposal {
             existing_mapping_id: Some(id),
@@ -206,9 +208,10 @@ async fn preview_existing_mapping(
             true,
         )
     } else {
-        let b = input.into_mapping()?;
-        validate_mapping(&mut tx, &b).await?;
-        let changed = !mapping_fields_equal(&existing, &b);
+        proposed = input.into_mapping()?;
+        let b = &proposed;
+        validate_mapping(&mut tx, b).await?;
+        let changed = !mapping_fields_equal(&existing, b);
         let proposal = lifecycle::GroupGrantProposal {
             existing_mapping_id: Some(id),
             target_kind: target_kind_of(&b.target_kind),
