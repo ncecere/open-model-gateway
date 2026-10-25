@@ -1,21 +1,11 @@
 {
   "operations": {
-    "DELETE /api/v1/platform/report-schedules/{id}": { "access": "PlatformWrite", "operation": {}, "scope": null, "token_policy": "Denied" },
-    "DELETE /api/v1/workspaces/{ws}/report-schedules/{id}": { "access": "WorkspaceReportAdmin", "operation": {}, "scope": null, "token_policy": "Denied" },
-    "GET /api/v1/platform/report-schedules": { "access": "PlatformRead", "operation": {}, "scope": null, "token_policy": "Denied" },
-    "GET /api/v1/platform/report-schedules/{id}": { "access": "PlatformRead", "operation": {}, "scope": null, "token_policy": "Denied" },
     "GET /api/v1/platform/report-schedules/{id}/runs": { "access": "PlatformRead", "operation": { "summary": "Latest 1–100 immutable occurrences and generation outcomes (default 20); no-store" }, "scope": null, "token_policy": "Denied" },
     "GET /api/v1/platform/report-schedules/{id}/runs/{run}": { "access": "PlatformRead", "operation": { "summary": "Live-authorized immutable aggregate snapshot; expired metadata has snapshot null; no-store" }, "scope": null, "token_policy": "Denied" },
     "GET /api/v1/platform/report-schedules/{id}/runs/{run}/csv": { "access": "PlatformRead", "operation": { "summary": "Live-authorized aggregate CSV; at most 1000 rows; formula-safe, no-store; expired 410, oversized 422" }, "scope": null, "token_policy": "Denied" },
-    "GET /api/v1/workspaces/{ws}/report-schedules": { "access": "WorkspaceReportAdmin", "operation": {}, "scope": null, "token_policy": "Denied" },
-    "GET /api/v1/workspaces/{ws}/report-schedules/{id}": { "access": "WorkspaceReportAdmin", "operation": {}, "scope": null, "token_policy": "Denied" },
     "GET /api/v1/workspaces/{ws}/report-schedules/{id}/runs": { "access": "WorkspaceReportAdmin", "operation": { "summary": "Latest 1–100 immutable occurrences and generation outcomes (default 20); no-store" }, "scope": null, "token_policy": "Denied" },
     "GET /api/v1/workspaces/{ws}/report-schedules/{id}/runs/{run}": { "access": "WorkspaceReportAdmin", "operation": { "summary": "Owner-private personal or shared owner/admin aggregate snapshot; expired metadata has snapshot null; no-store" }, "scope": null, "token_policy": "Denied" },
     "GET /api/v1/workspaces/{ws}/report-schedules/{id}/runs/{run}/csv": { "access": "WorkspaceReportAdmin", "operation": { "summary": "Live-authorized aggregate CSV; at most 1000 rows; formula-safe, no-store; expired 410, oversized 422" }, "scope": null, "token_policy": "Denied" },
-    "PATCH /api/v1/platform/report-schedules/{id}": { "access": "PlatformWrite", "operation": {}, "scope": null, "token_policy": "Denied" },
-    "PATCH /api/v1/workspaces/{ws}/report-schedules/{id}": { "access": "WorkspaceReportAdmin", "operation": {}, "scope": null, "token_policy": "Denied" },
-    "POST /api/v1/platform/report-schedules": { "access": "PlatformWrite", "operation": {}, "scope": null, "token_policy": "Denied" },
-    "POST /api/v1/workspaces/{ws}/report-schedules": { "access": "WorkspaceReportAdmin", "operation": {}, "scope": null, "token_policy": "Denied" },
     "DELETE /api/v1/me/sessions/{session}": {
       "access": "Browser",
       "operation": {},
@@ -1023,6 +1013,18 @@
       "operation": {},
       "scope": "access:write",
       "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/oidc/group-mappings/preview": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/platform/oidc/group-mappings/{id}/preview": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
     },
     "POST /api/v1/platform/providers": {
       "access": "PlatformWrite",

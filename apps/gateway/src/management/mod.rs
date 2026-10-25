@@ -12,6 +12,7 @@ mod deployment_configuration;
 mod directory;
 mod files;
 pub(crate) mod governance;
+mod group_mapping_preview;
 mod key_safety;
 mod keys;
 mod legal_holds;
@@ -131,7 +132,10 @@ const REASONS: &[(&str, &str)] = &[
     ),
     (alerts::KIND_FIXED, "alert_rule_kind_fixed"),
     (INSTALLATION_LIMITS_REMOVED, "installation_limits_removed"),
+    (PRECONDITION_FAILED, "precondition_failed"),
 ];
+const PRECONDITION_FAILED: &str =
+    "The mapping was changed since this proposal was reviewed; re-check it and try again";
 /// Installation-wide limits were removed (0026): the former installation
 /// policy endpoint answers `410` and an alert rule watching the
 /// `installation` budget layer is `400`, both with this reason.
@@ -629,6 +633,7 @@ fn routes() -> Router<Store> {
         .merge(scheduled_reports::routes())
         .merge(admin_tokens::routes())
         .merge(directory::routes())
+        .merge(group_mapping_preview::routes())
         .merge(resources::platform_routes())
         .merge(catalogs::routes())
         .merge(setup::routes())
