@@ -12,5 +12,7 @@ export default async function globalSetup() {
   // Never emit a test-only evaluation route or expose the URL to the SPA.
   const databaseUrl = new URL(state.adminUrl); databaseUrl.pathname = `/${state.database}`;
   process.env.OMG_BROWSER_DATABASE_URL = databaseUrl.href;
+  // Server-only worker fixture; never printed, persisted or sent to the browser.
+  process.env.OMG_BROWSER_WEBHOOK_SECRET = state.webhookSecret;
   return async () => { await stopStack(state); };
 }

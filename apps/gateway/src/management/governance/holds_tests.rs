@@ -457,7 +457,7 @@ async fn queue_visibility_privacy_pagination_and_strict_parameters(pool: PgPool)
         )
         .await
         .0,
-        StatusCode::FORBIDDEN
+        StatusCode::NOT_FOUND
     );
     for malformed in [
         "bad",
@@ -504,7 +504,7 @@ async fn queue_visibility_privacy_pagination_and_strict_parameters(pool: PgPool)
         call(&f, f.other, &format!("/api/v1/workspaces/{personal}/holds"))
             .await
             .0,
-        StatusCode::FORBIDDEN
+        StatusCode::NOT_FOUND
     );
     for role in ["auditor", "admin"] {
         sqlx::query("UPDATE platform_role_grants SET role=$2 WHERE user_id=$1")
@@ -525,7 +525,7 @@ async fn queue_visibility_privacy_pagination_and_strict_parameters(pool: PgPool)
             call(&f, f.other, &format!("/api/v1/workspaces/{personal}/holds"))
                 .await
                 .0,
-            StatusCode::FORBIDDEN
+            StatusCode::NOT_FOUND
         );
     }
     // Live revocation: metadata authority alone never expands workspace activity.

@@ -26,6 +26,7 @@ pub(crate) mod embeddings;
 pub(crate) mod framing;
 pub(crate) mod images;
 pub mod local;
+pub(crate) mod messages;
 pub(crate) mod metering;
 pub mod openai;
 pub mod openai_responses;
@@ -48,16 +49,17 @@ pub trait ProviderAdapter: Send + Sync {
     /// Pure, deterministic admission-time check of one client chat request
     /// against this adapter's wire, run on every protocol/coarse-capability
     /// candidate before any durable admission (`Engine::execute_protocol`).
-    /// The only allowed outcomes are `Ok(())`, `Err(InvalidRequest)` (the
+    /// The only allowed outcomes are `Ok(())`, `Err(InvalidRequest)` / `Err(InvalidField(_))` (the
     /// request is structurally malformed on this wire, e.g. unparseable tool
     /// call arguments) and `Err(Unsupported)` (this wire can never carry a
     /// capability the request uses, e.g. a strict tool or an out-of-range
     /// sampling parameter). Must not resolve credentials, touch the network,
     /// or read prices/endpoints: a route that would refuse this exact
     /// request deterministically must never create an execution or reserve
-    /// budget for it. Default: the coarse `supports_chat_request` bool
-    /// (local profiles that override that bool are covered automatically).
+    /// budget for it. Default: conservative Messages field rules plus the
+    /// coarse `supports_chat_request` bool (including local profile overrides).
     fn validate_chat_request(&self, request: &ChatRequest) -> Result<(), InferenceError> {
+        messages::validate(request, messages::ProviderClass::Local)?;
         if self.supports_chat_request(request) {
             Ok(())
         } else {

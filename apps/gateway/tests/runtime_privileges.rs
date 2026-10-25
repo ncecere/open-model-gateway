@@ -3,6 +3,9 @@
 #![allow(clippy::disallowed_methods)]
 //! Explicitly opt in only on the dedicated disposable PostgreSQL test cluster.
 use sqlx::PgPool;
+#[path = "runtime_privileges/temp.rs"]
+mod temp;
+
 #[sqlx::test(migrations = "./enterprise_migrations")]
 #[ignore = "role/maintenance ACL probe: run only on a disposable test PostgreSQL cluster"]
 async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
@@ -13,6 +16,10 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         .unwrap();
     sqlx::raw_sql("DO $$ BEGIN IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='gateway_runtime') THEN CREATE ROLE gateway_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS; END IF; END $$; REVOKE CONNECT ON DATABASE postgres FROM PUBLIC,gateway_runtime; REVOKE CONNECT ON DATABASE template1 FROM PUBLIC,gateway_runtime;")
         .execute(&mut *connection).await.unwrap();
+    // Run TEMP regressions before this fixture's legacy REVOKE ALL below can
+    // mask grants apply's responsibility for PostgreSQL's default PUBLIC TEMP.
+    // The existing dedicated PostgreSQL CI step exercises this suite explicitly.
+    temp::check_runtime_temp_grants(&pool).await;
     let database: String = sqlx::query_scalar("SELECT current_database()")
         .fetch_one(&mut *connection)
         .await
@@ -85,6 +92,7 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
     scim_provisioning_runs_as_runtime(&pool).await;
     budget_totals_maintained_as_runtime(&pool).await;
     read_snapshots_run_as_runtime(&pool).await;
+    deployment_preview_runs_as_runtime(&pool).await;
     file_store_runs_as_runtime(&pool).await;
     files_api_runs_as_runtime(&pool).await;
     history_partitions_run_as_runtime(&pool).await;
@@ -238,6 +246,56 @@ async fn scheduled_reports_run_as_runtime(pool: &PgPool) {
             "runtime refusal: {statement}"
         );
     }
+}
+
+/// #85: all preview SELECTs and model-visibility functions work under the
+/// deployed runtime ACL, not just the migration owner used by most fixtures.
+async fn deployment_preview_runs_as_runtime(pool: &PgPool) {
+    use serde_json::Value;
+    let runtime = runtime_pool(pool).await;
+    let user = uuid::Uuid::new_v4();
+    let model = uuid::Uuid::new_v4();
+    let connection = uuid::Uuid::new_v4();
+    let deployment = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,email) VALUES($1,'preview-acl@example.test')")
+        .bind(user)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO platform_role_grants(user_id,role,source) VALUES($1,'admin','manual')",
+    )
+    .bind(user)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO models(id,public_name) VALUES($1,'preview-acl')")
+        .bind(model)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO provider_connections(id,name,provider,credential_ref,enabled) VALUES($1,'Preview ACL','openai','env:NOT_RESOLVED',true)").bind(connection).execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model,enabled) VALUES($1,$2,$3,'preview-acl',true)").bind(deployment).bind(model).bind(connection).execute(pool).await.unwrap();
+    let store = open_model_gateway::store::Store::new(runtime.clone());
+    let mut tx = store.snapshot().await.unwrap();
+    let role: String =
+        sqlx::query_scalar("SELECT role FROM effective_platform_roles WHERE user_id=$1")
+            .bind(user)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+    assert_eq!(role, "admin");
+    sqlx::query("SELECT d.id,d.model_id,m.public_name,d.enabled,m.enabled model_enabled,p.enabled connection_enabled,p.provider,m.supported_protocols FROM deployments d JOIN models m ON m.id=d.model_id JOIN provider_connections p ON p.id=d.provider_connection_id WHERE d.id=$1").bind(deployment).fetch_one(&mut *tx).await.unwrap();
+    let versions: Value =
+        sqlx::query_scalar("SELECT jsonb_object_agg(topic,version::text) FROM config_versions WHERE topic IN ('catalog','access')")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+    assert!(versions["catalog"].is_string());
+    sqlx::query("SELECT w.id,w.name,w.kind FROM workspaces w WHERE w.kind IN ('team','project') AND w.disabled_at IS NULL AND workspace_model_allowed(w.id,$1) ORDER BY w.name,w.id LIMIT 100").bind(model).fetch_all(&mut *tx).await.unwrap();
+    sqlx::query(&format!("SELECT count(*) FROM deployments d WHERE d.model_id=$1 AND d.id<>$2 AND d.enabled AND EXISTS(SELECT 1 FROM provider_connections p WHERE p.id=d.provider_connection_id AND p.enabled) AND {}", open_model_gateway::providers::capabilities::route_serves_sql())).bind(model).bind(deployment).fetch_one(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    runtime.close().await;
 }
 
 /// #79: "Your sessions" as the runtime role. The real session middleware
