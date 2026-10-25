@@ -35,6 +35,8 @@ pub mod jobs;
 pub mod leases;
 pub mod legal_holds;
 pub mod lifecycle;
+#[cfg(test)]
+pub(crate) mod log_capture_test;
 pub mod maintenance;
 pub mod management;
 pub mod metrics;
