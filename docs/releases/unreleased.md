@@ -12,6 +12,12 @@ Notes for changes on `main` after [v0.8.0](v0.8.0.md). They become the next rele
 
 Adds Vitest contract/component coverage and a real-gateway Playwright journey with a disposable signed loopback receiver and 1440/390-width screenshots. No backend, migration, privilege or dependency changes. See [dashboard administration](../alerts.md#dashboard-administration-slice-3).
 
+## Deployment configuration impact previews (#85)
+
+Platform Admins can review deployment enable/disable changes before confirming: the allowlisted state diff, serving routes gained/lost, last-serving-route warnings and bounded affected Team/Project metadata. The new browser-only `POST /api/v1/platform/deployments/{id}/configuration/preview` requires Origin/CSRF and denies all admin tokens. It shares the typed deployment operation with existing PATCH/DELETE, reads one read-only primary snapshot and writes no configuration, audit, notifications or cache state. Personal effects are omitted, including from counts; no foreign personal IDs, owners, keys or request details are exposed.
+
+No migration or new runtime privilege is required. `expected_revision` is the existing monotonic **catalog configuration version**, not a new deployment revision. It is an observation token only: existing apply behavior, statuses and audit remain unchanged and do not enforce preview preconditions. History/per-target revisions, rollback and bulk actions remain later slices. See [management API](../management-api.md) and [platform administration](../platform-administration.md).
+
 ## OIDC group-mapping preview (#89)
 
 Platform Admins can now review a group-mapping change before saving it. `POST /platform/oidc/group-mappings/preview` (a new or edited proposal) and `POST /platform/oidc/group-mappings/{id}/preview` (edit or delete; an omitted body or `{"delete":true}` previews the delete) are a bounded, read-only dry-run, Platform Admin and browser session only, that never writes, audits or bumps a config version. It reuses the same matching predicates the real reconciliation runs (`lifecycle::group_match_predicate`/`group_enabled_for`/`group_target_predicate`), so the preview and the write path it previews can never disagree. Validation matches create/update exactly, including the `422` unknown-field refusal, and roster matching is exact (never case-folded). Covers platform roles and shared (Team/Project) membership only; never personal-workspace data.
@@ -48,6 +54,10 @@ The application TEMP revoke overlaps the separate #295 work; this change stays i
 `grants apply` now revokes `TEMPORARY` from `PUBLIC` and `gateway_runtime` on the connected gateway database, removing both PostgreSQL's default PUBLIC grant and any old explicit runtime grant. Runtime can no longer create temporary objects to shadow unqualified queries. Runtime code does not need TEMP; migrations that use temporary objects still run as the database/schema owner.
 
 **Upgrade:** this change adds no schema migration or runtime privilege. Explicitly reapply the matching binary's grants as the database/schema/object owner (`gateway_migrator` in staging), then run `grants verify` with a role allowed to `SET ROLE gateway_runtime`; verification now attempts `CREATE TEMP TABLE` and requires its refusal. Use a **dedicated gateway database**: all roles relying on PUBLIC TEMP lose it there, not just runtime. The owner/migrator's privileges and all unrelated databases are unchanged. `serve` never migrates or applies grants automatically. See [database authority](../staging.md#database-authority-and-releases).
+
+## Personal workspace existence privacy (#282)
+
+Workspace-scoped management routes now return the same `404` response for another owner's personal workspace as for an unknown UUID, including for Platform Admins/Auditors. Non-admin platform writes retain their role-first `403` for both. Personal-owner access, Team/Project authorization and platform aggregate reporting are unchanged. No migration or new privilege is required. See [management API refusals](../management-api.md).
 
 ## Transaction isolation independent of PostgreSQL defaults (#281)
 

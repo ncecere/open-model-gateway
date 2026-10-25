@@ -56,10 +56,10 @@ test("headroom uses real accounting and preserves member/personal refusals", asy
     expect((await api(operator.page, "PUT", `/platform/workspaces/${personal}/policy`, policy("1000000"))).status()).toBe(200);
     const personalKey = await (await api(admin.page, "POST", `/workspaces/${personal}/keys`, { name: "private-headroom", expires_in_days: 1, model_ids: null })).json();
     expect((await api(auditor.page, "GET", `/platform/workspaces/${personal}/policy`)).status()).toBe(200);
-    expect((await api(auditor.page, "GET", `/workspaces/${personal}/policy`)).status()).toBe(403);
+    expect((await api(auditor.page, "GET", `/workspaces/${personal}/policy`)).status()).toBe(404);
     for (const suffix of [`keys/${personalKey.id}`, `keys/${personalKey.id}/policy`, `keys/${personalKey.id}/stats`, "requests"]) {
-      expect((await api(auditor.page, "GET", `/workspaces/${personal}/${suffix}`)).status()).toBe(403);
-      expect((await api(operator.page, "GET", `/workspaces/${personal}/${suffix}`)).status()).toBe(403);
+      expect((await api(auditor.page, "GET", `/workspaces/${personal}/${suffix}`)).status()).toBe(404);
+      expect((await api(operator.page, "GET", `/workspaces/${personal}/${suffix}`)).status()).toBe(404);
     }
   } finally {
     expect((await api(operator.page, "DELETE", platform)).status()).toBe(200);

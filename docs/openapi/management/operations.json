@@ -972,6 +972,12 @@
       "scope": "catalog:write",
       "token_policy": "Scope"
     },
+    "POST /api/v1/platform/deployments/{id}/configuration/preview": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
     "POST /api/v1/platform/legal-holds": {
       "access": "PlatformWrite",
       "operation": {},
