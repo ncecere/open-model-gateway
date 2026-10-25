@@ -26,6 +26,49 @@ All money is exact integer micro-USD. Spend is never estimated from floats, and 
 | `admission_ceiling` | **One workspace or key near its admission ceiling** (scoped admission serializes one workspace's, and one key's, admissions on that scope's totals rows, so a single scope tops out at a few hundred requests/s however many replicas run; see [operations](operations.md#per-scope-admission-ceiling)). Per workspace and per key lineage over the last `window_minutes` (5–10) complete UTC minutes: admissions stayed at or above `ceiling_requests_per_second` in **every** minute, or at least 100 admissions were made and 5 % or more of them waited at least `ceiling_lock_wait_ms` (10, 25, 50, 100, 250, 500, 1000 or 2500) for their scope locks, that is a lock-wait p95 at or above the threshold. Set either threshold or both. One incident per scope; it resolves when the condition clears. Admissions are the interactive ones the minute rate counters count (async jobs excluded); waits come from each replica's counts, flushed every 5 s (`admission_lock_waits`, kept an hour), so the last minute can miss a few seconds. | Installation only |
 | `batch_stalled` | One incident per unfinished batch whose last progress (a finished line, or new provider counts) is older than `window_minutes` (5–1440). It resolves on progress or when the batch ends. A gateway-run batch legitimately waiting for its routes (time window, live traffic, server load, concurrency, its turn) is not stalled; the clock starts when the wait ends ([scheduling](batches.md#scheduling-on-self-hosted-models)). Unreadable server metrics do not count as a wait. | Installation (Team/Project batches); workspace |
 
+## Aged unknown-hold review alerts (#101, slice C)
+
+Built in, never a configurable rule: `aged_unknown_hold` fires at **24 hours**
+(warning, level 1) and **168 hours** (critical, level 2). Age uses database time
+and the reservation's `unknown` ledger entry, falling back to admission time.
+Pending, settled and unreserved attempts are excluded. This differs from the
+cost report's **aged hold**, which means an unresolved lease past expiry.
+
+There is one open incident per enabled Team/Project, and one anonymous
+installation-wide incident for all enabled personal workspaces combined.
+Notifications (including summary and read-marking, within 90 days) and history
+check authority live: Platform Admins/Auditors see all; current shared-workspace
+owners/admins see their workspace's incident. Members and personal owners get
+no alert solely for those roles; they can still use their authorized Holds queue.
+No request, key, owner or personal-workspace identity is stored in an incident.
+Details contain only `threshold_hours`; summaries are fixed. Shared-workspace
+incidents are not webhook-eligible. Only the anonymous installation aggregate
+can enqueue a fired webhook, through the existing kind-only privacy projection
+(no details, subject or workspace fields); clear remains silent. **Open holds**
+links to the authorized Usage & costs tab for current counts, ages and retained
+floors, never stale accounting facts embedded in an incident.
+
+Each tick retires up to 500 obsolete incidents silently. An incident clears
+when no aged unknown hold remains in its scope (including workspace disable).
+Crossing 168 hours silently supersedes warning before opening critical. Levels
+never step down while any 24-hour hold remains. Every new incident, including
+an escalation, counts toward one per subject and 500 installation-wide per
+rolling 24 hours; at most 100 fire per tick. If a warning first fires just before
+168 hours, its escalation can be deferred by that cooldown. Deferred candidates
+are not recorded; oldest unknown timestamp then subject order makes progress.
+The tick has its own lease-fenced/advisory-locked transaction and post-lock
+clock, a 10-second statement timeout, and no accounting writes or installation
+lock. Maintained lifetime unknown counts gate candidate probes.
+
+Apply migration **0058** explicitly before new binaries; `serve` never migrates.
+Both `rule_id` and `builtin` remain NULL so older replicas cannot display or
+email the new kind. An old lease holder simply omits this tick. A new binary
+without the migration records a failed built-in evaluation rather than crashing.
+Existing runtime grants suffice. No read audit action is added; incidents and
+`usage.reconciled` remain the record. Nothing is refunded, released or written
+off by an alert. **Email recipients/send-time checks and dedicated counters
+arrive in slice D**; this slice queues fired transitions only, never resolved mail.
+
 ## Authorized key-expiry reminders (#100)
 
 Built in (migration 0049), fixed thresholds, never a configurable rule: "An API key expires within 7 days" and "...within 1 day" for every active, authorized API key with an expiry.
@@ -44,7 +87,7 @@ Every recipient needs live platform entitlement; a shared recipient also needs e
 
 **Visibility and privacy.** Notifications and the bell show reminders only to their live recipients. Workspace history remains admin/reader-only: members receive `403` there and see their own reminders through Notifications/the bell instead. Owners/admins and permitted readers see reminders in workspace history only when the same live recipient predicate allows them; platform-reader authority alone does not qualify. Platform Admins/Auditors never see another owner's personal-workspace reminders, and these reminders never appear in platform history. Loss of membership, entitlement or key eligibility removes access immediately, including read-marking and history; an old read mark grants no authority. Resolved incidents remain stored for deduplication, even when no longer visible. No key names, ids, prefixes, hashes or holder identities anywhere this reminder appears: events, email or logs. The email links to Notifications; the UI offers **Open keys**, linking to the workspace's keys list, never a key identifier.
 
-**Rolling-upgrade safety.** A `key_expiring` incident carries neither `rule_id` nor `builtin` (every other kind always carries exactly one); that is deliberate. The released gateway's feed, summary and read-marking predicate, its platform/workspace history predicates and the outbox's other recipient-resolution branches key off those two columns. An old replica therefore cannot display or email these events to anyone. Explicit `kind=key_expiring` history filters on that binary are rejected as unknown. An old email worker (pre-outbox) can still consume a pending delivery, recording `no_recipients` (or `not_configured` without SMTP); best-effort email may be lost during overlap; completed deliveries are not replayed after upgrade. See 0049's migration header, the PostgreSQL upgrade-oracle regression and `apps/gateway/src/alerts.rs`/`apps/gateway/src/alerts/outbox.rs` for the mechanism.
+**Rolling-upgrade safety.** A `key_expiring` incident carries neither `rule_id` nor `builtin` (as does `aged_unknown_hold`; other kinds carry exactly one); that is deliberate. The released gateway's feed, summary and read-marking predicate, its platform/workspace history predicates and the outbox's other recipient-resolution branches key off those two columns. An old replica therefore cannot display or email these events to anyone. Explicit `kind=key_expiring` history filters on that binary are rejected as unknown. An old email worker (pre-outbox) can still consume a pending delivery, recording `no_recipients` (or `not_configured` without SMTP); best-effort email may be lost during overlap; completed deliveries are not replayed after upgrade. See 0049's migration header, the PostgreSQL upgrade-oracle regression and `apps/gateway/src/alerts.rs`/`apps/gateway/src/alerts/outbox.rs` for the mechanism.
 
 Budget and installation spend is settled actual cost plus in-flight pending holds, as admission counts them. Reservations in state `unknown`, and pending holds with no bounded amount, are not added to spend: they are reported as `unknown_cost_requests`, and the UI says the spend may be higher. Spend spikes use settled cost only and flag unknown cost the same way. Zero (deny-all) budgets never alert.
 
