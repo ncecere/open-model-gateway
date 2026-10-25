@@ -7,7 +7,7 @@
 //! while itself never writing anything. See `apps/gateway/src/lifecycle.rs`
 //! and `apps/gateway/src/management/group_mapping_preview.rs`.
 use super::*;
-use crate::identity::AdminTokenContext;
+use crate::identity::{AdminTokenContext, tests::MockProvider};
 
 const PATH: &str = "/api/v1/platform/oidc/group-mappings/preview";
 fn path_for(id: Uuid) -> String {
@@ -117,7 +117,10 @@ async fn call_as_token(
         serde_json::from_slice(&bytes).unwrap_or(Value::Null),
     )
 }
-/// [`call`] plus an `If-Match` header, for the digest/stale-confirmation tests.
+/// [`call`] plus an `If-Match` header (quoted, like a real ETag -- the
+/// `digest` field itself is the bare hex), for the digest/stale-
+/// confirmation tests. For a deliberately malformed header, build the
+/// request directly instead of through this helper.
 async fn call_if_match(
     s: &Store,
     u: &BrowserPrincipal,
@@ -135,7 +138,7 @@ async fn call_if_match(
                 .method(method)
                 .uri(path)
                 .header("content-type", "application/json")
-                .header("if-match", if_match)
+                .header("if-match", format!("\"{if_match}\""))
                 .body(Body::from(body.to_string()))
                 .unwrap(),
         )
@@ -246,6 +249,14 @@ async fn renaming_a_mapping_shows_the_immediate_revoke_even_when_reconciliation_
     let f = fixture(&pool).await;
     let issuer = "https://idp.example.test";
     let holder = inert_user(&pool, "holder@example.test").await;
+    // Live platform entitlement: `effective_workspace_memberships` requires
+    // it (review #89 item 4), so without it the workspace effect is
+    // trivially None->None and this test would prove nothing.
+    sqlx::query("INSERT INTO platform_role_grants(user_id,role,source) VALUES($1,'user','manual')")
+        .bind(holder)
+        .execute(&pool)
+        .await
+        .unwrap();
     scim_group(&pool, "engineering", &[holder]).await;
     let (status, created) = call(
         &f.s,
@@ -371,6 +382,13 @@ async fn deleting_a_mapping_shows_the_effective_precedence_downgrade(pool: PgPoo
     let f = fixture(&pool).await;
     let issuer = "https://idp.example.test";
     let holder = inert_user(&pool, "holder2@example.test").await;
+    // Live platform entitlement: `effective_workspace_memberships` requires
+    // it (review #89 item 4).
+    sqlx::query("INSERT INTO platform_role_grants(user_id,role,source) VALUES($1,'user','manual')")
+        .bind(holder)
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::query("INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source) VALUES($1,$2,'member','manual')")
         .bind(f.team).bind(holder).execute(&pool).await.unwrap();
     let map = Uuid::new_v4();
@@ -774,5 +792,346 @@ async fn authority_matrix_admin_only_browser_only(pool: PgPool) {
         call_as_token(&f.s, token, "POST", PATH, body).await.0,
         StatusCode::FORBIDDEN,
         "an admin token must never reach this handler, even with the write scope"
+    );
+}
+
+/// [`call`] plus a real `Extension<settings::SignIn>` layer, for the
+/// configured-issuer tests (review #89 item 2): the test harness's plain
+/// `call` never layers it, which is also the "no sign-in state configured"
+/// case `configured_scim_issuer` must tolerate.
+async fn call_with_sign_in(
+    s: &Store,
+    u: &BrowserPrincipal,
+    identity: crate::identity::IdentityState,
+    method: &str,
+    path: &str,
+    body: Value,
+) -> (StatusCode, Value) {
+    let response = routes()
+        .layer(Extension(ManagementPrincipal::Browser(u.clone())))
+        .layer(Extension(u.clone()))
+        .layer(Extension(settings::SignIn(identity)))
+        .with_state(s.clone())
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(path)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// Review #89 item 2: a mapping proposed under an issuer SCIM is not bound
+/// to must never trust `scim_groups` membership, even when `group_value`
+/// matches a real SCIM group pushed under the actual configured issuer.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn scim_roster_is_never_trusted_for_a_different_issuer(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let mock = MockProvider::start(None).await;
+    let identity = mock.state(pool.clone()).await;
+    let scim_value = crate::entropy::hex_token().unwrap();
+    let scim = crate::scim::ScimConfig::from_lookup(|name| match name {
+        "GATEWAY_SCIM_TOKEN_ENV" => Some("GROUP_PREVIEW_SCIM".to_owned()),
+        "GROUP_PREVIEW_SCIM" => Some(scim_value.clone()),
+        _ => None,
+    })
+    .unwrap();
+    let identity = identity.with_scim(scim).unwrap();
+    let real_issuer = identity.sign_in_summary()["issuer"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let user = inert_user(&pool, "scim-member@example.test").await;
+    scim_group(&pool, "staff", &[user]).await;
+    let (status, foreign) = call_with_sign_in(
+        &f.s,
+        &f.admin,
+        identity.clone(),
+        "POST",
+        PATH,
+        json!({"issuer":"https://not-the-configured-issuer.example.test","group_value":"staff","target_kind":"platform","platform_role":"user","enabled":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{foreign}");
+    assert_eq!(
+        foreign["membership_basis"], "last_sign_in_derived",
+        "a SCIM roster for a different issuer must never be trusted: {foreign}"
+    );
+    assert_eq!(foreign["diff"]["platform_role_gained"], json!([]));
+
+    // The same group value under the real configured issuer is trusted.
+    let (status, matching) = call_with_sign_in(
+        &f.s,
+        &f.admin,
+        identity,
+        "POST",
+        PATH,
+        json!({"issuer":real_issuer,"group_value":"staff","target_kind":"platform","platform_role":"user","enabled":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{matching}");
+    assert_eq!(matching["membership_basis"], "scim");
+    assert!(users_in(&matching["diff"]["platform_role_gained"]).contains(&user));
+}
+
+/// Review #89 item 1: an ordinary active user (`NULL` `disable_reason`/
+/// `cleanup_due_at`, the common case) must preview cleanly -- a prior bug
+/// decoded that `NULL` boolean expression into a non-optional Rust `bool`.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn an_ordinary_active_user_is_previewed_without_error(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let user = inert_user(&pool, "ordinary@example.test").await;
+    scim_group(&pool, "ordinary-group", &[user]).await;
+    let (status, preview) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        PATH,
+        json!({"issuer":"https://idp.example.test","group_value":"ordinary-group","target_kind":"platform","platform_role":"user","enabled":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert!(users_in(&preview["diff"]["platform_role_gained"]).contains(&user));
+}
+
+/// Review #89 item 4: an administratively suspended user (any reason other
+/// than entitlement loss) never shows as gaining, and neither does one
+/// whose entitlement-loss grace window already expired -- neither
+/// `synchronize_groups` nor `synchronize_scim_groups` would lift either.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn suspended_users_outside_the_real_reactivation_condition_never_gain(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let manual = inert_user(&pool, "manual-suspend@example.test").await;
+    sqlx::query("UPDATE users SET disabled_at=now(),disable_reason='manual' WHERE id=$1")
+        .bind(manual)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let expired = inert_user(&pool, "expired-grace@example.test").await;
+    sqlx::query("UPDATE users SET disabled_at=now()-interval '31 days',disable_reason='entitlement_loss',cleanup_due_at=now()-interval '1 day' WHERE id=$1")
+        .bind(expired).execute(&pool).await.unwrap();
+    scim_group(&pool, "never-gains", &[manual, expired]).await;
+    let (status, preview) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        PATH,
+        json!({"issuer":"https://idp.example.test","group_value":"never-gains","target_kind":"platform","platform_role":"user","enabled":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let gained = users_in(&preview["diff"]["platform_role_gained"]);
+    assert!(!gained.contains(&manual), "{preview}");
+    assert!(!gained.contains(&expired), "{preview}");
+}
+
+/// Review #89 item 4: workspace membership requires live platform
+/// entitlement (`effective_workspace_memberships` joins
+/// `effective_platform_roles`) -- a user with no platform grant at all
+/// never shows as gaining a workspace.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn workspace_gain_requires_live_platform_entitlement(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let user = inert_user(&pool, "no-platform-role@example.test").await;
+    scim_group(&pool, "ws-only", &[user]).await;
+    let (status, preview) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        PATH,
+        json!({"issuer":"https://idp.example.test","group_value":"ws-only","target_kind":"workspace","workspace_id":f.team,"workspace_role":"member","enabled":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert!(
+        !users_in(&preview["diff"]["workspace_membership_gained"]).contains(&user),
+        "{preview}"
+    );
+}
+
+/// Review #89 item 3: renaming/deleting a mapping that is a user's sole
+/// platform entitlement suspends them and revokes *every* key they hold
+/// (any workspace, `directory::revoke_human_credentials`), not only keys in
+/// a workspace this mapping happens to also touch. Counted once, distinct.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn immediate_key_count_includes_entitlement_loss_revocations(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let issuer = "https://idp.example.test";
+    let holder = inert_user(&pool, "sole@example.test").await;
+    let (status, created) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        "/api/v1/platform/oidc/group-mappings",
+        json!({"issuer":issuer,"group_value":"staff","target_kind":"platform","platform_role":"user","enabled":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let map = id(&created);
+    sqlx::query(
+        "INSERT INTO platform_role_grants(user_id,role,source,mapping_id) VALUES($1,'user','group',$2)",
+    )
+    .bind(holder)
+    .bind(map)
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Two keys in two different workspaces, unrelated to this mapping.
+    member(&pool, f.team, holder, "member").await;
+    member(&pool, f.project, holder, "member").await;
+    let (status, key1) = key(&f, &f.owner, f.team, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    sqlx::query("UPDATE api_keys SET issued_to_user_id=$1 WHERE id=$2")
+        .bind(holder)
+        .bind(id(&key1))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (status, key2) = key(&f, &f.owner, f.project, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    sqlx::query("UPDATE api_keys SET issued_to_user_id=$1 WHERE id=$2")
+        .bind(holder)
+        .bind(id(&key2))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let (status, preview) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        &path_for(map),
+        json!({"delete":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(
+        users_in(&preview["immediate"]["users_suspended"]),
+        [holder].into_iter().collect()
+    );
+    assert_eq!(preview["immediate"]["keys_revoked_count"], 2, "{preview}");
+
+    let digest = preview["digest"].as_str().unwrap().to_owned();
+    assert_eq!(
+        call_if_match(
+            &f.s,
+            &f.admin,
+            "DELETE",
+            &format!("/api/v1/platform/oidc/group-mappings/{map}"),
+            json!({}),
+            &digest,
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    for k in [&key1, &key2] {
+        assert!(
+            sqlx::query_scalar::<_, bool>(
+                "SELECT revoked_at IS NOT NULL FROM api_keys WHERE id=$1"
+            )
+            .bind(id(k))
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            "apply must match what preview predicted"
+        );
+    }
+    assert!(
+        sqlx::query_scalar::<_, bool>("SELECT disabled_at IS NOT NULL FROM users WHERE id=$1")
+            .bind(holder)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    );
+}
+
+/// Review #89 item 5: `If-Match` accepts only one well-formed
+/// `"<64 lowercase hex>"` header; anything else (non-hex, uppercase,
+/// unbalanced/repeated quotes, non-UTF8 bytes, duplicated headers) is a
+/// `400`, never silently treated as absent or loosely matched. A single
+/// well-formed but non-matching digest is still a `412`, not a `400`.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn malformed_or_duplicate_if_match_headers_are_refused(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let (status, created) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        "/api/v1/platform/oidc/group-mappings",
+        json!({"issuer":"https://idp.example.test","group_value":"mal","target_kind":"platform","platform_role":"user","enabled":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let map = id(&created);
+    let path = format!("/api/v1/platform/oidc/group-mappings/{map}");
+    async fn raw(s: &Store, u: &BrowserPrincipal, path: &str, values: &[&str]) -> StatusCode {
+        let mut builder = Request::builder()
+            .method("DELETE")
+            .uri(path)
+            .header("content-type", "application/json");
+        for v in values {
+            builder = builder.header("if-match", *v);
+        }
+        routes()
+            .layer(Extension(ManagementPrincipal::Browser(u.clone())))
+            .layer(Extension(u.clone()))
+            .with_state(s.clone())
+            .oneshot(builder.body(Body::from("{}")).unwrap())
+            .await
+            .unwrap()
+            .status()
+    }
+    let good = format!("\"{}\"", "a".repeat(64));
+    for bad in [
+        "a".repeat(64),                          // unquoted
+        format!("\"\"\"{}\"\"", "b".repeat(60)), // unbalanced/repeated quotes
+        "\"TOOSHORT\"".to_owned(),
+        format!("\"{}\"", "A".repeat(64)), // uppercase hex refused
+    ] {
+        assert_eq!(
+            raw(&f.s, &f.admin, &path, &[&bad]).await,
+            StatusCode::BAD_REQUEST,
+            "{bad}"
+        );
+    }
+    // Duplicate headers refused even if each is individually well-formed.
+    assert_eq!(
+        raw(&f.s, &f.admin, &path, &[&good, &good]).await,
+        StatusCode::BAD_REQUEST
+    );
+    // A non-UTF8 header value is refused, never treated as absent.
+    let mut request = Request::builder()
+        .method("DELETE")
+        .uri(&path)
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    request.headers_mut().insert(
+        "if-match",
+        axum::http::HeaderValue::from_bytes(&[0xff, 0xfe]).unwrap(),
+    );
+    let status = routes()
+        .layer(Extension(ManagementPrincipal::Browser(f.admin.clone())))
+        .layer(Extension(f.admin.clone()))
+        .with_state(f.s.clone())
+        .oneshot(request)
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // A well-formed but non-matching digest is a precondition failure, not malformed.
+    assert_eq!(
+        raw(&f.s, &f.admin, &path, &[&good]).await,
+        StatusCode::PRECONDITION_FAILED
     );
 }
