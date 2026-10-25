@@ -163,9 +163,16 @@ export function OidcMappings({ session }: { session: Session }) {
   // proposed body to the preview dialog, whose own "Continue to
   // confirmation" reuses this exact existing save path (the same ask()
   // mechanism, same POST/PATCH/DELETE, same audit) as a second, explicit step.
-  const reviewFields = (title: string, fields: Field[], build: (previewPath: string, body: Record<string, unknown>) => MappingReviewRequest, trigger: HTMLElement) =>
-    ask({ title, fields, submitLabel: "Review changes", successNotice: "Proposal checked. Review its impact before saving.", returnFocus: trigger, run: async v => v, after: v => setReview(build(path, mappingBody(v as Record<string, string>))) });
-  const create = writable && <Button id={createId} onClick={event => reviewFields("Create SSO group mapping", mappingFields(session), (previewPath, body) => ({ previewPath: `${previewPath}/preview`, body, title: "Create SSO group mapping", confirmTitle: "Create this SSO group mapping?", confirmLabel: "Create mapping", applyPath: previewPath, applyMethod: "POST", returnFocus: event.currentTarget, fallbackFocus: () => document.getElementById(createId) }), event.currentTarget)}><Plus aria-hidden /> Create mapping</Button>;
+  // A reopened review (onStale, #89 review item 6: a 412 from a mapping
+  // changed between review and apply) reuses the exact same request object,
+  // so it keeps its own returnFocus/fallbackFocus and refetches fresh.
+  const openReview = (build: () => Omit<MappingReviewRequest, "onStale">) => {
+    const request: MappingReviewRequest = { ...build(), onStale: () => setReview(request) };
+    setReview(request);
+  };
+  const reviewFields = (title: string, fields: Field[], build: (body: Record<string, unknown>) => Omit<MappingReviewRequest, "onStale">, trigger: HTMLElement) =>
+    ask({ title, fields, submitLabel: "Review changes", successNotice: "Proposal checked. Review its impact before saving.", returnFocus: trigger, run: async v => v, after: v => openReview(() => build(mappingBody(v as Record<string, string>))) });
+  const create = writable && <Button id={createId} onClick={event => { const trigger = event.currentTarget; reviewFields("Create SSO group mapping", mappingFields(session), body => ({ previewPath: `${path}/preview`, body, title: "Create SSO group mapping", confirmTitle: "Create this SSO group mapping?", confirmLabel: "Create mapping", applyPath: path, applyMethod: "POST", returnFocus: trigger, fallbackFocus: () => document.getElementById(createId) }), trigger); }}><Plus aria-hidden /> Create mapping</Button>;
   const target = (m: GroupMapping) => m.target_kind === "platform" ? (m.platform_role ? platformRoleLabels[m.platform_role] : "Platform") : m.workspace_name ?? "Unknown workspace";
   const columns: DataTableColumn<GroupMapping>[] = [
     { id: "group", header: "IdP group", accessor: m => m.group_value, rowHeader: true, hideable: false, cell: m => <span className={s.mono}>{m.group_value}</span> },
@@ -179,9 +186,14 @@ export function OidcMappings({ session }: { session: Session }) {
     <LocalTable<GroupMapping> path={path} label="SSO group mappings" storageKey="sso-groups" search={{ placeholder: "Group or target" }} rowKey={m => m.id} rowLabel={m => m.group_value} columns={columns}
       facets={[{ id: "status", label: "Status", options: [{ value: "enabled", label: "Enabled" }, { value: "disabled", label: "Disabled" }], accessor: m => m.enabled ? "enabled" : "disabled" }]}
       rowActions={m => [
-        { label: "Edit mapping…", hidden: !writable, onSelect: () => { const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : undefined; if (trigger) reviewFields("Edit SSO group mapping", mappingFields(session, m), (previewPath, body) => ({ previewPath: `${previewPath}/${enc(m.id)}/preview`, body, title: "Edit SSO group mapping", confirmTitle: "Save this SSO group mapping?", confirmLabel: "Save changes", applyPath: `${previewPath}/${enc(m.id)}`, applyMethod: "PATCH", returnFocus: trigger }), trigger); } },
+        // The row's own "…" trigger (stable aria-label, see
+        // components/people.tsx's actionsFor) survives an edit's own
+        // success, so it is a reasonable fallback once the menu item itself
+        // (the focus origin) is gone; a delete removes the row entirely, so
+        // its fallback is the page-level Create button instead.
+        { label: "Edit mapping…", hidden: !writable, onSelect: () => { const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : undefined; if (trigger) reviewFields("Edit SSO group mapping", mappingFields(session, m), body => ({ previewPath: `${path}/${enc(m.id)}/preview`, body, title: "Edit SSO group mapping", confirmTitle: "Save this SSO group mapping?", confirmLabel: "Save changes", applyPath: `${path}/${enc(m.id)}`, applyMethod: "PATCH", returnFocus: trigger, fallbackFocus: () => document.querySelector<HTMLElement>(`[aria-label="Actions for ${CSS.escape(m.group_value)}"]`) }), trigger); } },
         copyIdAction(m.id),
-        { label: "Delete mapping…", danger: true, hidden: !writable, onSelect: () => { const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : undefined; setReview({ previewPath: `${path}/${enc(m.id)}/preview`, body: {}, title: "Delete SSO group mapping", confirmTitle: "Delete this SSO group mapping?", confirmDescription: "Mapped grants are reconciled immediately. Independently assigned manual grants are preserved. Use suspension for immediate access revocation.", confirmLabel: "Delete mapping", danger: true, applyPath: `${path}/${enc(m.id)}`, applyMethod: "DELETE", returnFocus: trigger }); } },
+        { label: "Delete mapping…", danger: true, hidden: !writable, onSelect: () => { const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : undefined; openReview(() => ({ previewPath: `${path}/${enc(m.id)}/preview`, body: {}, title: "Delete SSO group mapping", confirmTitle: "Delete this SSO group mapping?", confirmDescription: "Mapped grants are reconciled immediately. Independently assigned manual grants are preserved. Use suspension for immediate access revocation.", confirmLabel: "Delete mapping", danger: true, applyPath: `${path}/${enc(m.id)}`, applyMethod: "DELETE", returnFocus: trigger, fallbackFocus: () => document.getElementById(createId) })); } },
       ]}
       empty={{ icon: <Network />, title: "No SSO group mappings.", description: "Create provider-neutral mappings. Authentication alone must never infer a platform role.", action: create || undefined }} />
     {review && <MappingReviewDialog request={review} onClose={() => setReview(null)} />}

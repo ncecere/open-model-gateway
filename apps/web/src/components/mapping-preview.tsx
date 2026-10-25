@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type MappingPreview, type MappingPreviewEntry } from "../lib/api";
+import { ApiError, api, type MappingPreview, type MappingPreviewEntry, type MappingPreviewImmediate } from "../lib/api";
 import { Button, ErrorNotice, Stack, useAction } from "./ui";
 import { Dialog } from "./ui/dialog/dialog";
 import { DescriptionList } from "./ui/description-list/description-list";
@@ -32,9 +32,17 @@ export type MappingReviewRequest = {
   /** A stable element to fall back to once `returnFocus` is no longer
    * connected (for example, a row menu item removed when its menu closed). */
   fallbackFocus?: () => HTMLElement | null;
+  /** Called when the confirmed apply is refused with 412 (the mapping
+   * changed between review and apply, #89 review item 6): reopen a fresh
+   * review instead of leaving the user with a stale one. */
+  onStale?: () => void;
 };
 
-const entryName = (e: MappingPreviewEntry) => e.display_name?.trim() || e.email || e.user_id;
+const entryName = (e: { display_name: string | null; email: string | null; user_id: string }) => e.display_name?.trim() || e.email || e.user_id;
+function roleChange(before: string | null, after: string | null) {
+  if (before && after) return `${before} → ${after}`;
+  return after ?? before ?? "";
+}
 function EntryList({ title, entries }: { title: string; entries: MappingPreviewEntry[] }) {
   if (entries.length === 0) return null;
   return (
@@ -45,12 +53,51 @@ function EntryList({ title, entries }: { title: string; entries: MappingPreviewE
       <ul>
         {entries.map(e => (
           <li key={e.user_id}>
-            {entryName(e)}
-            {e.role ? ` \u00b7 ${e.role}` : ""}
+            {entryName(e)} · {roleChange(e.before, e.after)}
+            {e.reactivated ? " (reactivated)" : ""}
+            {e.would_be_suspended ? " (would be suspended)" : ""}
           </li>
         ))}
       </ul>
     </section>
+  );
+}
+function RevokedList({ title, entries }: { title: string; entries: { user_id: string; email: string | null; display_name: string | null; role: string }[] }) {
+  if (entries.length === 0) return null;
+  return (
+    <section aria-label={title}>
+      <p>
+        {title} ({entries.length})
+      </p>
+      <ul>
+        {entries.map(e => (
+          <li key={e.user_id}>
+            {entryName(e)} · {e.role}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+/** What the real write does synchronously, the instant it commits -- distinct
+ * from `diff`, which is the net state once reconciliation has caught up. */
+function ImmediateSection({ immediate }: { immediate: MappingPreviewImmediate }) {
+  if (!immediate.applies) return null;
+  return (
+    <Alert tone={immediate.blocked_by_last_admin ? "danger" : "warning"} title="Applied immediately, not at next sign-in">
+      <Stack gap={2}>
+        {immediate.blocked_by_last_admin && <p>This would strand the last platform administrator; the real request would be refused.</p>}
+        <RevokedList title="Platform role revoked now" entries={immediate.platform_role_revoked} />
+        <RevokedList title="Workspace membership revoked now" entries={immediate.workspace_membership_revoked} />
+        {immediate.users_suspended.length > 0 && (
+          <p>
+            {immediate.users_suspended.length} user{immediate.users_suspended.length === 1 ? "" : "s"} would be suspended immediately for losing their only platform entitlement:{" "}
+            {immediate.users_suspended.map(entryName).join(", ")}.
+          </p>
+        )}
+        {immediate.keys_revoked_count > 0 && <p>{immediate.keys_revoked_count} API key{immediate.keys_revoked_count === 1 ? "" : "s"} would be permanently revoked for losing their only workspace membership. Revoked keys never reactivate, even once reconciliation restores the membership.</p>}
+      </Stack>
+    </Alert>
   );
 }
 
@@ -96,12 +143,19 @@ export function MappingReviewDialog({ request, onClose }: { request: MappingRevi
       submitLabel: request.confirmLabel,
       returnFocus: request.returnFocus,
       after: restoreAfterRefresh,
-      run: (_, signal) =>
-        api(request.applyPath, {
-          method: request.applyMethod,
-          ...(request.applyMethod === "DELETE" ? {} : { body: request.body }),
-          signal,
-        }),
+      run: async (_, signal) => {
+        try {
+          return await api(request.applyPath, {
+            method: request.applyMethod,
+            headers: preview.digest ? { "If-Match": preview.digest } : undefined,
+            ...(request.applyMethod === "DELETE" ? {} : { body: request.body }),
+            signal,
+          });
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 412) request.onStale?.();
+          throw error;
+        }
+      },
     });
   };
   return (
@@ -135,9 +189,15 @@ export function MappingReviewDialog({ request, onClose }: { request: MappingRevi
           <DescriptionList
             items={[
               { label: "Membership basis", value: preview.membership_basis === "scim" ? "SCIM roster" : "Sign-in derived" },
-              { label: "Gained / lost", value: `${preview.counts.gained} / ${preview.counts.lost}` },
+              { label: "Gained / lost at next sign-in", value: `${preview.counts.gained} / ${preview.counts.lost}` },
             ]}
           />
+          <ImmediateSection immediate={preview.immediate} />
+          {!preview.complete && (
+            <Alert tone="warning" title="Incomplete preview">
+              This group's membership is too large to fully evaluate; this preview may undercount who would gain access.
+            </Alert>
+          )}
           <EntryList title="Platform role gained" entries={preview.diff.platform_role_gained} />
           <EntryList title="Platform role lost" entries={preview.diff.platform_role_lost} />
           <EntryList title="Workspace membership gained" entries={preview.diff.workspace_membership_gained} />

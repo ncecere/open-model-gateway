@@ -3,15 +3,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { MappingReviewDialog, type MappingReviewRequest } from "./mapping-preview";
 import { ActionProvider, Button } from "./ui";
 import { testClient } from "../lib/test-fixtures";
 
+const noImmediate = { applies: false, blocked_by_last_admin: false, platform_role_revoked: [], workspace_membership_revoked: [], users_suspended: [], keys_revoked_count: 0 };
 const basePreview = {
   membership_basis: "scim" as const,
+  complete: true,
+  digest: "deadbeef",
+  immediate: noImmediate,
   diff: {
-    platform_role_gained: [{ user_id: "u1", email: "a@example.test", display_name: null, role: "auditor", workspace_id: null }],
+    platform_role_gained: [{ user_id: "u1", email: "a@example.test", display_name: null, before: null, after: "auditor", workspace_id: null }],
     platform_role_lost: [],
     workspace_membership_gained: [],
     workspace_membership_lost: [],
@@ -26,10 +30,19 @@ type ReviewRequest = Omit<MappingReviewRequest, "returnFocus" | "fallbackFocus">
  * review → confirm chain. */
 function Harness({ request }: { request: ReviewRequest }) {
   const [origin, setOrigin] = useState<HTMLElement | null>(null);
+  const originRef = useRef<HTMLElement | null>(null);
   return (
     <>
-      <Button onClick={event => setOrigin(event.currentTarget)}>Open review</Button>
-      {origin && <MappingReviewDialog request={{ ...request, returnFocus: origin }} onClose={() => setOrigin(null)} />}
+      <Button
+        onClick={event => {
+          originRef.current = event.currentTarget;
+          setOrigin(event.currentTarget);
+        }}
+      >
+        Open review
+      </Button>
+      {/* onStale (#89 review item 6): a 412 reopens a fresh review on the same origin, remounting (not just re-rendering) so it refetches. */}
+      {origin && <MappingReviewDialog request={{ ...request, returnFocus: origin, onStale: () => setOrigin(originRef.current) }} onClose={() => setOrigin(null)} />}
     </>
   );
 }
@@ -97,6 +110,37 @@ describe("group-mapping review", () => {
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
     expect(fetch.mock.calls[1][0]).toBe(createRequest.applyPath);
     expect(fetch.mock.calls[1][1]).toMatchObject({ method: "POST", body: JSON.stringify(createRequest.body) });
+  });
+
+  it("shows what the real write revokes immediately, separately from the net diff", async () => {
+    const immediate = { ...noImmediate, applies: true, platform_role_revoked: [{ user_id: "u2", email: "b@example.test", display_name: null, role: "admin" }], keys_revoked_count: 2 };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ ...basePreview, immediate })));
+    const user = view(createRequest);
+    await user.click(screen.getByRole("button", { name: /^Open review$/ }));
+    await screen.findByText(/Applied immediately, not at next sign-in/);
+    expect(screen.getByText(/b@example\.test/)).toBeTruthy();
+    expect(screen.getByText(/2 API keys would be permanently revoked/)).toBeTruthy();
+  });
+
+  it("sends If-Match with the reviewed digest, and reopens a fresh review on a stale 412", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(basePreview))
+      .mockResolvedValueOnce(Response.json({ error: { code: "412", message: "The mapping was changed since this proposal was reviewed", reason: "precondition_failed" } }, { status: 412 }))
+      .mockResolvedValueOnce(Response.json({ ...basePreview, digest: "freshdigest" }));
+    vi.stubGlobal("fetch", fetch);
+    const user = view(createRequest);
+    await user.click(screen.getByRole("button", { name: /^Open review$/ }));
+    await screen.findByText(/^Platform role gained \(1\)$/);
+    await user.click(screen.getByRole("button", { name: /^Continue to confirmation$/ }));
+    await screen.findByRole("dialog", { name: /^Create this SSO group mapping\?$/ });
+    await user.click(screen.getByRole("button", { name: /^Create mapping$/ }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    expect((fetch.mock.calls[1][1] as RequestInit).headers).toMatchObject({ "If-Match": "deadbeef" });
+    await screen.findByText(/was changed since this proposal was reviewed/);
+    // onStale reopened a fresh review behind the error dialog.
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
+    expect(fetch.mock.calls[2][1]).toMatchObject({ method: "POST" });
   });
 
   it("cancelling the review never applies, and restores focus to the originating trigger", async () => {
