@@ -8,6 +8,23 @@ Saved enabled receivers now receive `omg.alert.v1` envelopes signed with HMAC-SH
 
 Adds `POST /platform/alerts/webhooks/{id}/test` (fixed saved-receiver single attempt, no body or `{}`, transactionally audited limits 2/user/minute, 2/destination/minute, 20/installation/hour) and `GET /platform/alerts/webhooks/{id}/deliveries` (bounded metadata/status, existing redaction). Waiting counts exclude stale generations. Fixed-label attempt/delivery metrics and oldest-waiting age expose failures without destination identifiers. Receiver guidance requires constant-time signatures, ±300-second timestamp checks, header/body delivery-id equality and durable deduplication. Crash-after-acceptance duplicates remain possible; there is no replay endpoint. No new migration or privilege is needed beyond 0057. The UI and broader acceptance work remain slice 3.
 
+## Key dialog lifetime hardening (#276)
+
+Each ask now gets a fresh dialog lifetime (explicit retries within one dialog keep it), and successful non-secret actions cannot be repeated through retained submit callbacks. Key creation and rotation suppress late disclosures after retirement; a creation that completes after retirement, or any 2xx without a token, still invalidates the keys list so the key can be found and revoked. Admitted create requests remain uncancelled on local retirement so a newly created key can appear in the list and be revoked. A successful response missing its token shows an error; retry remains explicit, never automatic.
+
+## Fresh CNPG installs restrict database ACLs (#315)
+
+Fresh, explicitly installed chart-managed CNPG clusters now revoke PUBLIC/runtime CONNECT
+on `postgres` and `template1` and PUBLIC/runtime TEMPORARY on the application database.
+Bootstrap seeds passwordless CNPG operational roles and preserves their maintenance CONNECT
+explicitly; CNPG still supplies replication, monitoring and PgBouncer authentication privileges.
+Application CONNECT is retained. This changes only one-time initdb hooks, not the verifier,
+`grants apply`, migrations, external databases or existing clusters. Existing installations need
+an explicitly reviewed [manual remediation](../postgresql-ha.md#existing-cnpg-cluster-acl-remediation-315),
+including operational-role preconditions and strict tagged verification before restarting gateways.
+See [bootstrap lifecycle evidence](../kubernetes.md#cnpg-bootstrap-database-acls-315) for CNPG 1.30.1.
+The application TEMP revoke overlaps the separate #295 work; this change stays in the CNPG path.
+
 ## Transaction isolation independent of PostgreSQL defaults (#281)
 
 Normal gateway transactions now explicitly begin at **READ COMMITTED**, so database, login-role or connection defaults of REPEATABLE READ or SERIALIZABLE cannot leave lock-then-check queries using a stale snapshot. Session defaults are not rewritten, and session read-only policy is still inherited. Intentional reporting snapshots remain REPEATABLE READ and read-only; their bounded-staleness contract and the elevated-isolation refusal guards are unchanged. No migration or new database privilege is needed. See [transaction isolation](../governance.md#transaction-isolation).
