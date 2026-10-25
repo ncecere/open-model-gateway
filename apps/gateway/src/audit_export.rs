@@ -1252,7 +1252,7 @@ fn log_delivery_outcome(outcome: &Outcome, exporter: &Exporter, otlp_failing: &C
         // Only an actual successful attempt (a delivery or heartbeat) is a
         // recovery: `Outcome::Idle` can mean "still backing off, not
         // attempted yet" and must never clear the flag or claim recovery.
-        (Outcome::Delivered(_) | Outcome::Heartbeat)
+        Outcome::Delivered(_) | Outcome::Heartbeat
             if exporter.transport() == "otlp" && otlp_failing.replace(false) =>
         {
             tracing::warn!(
