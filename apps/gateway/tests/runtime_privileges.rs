@@ -178,13 +178,13 @@ async fn deployment_preview_runs_as_runtime(pool: &PgPool) {
         .unwrap();
     let app = open_model_gateway::management::router(identity).with_state(store);
     let path = format!("/api/v1/platform/deployments/{deployment}/configuration/history");
-    let mut detail = None;
+    let mut detail: Option<String> = None;
     for _ in 0..2 {
         let response = app
             .clone()
             .oneshot(
                 axum::http::Request::builder()
-                    .uri(detail.as_deref().unwrap_or(&path))
+                    .uri(detail.as_deref().unwrap_or(path.as_str()))
                     .header("cookie", format!("omg_session={cookie}"))
                     .body(axum::body::Body::empty())
                     .unwrap(),
