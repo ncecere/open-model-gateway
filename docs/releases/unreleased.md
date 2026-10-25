@@ -2,6 +2,10 @@
 
 Notes for changes on `main` after [v0.8.0](v0.8.0.md). They become the next release's notes.
 
+## Pinned Rust toolchain (#354)
+
+Adds `rust-toolchain.toml`, pinning the exact compiler version (1.99.1, with `rustfmt` and `clippy`) that `rustup` installs automatically for any local `cargo` command. Both `ci.yml` jobs that install Rust now pass that same version explicitly to the SHA-pinned `dtolnay/rust-toolchain` action instead of floating on `stable`, matching the digest-pinned `rust:1.99.1-bookworm` build stage in **both** `Dockerfile` and `deploy/loadtest/Dockerfile` (the latter was still on `1.99.0`; both now pin the identical image reference). `tests/supply-chain.test.mjs` now parses `rust-toolchain.toml` as a strict TOML subset, discovers every Dockerfile in the repository by walking it instead of a fixed list, checks every Rust build stage in each, and fails the build if any of them disagree, if two Dockerfiles pin the same version at different digests, if any workflow's toolchain input floats or mismatches, or if a workflow or local composite action overrides the pin at run time (`RUSTUP_TOOLCHAIN`, `rustup default`/`override set`/`toolchain install`, `cargo +<toolchain>`). CI, both image builds and local gates now always compile with the same rustc, so a change that passes locally cannot fail CI's `-D warnings` build (or the reverse) because of a compiler version difference (#348). `rust-version = "1.88"` in `apps/gateway`, `tools/loadgen` and `tools/mock-upstream` is each crate's minimum supported Rust version for crates.io, not this build pin, and is unaffected. Bumping the pinned version is documented in [verification](../verification.md#rust-toolchain) as a single reviewed PR: read the release notes, fix new lints, run the full gates. No behavior, schema or runtime change.
+
 
 
 ## Scheduled cost reports (#102, slices A–D)
