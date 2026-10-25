@@ -160,7 +160,12 @@ pub struct MessagesOptions {
     /// `strict` was present on a Messages tool definition. Do not infer wire
     /// presence from shared tools that adapters/canonical callers may modify.
     pub strict_tools: bool,
-    pub beta: bool,
+    /// Repeated header values retained verbatim, never interpreted as headers.
+    pub beta_headers: Vec<String>,
+    /// Validated native message/tool envelopes; no caller transport or metadata.
+    pub native_messages: Vec<serde_json::Value>,
+    pub native_tools: Vec<serde_json::Value>,
+    pub error_results: bool,
     pub system: Option<serde_json::Value>,
     pub cache_controls: Vec<serde_json::Value>,
     pub thinking: Option<serde_json::Value>,
@@ -298,6 +303,9 @@ impl std::fmt::Debug for ReportedModel {
 }
 
 pub struct ChatResponse {
+    /// Validated native Anthropic blocks, preserving order and opaque signatures.
+    /// Used only by the Messages codec, never logged as telemetry.
+    pub messages_content: Option<Vec<serde_json::Value>>,
     pub content: Option<String>,
     pub tool_calls: Vec<ToolCall>,
     pub finish_reason: FinishReason,
@@ -315,6 +323,9 @@ pub struct ToolCallDelta {
 // `Usage` is a copyable, fixed-size metering record; events are short-lived.
 #[allow(clippy::large_enum_variant)]
 pub enum ChatEvent {
+    /// Validated native Anthropic content-block lifecycle event. Canonical
+    /// text/tool deltas accompany it for accounting/telemetry and other codecs.
+    MessagesBlock(serde_json::Value),
     Delta {
         text: Option<String>,
         tool_calls: Vec<ToolCallDelta>,

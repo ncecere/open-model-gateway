@@ -1702,6 +1702,9 @@ mod tests {
 
     #[test]
     fn configuration_is_operator_only_and_strict() {
+        // #352: the "metadata address" case below refuses a Purpose::Audit
+        // destination; see `log_capture_test`'s doc comment.
+        let _lock = crate::log_capture_test::exclusive();
         let secret = "s".repeat(32);
         let env = |pairs: Vec<(&'static str, String)>| {
             move |name: &str| {
@@ -1862,6 +1865,10 @@ mod tests {
     /// checked at startup and never printed; `OTEL_*` is never read.
     #[test]
     fn otlp_configuration_is_one_destination_with_checked_headers_and_no_otel_variables() {
+        // #352: the "metadata address" case below refuses a
+        // Purpose::AuditOtlp destination; see `log_capture_test`'s doc
+        // comment.
+        let _lock = crate::log_capture_test::exclusive();
         // A header value that must never appear in Debug output or an error.
         const TOKEN: &str = "c2VjcmV0LWNvbGxlY3Rvci10b2tlbg";
         let otlp = |url: &str| (OTLP_URL_ENV, url.to_owned());
@@ -2262,32 +2269,6 @@ mod tests {
         }
     }
 
-    /// Captures formatted JSON log lines for one test (same shape as
-    /// `egress::tests::Captured`, duplicated locally: it's private to its
-    /// own module).
-    #[derive(Clone, Default)]
-    struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
-    impl std::io::Write for Captured {
-        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(b);
-            Ok(b.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
-        type Writer = Captured;
-        fn make_writer(&'a self) -> Self::Writer {
-            self.clone()
-        }
-    }
-    impl Captured {
-        fn text(&self) -> String {
-            String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
-        }
-    }
-
     /// #321 round 2 (LOW finding 2, adversarial review): the OTLP audit
     /// exporter's collector is a distinct `Purpose::AuditOtlp` (not the
     /// webhook/syslog `Purpose::Audit`) built through `https_client`, with
@@ -2297,18 +2278,15 @@ mod tests {
     /// (reused) client must log the refusal only once, host-free; an
     /// identical webhook exporter must keep naming the host on every
     /// attempt (unaffected).
+    ///
+    /// #352: captured via `crate::log_capture_test::Capture`, not a
+    /// per-test thread-local subscriber - see that module's doc comment
+    /// for why (this test's DNS resolution runs on a Tokio blocking-pool
+    /// thread, which a thread-local capture would never see).
     #[tokio::test]
     async fn otlp_audit_refusals_are_transition_only_and_host_free_but_webhook_refusals_still_name_the_host()
      {
-        let out = Captured::default();
-        let subscriber = tracing_subscriber::fmt()
-            .json()
-            .with_writer(out.clone())
-            .with_ansi(false)
-            .finish();
-        let _guard = tracing::subscriber::set_default(subscriber);
-        tracing::callsite::rebuild_interest_cache();
-
+        let capture = crate::log_capture_test::Capture::start();
         let otlp = Exporter::otlp("https://localhost/v1/logs", None, false).unwrap();
         let webhook = Exporter::new("https://localhost/x", vec![b's'; MIN_SECRET_BYTES], false)
             .unwrap()
@@ -2334,7 +2312,7 @@ mod tests {
             );
         }
 
-        let logged = out.text();
+        let logged = capture.text();
         let otlp_warnings: Vec<&str> = logged
             .lines()
             .filter(|line| line.contains("\"purpose\":\"audit_otlp\""))
@@ -2375,18 +2353,12 @@ mod tests {
     /// transition back (never on `Idle`, which just means still backing
     /// off, not a successful attempt); a webhook destination keeps naming
     /// the host on every failure.
+    /// #352: captured via `crate::log_capture_test::Capture`, see its doc
+    /// comment.
     #[test]
     fn otlp_delivery_log_is_transition_only_and_host_free_but_webhook_delivery_log_still_names_the_host()
      {
-        let out = Captured::default();
-        let subscriber = tracing_subscriber::fmt()
-            .json()
-            .with_writer(out.clone())
-            .with_ansi(false)
-            .finish();
-        let _guard = tracing::subscriber::set_default(subscriber);
-        tracing::callsite::rebuild_interest_cache();
-
+        let capture = crate::log_capture_test::Capture::start();
         let otlp = Exporter::otlp("https://collector.example.org/v1/logs", None, false).unwrap();
         let webhook = Exporter::new(
             "https://siem.example.org/x",
@@ -2421,7 +2393,7 @@ mod tests {
         log_delivery_outcome(&Outcome::Delivered(1), &otlp, &otlp_failing);
         log_delivery_outcome(&Outcome::Delivered(1), &webhook, &webhook_failing);
 
-        let logged = out.text();
+        let logged = capture.text();
         let otlp_warnings: Vec<&str> = logged
             .lines()
             .filter(|line| line.contains("\"transport\":\"otlp\""))
@@ -3540,6 +3512,9 @@ mod database {
 
     #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn syslog_connects_only_where_the_egress_policy_allows(pool: sqlx::PgPool) {
+        // #352: refuses a Purpose::Audit destination; see
+        // `log_capture_test`'s doc comment.
+        let _lock = crate::log_capture_test::exclusive();
         let store = Store::new(pool.clone());
         let receiver = syslog_receiver(pki::SERVER_CERT, None).await;
         // Address literals the policy refuses stop startup.

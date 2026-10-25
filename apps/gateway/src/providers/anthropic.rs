@@ -124,15 +124,19 @@ impl ProviderAdapter for AnthropicAdapter {
         let mut key = reqwest::header::HeaderValue::from_str(secret.expose())
             .map_err(|_| InferenceError::Configuration)?;
         key.set_sensitive(true);
-        let response = self
+        let mut outbound = self
             .client
             .post(format!("{}/messages", self.base))
             .header("anthropic-version", "2023-06-01")
-            .header("x-api-key", key)
-            .json(&payload)
-            .send()
-            .await
-            .map_err(transport)?;
+            .header("x-api-key", key);
+        if let Some(options) = &request.messages_options {
+            // Header name is fixed; append each original value, never synthesize
+            // betas or copy arbitrary headers (especially inference credentials).
+            for beta in &options.beta_headers {
+                outbound = outbound.header("anthropic-beta", beta);
+            }
+        }
+        let response = outbound.json(&payload).send().await.map_err(transport)?;
         let response = if request.messages_options.is_some() {
             super::framing::anthropic_generation_status(response).await?
         } else {
@@ -140,8 +144,9 @@ impl ProviderAdapter for AnthropicAdapter {
             response
         };
         if !request.stream {
-            return Ok(ProviderOutput::Complete(decode(
+            return Ok(ProviderOutput::Complete(decode_for(
                 &super::framing::body_limit(response, request.response_limit()).await?,
+                request.messages_options.is_some(),
             )?));
         }
         check_sse(&response)?;
@@ -230,6 +235,28 @@ fn encode(model: &str, request: &ChatRequest) -> Result<Value> {
                 .collect(),
         );
     }
+    if let Some(options) = &request.messages_options {
+        // Only fully grammar-validated envelopes retained by the Messages
+        // normalizer; metadata.user_id was intentionally never retained here.
+        if !options.native_messages.is_empty() {
+            value["messages"] = json!(options.native_messages);
+        }
+        if let Some(system) = &options.system {
+            value["system"] = system.clone();
+        }
+        if !options.native_tools.is_empty() {
+            value["tools"] = json!(options.native_tools);
+        }
+        if let Some(thinking) = &options.thinking {
+            value["thinking"] = thinking.clone();
+        }
+        if let Some(output) = &options.output_config {
+            value["output_config"] = output.clone();
+        }
+        if let Some(context) = &options.context_management {
+            value["context_management"] = context.clone();
+        }
+    }
     if let Some(choice) = &request.tool_choice {
         value["tool_choice"] = match choice {
             ToolChoice::Auto => json!({"type":"auto"}),
@@ -251,14 +278,18 @@ fn finish(value: &Value) -> Result<FinishReason> {
     }
 }
 /// Structural failure still fails, but a valid usage object is kept as evidence.
+#[cfg(test)]
 fn decode(value: &Value) -> Result<ChatResponse> {
-    crate::inference::evidence::preserve(decode_shape(value), || {
+    decode_for(value, false)
+}
+fn decode_for(value: &Value, messages: bool) -> Result<ChatResponse> {
+    crate::inference::evidence::preserve(decode_shape(value, messages), || {
         value["usage"].is_object().then(|| {
             usage(&value["usage"]).map(|u| super::metering::with_model(u, &value["model"]))
         })
     })
 }
-fn decode_shape(value: &Value) -> Result<ChatResponse> {
+fn decode_shape(value: &Value, messages: bool) -> Result<ChatResponse> {
     fields(
         value,
         &[
@@ -304,10 +335,20 @@ fn decode_shape(value: &Value) -> Result<ChatResponse> {
                     arguments: block["input"].to_string(),
                 });
             }
+            Some("thinking") if messages => {
+                fields(block, &["type", "thinking", "signature"])?;
+                string(&block["thinking"])?;
+                string(&block["signature"])?;
+            }
+            Some("redacted_thinking") if messages => {
+                fields(block, &["type", "data"])?;
+                string(&block["data"])?;
+            }
             _ => return Err(InferenceError::InvalidUpstream),
         }
     }
     Ok(ChatResponse {
+        messages_content: messages.then(|| blocks.clone()),
         content: if text.is_empty() { None } else { Some(text) },
         tool_calls: calls,
         finish_reason: finish(&value["stop_reason"])?,
@@ -320,12 +361,20 @@ struct State {
     started: bool,
     finished: bool,
     done: bool,
-    active: Option<(u64, bool)>,
+    active: Option<(u64, BlockKind)>,
     blocks: u64,
     tools: u32,
     usage: Usage,
     arguments: String,
+    native_bytes: usize,
     limit: Option<usize>,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BlockKind {
+    Text,
+    Tool,
+    Thinking,
+    Redacted,
 }
 impl State {
     fn push(&mut self, value: Value) -> Result<Vec<ChatEvent>> {
@@ -383,7 +432,7 @@ impl State {
                     return Err(InferenceError::InvalidUpstream);
                 }
                 let block = &value["content_block"];
-                let tool = match block["type"].as_str() {
+                let kind = match block["type"].as_str() {
                     Some("text") => {
                         fields(block, &["type", "text"])?;
                         let text = string(&block["text"])?;
@@ -393,7 +442,7 @@ impl State {
                                 tool_calls: vec![],
                             });
                         }
-                        false
+                        BlockKind::Text
                     }
                     Some("tool_use") => {
                         fields(block, &["type", "id", "name", "input"])?;
@@ -412,20 +461,31 @@ impl State {
                             }],
                         });
                         self.tools += 1;
-                        true
+                        BlockKind::Tool
+                    }
+                    Some("thinking") if self.messages => {
+                        fields(block, &["type", "thinking", "signature"])?;
+                        string(&block["thinking"])?;
+                        string(&block["signature"])?;
+                        BlockKind::Thinking
+                    }
+                    Some("redacted_thinking") if self.messages => {
+                        fields(block, &["type", "data"])?;
+                        string(&block["data"])?;
+                        BlockKind::Redacted
                     }
                     _ => return Err(InferenceError::InvalidUpstream),
                 };
-                self.active = Some((index, tool));
+                self.active = Some((index, kind));
                 self.blocks += 1;
             }
             Some("content_block_delta") if self.started && !self.finished => {
-                let (index, tool) = self.active.ok_or(InferenceError::InvalidUpstream)?;
+                let (index, kind) = self.active.ok_or(InferenceError::InvalidUpstream)?;
                 if value["index"].as_u64() != Some(index) {
                     return Err(InferenceError::InvalidUpstream);
                 }
                 let delta = &value["delta"];
-                if tool {
+                if kind == BlockKind::Tool {
                     fields(delta, &["type", "partial_json"])?;
                     if delta["type"] != "input_json_delta" {
                         return Err(InferenceError::InvalidUpstream);
@@ -449,7 +509,19 @@ impl State {
                             arguments: Some(partial.into()),
                         }],
                     });
-                } else {
+                } else if kind == BlockKind::Thinking {
+                    match delta["type"].as_str() {
+                        Some("thinking_delta") => {
+                            fields(delta, &["type", "thinking"])?;
+                            string(&delta["thinking"])?;
+                        }
+                        Some("signature_delta") => {
+                            fields(delta, &["type", "signature"])?;
+                            string(&delta["signature"])?;
+                        }
+                        _ => return Err(InferenceError::InvalidUpstream),
+                    }
+                } else if kind == BlockKind::Text {
                     fields(delta, &["type", "text"])?;
                     if delta["type"] != "text_delta" {
                         return Err(InferenceError::InvalidUpstream);
@@ -458,13 +530,15 @@ impl State {
                         text: Some(string(&delta["text"])?.into()),
                         tool_calls: vec![],
                     });
+                } else {
+                    return Err(InferenceError::InvalidUpstream);
                 }
             }
             Some("content_block_stop") if self.active.is_some() => {
                 if value["index"].as_u64() != self.active.map(|v| v.0) {
                     return Err(InferenceError::InvalidUpstream);
                 }
-                if self.active.is_some_and(|v| v.1) {
+                if self.active.is_some_and(|v| v.1 == BlockKind::Tool) {
                     if self.arguments.is_empty() {
                         events.push(ChatEvent::Delta {
                             text: None,
@@ -500,11 +574,37 @@ impl State {
             }
             _ => return Err(InferenceError::InvalidUpstream),
         }
+        // Preserve only the reviewed content-block lifecycle, after structural
+        // validation. Native start precedes canonical deltas so the codec knows
+        // to use the native view without duplicating text or tools.
+        if self.messages
+            && matches!(
+                value["type"].as_str(),
+                Some("content_block_start" | "content_block_delta" | "content_block_stop")
+            )
+        {
+            let allowed = match value["type"].as_str() {
+                Some("content_block_start") => &["type", "index", "content_block"][..],
+                Some("content_block_delta") => &["type", "index", "delta"][..],
+                _ => &["type", "index"][..],
+            };
+            fields(&value, allowed)?;
+            self.native_bytes = self
+                .native_bytes
+                .checked_add(value.to_string().len())
+                .ok_or(InferenceError::InvalidUpstream)?;
+            if self.native_bytes > self.limit.unwrap_or(BODY_LIMIT) {
+                return Err(InferenceError::InvalidUpstream);
+            }
+            events.insert(0, ChatEvent::MessagesBlock(value));
+        }
         Ok(events)
     }
 }
 /// Native Message Batches (`jobs::native`).
 mod batches;
+#[cfg(test)]
+mod fidelity_tests;
 #[cfg(all(test, feature = "integration-tests"))]
 mod terminal_tests;
 #[cfg(test)]
