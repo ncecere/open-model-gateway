@@ -1,3 +1,6 @@
+// `test_lock` serializes tests that attach the process-wide singleton; holding
+// it across awaits in these test-only, per-test runtimes is intended.
+#![allow(clippy::await_holding_lock)]
 use super::*;
 use serde_json::Value;
 

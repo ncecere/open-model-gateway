@@ -36,7 +36,7 @@
 //! operational logs need separately routed credentials/pipelines).
 use std::{
     sync::{
-        LazyLock, Mutex,
+        LazyLock,
         atomic::{AtomicU8, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -612,7 +612,7 @@ impl Drop for Runtime {
 /// Serializes tests that attach/detach the process-wide singleton
 /// (`configure`/`emit`); white-box encoder/worker tests never need it.
 pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: Mutex<()> = Mutex::new(());
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 #[cfg(test)]
