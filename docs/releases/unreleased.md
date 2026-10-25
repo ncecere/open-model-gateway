@@ -2,6 +2,12 @@
 
 Notes for changes on `main` after [v0.8.0](v0.8.0.md). They become the next release's notes.
 
+## Claude Code Messages frontend (#70, delivery 1)
+
+`/v1/messages`, including `?beta=true`, now parses Claude Code's field grammar and can route through all generation adapters using the ordinary workspace/key, admission and per-attempt accounting path. An explicit [per-field/provider table](../protocol-matrix.md#claude-code-field-rules-delivery-1) distinguishes deliberate hint removal from named Anthropic-shaped 400 refusals. Native Anthropic cache/thinking/beta/signature fidelity is **not** delivered: those fields return named 400s until delivery 2. Images, structured output and strict tools are refused; OpenAI-style reasoning/structured-output mapping follows in delivery 3. Server tools remain refused because their extra charges are unpriced.
+
+Messages error mapping now returns `prompt is too long` on context overflow (400), overload as 529 and rate limits as 429, without returning upstream diagnostics. The Messages output cap rises to 16 MiB; `max_tokens` remains the unchanged output reservation, including thinking. No migration, privilege change, prompt logging or client-credential forwarding is introduced. [Setup](../claude-code.md) explains configuring public model names explicitly; discovery only lists ids containing `claude`. Token counting and real Claude Code/provider acceptance remain separate deliveries; this note does not claim live-client acceptance.
+
 ## Signed alert webhook delivery (#45, slice 2)
 
 Saved enabled receivers now receive `omg.alert.v1` envelopes signed with HMAC-SHA256 over timestamp plus exact queued bytes, with optional dual signatures during the saved overlap (at most 24 hours). Signing variables are resolved only by the dedicated allowlist and require 32–4096 bytes. Short destination-before-outbox claims use generation checks and 90-second owner/token leases; fenced completion preserves terminal outcomes. Dispatch is bounded to 25 steps, a 60-second claiming budget and a 70-second hard timeout, with 1m/5m/30m/2h backoff and at most five attempts in 24 hours. Only connection failures, timeouts, 408/429 and 5xx retry. TLS, credentials, redirects and policy refusals are terminal. Egress checks include literals and checked DNS; proxies, redirects and implicit retries are disabled, requests time out after 10 seconds and response bodies are not read.
