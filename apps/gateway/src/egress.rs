@@ -15,10 +15,24 @@
 //! come from configuration and are checked with [`check_url`] when loaded.
 //! Approved local upstreams keep their own stricter, pinned approval
 //! (`providers/local/endpoints.rs`).
+//!
+//! Refusal logging has a per-[`Purpose`] policy ([`Purpose::logging_policy`],
+//! #321): most purposes name the refused host and resolved address on every
+//! attempt, which is what operators expect for provider, OIDC, storage,
+//! catalog, SMTP, audit and alert-webhook egress. Telemetry/OTLP export
+//! destinations are resolved on every export attempt - as often as the
+//! metrics push interval - so that purpose instead logs a fixed, host-free
+//! warning only when its connectivity actually changes (into or out of
+//! refusal), matching the exporters' own transition-only, fixed-enum
+//! diagnostics. The `gateway_egress_denied_total{purpose}` counter and the
+//! address enforcement itself are unchanged for every purpose.
 
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    sync::{Arc, OnceLock},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
@@ -51,6 +65,39 @@ impl Purpose {
             Self::AlertWebhook => "alert_webhook",
         }
     }
+
+    /// Whether this purpose's egress refusals are logged (host and resolved
+    /// address) on every attempt, or only when its connectivity state
+    /// changes (#321: telemetry export's shared egress refusal logs
+    /// repeated and named the collector host on every periodic attempt).
+    /// Only telemetry/OTLP export (traces today, metrics once #324 ships -
+    /// both build their client through `otlp::export_http_client` with this
+    /// same purpose) uses the quieter policy; every other purpose is
+    /// unchanged.
+    fn logging_policy(self) -> LoggingPolicy {
+        match self {
+            Self::Telemetry => LoggingPolicy::TransitionOnly,
+            Self::Provider
+            | Self::Oidc
+            | Self::Storage
+            | Self::Catalog
+            | Self::Smtp
+            | Self::Audit
+            | Self::AlertWebhook => LoggingPolicy::Always,
+        }
+    }
+}
+
+/// See [`Purpose::logging_policy`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LoggingPolicy {
+    /// Name the refused host and resolved address on every refusal.
+    Always,
+    /// Log a fixed, host-free warning only on a connectivity transition
+    /// (into or out of refusal); repeated refusals of the same state are
+    /// silent (beyond the `gateway_egress_denied_total` counter, which
+    /// still counts every one).
+    TransitionOnly,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -290,8 +337,21 @@ pub fn policy() -> Arc<Policy> {
     POLICY.get_or_init(|| Arc::new(Policy::default())).clone()
 }
 
-fn denied(purpose: Purpose, host: &str, ip: IpAddr, policy: &Policy) {
+fn denied(purpose: Purpose, host: &str, ip: IpAddr, policy: &Policy, transition: &AtomicBool) {
     crate::metrics::METRICS.egress_denied(purpose.as_str());
+    if purpose.logging_policy() == LoggingPolicy::TransitionOnly {
+        // #321: logged only on the transition into refusal, never the host
+        // or resolved address, so a periodic export attempt that keeps
+        // resolving to the same refused destination does not repeat it.
+        if !transition.swap(true, Ordering::Relaxed) {
+            tracing::warn!(
+                purpose = purpose.as_str(),
+                reason = policy.refusal(ip),
+                "outbound connection refused by the egress policy (destination omitted; repeated refusals are not re-logged until it recovers)"
+            );
+        }
+        return;
+    }
     tracing::warn!(
         purpose = purpose.as_str(),
         host,
@@ -299,6 +359,21 @@ fn denied(purpose: Purpose, host: &str, ip: IpAddr, policy: &Policy) {
         reason = policy.refusal(ip),
         "outbound connection refused by the egress policy"
     );
+}
+
+/// The transition-only counterpart to [`denied`]: logs once, host-free, the
+/// first time a [`LoggingPolicy::TransitionOnly`] purpose becomes reachable
+/// again after having been refused. A no-op for `Always` purposes and for a
+/// transition flag that is already clear.
+fn recovered(purpose: Purpose, transition: &AtomicBool) {
+    if purpose.logging_policy() == LoggingPolicy::TransitionOnly
+        && transition.swap(false, Ordering::Relaxed)
+    {
+        tracing::warn!(
+            purpose = purpose.as_str(),
+            "outbound connection to this destination is allowed again by the egress policy"
+        );
+    }
 }
 
 /// Keep the addresses the policy allows. Loopback-only policies reject the
@@ -310,18 +385,40 @@ fn filter(
     host: &str,
     found: Vec<SocketAddr>,
 ) -> anyhow::Result<Vec<SocketAddr>> {
+    // A fresh flag every call: `resolve`'s and `resolve_classified`'s own
+    // (non-`Resolver`) callers resolve once per connection, so they keep
+    // naming the host and address on every refusal exactly as before #321.
+    // Only `Resolver::resolve`'s persistent, per-client flag below can ever
+    // observe a transition.
+    filter_tracked(policy, purpose, host, found, &AtomicBool::new(false))
+}
+
+/// Same partitioning as [`filter`], with an explicit, caller-owned
+/// transition flag (#321): a caller that resolves the same destination
+/// repeatedly for one purpose (telemetry/OTLP export, through
+/// [`Resolver::resolve`]) passes its own persistent flag so a refusal (or
+/// recovery) is logged only when that purpose's connectivity actually
+/// changes, never on every attempt.
+fn filter_tracked(
+    policy: &Policy,
+    purpose: Purpose,
+    host: &str,
+    found: Vec<SocketAddr>,
+    transition: &AtomicBool,
+) -> anyhow::Result<Vec<SocketAddr>> {
     let (allowed, refused): (Vec<_>, Vec<_>) =
         found.iter().copied().partition(|a| policy.allows(a.ip()));
     if !allowed.is_empty() && (!policy.loopback_only || refused.is_empty()) {
         for addr in &refused {
             tracing::debug!(purpose = purpose.as_str(), host, address = %addr.ip(), reason = policy.refusal(addr.ip()), "egress policy dropped one resolved address");
         }
+        recovered(purpose, transition);
         return Ok(allowed);
     }
     let Some(first) = refused.first() else {
         anyhow::bail!("could not resolve {host}");
     };
-    denied(purpose, host, first.ip(), policy);
+    denied(purpose, host, first.ip(), policy, transition);
     anyhow::bail!(
         "{} connection to {host} refused: {} is {} (see {PRIVATE_ALLOW_ENV})",
         purpose.as_str(),
@@ -368,6 +465,20 @@ pub(crate) async fn resolve_classified(
     host: &str,
     port: u16,
 ) -> Result<Vec<SocketAddr>, ResolveError> {
+    // A fresh flag every call: SMTP (this function's other caller) keeps
+    // naming the host and address on every refusal exactly as before #321.
+    resolve_classified_tracked(policy, purpose, host, port, &AtomicBool::new(false)).await
+}
+
+/// [`resolve_classified`] with an explicit transition flag (#321), used only
+/// by [`Resolver::resolve`]'s persistent, per-client flag.
+async fn resolve_classified_tracked(
+    policy: &Policy,
+    purpose: Purpose,
+    host: &str,
+    port: u16,
+    transition: &AtomicBool,
+) -> Result<Vec<SocketAddr>, ResolveError> {
     let found: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
         .await
         .map_err(|_| ResolveError::Dns)?
@@ -375,7 +486,7 @@ pub(crate) async fn resolve_classified(
     if found.is_empty() {
         return Err(ResolveError::Dns);
     }
-    filter(policy, purpose, host, found).map_err(|_| ResolveError::Policy)
+    filter_tracked(policy, purpose, host, found, transition).map_err(|_| ResolveError::Policy)
 }
 
 /// Check a configured URL whose host may be an IP literal (those never reach
@@ -393,7 +504,17 @@ pub fn check_url(policy: &Policy, purpose: Purpose, url: &reqwest::Url) -> anyho
     if policy.allows(ip) {
         return Ok(());
     }
-    denied(purpose, &ip.to_string(), ip, policy);
+    // A one-time startup check of a configured IP-literal URL, not a
+    // periodic attempt: a fresh flag always reports this as a transition,
+    // matching the previous unconditional log for every purpose that can
+    // reach this (including telemetry's own startup validation).
+    denied(
+        purpose,
+        &ip.to_string(),
+        ip,
+        policy,
+        &AtomicBool::new(false),
+    );
     anyhow::bail!(
         "{} URL refused: {ip} is {} (see {PRIVATE_ALLOW_ENV})",
         purpose.as_str(),
@@ -440,10 +561,15 @@ impl std::fmt::Display for PolicyRefusal {
 }
 impl std::error::Error for PolicyRefusal {}
 
-/// A reqwest DNS resolver that applies the policy.
+/// A reqwest DNS resolver that applies the policy. `refused` is this
+/// resolver's own persistent transition flag (#321): one `Resolver` lives
+/// for the whole lifetime of the reqwest `Client` built from it, so a
+/// telemetry/OTLP exporter's resolver sees every connection attempt it ever
+/// makes and can tell a repeated refusal from a real connectivity change.
 pub struct Resolver {
     purpose: Purpose,
     policy: Option<Arc<Policy>>,
+    refused: Arc<AtomicBool>,
 }
 
 /// The resolver for every reqwest client: `.dns_resolver(egress::resolver(..))`.
@@ -452,6 +578,7 @@ pub fn resolver(purpose: Purpose) -> Arc<Resolver> {
     Arc::new(Resolver {
         purpose,
         policy: None,
+        refused: Arc::new(AtomicBool::new(false)),
     })
 }
 
@@ -460,15 +587,20 @@ pub fn resolver_with(purpose: Purpose, policy: Policy) -> Arc<Resolver> {
     Arc::new(Resolver {
         purpose,
         policy: Some(Arc::new(policy)),
+        refused: Arc::new(AtomicBool::new(false)),
     })
 }
 
 impl Resolve for Resolver {
     fn resolve(&self, name: Name) -> Resolving {
-        let (purpose, policy) = (self.purpose, self.policy.clone().unwrap_or_else(policy));
+        let (purpose, policy, refused) = (
+            self.purpose,
+            self.policy.clone().unwrap_or_else(policy),
+            self.refused.clone(),
+        );
         let host = name.as_str().to_owned();
         Box::pin(async move {
-            let addrs = resolve_classified(&policy, purpose, &host, 0)
+            let addrs = resolve_classified_tracked(&policy, purpose, &host, 0, &refused)
                 .await
                 .map_err(|error| match error {
                     ResolveError::Policy => {
@@ -1090,6 +1222,78 @@ mod tests {
                 line.contains("localhost"),
                 "provider refusal must still name the host: {line}"
             );
+        }
+    }
+
+    /// #321: the recovery transition (a previously refused destination
+    /// becoming reachable again) logs its own one-time, host-free warning,
+    /// and further successful attempts after that stay silent. Exercised
+    /// directly against the shared partition/transition logic
+    /// (`filter_tracked`) with synthetic addresses: the refusal transition
+    /// and the real-DNS, real-client path are already covered above by
+    /// `telemetry_refusal_is_transition_only_and_host_free_across_repeated_real_attempts`;
+    /// this test only needs to prove the pure recovery state machine.
+    #[test]
+    fn telemetry_recovery_logs_one_host_free_transition_warning() {
+        let out = Captured::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_writer(out.clone())
+            .with_ansi(false)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        tracing::callsite::rebuild_interest_cache();
+
+        let refused = SocketAddr::new(ip("127.0.0.1"), 4318);
+        let allowed = SocketAddr::new(ip("8.8.8.8"), 4318);
+        let transition = AtomicBool::new(false);
+
+        // Three repeated refusals of the same (synthetic) destination: one
+        // transition warning only.
+        for attempt in 0..3 {
+            assert!(
+                filter_tracked(
+                    &Policy::default(),
+                    Purpose::Telemetry,
+                    "collector.invalid",
+                    vec![refused],
+                    &transition
+                )
+                .is_err(),
+                "attempt {attempt}"
+            );
+        }
+        // Recovery: the same destination is now reachable. The first
+        // success logs the recovery transition; further successes stay
+        // silent.
+        for attempt in 0..3 {
+            assert!(
+                filter_tracked(
+                    &Policy::default(),
+                    Purpose::Telemetry,
+                    "collector.invalid",
+                    vec![allowed],
+                    &transition
+                )
+                .is_ok(),
+                "attempt {attempt}"
+            );
+        }
+
+        let logged = out.text();
+        let telemetry_warnings: Vec<&str> = logged
+            .lines()
+            .filter(|line| line.contains("\"purpose\":\"telemetry\""))
+            .collect();
+        assert_eq!(
+            telemetry_warnings.len(),
+            2,
+            "exactly one refusal transition and one recovery transition, never one per attempt: {logged}"
+        );
+        for line in &telemetry_warnings {
+            for forbidden in ["127.0.0.1", "8.8.8.8", "collector.invalid"] {
+                assert!(!line.contains(forbidden), "{forbidden} leaked: {line}");
+            }
         }
     }
 }
