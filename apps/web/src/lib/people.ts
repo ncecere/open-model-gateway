@@ -15,7 +15,8 @@ export type DirectoryUser = PlatformUser & { last_sign_in_at?: string | null; sh
 export type SharedMembership = { workspace_id: string; name: string; kind: Exclude<WorkspaceKind, "personal">; disabled_at?: string | null; role: Role; sources: RoleGrant["source"][]; grants?: { role: Role; source: RoleGrant["source"] }[] };
 export type UserRecord = DirectoryUser & { first_sign_in_at?: string | null; /** Live dashboard sessions (a count only, #79). */ active_sessions?: number; /** Active legal holds on this person (#75), a count. */ legal_holds?: number; shared_memberships?: SharedMembership[] };
 /** GET /platform/workspaces rows: shared workspaces with display-only counts and the allocation by name. */
-export type DirectoryWorkspace = Workspace & { member_count?: number; cost_center?: { id: string; name: string; code: string } | null };
+/** `discoverable`: Team/Project only, Platform Admin-controlled (#83); absent from older gateways. */
+export type DirectoryWorkspace = Workspace & { member_count?: number; cost_center?: { id: string; name: string; code: string } | null; discoverable?: boolean };
 
 const cap = (value: string) => value ? `${value[0].toUpperCase()}${value.slice(1)}` : value;
 export const platformRoleLabels: Record<PlatformRole, string> = { admin: "Platform admin", auditor: "Platform auditor", user: "Platform user" };

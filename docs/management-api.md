@@ -88,7 +88,7 @@ A workspace mapping instead uses `target_kind:"workspace"`, `platform_role:null`
 
 ## Self-service membership requests (#83, slice A)
 
-These routes are **browser-session only** (`TokenPolicy::Denied`), including platform reads. Every POST/PUT requires the configured Origin and `X-CSRF-Token`. Model-selection requests, notifications and request UI are not implemented in this slice.
+These routes are **browser-session only** (`TokenPolicy::Denied`), including platform reads. Every POST/PUT requires the configured Origin and `X-CSRF-Token`. Model-selection requests and in-app notifications are not implemented in this slice. The dashboard covers the membership workflow: see [dashboard](dashboard.md#access-requests-83-slice-a).
 
 | Method/path | Authority and behavior |
 | --- | --- |
