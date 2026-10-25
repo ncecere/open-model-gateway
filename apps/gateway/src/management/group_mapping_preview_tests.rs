@@ -571,12 +571,12 @@ async fn an_unchanged_patch_on_an_overflowing_mapping_shows_no_losses(pool: PgPo
     // (test-lowered) roster cap would truncate out of the roster array.
     for user in [a, b, c, d] {
         let mut tx = crate::db::begin(&pool).await.unwrap();
-        crate::lifecycle::apply_group_grants(
+        crate::lifecycle::synchronize_scim_groups(
             &mut tx,
             user,
             issuer,
             &["overflow-unchanged".to_owned()],
-            Some(&["overflow-unchanged".to_owned()]),
+            &["overflow-unchanged".to_owned()],
         )
         .await
         .unwrap();
@@ -618,12 +618,12 @@ async fn an_unchanged_patch_on_an_overflowing_mapping_shows_no_losses(pool: PgPo
     );
     for user in [a, b, c, d] {
         let mut tx = crate::db::begin(&pool).await.unwrap();
-        crate::lifecycle::apply_group_grants(
+        crate::lifecycle::synchronize_scim_groups(
             &mut tx,
             user,
             issuer,
             &["overflow-unchanged".to_owned()],
-            Some(&["overflow-unchanged".to_owned()]),
+            &["overflow-unchanged".to_owned()],
         )
         .await
         .unwrap();
@@ -667,12 +667,12 @@ async fn a_role_upgrade_on_an_overflowing_mapping_never_shows_a_false_loss(pool:
     let map = id(&created);
     for user in [a, b, c, d] {
         let mut tx = crate::db::begin(&pool).await.unwrap();
-        crate::lifecycle::apply_group_grants(
+        crate::lifecycle::synchronize_scim_groups(
             &mut tx,
             user,
             issuer,
             &["overflow-upgrade".to_owned()],
-            Some(&["overflow-upgrade".to_owned()]),
+            &["overflow-upgrade".to_owned()],
         )
         .await
         .unwrap();
@@ -722,12 +722,12 @@ async fn a_role_upgrade_on_an_overflowing_mapping_never_shows_a_false_loss(pool:
     );
     for user in [a, b, c, d] {
         let mut tx = crate::db::begin(&pool).await.unwrap();
-        crate::lifecycle::apply_group_grants(
+        crate::lifecycle::synchronize_scim_groups(
             &mut tx,
             user,
             issuer,
             &["overflow-upgrade".to_owned()],
-            Some(&["overflow-upgrade".to_owned()]),
+            &["overflow-upgrade".to_owned()],
         )
         .await
         .unwrap();
