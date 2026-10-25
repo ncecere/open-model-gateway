@@ -1572,6 +1572,17 @@ async fn key_issuance_budget_and_view_follow_real_router_authorization(pool: PgP
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn admin_token_principals_hide_foreign_personal_like_unknown(pool: PgPool) {
     let f = fixture(&pool).await;
+    // Real fixture rows for every non-`ws` path parameter (`{model}`,
+    // `{key}`, `{user}`, ...), the same `targets::Targets` helper
+    // `every_workspace_route_hides_foreign_personal_like_unknown` uses --
+    // "existing rows, not random missing-object UUIDs" -- so a route whose
+    // authorization order ever changed to resolve the secondary id first
+    // would still exercise a real row, not a placeholder that happens to
+    // never be looked at today.
+    let owner = session(&pool, &f.owner).await;
+    let (status, key_value) = key(&f, &f.owner, f.team, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    let targets = targets::Targets::new(&pool, &f, id(&key_value), &owner).await;
     let mock = MockProvider::start(None).await;
     let identity = mock.state(pool.clone()).await;
     let engine = crate::inference::Engine::new(
@@ -1595,7 +1606,7 @@ async fn admin_token_principals_hide_foreign_personal_like_unknown(pool: PgPool)
         path: &str,
         token: &str,
         seq: u32,
-    ) -> (StatusCode, axum::body::Bytes) {
+    ) -> (StatusCode, axum::http::HeaderMap, axum::body::Bytes) {
         let mut req = Request::builder()
             .method(method)
             .uri(path)
@@ -1607,10 +1618,36 @@ async fn admin_token_principals_hide_foreign_personal_like_unknown(pool: PgPool)
             .insert(axum::extract::ConnectInfo(synthetic_peer(seq)));
         let response = app.clone().oneshot(req).await.unwrap();
         let status = response.status();
+        let headers = response.headers().clone();
         (
             status,
+            headers,
             to_bytes(response.into_body(), 1024 * 1024).await.unwrap(),
         )
+    }
+    // Every header except a fresh per-request id and the response `Date`,
+    // which must differ between two independent requests even when every
+    // authorization-relevant observable is identical.
+    fn normalized_headers(headers: &axum::http::HeaderMap) -> Vec<(String, String)> {
+        let mut pairs: Vec<(String, String)> = headers
+            .iter()
+            .filter(|(name, _)| !matches!(name.as_str(), "x-request-id" | "date"))
+            .map(|(name, value)| (name.to_string(), value.to_str().unwrap_or("").to_owned()))
+            .collect();
+        pairs.sort();
+        pairs
+    }
+    type AttemptRow = (String, String, Option<String>, Option<i16>);
+    async fn attempt_rows(pool: &PgPool, request_id: Uuid) -> Vec<AttemptRow> {
+        let mut rows: Vec<AttemptRow> = sqlx::query_as(
+            "SELECT phase,outcome,required_scope,status_code FROM admin_token_attempts WHERE request_id=$1",
+        )
+        .bind(request_id)
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        rows.sort();
+        rows
     }
     let mut checked = std::collections::BTreeSet::new();
     let mut failures = Vec::new();
@@ -1622,9 +1659,16 @@ async fn admin_token_principals_hide_foreign_personal_like_unknown(pool: PgPool)
         })
         .collect();
     for route in &workspace_routes {
-        let personal_path = route.path.replace("{ws}", &f.personal.to_string());
-        let unknown_path = route.path.replace("{ws}", &unknown.to_string());
+        // `concrete` fixes every parameter but `ws` from real fixture rows
+        // (`targets::concrete` always substitutes `{ws}` with `f.team`); the
+        // trailing replace is the only place the two probes of a pair
+        // differ, swapping that one real workspace id for the foreign
+        // personal or the unknown one.
+        let concrete = targets.concrete(route.path, &f);
+        let personal_path = concrete.replace(&f.team.to_string(), &f.personal.to_string());
+        let unknown_path = concrete.replace(&f.team.to_string(), &unknown.to_string());
         assert!(!personal_path.contains('{'), "unexpanded {}", route.path);
+        assert!(!unknown_path.contains('{'), "unexpanded {}", route.path);
         let token: &str = match route.token_policy {
             TokenPolicy::Denied | TokenPolicy::BrowserAdminOnly => &all_scopes_token,
             TokenPolicy::Scope(scope) => &scoped_tokens[scope.as_str()],
@@ -1639,12 +1683,26 @@ async fn admin_token_principals_hide_foreign_personal_like_unknown(pool: PgPool)
             let mut replies = Vec::new();
             for path in [&personal_path, &unknown_path] {
                 seq += 1;
-                replies.push(fetch(&app, method, path, token, seq).await);
+                let (status, headers, body) = fetch(&app, method, path, token, seq).await;
+                let request_id: Uuid = headers["x-request-id"].to_str().unwrap().parse().unwrap();
+                let attempts = attempt_rows(&pool, request_id).await;
+                assert!(
+                    !attempts.is_empty(),
+                    "{method} {}: no admin_token_attempts row for request {request_id} -- the \
+                     token-policy/limiter pipeline must not be bypassed for either probe",
+                    route.path
+                );
+                replies.push((status, normalized_headers(&headers), body, attempts));
             }
             // Every Scope-policy route reaches the same `workspace_authority`
             // decision #320 already made identical for a foreign personal
             // workspace and an unknown one; every Denied route refuses
-            // before any workspace lookup, for either `ws` alike.
+            // before any workspace lookup, for either `ws` alike. Comparing
+            // the full reply (status, headers minus the two volatile ones,
+            // body) plus the audited `admin_token_attempts` rows (phase,
+            // outcome, required_scope, status_code) proves the token-policy
+            // and limiter pipeline treated both probes identically too, not
+            // only the final HTTP answer.
             let expected_status = match route.token_policy {
                 TokenPolicy::Denied | TokenPolicy::BrowserAdminOnly => StatusCode::FORBIDDEN,
                 TokenPolicy::Scope(_) => StatusCode::NOT_FOUND,
@@ -1656,9 +1714,9 @@ async fn admin_token_principals_hide_foreign_personal_like_unknown(pool: PgPool)
                 ));
             }
             if method == "HEAD" {
-                assert!(replies.iter().all(|(_, body)| body.is_empty()));
+                assert!(replies.iter().all(|(_, _, body, _)| body.is_empty()));
             } else {
-                for (_, body) in &replies {
+                for (_, _, body, _) in &replies {
                     let error: Value = serde_json::from_slice(body).unwrap();
                     assert!(
                         error["error"].is_object(),
@@ -1691,7 +1749,7 @@ async fn admin_token_principals_hide_foreign_personal_like_unknown(pool: PgPool)
     // Platform Admin (a shared workspace, not personal) -- never a blanket
     // refusal dressed up as "identical to unknown".
     seq += 1;
-    let (status, _) = fetch(
+    let (status, _, _) = fetch(
         &app,
         "GET",
         &format!("/api/v1/workspaces/{}", f.team),
