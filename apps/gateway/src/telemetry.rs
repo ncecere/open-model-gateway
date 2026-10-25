@@ -1469,6 +1469,8 @@ mod tests {
 
     #[tokio::test]
     async fn slow_acknowledgement_and_production_dns_refusal_use_real_transport() {
+        // Emits a real Telemetry egress refusal log (#352): exclude capturing tests.
+        let _lock = crate::log_capture_test::exclusive();
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();

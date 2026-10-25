@@ -64,6 +64,7 @@
 //! with a `Capture` session:
 //!
 //! - `egress::tests::telemetry_literal_and_dns_policies_cannot_bypass_metadata_or_private_approval`
+//! - `telemetry::tests::slow_acknowledgement_and_production_dns_refusal_use_real_transport`
 //! - `egress::tests::configured_ip_literal_endpoints_are_checked_at_startup`
 //! - `egress::tests::resolution_keeps_only_allowed_addresses`
 //! - `egress::tests::a_client_never_connects_to_a_refused_address`
