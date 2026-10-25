@@ -157,6 +157,9 @@ pub struct ChatRequest {
 /// Prompt-bearing options intentionally have no Debug/Serialize implementation.
 #[derive(Clone, Default)]
 pub struct MessagesOptions {
+    /// `strict` was present on a Messages tool definition. Do not infer wire
+    /// presence from shared tools that adapters/canonical callers may modify.
+    pub strict_tools: bool,
     pub beta: bool,
     pub system: Option<serde_json::Value>,
     pub cache_controls: Vec<serde_json::Value>,

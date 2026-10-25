@@ -147,7 +147,7 @@ impl ProviderAdapter for AnthropicAdapter {
         check_sse(&response)?;
         Ok(ProviderOutput::Stream(Box::pin(
             async_stream::try_stream! {
-                let frames = frames(response); futures_util::pin_mut!(frames); let mut state = State { limit: Some(request.response_limit()), ..State::default() };
+                let frames = frames(response); futures_util::pin_mut!(frames); let mut state = State { limit: Some(request.response_limit()), messages: request.messages_options.is_some(), ..State::default() };
                 while let Some(value) = frames.next().await {
                     for event in state.push(value?)? { let done = matches!(event, ChatEvent::Done); yield event; if done { return; } }
                 }
@@ -319,6 +319,7 @@ fn decode_shape(value: &Value) -> Result<ChatResponse> {
 }
 #[derive(Default)]
 struct State {
+    messages: bool,
     started: bool,
     finished: bool,
     done: bool,
@@ -336,9 +337,11 @@ impl State {
         }
         let mut events = vec![];
         if value["type"] == "error" {
-            return Err(
+            return Err(if self.messages {
                 super::framing::anthropic_error(&value).unwrap_or(InferenceError::InvalidUpstream)
-            );
+            } else {
+                InferenceError::InvalidUpstream
+            });
         }
         match value["type"].as_str() {
             Some("ping") => {}

@@ -412,6 +412,7 @@ impl Request {
                 "tools",
             )?;
             cache(&t, &mut options)?;
+            options.strict_tools |= t.get("strict").is_some();
             if let Some(v) = t.get("defer_loading") {
                 v.as_bool().ok_or_else(|| invalid("defer_loading"))?;
                 options.defer_loading.push(v.clone());

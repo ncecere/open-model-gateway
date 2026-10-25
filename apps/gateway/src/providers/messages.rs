@@ -24,7 +24,9 @@ pub(crate) fn validate(request: &ChatRequest, class: ProviderClass) -> Result<()
     {
         return refuse("output_config.format");
     }
-    if request.tools.iter().any(|t| t.strict.is_some()) {
+    // This is a Messages wire-field refusal, not a new rule for shared
+    // FunctionTool.strict values supplied by existing canonical adapter callers.
+    if options.strict_tools {
         return refuse("strict");
     }
     if class == ProviderClass::Anthropic {

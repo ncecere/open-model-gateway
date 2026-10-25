@@ -308,7 +308,10 @@ impl ProviderAdapter for OpenAiAdapter {
             if !is_sse {
                 return Err(InferenceError::InvalidUpstream);
             }
-            Ok(ProviderOutput::Stream(decode_stream(response)))
+            Ok(ProviderOutput::Stream(decode_stream(
+                response,
+                request.messages_options.is_some(),
+            )))
         } else {
             if response
                 .content_length()
@@ -327,7 +330,11 @@ impl ProviderAdapter for OpenAiAdapter {
             }
             let value =
                 serde_json::from_slice(&body).map_err(|_| InferenceError::InvalidUpstream)?;
-            Ok(ProviderOutput::Complete(decode_complete(&value)?))
+            Ok(ProviderOutput::Complete(decode_complete_protocol(
+                &value,
+                None,
+                request.messages_options.is_some(),
+            )?))
         }
     }
 }
@@ -555,7 +562,14 @@ pub(super) fn decode_complete_profile(
     value: &Value,
     profile: Option<&str>,
 ) -> Result<ChatResponse> {
-    crate::inference::evidence::preserve(decode_shape(value, profile), || {
+    decode_complete_protocol(value, profile, false)
+}
+pub(super) fn decode_complete_protocol(
+    value: &Value,
+    profile: Option<&str>,
+    messages: bool,
+) -> Result<ChatResponse> {
+    crate::inference::evidence::preserve(decode_shape(value, profile, messages), || {
         value["usage"].is_object().then(|| {
             match profile {
                 Some(profile) => local_usage(&value["usage"], profile),
@@ -565,12 +579,17 @@ pub(super) fn decode_complete_profile(
         })
     })
 }
-fn decode_shape(value: &Value, profile: Option<&str>) -> Result<ChatResponse> {
+fn wire_error(value: &Value, messages: bool) -> InferenceError {
+    if messages {
+        super::framing::classified_error(value).unwrap_or(InferenceError::InvalidUpstream)
+    } else {
+        InferenceError::InvalidUpstream
+    }
+}
+fn decode_shape(value: &Value, profile: Option<&str>, messages: bool) -> Result<ChatResponse> {
     object(value)?;
     if !empty(&value["error"]) {
-        return Err(
-            super::framing::classified_error(value).unwrap_or(InferenceError::InvalidUpstream)
-        );
+        return Err(wire_error(value, messages));
     }
     let choices = array(&value["choices"])?;
     if choices.len() != 1 {
@@ -638,6 +657,7 @@ fn decode_shape(value: &Value, profile: Option<&str>) -> Result<ChatResponse> {
 #[derive(Default)]
 pub(super) struct StreamState {
     profile: Option<&'static str>,
+    messages: bool,
     finished: bool,
     used: bool,
     /// First valid `model` any chunk reported; carried on the usage event.
@@ -656,9 +676,7 @@ impl StreamState {
             serde_json::from_slice(data).map_err(|_| InferenceError::InvalidUpstream)?;
         object(&value)?;
         if !empty(&value["error"]) {
-            return Err(
-                super::framing::classified_error(&value).unwrap_or(InferenceError::InvalidUpstream)
-            );
+            return Err(wire_error(&value, self.messages));
         }
         if self.model.is_none() {
             self.model = ReportedModel::from_json(&value["model"]);
@@ -814,17 +832,18 @@ impl SseDecoder {
     }
 }
 
-fn decode_stream(response: reqwest::Response) -> EventStream {
-    decode_stream_profile(response, None)
+fn decode_stream(response: reqwest::Response, messages: bool) -> EventStream {
+    decode_stream_profile(response, None, messages)
 }
 pub(super) fn decode_stream_profile(
     response: reqwest::Response,
     profile: Option<&'static str>,
+    messages: bool,
 ) -> EventStream {
     Box::pin(async_stream::try_stream! {
         let mut chunks = response.bytes_stream();
         let mut decoder = SseDecoder::new();
-        let mut state = StreamState { profile, ..StreamState::default() };
+        let mut state = StreamState { profile, messages, ..StreamState::default() };
         while let Some(chunk) = chunks.next().await {
             let chunk = chunk.map_err(transport_error)?;
             for &byte in chunk.iter() {

@@ -324,6 +324,9 @@ fn empty(value: &Value) -> bool {
 
 /// A 200 body (or stream frame) carrying `error` is a failure, mapped by code.
 fn embedded_error(value: &Value) -> Result<()> {
+    embedded_error_protocol(value, false)
+}
+fn embedded_error_protocol(value: &Value, messages: bool) -> Result<()> {
     if empty(&value["error"]) {
         return Ok(());
     }
@@ -333,7 +336,11 @@ fn embedded_error(value: &Value) -> Result<()> {
     {
         return Err(status_error(code));
     }
-    Err(super::framing::classified_error(value).unwrap_or(InferenceError::UpstreamUnavailable))
+    Err(if messages {
+        super::framing::classified_error(value).unwrap_or(InferenceError::UpstreamUnavailable)
+    } else {
+        InferenceError::UpstreamUnavailable
+    })
 }
 
 async fn read(response: reqwest::Response) -> Result<Vec<u8>> {
@@ -378,12 +385,15 @@ fn provider_cost(bytes: &[u8]) -> Result<Option<i64>> {
 
 /// JSON object body plus exact provider cost evidence.
 fn parse(bytes: &[u8]) -> Result<(Value, Option<i64>)> {
+    parse_protocol(bytes, false)
+}
+fn parse_protocol(bytes: &[u8], messages: bool) -> Result<(Value, Option<i64>)> {
     let value: Value =
         serde_json::from_slice(bytes).map_err(|_| InferenceError::InvalidUpstream)?;
     if !value.is_object() {
         return Err(InferenceError::InvalidUpstream);
     }
-    embedded_error(&value)?;
+    embedded_error_protocol(&value, messages)?;
     Ok((value, provider_cost(bytes)?))
 }
 
@@ -420,8 +430,8 @@ fn normalize_choices(value: &mut Value) -> Result<()> {
     Ok(())
 }
 
-fn decode_chat(bytes: &[u8]) -> Result<ChatResponse> {
-    let (mut value, cost) = parse(bytes)?;
+fn decode_chat(bytes: &[u8], messages: bool) -> Result<ChatResponse> {
+    let (mut value, cost) = parse_protocol(bytes, messages)?;
     normalize_choices(&mut value)?;
     let mut response = openai::decode_complete(&value)?;
     response.usage.provider_cost_microusd = cost;
@@ -429,11 +439,15 @@ fn decode_chat(bytes: &[u8]) -> Result<ChatResponse> {
 }
 
 /// Normalize one SSE data frame. `finish` is the first finish reason seen.
-fn normalize_frame(data: &[u8], finish: &mut Option<String>) -> Result<(Vec<u8>, Option<i64>)> {
+fn normalize_frame(
+    data: &[u8],
+    finish: &mut Option<String>,
+    messages: bool,
+) -> Result<(Vec<u8>, Option<i64>)> {
     if data == b"[DONE]" {
         return Ok((data.to_vec(), None));
     }
-    let (mut value, cost) = parse(data)?;
+    let (mut value, cost) = parse_protocol(data, messages)?;
     normalize_choices(&mut value)?;
     if let Some(previous) = finish.as_deref()
         && !value["usage"].is_null()
@@ -464,7 +478,7 @@ fn normalize_frame(data: &[u8], finish: &mut Option<String>) -> Result<(Vec<u8>,
     ))
 }
 
-fn decode_chat_stream(response: reqwest::Response) -> EventStream {
+fn decode_chat_stream(response: reqwest::Response, messages: bool) -> EventStream {
     Box::pin(async_stream::try_stream! {
         let mut chunks = response.bytes_stream();
         let mut decoder = openai::SseDecoder::new();
@@ -474,7 +488,7 @@ fn decode_chat_stream(response: reqwest::Response) -> EventStream {
             let chunk = chunk.map_err(transport)?;
             for &byte in chunk.iter() {
                 if let Some(data) = decoder.push(byte)? {
-                    let (frame, cost) = normalize_frame(&data, &mut finish)?;
+                    let (frame, cost) = normalize_frame(&data, &mut finish, messages)?;
                     for event in state.decode(&frame)? {
                         let event = match event {
                             ChatEvent::Usage(mut usage) => {
@@ -590,10 +604,14 @@ impl ProviderAdapter for OpenRouterAdapter {
             .await?;
         if request.stream {
             super::framing::check_sse(&response)?;
-            Ok(ProviderOutput::Stream(decode_chat_stream(response)))
+            Ok(ProviderOutput::Stream(decode_chat_stream(
+                response,
+                request.messages_options.is_some(),
+            )))
         } else {
             Ok(ProviderOutput::Complete(decode_chat(
                 &read_limit(response, request.response_limit()).await?,
+                request.messages_options.is_some(),
             )?))
         }
     }

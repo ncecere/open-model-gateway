@@ -176,12 +176,15 @@ impl ProviderAdapter for LocalAdapter {
         }
     }
     fn supports_chat_request(&self, request: &ChatRequest) -> bool {
-        // Messages strict fields must reach validate_chat_request so the
+        // Parsed Messages strict fields must reach validate_chat_request so the
         // refusal names `strict` before admission, rather than disappearing at
         // the coarse gate as a generic unsupported capability. This is not
         // strict support: the Messages field policy still refuses the field.
         self.capabilities().supports(request)
-            && (request.messages_options.is_some()
+            && (request
+                .messages_options
+                .as_ref()
+                .is_some_and(|o| o.strict_tools)
                 || !request.tools.iter().any(|t| t.strict == Some(true)))
             && !(matches!(self.profile, Profile::Ollama) && request.tool_choice.is_some())
             && !(matches!(self.profile, Profile::OpenAiCompatible)
@@ -220,10 +223,15 @@ impl ProviderAdapter for LocalAdapter {
             Ok(ProviderOutput::Stream(openai::decode_stream_profile(
                 response,
                 Some(self.id()),
+                request.messages_options.is_some(),
             )))
         } else {
             let value = framing::body_limit(response, request.response_limit()).await?;
-            let response = openai::decode_complete_profile(&value, Some(self.id()))?;
+            let response = openai::decode_complete_protocol(
+                &value,
+                Some(self.id()),
+                request.messages_options.is_some(),
+            )?;
             Ok(ProviderOutput::Complete(response))
         }
     }
