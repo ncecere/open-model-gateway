@@ -11,6 +11,11 @@ fn version_is_exact_and_beta_is_accepted() {
     assert!(!valid_version(&h));
     h.insert("anthropic-version", "2023-06-01".parse().unwrap());
     h.insert("anthropic-beta", "future".parse().unwrap());
+    assert!(!valid_version(&h));
+    h.insert(
+        "anthropic-beta",
+        "interleaved-thinking-2025-05-14".parse().unwrap(),
+    );
     assert!(valid_version(&h));
 }
 fn parse(v: Value) -> Result<ChatRequest> {

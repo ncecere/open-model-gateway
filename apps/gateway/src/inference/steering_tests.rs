@@ -991,7 +991,7 @@ fn steering_headers(attacker: &Upstream) -> Vec<(String, String)> {
 /// A header the protocol itself reads is refused when it is wrong; every other
 /// one is ignored.
 fn header_expect(t: &Target, name: &str) -> Expect {
-    if t.messages() && name == "anthropic-version" {
+    if t.messages() && matches!(name, "anthropic-version" | "anthropic-beta") {
         return Rejected(400, "invalid_request_error");
     }
     Forwarded
@@ -1277,7 +1277,14 @@ async fn anthropic_fidelity_data_cannot_steer_transport(pool: PgPool) {
     rich["tools"] = json!([{"name":"lookup","description":attacker,"input_schema":{"type":"object","description":attacker},"defer_loading":true}]);
     rich["metadata"] = json!({"user_id":attacker});
     rich["messages"] = json!([{"role":"assistant","content":[{"type":"thinking","thinking":attacker,"signature":attacker},{"type":"redacted_thinking","data":attacker}]},{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}},{"type":"text","text":attacker}]}]);
-    let headers = [t.base(), vec![("anthropic-beta".into(), attacker.clone())]].concat();
+    // This request deliberately needs a TTL-aware price. Its original v1
+    // control remains valid because it has no cache hints.
+    let priced = json!({"status":"priced","microusd_per_million":"2000000"});
+    let cache = json!({"read":priced,"write":priced,"write_5m":priced,"write_1h":priced});
+    sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version,cache_pricing) SELECT gen_random_uuid(),d.id,1000000,2000000,1000,1000,2,$1 FROM deployments d JOIN models m ON m.id=d.model_id WHERE m.public_name=$2")
+        .bind(cache).bind(t.model).execute(&w.pool).await.unwrap();
+    let beta = "context-management-2025-06-27";
+    let headers = [t.base(), vec![("anthropic-beta".into(), beta.into())]].concat();
     let _ = send(
         &w.app,
         json_request(&w.keys.personal_key.token, t.path, &headers, &rich),
@@ -1285,7 +1292,7 @@ async fn anthropic_fidelity_data_cannot_steer_transport(pool: PgPool) {
     .await;
     let mut hits = w.approved.take();
     assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].header("anthropic-beta"), Some(attacker.as_str()));
+    assert_eq!(hits[0].header("anthropic-beta"), Some(beta));
     hits[0].headers.retain(|(n, _)| n != "anthropic-beta");
     let actual: Value = serde_json::from_str(&hits[0].body).unwrap();
     // Compare transport to the control; reviewed body data is asserted exactly
@@ -1365,22 +1372,6 @@ async fn no_json_inference_input_can_steer_the_upstream(pool: PgPool) {
 
         // Request headers: ignored, except those the protocol itself reads.
         for (name, value) in steering_headers(&w.attacker) {
-            if t.label == "messages/anthropic" && name == "anthropic-beta" {
-                let (status, text) =
-                    send(&w.app, post(&[(name.clone(), value.clone())], &body)).await;
-                assert_eq!(
-                    (status.as_u16(), reason(&text)),
-                    (ctl.status, ctl.reason.clone())
-                );
-                let mut hits = w.approved.take();
-                assert_eq!(hits.len(), 1);
-                assert_eq!(hits[0].header("anthropic-beta"), Some(value.as_str()));
-                hits[0].headers.retain(|(n, _)| n != "anthropic-beta");
-                assert_clean(t.label, "reviewed beta header", &hits[0], &ctl.hit, &w);
-                assert_eq!(hits[0].body, ctl.hit.body);
-                assert_no_attacker(&w, t.label, "reviewed beta header");
-                continue;
-            }
             let want = header_expect(&t, &name);
             check(name.clone(), post(&[(name, value)], &body), want).await;
         }

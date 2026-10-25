@@ -257,6 +257,63 @@ fn beta_is_accepted_with_bounded_verbatim_values() {
     }
 }
 
+#[test]
+fn beta_allowlist_checks_every_token_across_repeated_headers() {
+    for beta in [
+        "context-1m-2025-08-07",
+        "files-api-2025-04-14",
+        "code-execution-2025-05-22",
+        "web-search-2025-03-05",
+        "web-fetch-2025-09-10",
+        "mcp-client-2025-11-20",
+        "computer-use-2025-01-24",
+        "output-128k-2025-02-19",
+        "output-300k-2026-03-24",
+        "attacker-beta",
+        "interleaved-thinking-2025-05-14,",
+        "",
+    ] {
+        let mut h = HeaderMap::new();
+        h.append(
+            "anthropic-beta",
+            "interleaved-thinking-2025-05-14".parse().unwrap(),
+        );
+        h.append("anthropic-beta", beta.parse().unwrap());
+        assert!(
+            matches!(
+                beta_headers(&h),
+                Err(InferenceError::InvalidField("anthropic-beta"))
+            ),
+            "{beta}"
+        );
+        let mut r = request(json!({})).unwrap();
+        r.messages_options.as_mut().unwrap().beta_headers =
+            vec![format!("context-management-2025-06-27, {beta}")];
+        assert!(matches!(
+            crate::providers::messages::validate(&r, ProviderClass::Anthropic),
+            Err(InferenceError::InvalidField("anthropic-beta"))
+        ));
+    }
+    for (last_count, accepted) in [(2, true), (3, false)] {
+        let mut h = HeaderMap::new();
+        for i in 0..16 {
+            let value = vec!["context-management-2025-06-27"; if i == 15 { last_count } else { 2 }]
+                .join(", ");
+            h.append("anthropic-beta", value.parse().unwrap());
+        }
+        assert_eq!(
+            beta_headers(&h).is_ok(),
+            accepted,
+            "32-token bound is across all repeated headers"
+        );
+    }
+    for beta in crate::providers::messages::ALLOWED_BETAS {
+        let mut h = HeaderMap::new();
+        h.append("anthropic-beta", beta.parse().unwrap());
+        assert_eq!(beta_headers(&h).unwrap(), vec![beta.to_string()]);
+    }
+}
+
 #[tokio::test]
 async fn native_thinking_lifecycles_reach_the_client_without_duplicate_text_or_success_on_eof() {
     let blocks = vec![

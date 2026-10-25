@@ -1977,6 +1977,8 @@ async fn resolve_usage_once(
 mod audio_tests;
 #[cfg(all(test, feature = "integration-tests"))]
 mod generation_defaults_tests;
+#[cfg(all(test, feature = "integration-tests"))]
+mod anthropic_cache_tests;
 /// Test helper: replace one scope's whole budget set with `amount` for `period` (or none).
 #[cfg(test)]
 pub(crate) async fn set_test_budget(

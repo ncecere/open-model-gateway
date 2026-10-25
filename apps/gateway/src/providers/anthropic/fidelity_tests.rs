@@ -29,7 +29,7 @@ async fn native_fidelity_exact_upstream_wire_and_headers() {
         let mut request = native(wire.clone());
         request.messages_options.as_mut().unwrap().beta_headers = vec![
             "interleaved-thinking-2025-05-14, context-management-2025-06-27".into(),
-            "caller-only-beta".into(),
+            "fine-grained-tool-streaming-2025-05-14".into(),
         ];
         mock.adapter.execute(&target(), request).await.unwrap();
         let capture = mock.capture.lock().unwrap();
@@ -46,7 +46,7 @@ async fn native_fidelity_exact_upstream_wire_and_headers() {
                 .collect::<Vec<_>>(),
             vec![
                 "interleaved-thinking-2025-05-14, context-management-2025-06-27",
-                "caller-only-beta"
+                "fine-grained-tool-streaming-2025-05-14"
             ]
         );
         wire.as_object_mut().unwrap().remove("metadata");
@@ -151,6 +151,31 @@ fn image_types_count_and_data_limits_are_enforced_before_dispatch() {
         );
         assert!(crate::protocols::messages::batch_request(body(vec![block; 21])).is_err());
     }
+}
+
+#[test]
+fn complete_thinking_is_native_messages_only() {
+    let mut body = complete();
+    body["content"] = json!([{"type":"thinking","thinking":"reason","signature":"opaque"},{"type":"redacted_thinking","data":"opaque"}]);
+    assert!(decode_for(&body, true).is_ok());
+    assert!(matches!(
+        decode_for(&body, false),
+        Err(InferenceError::InvalidUpstream)
+    ));
+}
+
+#[test]
+fn cached_native_batch_lines_use_request_aware_gateway_admission() {
+    let request = crate::jobs::types::BatchRequest::Chat(native(fixture()));
+    assert!(matches!(
+        batches::encode_native_line(
+            &target(),
+            crate::jobs::types::BatchEndpoint::Messages,
+            "l0",
+            &request
+        ),
+        Err(InferenceError::InvalidField("cache_control"))
+    ));
 }
 
 #[test]

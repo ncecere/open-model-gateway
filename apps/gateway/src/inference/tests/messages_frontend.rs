@@ -138,7 +138,9 @@ async fn native_frontend_preserves_beta_values_and_blocks_through_the_engine() {
     );
     input.headers_mut().append(
         "anthropic-beta",
-        "caller-only-beta, second-value".parse().unwrap(),
+        "fine-grained-tool-streaming-2025-05-14, token-efficient-tools-2025-02-19"
+            .parse()
+            .unwrap(),
     );
     let response = app.oneshot(input).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -161,7 +163,7 @@ async fn native_frontend_preserves_beta_values_and_blocks_through_the_engine() {
             .collect::<Vec<_>>(),
         [
             "interleaved-thinking-2025-05-14",
-            "caller-only-beta, second-value"
+            "fine-grained-tool-streaming-2025-05-14, token-efficient-tools-2025-02-19"
         ]
     );
     assert_eq!(body["system"], system);

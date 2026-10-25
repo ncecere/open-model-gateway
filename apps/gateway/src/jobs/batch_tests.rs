@@ -2991,6 +2991,36 @@ async fn object_visibility_matrix_for_files_and_batches(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
+async fn cache_ttl_price_refusal_cannot_reuse_a_clean_batch_line_preview(pool: PgPool) {
+    let w = world(pool, false, true, 1).await;
+    let f = &w.f;
+    let clean = json!({"custom_id":"clean","method":"POST","url":"/v1/messages","body":{"model":"company/claude","max_tokens":10,"messages":[{"role":"user","content":"hello"}]}});
+    let mut cached = clean.clone();
+    cached["custom_id"] = json!("cached");
+    cached["body"]["system"] =
+        json!([{"type":"text","text":"cache me","cache_control":{"type":"ephemeral","ttl":"1h"}}]);
+    let file = w.upload(&f.principal, &[clean, cached]).await;
+    let before = admission_rowcounts(f).await;
+    let result = w
+        .create(f.principal, &file, BatchEndpoint::Messages, None)
+        .await;
+    assert!(matches!(
+        result,
+        Err(CreateError::Job(JobError::Inference(
+            InferenceError::InvalidField("cache_control")
+        )))
+    ));
+    assert_eq!(
+        admission_rowcounts(f).await,
+        before,
+        "no parent envelope or child reservation"
+    );
+    assert!(w.anthropic.executed().is_empty());
+    assert!(w.anthropic.calls().is_empty());
+    consistent(f).await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
 async fn memoized_refusal_classification_stays_per_line(pool: PgPool) {
     // Coordinator review of the #238 memoization: the cached lookups must not
     // fix one model's refusal *kind* for every later line. Two lines of the
