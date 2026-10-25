@@ -97,9 +97,12 @@ test("Admin create → enable → signed test → deliveries; Auditor read-only;
     await page.getByRole("menuitem", { name: "Delete…", exact: true }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Delete webhook", exact: true }).click();
     await expect(row).toHaveCount(0);
+    // The row can leave the list before DELETE commits; wait for its confirmation.
+    await expect(page.getByText("Webhook deleted", { exact: true })).toBeVisible();
     expect((await api(page, "GET", `/platform/alerts/webhooks/${id}`)).status()).toBe(404); id = undefined;
   } finally {
-    try { if (id && operator) expect((await api(operator.page, "DELETE", `/platform/alerts/webhooks/${id}`)).ok()).toBe(true); }
+    // Best-effort cleanup: never throw here, or it replaces the body's real failure.
+    try { if (id && operator) { const r = await api(operator.page, "DELETE", `/platform/alerts/webhooks/${id}`); if (!r.ok() && r.status() !== 404) console.warn(`webhook cleanup returned ${r.status()}`); } }
     finally { await operator?.context.close(); await auditor?.context.close(); await new Promise<void>(resolve => receiver.close(() => resolve())); }
   }
 });
