@@ -511,12 +511,6 @@ fn usage(value: &aws::TokenUsage) -> Result<Usage> {
     }
     super::metering::bedrock(&wire)
 }
-#[cfg(test)]
-fn decode_complete(
-    output: aws_sdk_bedrockruntime::operation::converse::ConverseOutput,
-) -> Result<ChatResponse> {
-    decode_complete_limit(output, OUTPUT_LIMIT)
-}
 fn decode_complete_limit(
     output: aws_sdk_bedrockruntime::operation::converse::ConverseOutput,
     limit: usize,
