@@ -12,6 +12,7 @@ pub(super) struct State {
     stopped: bool,
     metadata: bool,
     size: usize,
+    limit: Option<usize>,
     tools: u32,
     blocks: BTreeMap<i32, Block>,
     ids: BTreeSet<String>,
@@ -108,7 +109,7 @@ impl State {
                     }
                     Some(aws::ContentBlockDelta::ToolUse(tool)) if block.tool.is_some() => {
                         self.size += tool.input.len();
-                        if self.size > OUTPUT_LIMIT {
+                        if self.size > self.limit.unwrap_or(OUTPUT_LIMIT) {
                             return Err(invalid());
                         }
                         block.arguments.push_str(&tool.input);
@@ -175,7 +176,7 @@ impl State {
             }
             _ => return Err(invalid()),
         }
-        if self.size > OUTPUT_LIMIT {
+        if self.size > self.limit.unwrap_or(OUTPUT_LIMIT) {
             return Err(invalid());
         }
         Ok(result)
@@ -193,9 +194,10 @@ impl State {
 
 pub(super) fn decode(
     mut receiver: EventReceiver<aws::ConverseStreamOutput, aws::error::ConverseStreamOutputError>,
+    limit: usize,
 ) -> EventStream {
     Box::pin(async_stream::try_stream! {
-        let mut state = State::default();
+        let mut state = State { limit: Some(limit), ..State::default() };
         loop {
             // Explicit deadline for recv: SDK operation timeout ends when response headers arrive.
             let next = tokio::time::timeout(Duration::from_secs(60), receiver.recv()).await

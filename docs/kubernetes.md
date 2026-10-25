@@ -122,6 +122,56 @@ pass `/health/ready`. Verified on kind with CloudNativePG 1.30.1: about two minu
 Every later migrating upgrade is `helm upgrade ... --set migrations.run=true --wait`; there the Job
 is a `pre-upgrade` hook, so the schema changes before any new gateway pod starts.
 
+### CNPG bootstrap database ACLs (#315)
+
+For a **fresh, explicitly installed** chart-managed Cluster, `bootstrap.initdb.postInitSQL`
+revokes CONNECT on `postgres` and `template1` from PUBLIC and the runtime role.
+`postInitApplicationSQL` revokes TEMPORARY on the configured application database from
+PUBLIC and runtime. PUBLIC CONNECT on the application database is deliberately retained;
+object privileges still come only from `grants apply`. Database and runtime names are SQL
+identifier-quoted, including embedded double quotes. The Cluster's database, owner and
+managed runtime-role name are also YAML-quoted so punctuation round-trips unchanged.
+The hard-coded privilege verifier assumes the default runtime role name `gateway_runtime`;
+rendering a custom runtime name does not make it supported by that verifier.
+
+For chart-managed CNPG, the chart always renders `bootstrap.initdb`; recovery/import
+bootstrap is not supported by the chart. These are CNPG's **one-time initdb hooks**, run
+as `postgres` only on a fresh initdb, not Helm upgrade hooks.
+They do not repair an existing Cluster, run after a physical restore, or affect external
+databases. Never recreate a Cluster/PVC or rerun initdb to apply this fix. For existing
+installations use the [manual ACL remediation](postgresql-ha.md#existing-cnpg-cluster-acl-remediation-315).
+The verifier is unchanged: maintenance access and application TEMP still fail closed.
+
+**Why bootstrap seeds roles.** Source inspection uses CloudNativePG **v1.30.1**
+(`2a35abb4628f209d149825ef3c38011e0701ff2f`), the operator used for chart validation:
+
+- [Bootstrap documentation](https://github.com/cloudnative-pg/cloudnative-pg/blob/v1.30.1/docs/src/bootstrap.md#executing-queries-after-initialization)
+  specifies superuser hooks in postgres → template1 → application order;
+  [`ConfigureNewInstance`, initdb.go:308–395](https://github.com/cloudnative-pg/cloudnative-pg/blob/v1.30.1/pkg/management/postgres/initdb.go#L308-L395)
+  creates only the application owner before the hooks, then creates the application database.
+  The runtime managed role and operational roles do not yet exist.
+- [`configureInstancePermissions`, lifecycle/run.go:157–253](https://github.com/cloudnative-pg/cloudnative-pg/blob/v1.30.1/internal/cmd/manager/instance/run/lifecycle/run.go#L157-L253)
+  creates/repairs `streaming_replica` at instance startup, including LOGIN/REPLICATION and
+  pg_rewind privileges; it does not grant database CONNECT.
+- [`SetupMetricsExporterRole`, metrics_exporter_role.go:33–85](https://github.com/cloudnative-pg/cloudnative-pg/blob/v1.30.1/pkg/management/postgres/metrics_exporter_role.go#L33-L85)
+  creates/repairs the passwordless LOGIN role `cnpg_metrics_exporter` and `pg_monitor`
+  membership at startup/reconciliation, but does not grant CONNECT.
+- [`reconcilePgbouncerAuthUser`, instance_controller.go:844–934](https://github.com/cloudnative-pg/cloudnative-pg/blob/v1.30.1/internal/management/controller/instance_controller.go#L844-L934)
+  creates `cnpg_pooler_pgbouncer` only after Pooler integration is present. It grants CONNECT
+  on its auth database (`postgres`) **only when creating the role**, not on each reconcile;
+  it still configures auth_query and function EXECUTE when the role already exists.
+
+Consequently, bootstrap first creates these three operational roles with LOGIN and **NULL
+passwords**, explicitly grants each CONNECT on both maintenance databases, and only then
+revokes PUBLIC/runtime maintenance CONNECT. CNPG remains responsible for replication,
+monitoring and pooler function privileges/certificates. The pooler role must already have
+LOGIN because its reconciler does not repair that attribute on an existing role. The roles
+are seeded even when the Pooler is disabled, so enabling it later needs no ACL repair.
+Runtime is seeded NOLOGIN with no password; CNPG `managed.roles` later enables LOGIN and
+sets the password from its separate Secret. No operational role receives application
+object privileges. Check this lifecycle and actual metrics/replication/pooler connections
+on your installed operator version before production rollout, especially if not 1.30.1.
+
 ## Migration Job and runtime grants
 
 `AGENTS.md` forbids migrating or bootstrapping in `serve`. `migrations.run=false` by default; set
@@ -194,6 +244,24 @@ networkPolicy:
 ```
 
 The Secret `omg-trace-headers` needs one key named `GATEWAY_TRACES_HEADERS` (matching the name given to `GATEWAY_TRACES_OTLP_HEADERS_ENV` above), holding `Key=Value,Key2=Value2` header pairs such as `Authorization=Bearer ...`. A private collector destination also needs `GATEWAY_EGRESS_PRIVATE_ALLOW` covering its address, exactly like any other private destination above; a collector outside the cluster still needs 4318 reachable under `httpsCidrs`/`httpsExceptCidrs` if those are set and the URL uses HTTPS (plain HTTP to a collector is accepted only on development loopback). This chart's `configmap.yaml`/`deployment.yaml` route every `gateway.env` entry to the gateway container alone: the migration Job never mounts this ConfigMap, so a trace setting placed here never reaches it.
+
+### OTLP metrics (#99)
+
+Metrics push is independent of traces and `GATEWAY_METRICS_ADDR`; it needs no ServiceMonitor or inbound metrics port. Put `GATEWAY_METRICS_OTLP_URL` (full HTTPS `/v1/metrics` URL), `GATEWAY_METRICS_OTLP_INTERVAL_SECONDS` (10–300, default 60), `GATEWAY_METRICS_OTLP_TRAFFIC` (`off` by default) and the optional `GATEWAY_METRICS_OTLP_HEADERS_ENV` secret-variable **name** in `gateway.env`. For example:
+
+```yaml
+gateway:
+  env:
+    GATEWAY_METRICS_OTLP_URL: "https://otel-collector.observability.svc.cluster.local:4318/v1/metrics"
+    GATEWAY_METRICS_OTLP_INTERVAL_SECONDS: "60"
+    GATEWAY_METRICS_OTLP_TRAFFIC: "off"
+    GATEWAY_METRICS_OTLP_HEADERS_ENV: "METRICS_COLLECTOR_HEADERS"
+  extraEnvFrom:
+    - secretRef:
+        name: omg-metrics-headers
+```
+
+The Secret's `METRICS_COLLECTOR_HEADERS` key holds `Key=Value,Key2=Value2`; never put its value in `gateway.env` or share it with provider, SMTP, trace or audit credentials. Apply the collector egress rule above for TCP 4318 and allow its private address range in `GATEWAY_EGRESS_PRIVATE_ALLOW`. Production collectors require HTTPS, including in-cluster collectors; plain HTTP is development-loopback-only (post-DNS tightening is tracked separately in #313). Each replica has one worker, no retries or spool, and a single 3-second exporter shutdown budget shared by collection and final delivery, concurrent with trace drain. Collector failure does not affect readiness. The exporter's own warnings are fixed-enum outage transitions without destination, headers or server text; DNS/egress policy refusals additionally produce a shared-egress WARN with purpose, host and resolved address on every attempt (#321). See [OTLP metrics](operations.md#otlp-metrics-99) for privacy classes, caps and outcome metrics. No chart template change is needed.
 
 ## Failover timing
 

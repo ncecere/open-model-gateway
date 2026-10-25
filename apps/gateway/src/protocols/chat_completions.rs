@@ -236,6 +236,7 @@ impl Request {
             }
         };
         Ok(ChatRequest {
+            messages_options: None,
             model: self.model,
             messages,
             tools,

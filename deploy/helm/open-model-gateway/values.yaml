@@ -40,7 +40,7 @@ gateway:
   # Secret env vars sourced via envFrom/secretKeyRef from existing Secrets,
   # for provider keys not covered by the four `_FILE` names below
   # (GATEWAY_SECRET_ENV_ALLOWLIST must list every name used this way), and
-  # for the trace exporter's header secret below.
+  # for the trace/metrics exporters' dedicated header secrets below.
   #
   # OpenTelemetry trace export (#98; see docs/operations.md#traces) is off
   # unless GATEWAY_TRACES_OTLP_URL is set. All three settings are plain,
@@ -74,6 +74,21 @@ gateway:
   #                 matchLabels:
   #                   app: otel-collector
   #           ports: [{ protocol: TCP, port: 4318 }]
+  # OTLP metrics (#99; docs/operations.md#otlp-metrics-99) is independently
+  # opt-in: put the full HTTPS GATEWAY_METRICS_OTLP_URL (/v1/metrics) in env.
+  # GATEWAY_METRICS_OTLP_INTERVAL_SECONDS defaults to 60 (10-300 allowed);
+  # GATEWAY_METRICS_OTLP_TRAFFIC defaults to off (on includes personal traffic
+  # as identity-free aggregates). No scrape listener/ServiceMonitor is needed.
+  # Optional GATEWAY_METRICS_OTLP_HEADERS_ENV names a dedicated Secret variable,
+  # e.g. METRICS_COLLECTOR_HEADERS, holding Key=Value,Key2=Value2. Source that
+  # value only via extraEnvFrom; never env or the provider/SMTP allowlists,
+  # and do not reuse trace/audit credentials. Apply the collector egress rule
+  # above (4318 if used), plus GATEWAY_EGRESS_PRIVATE_ALLOW for private IPs.
+  # One worker per replica; no retries/spool; one 3s exporter shutdown budget.
+  # Collector outages never gate readiness. HTTP is development-loopback-only.
+  # Exporter-owned warnings are fixed-enum outage transitions without destination,
+  # headers or server text. Shared-egress DNS/policy refusals additionally WARN
+  # with purpose, host and resolved address on every attempt (#321).
   extraEnvFrom: []
   secretEnvAllowlist: []
   # Names the SMTP password reference may read (GATEWAY_SMTP_SECRET_ENV_ALLOWLIST).
@@ -327,6 +342,9 @@ cnpg:
     # (measured on bitop-talos, #25). The gateway retries and reconciles
     # interrupted attempts, so a short wait is safe.
     smartShutdownTimeout: 15
+    # Fresh initdb hooks restrict maintenance CONNECT and application TEMP,
+    # preserving CNPG operational roles. Never replayed on existing clusters;
+    # see docs/postgresql-ha.md#existing-cnpg-cluster-acl-remediation-315.
     database: gateway
     # Connection string suffix, e.g. "disable" or "require"; empty uses the
     # driver default. CNPG does not enable TLS on the client port by default.

@@ -87,6 +87,7 @@ fn counts(processing: u32, succeeded: u32, errored: u32, canceled: u32, expired:
 }
 fn request() -> BatchRequest {
     BatchRequest::Chat(crate::inference::types::ChatRequest {
+        messages_options: None,
         model: "company/claude".into(),
         messages: vec![crate::inference::types::Message {
             role: crate::inference::types::Role::User,
