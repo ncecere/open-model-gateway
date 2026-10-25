@@ -46,7 +46,7 @@ const RESERVATION_REFRESH: Duration = Duration::from_secs(15);
 
 // Pending work is bounded by its admission window; terminal failures must
 // remain visible for a full observation window after completion/cleanup.
-const ALERT_DELIVERY_COUNTS: &str = "SELECT recent.*,pending.* FROM (SELECT count(*) FILTER(WHERE retrying),count(*) FILTER(WHERE exhausted>0),count(*) FILTER(WHERE status IN ('failed','partial')),count(*) FILTER(WHERE status='suppressed') FROM alert_deliveries WHERE (status='pending' AND created_at>clock_timestamp()-interval '24 hours') OR (status<>'pending' AND completed_at>clock_timestamp()-interval '24 hours')) recent CROSS JOIN (SELECT count(DISTINCT bucket_id),floor(greatest(0,coalesce(extract(epoch FROM clock_timestamp()-min(created_at)),0)))::bigint FROM alert_deliveries WHERE status='pending') pending";
+const ALERT_DELIVERY_COUNTS: &str = "SELECT recent.*,pending.* FROM (SELECT count(*) FILTER(WHERE retrying),count(*) FILTER(WHERE exhausted>0),count(*) FILTER(WHERE status IN ('failed','partial')),count(*) FILTER(WHERE status='suppressed') FROM alert_deliveries WHERE event_id IS NOT NULL AND ((status='pending' AND created_at>clock_timestamp()-interval '24 hours') OR (status<>'pending' AND completed_at>clock_timestamp()-interval '24 hours'))) recent CROSS JOIN (SELECT count(DISTINCT bucket_id),floor(greatest(0,coalesce(extract(epoch FROM clock_timestamp()-min(created_at)),0)))::bigint FROM alert_deliveries WHERE status='pending') pending";
 
 // Shared with the retained-history EXPLAIN harness: measure the exact collector SQL.
 // Separate branches can use the existing waiting/leased partial indexes and
@@ -262,6 +262,8 @@ pub struct Metrics {
     lease_terms: Family<L1, Counter>,
     background_runs: Family<L2, Counter>,
     report_outcomes: Family<L1, Counter>,
+    report_delivery_attempts: Family<L1, Counter>,
+    report_delivery_queue: Family<L1, Gauge>,
     report_backlog: Family<L0, Gauge>,
     report_backlog_capped: Family<L0, Gauge>,
     report_oldest_due_lag: Family<L0, Gauge>,
@@ -442,6 +444,8 @@ impl Metrics {
             lease_terms: Family::default(),
             background_runs: Family::default(),
             report_outcomes: Family::default(),
+            report_delivery_attempts: Family::default(),
+            report_delivery_queue: Family::default(),
             report_backlog: Family::default(),
             report_backlog_capped: Family::default(),
             report_oldest_due_lag: Family::default(),
@@ -747,6 +751,12 @@ impl Metrics {
             metrics.report_outcomes.clone(),
         );
         registry.register(
+            "report_email_attempts",
+            "Report recipient send outcomes; fixed categories only",
+            metrics.report_delivery_attempts.clone(),
+        );
+        registry.register("report_email_recipients", "Recipient states in the latest 1024 report deliveries created within 24 hours; ineligible means authorization suppression", metrics.report_delivery_queue.clone());
+        registry.register(
             "report_due_backlog",
             "Active due schedules, saturated at 1024; includes uninitialized calendars",
             metrics.report_backlog.clone(),
@@ -963,6 +973,11 @@ impl Metrics {
             .inc();
     }
 
+    pub(crate) fn observe_report_delivery(&self, outcome: &'static str, n: u64) {
+        self.report_delivery_attempts
+            .get_or_create(&[("outcome", outcome.to_owned())])
+            .inc_by(n);
+    }
     pub(crate) fn observe_report_outcome(&self, category: crate::scheduled_reports::Outcome) {
         self.report_outcomes
             .get_or_create(&[("category", category.as_str().to_owned())])
@@ -1341,6 +1356,7 @@ impl Metrics {
         {
             self.reservations.clear();
             self.alert_delivery_queue.clear();
+            self.report_delivery_queue.clear();
             self.alert_webhook_queue.clear();
             self.alert_webhook_oldest.clear();
             self.alert_pending_buckets.clear();
@@ -1385,6 +1401,14 @@ impl Metrics {
                 }
             }
             _ => self.collection_error("alert_email"),
+        }
+        match tokio::time::timeout(Duration::from_secs(2), sqlx::query_as::<_,(String,i64)>("SELECT q.state,count(*) FROM (SELECT id FROM alert_deliveries WHERE report_run_id IS NOT NULL AND created_at>clock_timestamp()-interval '24 hours' ORDER BY created_at DESC,id LIMIT 1024) d JOIN alert_recipient_outbox q ON q.delivery_id=d.id GROUP BY q.state").fetch_all(pool)).await {
+            Ok(Ok(rows)) => {
+                for state in ["waiting","leased","sent","failed","ineligible","exhausted","not_configured"] {
+                    self.report_delivery_queue.get_or_create(&[("state",state.to_owned())]).set(rows.iter().find(|(s,_)|s==state).map_or(0,|(_,n)|*n));
+                }
+            }
+            _ => self.collection_error("report_email"),
         }
         match tokio::time::timeout(
             Duration::from_secs(2),
@@ -1509,12 +1533,32 @@ mod tests {
         let m = Metrics::new();
         m.observe_report_outcome(crate::scheduled_reports::Outcome::Timeout);
         m.set_report_queue(1024, true, 42);
+        m.observe_report_delivery("permanent_failure", 1);
+        for state in ["exhausted", "ineligible"] {
+            m.report_delivery_queue
+                .get_or_create(&[("state", state.into())])
+                .set(1);
+        }
         let mut out = String::new();
         encode(&mut out, &m.registry).unwrap();
         assert!(out.contains("gateway_report_generation_outcomes_total{category=\"timeout\"} 1"));
         assert!(out.contains("gateway_report_due_backlog{} 1024"));
         assert!(out.contains("gateway_report_due_backlog_capped{} 1"));
         assert!(out.contains("gateway_report_oldest_due_lag_seconds{} 42"));
+        assert!(
+            out.contains("gateway_report_email_attempts_total{outcome=\"permanent_failure\"} 1")
+        );
+        for state in ["exhausted", "ineligible"] {
+            assert!(out.contains(&format!(
+                "gateway_report_email_recipients{{state=\"{state}\"}} 1"
+            )));
+        }
+        let report_families: Vec<_> = include_str!("metrics_families.golden")
+            .lines()
+            .filter(|line| line.starts_with("gateway_report_"))
+            .collect();
+        assert_eq!(report_families.len(), 6);
+        assert!(report_families.iter().all(|line| line.ends_with(" System")));
     }
     #[test]
     fn listener_is_optional_and_never_the_public_port() {

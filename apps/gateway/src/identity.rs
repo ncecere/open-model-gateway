@@ -217,7 +217,7 @@ impl IdentityConfig {
         Ok(Some(config))
     }
 
-    fn validate_origin(value: &str, development: bool) -> anyhow::Result<Url> {
+    pub(crate) fn validate_origin(value: &str, development: bool) -> anyhow::Result<Url> {
         let url = validate_url(value, development)?;
         anyhow::ensure!(
             url.path() == "/" && url.query().is_none(),

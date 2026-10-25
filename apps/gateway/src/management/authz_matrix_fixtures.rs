@@ -220,6 +220,7 @@ impl Targets {
             &f.member.user_id.to_string()
         };
         let mut result = path
+            .replace("{run}", &Uuid::new_v4().to_string())
             .replace("{id}", id)
             .replace("{ws}", &f.team.to_string())
             .replace("{user}", &f.member.user_id.to_string())

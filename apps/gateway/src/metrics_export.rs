@@ -118,6 +118,8 @@ classes! {
     "gateway_otlp_metrics_rejected_points" => (System, Counter, "1", []),
     "gateway_report_due_backlog" => (System, Gauge, "1", []),
     "gateway_report_due_backlog_capped" => (System, Gauge, "1", []),
+    "gateway_report_email_attempts" => (System, Counter, "1", ["outcome"]),
+    "gateway_report_email_recipients" => (System, Gauge, "1", ["state"]),
     "gateway_report_generation_outcomes" => (System, Counter, "1", ["category"]),
     "gateway_report_oldest_due_lag_seconds" => (System, Gauge, "s", []),
     "gateway_reservations_held" => (Traffic, Gauge, "1", ["state"]),

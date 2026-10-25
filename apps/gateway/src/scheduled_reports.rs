@@ -1,7 +1,8 @@
-//! #102B: bounded primary-only aggregate generation. No delivery or SMTP.
+//! #102: bounded primary-only aggregate generation and shared outbox enqueue.
 //! Every write transaction is lease-fenced; generation runs outside those
 //! transactions in a bounded REPEATABLE READ READ ONLY primary snapshot.
 pub(crate) mod calendar;
+pub(crate) mod delivery;
 use crate::{
     governance::locks::{self, Scope},
     leases::{Fence, Lease},
@@ -269,6 +270,7 @@ pub(crate) async fn complete(
             .bind(body)
             .execute(&mut *tx)
             .await?;
+        delivery::enqueue(&mut tx, run).await?;
         audit(&mut tx,&s,"report.generated",json!({"run_id":run,"configuration_revision":s.configuration_revision.to_string(),"skipped_intervals":c.skipped})).await?;
         record_outcome(&mut tx, &s, Some(c), Outcome::Success, Some(run)).await?;
     }

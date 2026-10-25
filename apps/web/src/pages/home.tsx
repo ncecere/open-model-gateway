@@ -1,3 +1,4 @@
+import { ReportRunPage } from "./scheduled-reports";
 import { LegalHolds } from "./legal-holds";
 import { AuditExportSettingsPage } from "./settings/audit-export";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -104,6 +105,7 @@ export function DashboardContent({ session, search, workspace, navigate }: { ses
     case "settings-alerts": return <AdminAlertsPage session={session} tab={search.tab} onTabChange={changeTab} />;
     case "alert-rule-detail": return search.record ? <AlertRulePage key={search.record} session={session} scope={{ kind: "platform" }} id={search.record} /> : <PermissionNotice title="Missing alert rule identifier" />;
     case "notifications": return <NotificationsPage session={session} />;
+    case "platform-report-run": return search.record && search.run ? <ReportRunPage session={session} schedule={search.record} run={search.run} /> : <PermissionNotice title="Missing report identifier" />;
     case "platform-costs": return <PlatformCosts session={session} />;
     case "platform-logs": return <LogsPage scope={{ kind: "platform" }} />;
     case "platform-log-detail": return search.record ? <PlatformRequestDetailPage session={session} id={search.record} /> : <PermissionNotice title="Missing request identifier" />;
@@ -137,6 +139,7 @@ export function DashboardContent({ session, search, workspace, navigate }: { ses
     case "workspace-alert-detail": return search.record ? <AlertRulePage key={search.record} session={session} scope={{ kind: "workspace", ws: workspace.id }} workspace={workspace} id={search.record} /> : <PermissionNotice title="Missing alert rule identifier" />;
     case "workspace-settings": return <WorkspaceSettings session={session} workspace={workspace} tab={search.tab} onTabChange={changeTab} />;
     case "governance": return <Governance session={session} workspace={workspace} />;
+    case "workspace-report-run": return search.record && search.run ? <ReportRunPage session={session} workspace={workspace} schedule={search.record} run={search.run} /> : <PermissionNotice title="Missing report identifier" />;
     case "costs": return <Costs session={session} workspace={workspace} />;
     case "invitations": return <AcceptInvitation email={session.user.email} />;
     default: return <PermissionNotice title="Page not found" />;

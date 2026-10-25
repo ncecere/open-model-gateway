@@ -117,6 +117,52 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         .unwrap();
 }
 
+/// #85: preview reads must work with deployed runtime ACLs.
+async fn deployment_preview_runs_as_runtime(pool: &PgPool) {
+    use serde_json::Value;
+    let runtime = runtime_pool(pool).await;
+    let user = uuid::Uuid::new_v4();
+    let model = uuid::Uuid::new_v4();
+    let connection = uuid::Uuid::new_v4();
+    let deployment = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,email) VALUES($1,'preview-acl@example.test')")
+        .bind(user)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO platform_role_grants(user_id,role,source) VALUES($1,'admin','manual')",
+    )
+    .bind(user)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO models(id,public_name) VALUES($1,'preview-acl')")
+        .bind(model)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO provider_connections(id,name,provider,credential_ref,enabled) VALUES($1,'Preview ACL','openai','env:NOT_RESOLVED',true)").bind(connection).execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model,enabled) VALUES($1,$2,$3,'preview-acl',true)").bind(deployment).bind(model).bind(connection).execute(pool).await.unwrap();
+    let store = open_model_gateway::store::Store::new(runtime.clone());
+    let mut tx = store.snapshot().await.unwrap();
+    let role: String =
+        sqlx::query_scalar("SELECT role FROM effective_platform_roles WHERE user_id=$1")
+            .bind(user)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+    assert_eq!(role, "admin");
+    sqlx::query("SELECT d.id,d.model_id,m.public_name,d.enabled,m.enabled model_enabled,p.enabled connection_enabled,p.provider,m.supported_protocols FROM deployments d JOIN models m ON m.id=d.model_id JOIN provider_connections p ON p.id=d.provider_connection_id WHERE d.id=$1").bind(deployment).fetch_one(&mut *tx).await.unwrap();
+    let versions: Value = sqlx::query_scalar("SELECT jsonb_object_agg(topic,version::text) FROM config_versions WHERE topic IN ('catalog','access')")
+        .fetch_one(&mut *tx).await.unwrap();
+    assert!(versions["catalog"].is_string());
+    sqlx::query("SELECT w.id,w.name,w.kind FROM workspaces w WHERE w.kind IN ('team','project') AND w.disabled_at IS NULL AND workspace_model_allowed(w.id,$1) ORDER BY w.name,w.id LIMIT 100").bind(model).fetch_all(&mut *tx).await.unwrap();
+    sqlx::query(&format!("SELECT count(*) FROM deployments d WHERE d.model_id=$1 AND d.id<>$2 AND d.enabled AND EXISTS(SELECT 1 FROM provider_connections p WHERE p.id=d.provider_connection_id AND p.enabled) AND {}", open_model_gateway::providers::capabilities::route_serves_sql())).bind(model).bind(deployment).fetch_one(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    runtime.close().await;
+}
+
 async fn scheduled_reports_run_as_runtime(pool: &PgPool) {
     let runtime = runtime_pool(pool).await;
     let user = uuid::Uuid::new_v4();
@@ -171,6 +217,12 @@ async fn scheduled_reports_run_as_runtime(pool: &PgPool) {
     .await
     .unwrap();
     let id:uuid::Uuid=sqlx::query_scalar("INSERT INTO report_schedules(scope_kind,created_by,cadence,timezone,delivery_time,state) VALUES('installation',$1,'weekly','UTC','00:01','active') RETURNING id").bind(user).fetch_one(&runtime).await.unwrap();
+    sqlx::query("INSERT INTO report_schedule_recipients(schedule_id,slot,user_id) VALUES($1,1,$2)")
+        .bind(id)
+        .bind(user)
+        .execute(&runtime)
+        .await
+        .unwrap();
     let leases = open_model_gateway::leases::Leases::new();
     leases.renew_once(&runtime).await;
     let fence = leases
@@ -185,8 +237,77 @@ async fn scheduled_reports_run_as_runtime(pool: &PgPool) {
         .await
         .unwrap();
     assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM report_runs r JOIN report_snapshots p ON p.run_id=r.id WHERE r.schedule_id=$1").bind(id).fetch_one(&runtime).await.unwrap(),1);
+    let deliveries: i64 = sqlx::query_scalar("SELECT count(*) FROM alert_deliveries d JOIN report_runs r ON r.id=d.report_run_id WHERE r.schedule_id=$1 AND d.status='report_pending' AND NOT d.quota_charged AND d.suppression_reason IS NULL").bind(id).fetch_one(&runtime).await.unwrap();
+    assert_eq!(deliveries, 1);
+    // #102D: the actual primary read/list/CSV handlers use the runtime ACL.
+    let run: uuid::Uuid = sqlx::query_scalar("SELECT id FROM report_runs WHERE schedule_id=$1")
+        .bind(id)
+        .fetch_one(&runtime)
+        .await
+        .unwrap();
+    let token = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    sqlx::query("INSERT INTO browser_sessions(token_hash,user_id,csrf_hash,expires_at,verified_email) VALUES(sha256(convert_to($1,'UTF8')),$2,sha256('csrf'::bytea),now()+interval '1 hour','report-runtime@example.test')").bind(&token).bind(user).execute(&runtime).await.unwrap();
+    let identity = open_model_gateway::identity::IdentityState::new(store.clone(), None)
+        .await
+        .unwrap();
+    let app = open_model_gateway::management::router(identity).with_state(store.clone());
+    for path in [
+        format!("/api/v1/platform/report-schedules/{id}/runs?limit=20"),
+        format!("/api/v1/platform/report-schedules/{id}/runs/{run}"),
+        format!("/api/v1/platform/report-schedules/{id}/runs/{run}/csv"),
+    ] {
+        use tower::ServiceExt;
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(&path)
+                    .header("cookie", format!("omg_session={token}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200, "runtime report read: {path}");
+        assert_eq!(response.headers()["cache-control"], "no-store");
+    }
+    // Exemption is only from bucket quota, never from snapshot isolation.
+    for isolation in ["REPEATABLE READ", "SERIALIZABLE"] {
+        let mut tx = runtime.begin().await.unwrap();
+        sqlx::query(&format!("SET TRANSACTION ISOLATION LEVEL {isolation}"))
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let error = sqlx::query("INSERT INTO alert_recipient_outbox(delivery_id,fingerprint,internal_user_id) SELECT d.id,sha256('isolation'::bytea),$2 FROM alert_deliveries d JOIN report_runs r ON r.id=d.report_run_id WHERE r.schedule_id=$1")
+            .bind(id).bind(user).execute(&mut *tx).await.unwrap_err();
+        assert_eq!(
+            error.as_database_error().unwrap().code().as_deref(),
+            Some("25001")
+        );
+        tx.rollback().await.unwrap();
+    }
+    sqlx::query("UPDATE installation_settings SET smtp_host=NULL WHERE singleton")
+        .execute(&runtime)
+        .await
+        .unwrap();
+    open_model_gateway::alerts::deliver_pending(&store, 25).await;
+    let status: String = sqlx::query_scalar("SELECT d.status FROM alert_deliveries d JOIN report_runs r ON r.id=d.report_run_id WHERE r.schedule_id=$1").bind(id).fetch_one(&runtime).await.unwrap();
+    assert_eq!(status, "not_configured");
     leases.release_all(&runtime).await;
     for statement in [
+        "UPDATE alert_deliveries SET report_run_id=gen_random_uuid()",
+        "UPDATE alert_deliveries SET quota_charged=true",
+        "UPDATE alert_deliveries SET suppression_reason=NULL",
+        "UPDATE alert_deliveries SET created_at=clock_timestamp()",
+        "UPDATE alert_deliveries SET event_id=gen_random_uuid()",
+        "UPDATE alert_deliveries SET bucket_id=gen_random_uuid()",
+        "DELETE FROM alert_recipient_outbox",
+        "TRUNCATE alert_recipient_outbox",
+        "INSERT INTO alert_deliveries(id,report_run_id,transition) VALUES(gen_random_uuid(),gen_random_uuid(),'fired')",
         "UPDATE report_schedules SET id=gen_random_uuid()",
         "UPDATE report_schedules SET created_by=gen_random_uuid()",
         "UPDATE report_schedules SET scope_kind='installation'",
@@ -212,56 +333,6 @@ async fn scheduled_reports_run_as_runtime(pool: &PgPool) {
             "runtime refusal: {statement}"
         );
     }
-}
-
-/// #85: all preview SELECTs and model-visibility functions work under the
-/// deployed runtime ACL, not just the migration owner used by most fixtures.
-async fn deployment_preview_runs_as_runtime(pool: &PgPool) {
-    use serde_json::Value;
-    let runtime = runtime_pool(pool).await;
-    let user = uuid::Uuid::new_v4();
-    let model = uuid::Uuid::new_v4();
-    let connection = uuid::Uuid::new_v4();
-    let deployment = uuid::Uuid::new_v4();
-    sqlx::query("INSERT INTO users(id,email) VALUES($1,'preview-acl@example.test')")
-        .bind(user)
-        .execute(pool)
-        .await
-        .unwrap();
-    sqlx::query(
-        "INSERT INTO platform_role_grants(user_id,role,source) VALUES($1,'admin','manual')",
-    )
-    .bind(user)
-    .execute(pool)
-    .await
-    .unwrap();
-    sqlx::query("INSERT INTO models(id,public_name) VALUES($1,'preview-acl')")
-        .bind(model)
-        .execute(pool)
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO provider_connections(id,name,provider,credential_ref,enabled) VALUES($1,'Preview ACL','openai','env:NOT_RESOLVED',true)").bind(connection).execute(pool).await.unwrap();
-    sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model,enabled) VALUES($1,$2,$3,'preview-acl',true)").bind(deployment).bind(model).bind(connection).execute(pool).await.unwrap();
-    let store = open_model_gateway::store::Store::new(runtime.clone());
-    let mut tx = store.snapshot().await.unwrap();
-    let role: String =
-        sqlx::query_scalar("SELECT role FROM effective_platform_roles WHERE user_id=$1")
-            .bind(user)
-            .fetch_one(&mut *tx)
-            .await
-            .unwrap();
-    assert_eq!(role, "admin");
-    sqlx::query("SELECT d.id,d.model_id,m.public_name,d.enabled,m.enabled model_enabled,p.enabled connection_enabled,p.provider,m.supported_protocols FROM deployments d JOIN models m ON m.id=d.model_id JOIN provider_connections p ON p.id=d.provider_connection_id WHERE d.id=$1").bind(deployment).fetch_one(&mut *tx).await.unwrap();
-    let versions: Value =
-        sqlx::query_scalar("SELECT jsonb_object_agg(topic,version::text) FROM config_versions WHERE topic IN ('catalog','access')")
-            .fetch_one(&mut *tx)
-            .await
-            .unwrap();
-    assert!(versions["catalog"].is_string());
-    sqlx::query("SELECT w.id,w.name,w.kind FROM workspaces w WHERE w.kind IN ('team','project') AND w.disabled_at IS NULL AND workspace_model_allowed(w.id,$1) ORDER BY w.name,w.id LIMIT 100").bind(model).fetch_all(&mut *tx).await.unwrap();
-    sqlx::query(&format!("SELECT count(*) FROM deployments d WHERE d.model_id=$1 AND d.id<>$2 AND d.enabled AND EXISTS(SELECT 1 FROM provider_connections p WHERE p.id=d.provider_connection_id AND p.enabled) AND {}", open_model_gateway::providers::capabilities::route_serves_sql())).bind(model).bind(deployment).fetch_one(&mut *tx).await.unwrap();
-    tx.commit().await.unwrap();
-    runtime.close().await;
 }
 
 /// #79: "Your sessions" as the runtime role. The real session middleware

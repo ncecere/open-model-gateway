@@ -847,7 +847,8 @@ async fn run(cli: Cli, process_start_unix_nano: u64) -> Result<()> {
             let batch_runner = open_model_gateway::jobs::runner::start(batch_jobs);
             let alerts =
                 alert_interval.map(|every| open_model_gateway::alerts::start(store.clone(), every));
-            // Generation only: no report outbox or email sending in #102B.
+            // Reports publish into the same fair email outbox dispatched by
+            // the alert/email loop above; disabling that loop pauses all mail.
             let reports = open_model_gateway::scheduled_reports::start(store.clone());
             let audit_export = audit_exporter
                 .map(|exporter| open_model_gateway::audit_export::start(store.clone(), exporter));
@@ -1121,9 +1122,10 @@ mod demo {
         );
         assert_eq!(migrations[0]["version"], 1);
         // At least this release's newest migration; later releases add more.
-        assert!(value["latest_version"].as_i64().unwrap() >= 60);
+        assert!(value["latest_version"].as_i64().unwrap() >= 65);
         assert!(migrations.iter().any(|m| m["version"] == 58));
         assert!(migrations.iter().any(|m| m["version"] == 59));
+        assert!(migrations.iter().any(|m| m["version"] == 65));
         assert!(
             migrations
                 .iter()

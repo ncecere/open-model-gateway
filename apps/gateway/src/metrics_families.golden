@@ -48,6 +48,8 @@ gateway_otlp_metrics_pushes counter outcome System
 gateway_otlp_metrics_rejected_points counter - System
 gateway_report_due_backlog gauge - System
 gateway_report_due_backlog_capped gauge - System
+gateway_report_email_attempts counter outcome System
+gateway_report_email_recipients gauge state System
 gateway_report_generation_outcomes counter category System
 gateway_report_oldest_due_lag_seconds gauge - System
 gateway_reservations_held gauge state Traffic

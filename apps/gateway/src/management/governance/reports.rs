@@ -498,7 +498,7 @@ pub(super) async fn costs(
     })
     .await
 }
-fn csv_cell(value: &str) -> String {
+pub(crate) fn csv_cell(value: &str) -> String {
     let trimmed = value.trim_start_matches(|c: char| c.is_whitespace() || c.is_control());
     format!(
         "\"{}{}\"",
