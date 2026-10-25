@@ -8,6 +8,8 @@ use crate::{inference::types::*, providers::ProviderAdapter};
 use async_trait::async_trait;
 use futures_util::stream;
 
+mod messages_frontend;
+
 #[derive(Default)]
 struct MemoryRepository {
     deployments: Mutex<Vec<Deployment>>,
@@ -171,6 +173,7 @@ impl ProviderAdapter for Adapter {
 }
 fn request(stream: bool) -> ChatRequest {
     ChatRequest {
+        messages_options: None,
         model: "public/alias".into(),
         messages: vec![Message {
             role: Role::User,
