@@ -6,7 +6,7 @@ DO $$ DECLARE r record; t text; BEGIN
  IF EXISTS(SELECT FROM pg_database WHERE datname=current_database() AND datdba=r.oid) OR EXISTS(SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relowner=r.oid) THEN RAISE EXCEPTION 'runtime owns objects'; END IF;
  IF has_database_privilege('gateway_runtime','postgres','CONNECT') OR has_database_privilege('gateway_runtime','template1','CONNECT') THEN RAISE EXCEPTION 'maintenance database access'; END IF;
  IF has_schema_privilege('gateway_runtime','public','CREATE') OR has_database_privilege('gateway_runtime',current_database(),'CREATE') OR has_database_privilege('gateway_runtime',current_database(),'TEMP') THEN RAISE EXCEPTION 'runtime can create objects'; END IF;
- FOREACH t IN ARRAY ARRAY['_sqlx_migrations','deployment_prices','monetary_ledger','audit_events'] LOOP
+ FOREACH t IN ARRAY ARRAY['_sqlx_migrations','deployment_prices','monetary_ledger','audit_events','configuration_changes'] LOOP
   IF has_table_privilege('gateway_runtime','public.'||t,'UPDATE,DELETE,TRUNCATE') OR has_any_column_privilege('gateway_runtime','public.'||t,'UPDATE') THEN RAISE EXCEPTION 'mutable immutable history: %',t; END IF;
  END LOOP;
  IF has_table_privilege('gateway_runtime','public._sqlx_migrations','INSERT') OR has_table_privilege('gateway_runtime','public.installation','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.installation','schema_family','UPDATE') OR has_column_privilege('gateway_runtime','public.installation','id','UPDATE') THEN RAISE EXCEPTION 'runtime can rewrite lineage'; END IF;
@@ -16,6 +16,8 @@ DO $$ DECLARE r record; t text; BEGIN
  FOREACH t IN ARRAY ARRAY['meter_usage','output_image_variant','provider_cost_microusd'] LOOP
   IF has_column_privilege('gateway_runtime','public.monetary_ledger',t,'UPDATE') THEN RAISE EXCEPTION 'mutable ledger evidence: %',t; END IF;
  END LOOP;
+ IF NOT has_table_privilege('gateway_runtime','public.configuration_changes','SELECT,INSERT') OR has_column_privilege('gateway_runtime','public.deployments','revision','UPDATE') THEN RAISE EXCEPTION 'configuration history/revision ACLs'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname IN ('configuration_changes_validate','configuration_changes_no_update','configuration_changes_no_truncate','deployment_configuration_revision','deployment_configuration_capture') AND tgenabled='O' AND NOT tgisinternal)<>5 THEN RAISE EXCEPTION 'configuration history guards missing or disabled'; END IF;
  IF has_column_privilege('gateway_runtime','public.api_keys','governance_key_id','UPDATE') THEN RAISE EXCEPTION 'mutable credential budget lineage'; END IF;
  IF has_any_column_privilege('gateway_runtime','public.policy_budgets','UPDATE') OR has_table_privilege('gateway_runtime','public.policy_budgets','TRUNCATE') THEN RAISE EXCEPTION 'budget rows rewritable in place'; END IF;
  IF has_table_privilege('gateway_runtime','public.key_model_restrictions','UPDATE,DELETE,TRUNCATE') OR has_any_column_privilege('gateway_runtime','public.key_model_restrictions','UPDATE') OR has_any_column_privilege('gateway_runtime','public.key_model_selections','UPDATE') THEN RAISE EXCEPTION 'mutable key restriction provenance'; END IF;
@@ -389,6 +391,18 @@ BEGIN
  IF NOT workspace_model_allowed(ws,m) OR EXISTS(SELECT FROM key_model_selections WHERE workspace_id=ws) THEN RAISE EXCEPTION 'direct access/key resurrection invariant'; END IF;
  INSERT INTO provider_connections(id,name,provider,credential_ref,endpoint) VALUES(pc,'Rollback local','openai_compatible','none','http://127.0.0.1:19091/v1');
  INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model) VALUES(d,m,pc,'disabled-probe');
+ -- #86: real invoker-rights history writes and immutable evidence probes.
+ IF (SELECT revision FROM deployments WHERE id=d)<>1 OR (SELECT count(*) FROM configuration_changes WHERE deployment_id=d AND revision=1 AND before_enabled IS NULL AND NOT after_enabled)<>1 THEN RAISE EXCEPTION 'deployment creation history missing'; END IF;
+ UPDATE deployments SET enabled=true WHERE id=d;
+ UPDATE deployments SET enabled=true WHERE id=d;
+ IF (SELECT revision FROM deployments WHERE id=d)<>2 OR (SELECT count(*) FROM configuration_changes WHERE deployment_id=d)<>2 THEN RAISE EXCEPTION 'deployment change/no-op history incorrect'; END IF;
+ IF NOT EXISTS(SELECT FROM configuration_changes c JOIN audit_events a ON (a.id,a.created_at)=(c.audit_event_id,c.audit_created_at) WHERE c.deployment_id=d AND c.revision=2 AND NOT c.before_enabled AND c.after_enabled) THEN RAISE EXCEPTION 'history audit identity or values missing'; END IF;
+ changed := gen_random_uuid();
+ BEGIN INSERT INTO configuration_changes(id,created_at,audit_event_id,audit_created_at,target_kind,deployment_id,schema_version,before_enabled,after_enabled,revision) VALUES(changed,now(),changed,now(),'deployment',d,1,false,true,3); RAISE EXCEPTION 'orphan history allowed'; EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+ BEGIN UPDATE configuration_changes SET after_enabled=false WHERE deployment_id=d; RAISE EXCEPTION 'history update allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN DELETE FROM configuration_changes WHERE deployment_id=d; RAISE EXCEPTION 'history deletion allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN TRUNCATE configuration_changes; RAISE EXCEPTION 'history truncation allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN UPDATE deployments SET revision=0 WHERE id=d; RAISE EXCEPTION 'revision rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  -- Bedrock identity modes (0008): reference shapes, identity/endpoint replacement, immutable region.
  INSERT INTO provider_connections(id,name,provider,credential_ref,region) VALUES(gen_random_uuid(),'Rollback Bedrock','bedrock','aws:role:arn:aws:iam::123456789012:role/gateway/bedrock;external_id=probe-external;session_name=gateway-probe','us-east-1');
  UPDATE provider_connections SET credential_ref='aws:profile:bedrock-prod',endpoint='https://vpce-0probe.bedrock-runtime.us-east-1.vpce.amazonaws.com' WHERE name='Rollback Bedrock';
