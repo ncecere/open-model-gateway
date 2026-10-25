@@ -11,6 +11,7 @@ mod compare;
 mod directory;
 mod files;
 mod governance;
+mod group_mapping_preview;
 mod key_safety;
 mod keys;
 mod legal_holds;
@@ -619,6 +620,7 @@ fn routes() -> Router<Store> {
     Router::new()
         .merge(admin_tokens::routes())
         .merge(directory::routes())
+        .merge(group_mapping_preview::routes())
         .merge(resources::platform_routes())
         .merge(catalogs::routes())
         .merge(setup::routes())

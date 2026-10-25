@@ -732,16 +732,19 @@ async fn deactivate_unentitled(
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct MappingInput {
-    issuer: String,
-    group_value: String,
-    target_kind: String,
-    platform_role: Option<String>,
-    workspace_id: Option<Uuid>,
-    workspace_role: Option<String>,
-    enabled: bool,
+// `pub(super)`: the preview evaluator (#89, `group_mapping_preview.rs`)
+// reuses this exact shape and its validation so a proposal is rejected the
+// same way create/update would reject it, never a parallel relaxed check.
+pub(super) struct MappingInput {
+    pub(super) issuer: String,
+    pub(super) group_value: String,
+    pub(super) target_kind: String,
+    pub(super) platform_role: Option<String>,
+    pub(super) workspace_id: Option<Uuid>,
+    pub(super) workspace_role: Option<String>,
+    pub(super) enabled: bool,
 }
-fn mapping_valid(b: &MappingInput) -> bool {
+pub(super) fn mapping_valid(b: &MappingInput) -> bool {
     let issuer = reqwest::Url::parse(&b.issuer).ok();
     issuer.is_some_and(|u| {
         (u.scheme() == "https"
@@ -778,7 +781,7 @@ fn mapping_valid(b: &MappingInput) -> bool {
             _ => false,
         }
 }
-async fn validate_mapping(
+pub(super) async fn validate_mapping(
     tx: &mut Transaction<'_, Postgres>,
     b: &MappingInput,
 ) -> Result<(), ApiError> {
