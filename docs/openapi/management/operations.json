@@ -450,6 +450,12 @@
       "scope": "platform:read",
       "token_policy": "Scope"
     },
+    "GET /api/v1/platform/report-schedules/{id}/runs/{run}": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
     "GET /api/v1/platform/server-policy": {
       "access": "PlatformRead",
       "operation": {},
@@ -767,6 +773,12 @@
       "operation": {},
       "scope": "platform:read",
       "token_policy": "Scope"
+    },
+    "GET /api/v1/workspaces/{ws}/report-schedules/{id}/runs/{run}": {
+      "access": "WorkspaceReportAdmin",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
     },
     "GET /api/v1/workspaces/{ws}/requests": {
       "access": "WorkspaceMember",
