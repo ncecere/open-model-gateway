@@ -921,6 +921,12 @@ pub(crate) const ROUTES: &[Route] = &[
         PlatformWrite,
         CATALOG_WRITE
     ),
+    route!(
+        "POST",
+        "/api/v1/platform/deployments/{id}/configuration/preview",
+        PlatformWrite,
+        DENIED
+    ),
     route!("GET", "/api/v1/platform/holds", PlatformRead, PLATFORM_READ),
     route!("GET", "/api/v1/platform/audit", PlatformRead, PLATFORM_READ),
     route!(

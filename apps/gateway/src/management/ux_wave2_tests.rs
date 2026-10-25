@@ -270,7 +270,7 @@ async fn single_key_read_follows_list_visibility(pool: PgPool) {
         );
         assert_eq!(
             get(&f, u, &path(f.personal, &personal)).await.0,
-            StatusCode::FORBIDDEN
+            StatusCode::NOT_FOUND
         );
     }
     // A key id from another workspace is not found here.
@@ -686,7 +686,7 @@ async fn platform_member_rows_show_totals_never_personal_key_identity(pool: PgPo
             format!("/api/v1/workspaces/{}/requests/{root}", f.personal),
             format!("/api/v1/workspaces/{}/keys/{personal_id}", f.personal),
         ] {
-            assert_eq!(get(&f, u, &path).await.0, StatusCode::FORBIDDEN, "{path}");
+            assert_eq!(get(&f, u, &path).await.0, StatusCode::NOT_FOUND, "{path}");
         }
     }
 }
