@@ -538,6 +538,7 @@ fn send(sender: &mpsc::Sender<Queued>, n: usize) {
 
 #[tokio::test]
 async fn collector_accepts_a_batch_and_counts_the_push() {
+    let _guard = test_lock();
     let (url, seen, task) = collector(axum::http::StatusCode::OK, "{}", Duration::ZERO).await;
     let built = exporter(&url);
     let (sender, receiver) = mpsc::channel(QUEUE);
@@ -563,6 +564,7 @@ async fn collector_accepts_a_batch_and_counts_the_push() {
 
 #[tokio::test]
 async fn collector_partial_success_is_recorded_and_bounded_by_sent_count() {
+    let _guard = test_lock();
     let (url, _seen, task) = collector(
         axum::http::StatusCode::OK,
         r#"{"partialSuccess":{"rejectedLogRecords":"999"}}"#,
@@ -585,6 +587,7 @@ async fn collector_partial_success_is_recorded_and_bounded_by_sent_count() {
 
 #[tokio::test]
 async fn collector_http_error_counts_http_status_and_drops_the_batch_as_delivery() {
+    let _guard = test_lock();
     let (url, _seen, task) = collector(
         axum::http::StatusCode::INTERNAL_SERVER_ERROR,
         "",
@@ -611,6 +614,7 @@ async fn collector_http_error_counts_http_status_and_drops_the_batch_as_delivery
 
 #[tokio::test]
 async fn collector_timeout_never_retries_and_counts_timeout() {
+    let _guard = test_lock();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let task = tokio::spawn(async move {
@@ -644,6 +648,7 @@ async fn collector_timeout_never_retries_and_counts_timeout() {
 /// not just on a normal return.
 #[tokio::test]
 async fn forced_abort_mid_exchange_counts_in_flight_records_as_shutdown_drops() {
+    let _guard = test_lock();
     // Accepts the connection but never answers: the exchange stays
     // suspended (inside otlp::post's own 2 s internal timeout) until
     // something external cancels it.
