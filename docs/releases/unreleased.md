@@ -2,6 +2,10 @@
 
 Notes for changes on `main` after [v0.8.0](v0.8.0.md). They become the next release's notes.
 
+## Pinned Rust toolchain (#354)
+
+Adds `rust-toolchain.toml`, pinning the exact compiler version (1.99.1, with `rustfmt` and `clippy`) that `rustup` installs automatically for any local `cargo` command. Both `ci.yml` jobs that install Rust now pass that same version explicitly to the SHA-pinned `dtolnay/rust-toolchain` action instead of floating on `stable`, matching the `Dockerfile`'s existing digest-pinned `rust:1.99.1-bookworm` build stage. A new `tests/supply-chain.test.mjs` check fails the build if `rust-toolchain.toml`, any workflow's toolchain input and the Dockerfile ever disagree, or if any of them floats on `stable`/`beta`/`nightly`. CI, the image build and local gates now always compile with the same rustc, so a change that passes locally cannot fail CI's `-D warnings` build (or the reverse) because of a compiler version difference (#348). Bumping the pinned version is documented in [verification](../verification.md#rust-toolchain) as a single reviewed PR: read the release notes, fix new lints, run the full gates. No behavior, schema or runtime change.
+
 ## Development HTTP telemetry exports are loopback-only after DNS (#313)
 
 **Behavior change for development installations.** Plain-HTTP OTLP traces, audit OTLP logs and audit webhooks (allowed only with `GATEWAY_ENV=development`) now connect only to canonical loopback addresses after name resolution, including IPv4-mapped loopback. If any resolved address is not loopback, the whole answer is refused, even when other answers are loopback or the address is covered by `GATEWAY_EGRESS_PRIVATE_ALLOW`. Literal non-loopback HTTP endpoints are refused before any connection. HTTPS exports keep the general egress policy, and production (non-development) installations are unaffected: they never allowed plain HTTP. To export to another host, use HTTPS. See [operations](../operations.md#outbound-connections).

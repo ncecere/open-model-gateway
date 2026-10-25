@@ -356,6 +356,89 @@ test("every Dockerfile base image is pinned by digest", () => {
   assert.deepEqual(unpinned, []);
 });
 
+// ---- Rust toolchain pin (#354) ----
+//
+// rust-toolchain.toml, every `dtolnay/rust-toolchain` step's `toolchain:` input and the
+// Dockerfile's `rust:<version>-bookworm` build stage must all name the same exact version.
+// A floating channel (`stable`, `beta`, `nightly`, with or without a date) anywhere here
+// defeats the whole point: CI would no longer compile with the same compiler as local gates
+// and release builds (PR #348's local-pass/CI-fail divergence).
+
+const FLOATING_RUST_CHANNEL = /^(stable|beta|nightly)(-\d{4}-\d{2}-\d{2})?$/i;
+
+function readRustToolchainChannel() {
+  const text = readLocalFromRepo("rust-toolchain.toml");
+  if (text === null) throw new Error("rust-toolchain.toml is missing");
+  const m = text.match(/^\s*channel\s*=\s*"([^"]+)"\s*$/m);
+  if (!m) throw new Error('rust-toolchain.toml has no channel = "..." line');
+  return m[1];
+}
+
+function readDockerfileRustVersion(file) {
+  const text = readFileSync(join(root, file), "utf8");
+  const m = text.match(/FROM\s+\S*\/library\/rust:(\d+\.\d+\.\d+)-bookworm@sha256:[0-9a-f]{64}/);
+  if (!m) throw new Error(`${file}: no pinned rust:<version>-bookworm base image found`);
+  return m[1];
+}
+
+// Every `dtolnay/rust-toolchain` step anywhere (workflow jobs and composite action `runs`),
+// with the `toolchain:` input it sets (undefined if absent).
+function dtolnayToolchainSteps() {
+  const found = [];
+  for (const { file, text } of repoFiles()) {
+    const data = toData(parseStrict(text, file));
+    for (const [name, job] of jobsOf(data)) {
+      stepsOf(job).forEach((step, i) => {
+        if (typeof step.uses === "string" && actionName(step.uses) === "dtolnay/rust-toolchain") {
+          found.push({ file, where: `job '${name}' step ${i + 1}`, toolchain: step.with?.toolchain });
+        }
+      });
+    }
+    stepsOf(data.runs).forEach((step, i) => {
+      if (typeof step.uses === "string" && actionName(step.uses) === "dtolnay/rust-toolchain") {
+        found.push({ file, where: `composite step ${i + 1}`, toolchain: step.with?.toolchain });
+      }
+    });
+  }
+  return found;
+}
+
+test("rust-toolchain.toml, every dtolnay/rust-toolchain step and the Dockerfile pin the same exact Rust version (#354)", () => {
+  const channel = readRustToolchainChannel();
+  assert.match(channel, /^\d+\.\d+\.\d+$/, "rust-toolchain.toml channel must be an exact x.y.z version, not a floating channel");
+  assert.doesNotMatch(channel, FLOATING_RUST_CHANNEL, "rust-toolchain.toml channel must not float");
+
+  const dockerfileVersion = readDockerfileRustVersion("Dockerfile");
+  assert.equal(dockerfileVersion, channel, `Dockerfile pins rust:${dockerfileVersion}-bookworm, which disagrees with rust-toolchain.toml's ${channel}`);
+
+  const steps = dtolnayToolchainSteps();
+  assert.ok(steps.length > 0, "expected at least one dtolnay/rust-toolchain step in the workflows");
+  for (const step of steps) {
+    assert.ok(step.toolchain, `${step.file}: ${step.where} must set an explicit 'toolchain' input (no implicit floating default)`);
+    const toolchain = String(step.toolchain);
+    assert.doesNotMatch(toolchain, FLOATING_RUST_CHANNEL, `${step.file}: ${step.where} toolchain '${toolchain}' must not be a floating channel`);
+    assert.equal(toolchain, channel, `${step.file}: ${step.where} toolchain '${toolchain}' disagrees with rust-toolchain.toml's ${channel}`);
+  }
+});
+
+test("no dtolnay/rust-toolchain reference carries a floating-channel version comment", () => {
+  // Defensive, on top of the exact-input check above: a '# stable'/'# beta'/'# nightly'
+  // comment next to a SHA pin could mislead a reviewer bumping the version by hand.
+  for (const { file, text } of repoFiles()) {
+    const doc = parseStrict(text, file);
+    visit(doc, {
+      Pair(_, pair) {
+        if (!isScalar(pair.key) || pair.key.value !== "uses") return;
+        const v = pair.value;
+        if (!isScalar(v) || typeof v.value !== "string") return;
+        if (actionName(v.value) !== "dtolnay/rust-toolchain") return;
+        const comment = (v.comment ?? "").trim();
+        assert.doesNotMatch(comment, /^(stable|beta|nightly)$/i, `${file}: ${v.value} has a floating-channel comment '${comment}'`);
+      },
+    });
+  }
+});
+
 test("jobs that can write use only allowlisted actions (#194)", () => {
   assert.deepEqual(allWriteViolations(repoFiles(), readLocalFromRepo), []);
 });
