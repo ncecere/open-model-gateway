@@ -101,6 +101,27 @@ fn request(stream: bool) -> ChatRequest {
     }
 }
 #[tokio::test]
+async fn messages_parallel_calls_and_results_preserve_all_local_profile_turns() {
+    for profile in [
+        Profile::OpenAiCompatible,
+        Profile::Vllm,
+        Profile::Sglang,
+        Profile::Ollama,
+    ] {
+        let mock = Mock::new(200, false).await;
+        let adapter = mock.adapter(profile, Arc::new(Resolver(AtomicUsize::new(0))));
+        let request = super::super::contract::parallel_messages_request();
+        adapter
+            .execute(&mock.target(profile), request)
+            .await
+            .unwrap();
+        let capture = mock.capture.lock().unwrap();
+        assert_eq!(capture.len(), 1);
+        super::super::contract::assert_parallel_chat_wire(&capture[0].2);
+    }
+}
+
+#[tokio::test]
 async fn no_argument_tool_defaults_preserve_all_local_profile_wires() {
     for profile in [
         Profile::OpenAiCompatible,

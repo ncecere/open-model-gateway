@@ -216,6 +216,41 @@ fn wire(events: Vec<(&str, Value)>) -> Vec<u8> {
 }
 
 #[tokio::test]
+async fn messages_parallel_calls_and_results_preserve_converse_turns() {
+    let mock = Mock::serve(complete(false), wire(events(false)), 200).await;
+    let request = super::super::contract::parallel_messages_request();
+    let adapter = mock.adapter();
+    adapter.validate_chat_request(&request).unwrap();
+    adapter.execute(&target(), request).await.unwrap();
+    let capture = mock.requests.lock().unwrap();
+    assert_eq!(capture.len(), 1);
+    let messages = capture[0].body["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 5);
+    assert_eq!(messages[0]["content"], json!([{"text":"hello there"}]));
+    assert_eq!(messages[1]["role"], "assistant");
+    assert_eq!(
+        messages[1]["content"],
+        json!([
+            {"text":"checking both!"},
+            {"toolUse":{"toolUseId":"first-call","name":"ping","input":{"value":1}}},
+            {"toolUse":{"toolUseId":"second-call","name":"pong","input":{"value":2}}}
+        ])
+    );
+    assert_eq!(messages[2]["role"], "user");
+    assert_eq!(
+        messages[2]["content"],
+        json!([
+            {"toolResult":{"toolUseId":"second-call","content":[{"text":"second result"}]}},
+            {"toolResult":{"toolUseId":"first-call","content":[{"text":"first result"}]}}
+        ])
+    );
+    assert_eq!(messages[3]["role"], "assistant");
+    assert_eq!(messages[3]["content"], json!([{"text":"done"}]));
+    assert_eq!(messages[4]["role"], "user");
+    assert_eq!(messages[4]["content"], json!([{"text":"continue"}]));
+}
+
+#[tokio::test]
 async fn no_argument_tool_defaults_preserve_converse_wire_and_correlation() {
     let mock = Mock::serve(complete(false), wire(events(false)), 200).await;
     let adapter = mock.adapter();
@@ -527,6 +562,34 @@ async fn incomplete_tool_arguments_unknown_content_and_stop_reason_fail() {
     let mut bad = events(false);
     bad[1].1["contentBlockIndex"] = json!(-1);
     assert_bad_stream(wire(bad)).await;
+}
+
+#[tokio::test]
+async fn messages_bedrock_context_envelope_does_not_match_quoted_client_text() {
+    for (code, text, expected) in [
+        (
+            "ValidationException",
+            "Input is too long for requested model.",
+            InferenceError::ContextLength,
+        ),
+        (
+            "ValidationException",
+            "Invalid field quoting client text: prompt is too long",
+            InferenceError::UpstreamRejected,
+        ),
+        (
+            "ThrottlingException",
+            "Input is too long for requested model.",
+            InferenceError::Busy,
+        ),
+    ] {
+        let mock = Mock::serve(json!({"__type":code,"message":text}), Vec::new(), 400).await;
+        let mut r = request();
+        r.messages_options = Some(Box::default());
+        assert!(
+            matches!(mock.adapter().execute(&target(), r).await, Err(error) if error == expected)
+        );
+    }
 }
 
 #[tokio::test]

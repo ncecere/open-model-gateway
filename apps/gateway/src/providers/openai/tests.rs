@@ -179,6 +179,30 @@ fn assert_error<T>(result: Result<T>, expected: InferenceError) {
 }
 
 #[tokio::test]
+async fn messages_parallel_calls_and_results_preserve_openai_turns() {
+    let mock = Mock::json(complete()).await;
+    let request = super::super::contract::parallel_messages_request();
+    mock.adapter().execute(&target(), request).await.unwrap();
+    let capture = mock.requests.lock().unwrap();
+    assert_eq!(capture.len(), 1);
+    super::super::contract::assert_parallel_chat_wire(&capture[0].body);
+}
+
+#[tokio::test]
+async fn messages_embedded_error_codes_override_quoted_context_phrases() {
+    let mock = Mock::json(
+        json!({"error":{"code":"rate_limit_exceeded","message":"Client text: prompt is too long"}}),
+    )
+    .await;
+    let mut r = request(false);
+    r.messages_options = Some(Box::default());
+    assert_error(
+        mock.adapter().execute(&target(), r).await,
+        InferenceError::Busy,
+    );
+}
+
+#[tokio::test]
 async fn no_argument_tool_defaults_preserve_openai_wire_and_explicit_strict() {
     let mock = Mock::json(complete()).await;
     for request in super::super::contract::no_argument_tool_requests() {

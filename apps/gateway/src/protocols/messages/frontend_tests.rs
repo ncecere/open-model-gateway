@@ -126,6 +126,24 @@ fn cache_hints_have_the_same_rule_at_every_supported_position() {
 }
 
 #[test]
+fn parallel_calls_share_one_assistant_turn_without_collapsing_neighbor_turns() {
+    let r = crate::providers::contract::parallel_messages_request();
+    assert_eq!(r.messages.len(), 6);
+    assert!(r.messages[0].role == Role::User);
+    assert_eq!(r.messages[0].content.as_deref(), Some("hello there"));
+    assert!(r.messages[1].role == Role::Assistant);
+    assert_eq!(r.messages[1].content.as_deref(), Some("checking both!"));
+    assert_eq!(r.messages[1].tool_calls.len(), 2);
+    assert_eq!(r.messages[1].tool_calls[0].id, "first-call");
+    assert_eq!(r.messages[1].tool_calls[1].id, "second-call");
+    assert_eq!(r.messages[2].tool_call_id.as_deref(), Some("second-call"));
+    assert_eq!(r.messages[3].tool_call_id.as_deref(), Some("first-call"));
+    assert!(r.messages[4].role == Role::Assistant);
+    assert_eq!(r.messages[4].content.as_deref(), Some("done"));
+    assert!(r.messages[5].role == Role::User);
+}
+
+#[test]
 fn system_text_and_sampling_are_not_lost() {
     let r = request(json!({"system":[{"type":"text","text":"one"},{"type":"text","text":"two"}],"top_p":0.8,"top_k":40,"stop_sequences":["STOP"],"metadata":{"user_id":"client-label"}})).unwrap();
     assert_eq!(r.messages[0].content.as_deref(), Some("one"));

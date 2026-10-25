@@ -204,6 +204,62 @@ pub(super) fn usage(value: &Value) -> Result<crate::inference::types::Usage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn structured_error_codes_precede_diagnostic_text() {
+        use serde_json::json;
+        for (error, expected) in [
+            (
+                json!({"code":"rate_limit_exceeded","message":"Client said prompt is too long"}),
+                Some(InferenceError::Busy),
+            ),
+            (
+                json!({"code":"overloaded_error","message":"Client said maximum context length"}),
+                Some(InferenceError::Overloaded),
+            ),
+            (
+                json!({"code":"unrelated_error","type":"overloaded_error","message":"prompt is too long"}),
+                None,
+            ),
+            (
+                json!({"code":402,"type":"overloaded_error","message":"prompt is too long"}),
+                None,
+            ),
+            (
+                json!({"type":"invalid_request_error","message":"Client said prompt is too long"}),
+                None,
+            ),
+            (json!({"message":"prompt is too long"}), None),
+            (
+                json!({"code":"context_length_exceeded","message":"SECRET"}),
+                Some(InferenceError::ContextLength),
+            ),
+        ] {
+            assert_eq!(classified_error(&json!({"error":error})), expected);
+        }
+    }
+
+    #[test]
+    fn context_text_fallback_is_only_anthropic_invalid_request_prefix() {
+        use serde_json::json;
+        assert_eq!(
+            anthropic_error(
+                &json!({"error":{"type":"invalid_request_error","message":"prompt is too long: 123 tokens"}})
+            ),
+            Some(InferenceError::ContextLength)
+        );
+        for error in [
+            json!({"type":"invalid_request_error","message":"Client quoted prompt is too long"}),
+            json!({"type":"rate_limit_error","message":"prompt is too long"}),
+            json!({"code":"unrelated_error","type":"invalid_request_error","message":"prompt is too long"}),
+            json!({"code":"rate_limit_exceeded","type":"invalid_request_error","message":"prompt is too long"}),
+        ] {
+            assert_eq!(
+                anthropic_error(&json!({"error":error})),
+                classified_error(&json!({"error":error}))
+            );
+        }
+    }
+
     #[tokio::test]
     async fn native_transport_drop_cancels_body_and_frames() {
         use axum::{

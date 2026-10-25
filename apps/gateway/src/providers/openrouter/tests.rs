@@ -147,6 +147,51 @@ fn chat(stream: bool) -> ChatRequest {
     }
 }
 #[tokio::test]
+async fn messages_parallel_calls_and_results_preserve_openrouter_turns() {
+    let mock = Mock::json(glm_complete()).await;
+    let request = super::super::contract::parallel_messages_request();
+    mock.adapter()
+        .execute(&target("private"), request)
+        .await
+        .unwrap();
+    super::super::contract::assert_parallel_chat_wire(&mock.last().2);
+    assert_eq!(mock.count(), 1);
+}
+
+#[tokio::test]
+async fn messages_openrouter_status_meanings_survive_body_classification() {
+    for (status, expected) in [
+        (402, InferenceError::Configuration),
+        (403, InferenceError::UpstreamRejected),
+        (524, InferenceError::Timeout),
+    ] {
+        let mock = Mock::raw(status, r#"{"error":{"code":"context_length_exceeded","message":"prompt is too long: SECRET"}}"#).await;
+        let mut request = chat(false);
+        request.messages_options = Some(Box::default());
+        assert!(
+            matches!(mock.adapter().execute(&target("private"), request).await, Err(error) if error == expected)
+        );
+        assert_eq!(mock.count(), 1);
+    }
+    for (code, expected) in [
+        (json!(402), InferenceError::Configuration),
+        (json!(403), InferenceError::UpstreamRejected),
+        (json!(524), InferenceError::Timeout),
+        (json!("rate_limit_exceeded"), InferenceError::Busy),
+    ] {
+        let mock = Mock::json(
+            json!({"error":{"code":code,"message":"Client quoted: prompt is too long"}}),
+        )
+        .await;
+        let mut request = chat(false);
+        request.messages_options = Some(Box::default());
+        assert!(
+            matches!(mock.adapter().execute(&target("private"), request).await, Err(error) if error == expected)
+        );
+    }
+}
+
+#[tokio::test]
 async fn no_argument_tool_defaults_preserve_openrouter_wire_and_explicit_strict() {
     let mock = Mock::json(glm_complete()).await;
     for request in super::super::contract::no_argument_tool_requests() {
