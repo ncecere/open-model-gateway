@@ -63,6 +63,14 @@ Two things are reported separately, after review feedback: `immediate` is what t
 
 The SSO groups page's Create/Edit/Delete mapping flows show a "Review changes" dialog (the immediate/diff sections, membership basis, warnings) before the existing save path runs, sending the reviewed digest as `If-Match` and reopening a fresh review on a `412`. See [identity](../identity.md#authentication-is-not-entitlement) and [management API](../management-api.md#session-inventory-and-directories).
 
+## Self-service membership requests (#83, slice A)
+
+Adds browser-only APIs for discovering opted-in active Teams/Projects, submitting/withdrawing one's own membership requests, and live workspace-admin/platform approval queues. Discoverability defaults off and only Platform Admins can change it. Approval atomically applies a linked manual `member` grant; self-approval, stale membership and entitlement loss fail closed. Replays return the recorded outcome without regranting. PostgreSQL owns seven-day expiry, terminal transitions and replica-safe caps (20 pending, five submissions/minute, 50/rolling day); rate refusals include `Retry-After`. Reasons are bounded plain text, excluded from audit, included in subject export and scrubbed by hold-aware cleanup. Lifecycle expiry is bounded to 100 per tick. Later membership grants/revocations permanently supersede older pending requests, even after removal; retained reasons for cleaned users are scrubbed in batches of 100 after holds end. The schema preflight inventory includes both new tables, and platform/requester history indexes follow queue ordering. Model requests and notifications remain later slices.
+
+**Dashboard:** adds the Workspace portal's Request access/My requests page, a workspace Settings › Access requests approval queue, the Admin › Access requests platform queue, and a per-workspace Discoverable toggle on the Admin workspace detail page. The Admin workspace detail GET now reports the live `discoverable` column alongside its existing fields (no new migration or runtime grant: the column and its SELECT access already existed). See [dashboard](../dashboard.md#access-requests-83-slice-a).
+
+**Schema/API impact:** migration **0066_access_requests.sql**, new exact browser-only routes, and narrow runtime column grants/privilege probes. Explicitly apply migration/grants only on the selected enterprise database; never reset an old installation. This change is held until reserved migrations **0059–0065** land and the ordered prefix is complete. See [management API](../management-api.md#self-service-membership-requests-83-slice-a) and [identity](../identity.md#self-service-membership-requests).
+
 
 
 ## Aged unknown-hold email and observability (#101, slice D)

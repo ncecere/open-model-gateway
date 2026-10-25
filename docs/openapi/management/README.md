@@ -2,7 +2,7 @@
 
 [management.openapi.json](../management.openapi.json) is the **incomplete PR1 skeleton** for #81, not a finished client-generation or body-validation contract. The test-only generator reads compiled `route_policy::ROUTES`, expands declared methods and includes exactly `/api/v1/*`. Inference, SCIM, health and metrics are excluded; anonymous authentication/branding operations and authorized installation-policy tombstones are included. Implicit HEAD follows GET policy without synthetic operations. `info.version` is the gateway package version.
 
-PR1 has 208 operations, 38 shared error reasons and **416 incomplete request/response schema slots**. `management_openapi_reports_incomplete_schemas` reports and pins progress; later schema slices must deliberately reduce the baseline. #81 stays open until exhaustive schema and real-handler coverage is complete with no placeholders.
+The skeleton now has 249 operations, 40 shared error reasons and **498 incomplete request/response schema slots**. `management_openapi_reports_incomplete_schemas` reports and pins progress; later schema slices must deliberately reduce the baseline. #81 stays open until exhaustive schema and real-handler coverage is complete with no placeholders.
 
 ## Run the gates
 

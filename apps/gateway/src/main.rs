@@ -947,6 +947,11 @@ async fn run(cli: Cli, process_start_unix_nano: u64) -> Result<()> {
                         |fence| {
                             let store = lifecycle_store.clone();
                             async move {
+                                open_model_gateway::lifecycle::expire_access_requests_fenced(
+                                    &store,
+                                    Some(&fence),
+                                )
+                                .await?;
                                 open_model_gateway::lifecycle::cleanup_inactive_accounts_fenced(
                                     &store,
                                     Some(&fence),

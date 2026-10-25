@@ -1,4 +1,17 @@
 -- Enterprise ACL assertions, followed by executable rollback-only probes.
+DO $$ DECLARE c text; BEGIN
+ IF NOT has_table_privilege('gateway_runtime','public.access_requests','SELECT') OR NOT has_column_privilege('gateway_runtime','public.access_requests','status','UPDATE') OR NOT has_column_privilege('gateway_runtime','public.workspaces','discoverable','UPDATE') THEN RAISE EXCEPTION 'request operations unavailable'; END IF;
+ IF has_table_privilege('gateway_runtime','public.access_requests','INSERT,UPDATE,DELETE,TRUNCATE') OR has_table_privilege('gateway_runtime','public.access_request_applications','INSERT,UPDATE,DELETE,TRUNCATE') OR has_any_column_privilege('gateway_runtime','public.access_request_applications','UPDATE') THEN RAISE EXCEPTION 'request history mutable'; END IF;
+ FOREACH c IN ARRAY ARRAY['id','requester','workspace_id','target_kind','requested_role','reason','idempotency_digest','payload_digest','created_at','expires_at','workspace_name_at_request'] LOOP
+  IF has_column_privilege('gateway_runtime','public.access_requests',c,'UPDATE') THEN RAISE EXCEPTION 'mutable request identity: %',c; END IF;
+ END LOOP;
+ FOREACH c IN ARRAY ARRAY['id','status','target_kind','requested_role','created_at','expires_at','decided_by','decided_at','workspace_name_at_request'] LOOP
+  IF has_column_privilege('gateway_runtime','public.access_requests',c,'INSERT') THEN RAISE EXCEPTION 'request initialization bypass: %',c; END IF;
+ END LOOP;
+ IF has_function_privilege('gateway_runtime','public.access_request_reason_cleanup()','EXECUTE') THEN RAISE EXCEPTION 'cleanup trigger callable'; END IF;
+ IF NOT has_function_privilege('gateway_runtime','public.scrub_access_request_reasons()','EXECUTE') THEN RAISE EXCEPTION 'bounded request reason cleanup unavailable'; END IF;
+ IF has_column_privilege('gateway_runtime','public.workspace_membership_grants','access_request_changed_at','UPDATE') THEN RAISE EXCEPTION 'membership change clock mutable'; END IF;
+END $$;
 DO $$ DECLARE r record; t text; BEGIN
  SELECT * INTO STRICT r FROM pg_roles WHERE rolname='gateway_runtime';
  IF r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls THEN RAISE EXCEPTION 'privileged runtime attributes'; END IF;
@@ -185,7 +198,7 @@ DO $$ DECLARE r record; t text; BEGIN
   IF has_column_privilege('gateway_runtime','public.batch_route_waits',t,'UPDATE') THEN RAISE EXCEPTION 'mutable batch demand identity: %',t; END IF;
  END LOOP;
  IF has_table_privilege('gateway_runtime','public.batch_route_waits','TRUNCATE') THEN RAISE EXCEPTION 'batch demand truncatable'; END IF;
- IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units','valid_model_protocols_base','valid_cost_components_base','valid_price_lines_base','valid_upstream_job_id','rate_reserved_tokens','rate_contribution','omg_scope_key','omg_type_key','omg_scope_lock_audit_order','omg_lock_scopes','omg_admission_locks','omg_lock_scope_rows','omg_catalog_lock_mode','omg_scope_lock_exclusive','omg_config_bump','omg_lease_acquire','omg_lease_fence','omg_lease_complete','omg_lease_release','omg_ensure_partitions','omg_partition_coverage','omg_partition_bounds','omg_month_start','omg_next_month','omg_usage_aggregate','omg_usage_rows','omg_admin_tokens_revoke_owner','omg_admin_tokens_require_read_committed','omg_admin_tokens_require_owner_lock','valid_admin_token_scopes','valid_admin_token_allowlist','alert_webhook_summary','alert_webhook_payload','omg_report_prune_snapshots','alert_delivery_lock_buckets','alert_delivery_recent_count')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
+ IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units','valid_model_protocols_base','valid_cost_components_base','valid_price_lines_base','valid_upstream_job_id','rate_reserved_tokens','rate_contribution','omg_scope_key','omg_type_key','omg_scope_lock_audit_order','omg_lock_scopes','omg_admission_locks','omg_lock_scope_rows','omg_catalog_lock_mode','omg_scope_lock_exclusive','omg_config_bump','omg_lease_acquire','omg_lease_fence','omg_lease_complete','omg_lease_release','omg_ensure_partitions','omg_partition_coverage','omg_partition_bounds','omg_month_start','omg_next_month','omg_usage_aggregate','omg_usage_rows','omg_admin_tokens_revoke_owner','omg_admin_tokens_require_read_committed','omg_admin_tokens_require_owner_lock','valid_admin_token_scopes','valid_admin_token_allowlist','alert_webhook_summary','alert_webhook_payload','omg_report_prune_snapshots','alert_delivery_lock_buckets','alert_delivery_recent_count','scrub_access_request_reasons')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
  -- Change notifications (0028): seeded topics, forward-only versions, triggers present.
  IF has_table_privilege('gateway_runtime','public.config_versions','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.config_versions','topic','UPDATE') THEN RAISE EXCEPTION 'configuration topics mutable'; END IF;
  IF NOT has_table_privilege('gateway_runtime','public.config_versions','SELECT') OR NOT has_column_privilege('gateway_runtime','public.config_versions','version','UPDATE') THEN RAISE EXCEPTION 'configuration versions not maintainable by runtime'; END IF;
@@ -1084,6 +1097,31 @@ BEGIN
   -- Business-action audit attribution: an admin-token-attributed row reads
   -- back the token id, like every other audit_events column.
   INSERT INTO audit_events(id,actor_user_id,action,resource_type,resource_id,admin_token_id) VALUES(gen_random_uuid(),tu,'provider.updated','provider',gen_random_uuid(),ta);
+ END;
+ -- Access requests (0066): real runtime writes, frozen identity/linkage and self-decision refusal.
+ DECLARE ru uuid:=gen_random_uuid(); decider uuid:=gen_random_uuid(); ws uuid:=gen_random_uuid(); req uuid; grant_id uuid:=gen_random_uuid(); BEGIN
+  INSERT INTO users(id,email) VALUES(ru,'request-'||ru||'@example.invalid'),(decider,'decider-'||decider||'@example.invalid');
+  INSERT INTO workspaces(id,name,kind,discoverable) VALUES(ws,'Request probe','team',true);
+  INSERT INTO access_requests(requester,workspace_id,reason,idempotency_digest,payload_digest) VALUES(ru,ws,'Probe',decode(repeat('ab',32),'hex'),decode(repeat('cd',32),'hex')) RETURNING id INTO req;
+  -- UX fix (#83): the server, not the runtime caller, captures the workspace name at INSERT.
+  IF (SELECT workspace_name_at_request FROM access_requests WHERE id=req)<>'Request probe' THEN RAISE EXCEPTION 'workspace name not captured at request'; END IF;
+  BEGIN UPDATE access_requests SET workspace_name_at_request='rewrite' WHERE id=req; RAISE EXCEPTION 'workspace name at request mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  IF scrub_access_request_reasons()<>0 THEN RAISE EXCEPTION 'active requester reason scrubbed'; END IF;
+  BEGIN UPDATE workspace_membership_grants SET access_request_changed_at=now(); RAISE EXCEPTION 'membership clock rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE access_requests SET reason='rewrite' WHERE id=req; RAISE EXCEPTION 'request reason mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE access_requests SET expires_at=now() WHERE id=req; RAISE EXCEPTION 'request expiry mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN DELETE FROM access_requests WHERE id=req; RAISE EXCEPTION 'request removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE access_requests SET status='approved',decided_by=ru WHERE id=req; RAISE EXCEPTION 'request self-decision allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  -- The configuration probe above forced ALL constraints IMMEDIATE; the
+  -- application pair is checked as the gateway commits it: deferred, then once.
+  SET CONSTRAINTS access_requests_application,access_request_applications_check DEFERRED;
+  INSERT INTO workspace_membership_grants(id,workspace_id,user_id,role,source) VALUES(grant_id,ws,ru,'member','manual');
+  INSERT INTO access_request_applications(request_id,workspace_id,requester,membership_grant_id) VALUES(req,ws,ru,grant_id);
+  UPDATE access_requests SET status='approved',decided_by=decider WHERE id=req;
+  SET CONSTRAINTS access_requests_application,access_request_applications_check IMMEDIATE;
+  BEGIN UPDATE access_requests SET status='pending',decided_by=NULL,decided_at=NULL WHERE id=req; RAISE EXCEPTION 'request reopened'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE access_request_applications SET membership_grant_id=gen_random_uuid() WHERE request_id=req; RAISE EXCEPTION 'application mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN DELETE FROM access_request_applications WHERE request_id=req; RAISE EXCEPTION 'application removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  END;
  -- Work leases (0029): election, renewal, fencing, release and takeover as runtime.
  DECLARE me uuid:=gen_random_uuid(); other uuid:=gen_random_uuid(); term bigint; BEGIN

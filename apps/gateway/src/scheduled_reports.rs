@@ -421,7 +421,7 @@ pub fn start(store: Store) -> tokio::task::JoinHandle<()> {
                 crate::leases::run_singleton(
                     leases,
                     Lease::ReportScheduler,
-                    "report_scheduler",
+                    crate::ops_log::Job::ReportScheduler,
                     Duration::from_secs(90),
                     |fence| {
                         let store = &store;

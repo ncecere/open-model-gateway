@@ -189,6 +189,10 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "provider_cost_mappings",
     "provider_cost_bindings",
     "provider_reconciliations",
+    // 0066 self-service membership requests (#83). UUID defaults create no
+    // sequences; functions/triggers/indexes are not relation-preflight inputs.
+    "access_requests",
+    "access_request_applications",
 ];
 /// Partitioned parents (0030/0031). Any partition of one of these in
 /// `public` (`pg_class.relispartition`; month partitions are created ahead of
@@ -689,6 +693,19 @@ mod tests {
         let (first, second) = tokio::join!(store.migrate_enterprise(), store.migrate_enterprise());
         first.unwrap();
         second.unwrap();
+        // The current schema (including 0066) must survive a fresh migration,
+        // startup preflight and a later migrate, not just SQLx's test setup.
+        for relation in ["access_requests", "access_request_applications"] {
+            assert!(
+                sqlx::query_scalar::<_, bool>("SELECT to_regclass($1) IS NOT NULL")
+                    .bind(relation)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+            );
+        }
+        store.preflight_enterprise().await.unwrap();
+        store.migrate_enterprise().await.unwrap();
         assert!(store.is_ready().await);
         sqlx::query("UPDATE _sqlx_migrations SET checksum='\\x00'::bytea")
             .execute(&pool)

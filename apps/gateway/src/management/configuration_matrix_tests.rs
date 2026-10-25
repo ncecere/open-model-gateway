@@ -212,6 +212,25 @@ async fn every_json_management_write_rejects_unknown_fields_after_valid_control(
             });
         };
     }
+    sqlx::query("UPDATE workspaces SET discoverable=true WHERE id=$1")
+        .bind(f.team)
+        .execute(&pool)
+        .await
+        .unwrap();
+    case!(
+        "access_requests::create",
+        "POST",
+        "/api/v1/me/access-requests",
+        &f.outsider,
+        json!({"workspace_id":f.team,"idempotency_key":"configuration-matrix","reason":"Join team"})
+    );
+    case!(
+        "access_requests::set_discoverable",
+        "PUT",
+        format!("{platform}/workspaces/{ws}/discoverable"),
+        &f.admin,
+        json!({"discoverable":true})
+    );
     case!(
         "resources::create_provider",
         "POST",

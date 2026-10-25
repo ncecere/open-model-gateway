@@ -67,6 +67,17 @@ describe("audit event labels", () => {
   ])("labels webhook event %s", (code, label) => {
     expect(auditActionLabels[code]).toBe(label);
   });
+  it.each([
+    ["access_request.created", "Submitted access request"],
+    ["access_request.approved", "Approved access request"],
+    ["access_request.denied", "Denied access request"],
+    ["access_request.withdrawn", "Withdrew access request"],
+    ["access_request.expired", "Expired access request"],
+    ["access_request.applied", "Applied access request"],
+    ["workspace.discoverability_set", "Changed workspace discoverability"],
+  ])("labels access request event %s", (code, label) => {
+    expect(auditActionLabels[code]).toBe(label);
+  });
   it("uses short labels, not codes", () => {
     for (const [code, label] of Object.entries(auditActionLabels)) {
       expect(label, code).not.toMatch(/[._]/);

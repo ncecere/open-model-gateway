@@ -44,6 +44,7 @@ import { PrivacySettingsPage } from "./settings/privacy";
 import { EmailSettingsPage } from "./settings/email";
 import { SignInSettingsPage } from "./settings/sign-in";
 import { AdminAlertsPage, AlertRulePage, NotificationsPage } from "./alerts";
+import { AccessRequestsPage, PlatformAccessRequestsPage } from "./access-requests";
 import s from "./shared.module.css";
 import signIn from "./sign-in.module.css";
 import { Card, CardBody } from "../components/ui/card/card";
@@ -106,6 +107,8 @@ export function DashboardContent({ session, search, workspace, navigate }: { ses
     case "alert-rule-detail": return search.record ? <AlertRulePage key={search.record} session={session} scope={{ kind: "platform" }} id={search.record} /> : <PermissionNotice title="Missing alert rule identifier" />;
     case "notifications": return <NotificationsPage session={session} />;
     case "platform-report-run": return search.record && search.run ? <ReportRunPage session={session} schedule={search.record} run={search.run} /> : <PermissionNotice title="Missing report identifier" />;
+    case "access-requests": return <AccessRequestsPage tab={search.tab} onTabChange={changeTab} />;
+    case "platform-access-requests": return <PlatformAccessRequestsPage session={session} />;
     case "platform-costs": return <PlatformCosts session={session} />;
     case "platform-logs": return <LogsPage scope={{ kind: "platform" }} />;
     case "platform-log-detail": return search.record ? <PlatformRequestDetailPage session={session} id={search.record} /> : <PermissionNotice title="Missing request identifier" />;

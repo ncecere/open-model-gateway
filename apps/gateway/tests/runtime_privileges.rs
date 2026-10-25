@@ -29,10 +29,24 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         .execute(&mut *connection).await.unwrap();
     // The same embedded files and code path as `open-model-gateway grants apply|verify`.
     let store = open_model_gateway::store::Store::new(pool.clone());
+    // Real operator/startup chain, including every embedded migration (0066).
+    // This used to fail before grants: 0066's tables were missing from preflight.
+    store.migrate_enterprise().await.unwrap();
+    store.preflight_enterprise().await.unwrap();
     store.apply_runtime_grants().await.unwrap();
     // Idempotent: reapplying after every migration must succeed.
     store.apply_runtime_grants().await.unwrap();
     store.verify_runtime_grants().await.unwrap();
+    assert!(
+        store.is_ready().await,
+        "migrate → grants → startup readiness"
+    );
+    store.migrate_enterprise().await.unwrap(); // subsequent upgrades must preflight too
+    let runtime_startup = runtime_pool(&pool).await;
+    let runtime_store = open_model_gateway::store::Store::new(runtime_startup.clone());
+    runtime_store.preflight_enterprise().await.unwrap();
+    assert!(runtime_store.is_ready().await);
+    runtime_startup.close().await;
     for table in [
         "users",
         "api_keys",
@@ -70,6 +84,8 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         "provider_cost_mappings",
         "provider_cost_bindings",
         "provider_reconciliations",
+        "access_requests",
+        "access_request_applications",
     ] {
         assert_eq!(
             sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
@@ -109,6 +125,7 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
     alert_webhooks_run_as_runtime(&pool).await;
     scheduled_reports_run_as_runtime(&pool).await;
     key_issuance_runs_as_runtime(&pool).await;
+    access_requests_run_as_runtime(&pool).await;
     // Last: its unknown batch hold would change the installation-wide totals above.
     async_jobs_run_as_runtime(&pool).await;
     sqlx::query("SELECT pg_advisory_unlock(72419505)")
@@ -117,7 +134,118 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         .unwrap();
 }
 
-/// #85: preview reads must work with deployed runtime ACLs.
+/// #83: the same INSERT, transition and linkage SQL as the handler. The
+/// rollback probe file also refuses identity/reason mutation and self-decision.
+async fn access_requests_run_as_runtime(pool: &PgPool) {
+    use uuid::Uuid;
+    let runtime = runtime_pool(pool).await;
+    let (requester, decider, ws) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let mut tx = runtime.begin().await.unwrap();
+    sqlx::query("INSERT INTO users(id,email) VALUES($1,'request-runtime@example.test'),($2,'decide-runtime@example.test')").bind(requester).bind(decider).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO platform_role_grants(user_id,role,source) VALUES($1,'user','manual'),($2,'admin','manual')").bind(requester).bind(decider).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO workspaces(id,name,kind,discoverable) VALUES($1,'Request runtime','team',true)").bind(ws).execute(&mut *tx).await.unwrap();
+    let id:Uuid=sqlx::query_scalar("INSERT INTO access_requests(requester,workspace_id,reason,idempotency_digest,payload_digest) VALUES($1,$2,'Join',sha256('runtime'::bytea),sha256('payload'::bytea)) RETURNING id").bind(requester).bind(ws).fetch_one(&mut *tx).await.unwrap();
+    // UX fix (#83): the server captures the workspace name at INSERT; runtime never gets
+    // UPDATE(workspace_name_at_request), same as created_at/expires_at above.
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT workspace_name_at_request FROM access_requests WHERE id=$1"
+        )
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap(),
+        "Request runtime"
+    );
+    // A SAVEPOINT isolates the expected privilege error so the surrounding rollback-only
+    // transaction (committed statements below) is not left aborted by it.
+    sqlx::query("SAVEPOINT probe_workspace_name")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    assert!(
+        sqlx::query("UPDATE access_requests SET workspace_name_at_request='rewrite' WHERE id=$1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .is_err(),
+        "runtime must not be able to rewrite the frozen workspace name"
+    );
+    sqlx::query("ROLLBACK TO SAVEPOINT probe_workspace_name")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let grant:Uuid=sqlx::query_scalar("INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source) VALUES($1,$2,'member','manual') RETURNING id").bind(ws).bind(requester).fetch_one(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO access_request_applications(request_id,workspace_id,requester,membership_grant_id) VALUES($1,$2,$3,$4)").bind(id).bind(ws).bind(requester).bind(grant).execute(&mut *tx).await.unwrap();
+    sqlx::query("UPDATE access_requests SET status='approved',decided_by=$2 WHERE id=$1")
+        .bind(id)
+        .bind(decider)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::raw_sql("SET CONSTRAINTS ALL IMMEDIATE")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let hold = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO legal_holds(id,workspace_id,reference) VALUES($1,$2,'RUNTIME-REQUEST-HOLD')",
+    )
+    .bind(hold)
+    .bind(ws)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE users SET cleaned_at=now(),disabled_at=now() WHERE id=$1")
+        .bind(requester)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT scrub_access_request_reasons()")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap(),
+        0,
+        "active hold wins"
+    );
+    assert!(
+        sqlx::query_scalar::<_, Option<String>>("SELECT reason FROM access_requests WHERE id=$1")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    sqlx::query("UPDATE legal_holds SET released_at=now(),released_by_user_id=$2 WHERE id=$1")
+        .bind(hold)
+        .bind(decider)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT scrub_access_request_reasons()")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap(),
+        1,
+        "runtime can resume bounded cleanup after release"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, Option<String>>("SELECT reason FROM access_requests WHERE id=$1")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap(),
+        None,
+        "owner-run cleanup scrubs reasons without runtime UPDATE(reason)"
+    );
+    tx.rollback().await.unwrap();
+    runtime.close().await;
+}
+
+/// #85: all preview SELECTs and model-visibility functions work under the
+/// deployed runtime ACL, not just the migration owner used by most fixtures.
 async fn deployment_preview_runs_as_runtime(pool: &PgPool) {
     use serde_json::Value;
     let runtime = runtime_pool(pool).await;

@@ -1,6 +1,6 @@
 import { placeHold } from "./legal-holds";
 import { useEffect, type ReactNode } from "react";
-import { BellRing, Bot, Boxes, Gauge, LayoutDashboard, Library, ScrollText, Settings2, ShieldCheck, UsersRound } from "lucide-react";
+import { BellRing, Bot, Boxes, Gauge, Inbox, LayoutDashboard, Library, ScrollText, Settings2, ShieldCheck, UsersRound, UserPlus } from "lucide-react";
 import { api, wsPath, platformWorkspacePath, type Session, type Workspace, type CostCenter, type CatalogAvailability, type Grant, type ObjectVisibility } from "../lib/api";
 import { ResourcePage } from "../components/resource-page";
 import { DateTime, ErrorNotice, Panel, Stack, Alert, StatCard, useApi, useChoices, Button, useAction } from "../components/ui";
@@ -24,6 +24,8 @@ import { EffectiveAccess } from "../components/effective-access";
 import { WorkspaceModelAccess } from "./model-access";
 import { ResourceLink } from "../components/navigation-link";
 import { WorkspaceAlerts } from "./alerts";
+import { WorkspaceAccessRequestQueue } from "./access-requests";
+import { discoverablePath } from "../lib/access-requests";
 import type { Scope } from "./workspace";
 import s from "./shared.module.css";
 /*
@@ -38,7 +40,7 @@ import s from "./shared.module.css";
  */
 export function workspaceSettingsTabs(session: Session, workspace: Workspace): string[] {
   if (workspace.kind === "personal") return ["limits", "access", "alerts", "audit"];
-  return ["overview", "members", ...(permissions(session, workspace).manageServiceAccounts ? ["service-accounts"] : []), "limits", "access", ...(permissions(session, workspace).managePolicy ? ["alerts"] : []), "audit"];
+  return ["overview", "members", ...(permissions(session, workspace).manageServiceAccounts ? ["service-accounts"] : []), ...(permissions(session, workspace).manageTeam ? ["access-requests"] : []), "limits", "access", ...(permissions(session, workspace).managePolicy ? ["alerts"] : []), "audit"];
 }
 export function WorkspaceSettings({ session, workspace, tab, onTabChange }: Scope & { tab?: string; onTabChange: (tab: string) => void }) {
   const personal = workspace.kind === "personal", editLimits = !personal && permissions(session, workspace).managePolicy;
@@ -47,6 +49,7 @@ export function WorkspaceSettings({ session, workspace, tab, onTabChange }: Scop
     overview: { label: "General", icon: <Settings2 aria-hidden />, content: <WorkspaceGeneral session={session} workspace={workspace} /> },
     members: { label: "Members", icon: <UsersRound aria-hidden />, content: <WorkspaceMembers session={session} workspace={workspace} /> },
     "service-accounts": { label: "Service accounts", icon: <Bot aria-hidden />, content: <ServiceAccounts session={session} workspace={workspace} /> },
+    "access-requests": { label: "Access requests", icon: <Inbox aria-hidden />, content: <WorkspaceAccessRequestQueue session={session} workspace={workspace} /> },
     limits: { label: "Limits", icon: <Gauge aria-hidden />, content: editLimits ? <Governance session={session} workspace={workspace} /> : <EffectiveLimits workspace={workspace} /> },
     access: { label: "Access", icon: <ShieldCheck aria-hidden />, content: <EffectiveAccess workspace={workspace} title="Access" canManageModels={permissions(session, workspace).manageGrants} /> },
     alerts: { label: "Alerts", icon: <BellRing aria-hidden />, content: <WorkspaceAlerts session={session} workspace={workspace} /> },
@@ -102,7 +105,8 @@ export function WorkspaceDetail({ session, id, kind, tab, onTabChange }: { sessi
   const disabled = !!q.data.disabled_at, writable = session.capabilities.platform_write && !disabled;
   const readSession: Session = disabled ? { ...session, capabilities: { ...session.capabilities, platform_write: false } } : session;
   const workspace: Workspace = { ...q.data, owner_user_id: null, role: mine?.role ?? null, membership_source: mine?.membership_source ?? null, capabilities: { issue_own_key: false, manage_members: writable, manage_service_accounts: writable, manage_policy: writable, delegate_models: writable, view_all_activity: writable } };
-  const data = q.data, noun = kindLabels[workspace.kind], members = data.member_count, center = data.cost_center;
+  const data = q.data, noun = kindLabels[workspace.kind], members = data.member_count, center = data.cost_center, discoverable = !!data.discoverable;
+  const toggleDiscoverable = () => ask({ title: discoverable ? `Hide ${workspace.name} from discovery?` : `Make ${workspace.name} discoverable?`, description: discoverable ? "People can no longer find it to request access. Pending requests are unaffected." : "Active, entitled users can find this workspace and ask to join as a member.", submitLabel: discoverable ? "Hide" : "Make discoverable", successNotice: discoverable ? "Workspace is hidden from discovery." : "Workspace is now discoverable.", run: (_, signal) => api(discoverablePath(id), { method: "PUT", body: { discoverable: !discoverable }, signal }) });
   const toggle = () => ask({ title: `${workspace.disabled_at ? "Enable" : "Disable"} ${workspace.name}?`, description: workspace.disabled_at ? "Revoked keys don't come back; issue new ones after enabling." : "Refuses new requests and revokes its keys. Past usage is kept.", danger: !workspace.disabled_at, submitLabel: workspace.disabled_at ? "Enable workspace" : "Disable workspace", run: (_, signal) => api(platformWorkspacePath(id), { method: "PATCH", body: { disabled: !workspace.disabled_at }, signal }) });
   // Admin is read-only for Auditors even if an independent membership authorizes
   // workspace-mode administration. Member/private operations stay in Workspace.
@@ -124,7 +128,12 @@ export function WorkspaceDetail({ session, id, kind, tab, onTabChange }: { sessi
       { value: "model-access", label: "Models", icon: <Boxes aria-hidden />, count: modelsVisible ? models.data?.length : undefined, content: <WorkspaceModelAccess session={session} workspace={workspace} /> },
       { value: "limits", label: "Limits", icon: <Gauge aria-hidden />, content: <ScopeLimits mode="replacement" path={`${platformWorkspacePath(id)}/policy`} writable={writable} kind={workspace.kind} /> },
       { value: "access", label: "Access", icon: <ShieldCheck aria-hidden />, content: <EffectiveAccess workspace={workspace} title="Access" /> },
-      { value: "settings", label: "General", icon: <Settings2 aria-hidden />, content: <Stack gap={6}><Panel title="Administrative settings"><SettingsForm fields={[{ ...nameField, value: workspace.name }, { name: "cost_center_id", label: "Cost center", type: "select", value: workspace.cost_center_id ?? "", options: centers.data?.filter(c => !c.archived_at).map(c => ({ value: c.id, label: `${c.name} · ${c.code}` })) ?? [], help: "Applies to new requests only. Empty: Unallocated." }]} writable={writable && centers.isSuccess} onSave={(v, signal) => api(platformWorkspacePath(id), { method: "PATCH", body: { name: v.name, cost_center_id: v.cost_center_id || null }, signal })} />{centers.isError && <ErrorNotice error={centers.error} />}</Panel>{session.capabilities.platform_write && (disabled
+      { value: "settings", label: "General", icon: <Settings2 aria-hidden />, content: <Stack gap={6}><Panel title="Administrative settings"><SettingsForm fields={[{ ...nameField, value: workspace.name }, { name: "cost_center_id", label: "Cost center", type: "select", value: workspace.cost_center_id ?? "", options: centers.data?.filter(c => !c.archived_at).map(c => ({ value: c.id, label: `${c.name} · ${c.code}` })) ?? [], help: "Applies to new requests only. Empty: Unallocated." }]} writable={writable && centers.isSuccess} onSave={(v, signal) => api(platformWorkspacePath(id), { method: "PATCH", body: { name: v.name, cost_center_id: v.cost_center_id || null }, signal })} />{centers.isError && <ErrorNotice error={centers.error} />}</Panel>
+      <Panel title="Discovery"><DescriptionList items={[{ label: "Discoverable", value: <Badge tone={discoverable ? "success" : "neutral"}>{discoverable ? "Yes" : "No"}</Badge> }]} />
+        <p className={s.note}>Active, entitled users can find a discoverable workspace and ask to join it as a member. Defaults off.</p>
+        {writable && <Button variant="secondary" onClick={toggleDiscoverable}>{discoverable ? "Hide from discovery" : "Make discoverable"}</Button>}
+      </Panel>
+      {session.capabilities.platform_write && (disabled
         ? <Panel title="Disabled"><Button variant="secondary" onClick={toggle}>Enable workspace</Button></Panel>
         : <DangerZone><DangerAction title={`Disable ${noun.toLowerCase()}`} description="Refuses new requests and revokes its keys. Enabling later doesn't restore them." action={<Button variant="danger" onClick={toggle}>Disable workspace</Button>} /></DangerZone>)}</Stack> },
     ]} />;

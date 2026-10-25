@@ -522,6 +522,18 @@ pub(crate) async fn audit(
     let mut safe = serde_json::Map::new();
     if let Some(object) = metadata.as_object() {
         for (k, v) in object {
+            // Access-request outcomes are closed typed values, never reason text.
+            if k == "outcome"
+                && action.starts_with("access_request.")
+                && v.as_str().is_some_and(|s| {
+                    matches!(
+                        s,
+                        "created" | "approved" | "denied" | "withdrawn" | "expired" | "applied"
+                    )
+                })
+            {
+                safe.insert(k.clone(), v.clone());
+            }
             if k == "changed_fields"
                 && action.starts_with("alert_webhook.")
                 && v.as_array().is_some_and(|fields| {

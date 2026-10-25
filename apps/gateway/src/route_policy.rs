@@ -275,6 +275,57 @@ pub(crate) const ROUTES: &[Route] = &[
         PlatformRead,
         DENIED
     ),
+    route!("GET", "/api/v1/access-request-targets", Browser, DENIED),
+    route!("GET POST", "/api/v1/me/access-requests", Browser, DENIED),
+    route!("GET", "/api/v1/me/access-requests/{id}", Browser, DENIED),
+    route!(
+        "POST",
+        "/api/v1/me/access-requests/{id}/withdraw",
+        Browser,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/workspaces/{ws}/access-requests",
+        WorkspaceAdmin,
+        DENIED
+    ),
+    route!(
+        "POST",
+        "/api/v1/workspaces/{ws}/access-requests/{id}/approve",
+        WorkspaceAdmin,
+        DENIED
+    ),
+    route!(
+        "POST",
+        "/api/v1/workspaces/{ws}/access-requests/{id}/deny",
+        WorkspaceAdmin,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/access-requests",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "POST",
+        "/api/v1/platform/access-requests/{id}/approve",
+        PlatformWrite,
+        DENIED
+    ),
+    route!(
+        "POST",
+        "/api/v1/platform/access-requests/{id}/deny",
+        PlatformWrite,
+        DENIED
+    ),
+    route!(
+        "PUT",
+        "/api/v1/platform/workspaces/{ws}/discoverable",
+        PlatformWrite,
+        DENIED
+    ),
     route!("GET", "/api/v1/me", Browser, DENIED),
     route!("GET", "/api/v1/me/summary", Browser, DENIED),
     route!("GET", "/api/v1/me/keys", Browser, DENIED),

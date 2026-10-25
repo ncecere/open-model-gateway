@@ -1,5 +1,5 @@
 import { dashboardSearch, identifier, type DashboardSearch, type Page } from "./permissions";
-export const platformPaths: Partial<Record<Page, string>> = { "legal-holds": "/admin/legal-holds", "admin-tokens": "/admin/settings/admin-tokens", "settings-audit-export": "/admin/settings/audit-export", "settings-alerts": "/admin/settings/alerts", "platform-overview": "/admin", "platform-teams": "/admin/teams", "platform-projects": "/admin/projects", users: "/admin/users", models: "/admin/models", "model-new": "/admin/models/new", providers: "/admin/connections", deployments: "/admin/deployments", catalogs: "/admin/catalogs", policies: "/admin/settings/limits", "settings-general": "/admin/settings/general", "settings-privacy": "/admin/settings/privacy", "settings-email": "/admin/settings/email", "settings-sign-in": "/admin/settings/sign-in", "cost-centers": "/admin/cost-centers", "platform-costs": "/admin/costs", oidc: "/admin/sso-groups", "platform-audit": "/admin/audit", "platform-logs": "/admin/logs", "platform-log-session": "/admin/logs/session", pricing: "/admin/pricing", routing: "/admin/routing", "key-safety": "/admin/key-safety", "platform-model-compare": "/admin/models/compare" };
+export const platformPaths: Partial<Record<Page, string>> = { "legal-holds": "/admin/legal-holds", "platform-access-requests": "/admin/access-requests", "admin-tokens": "/admin/settings/admin-tokens", "settings-audit-export": "/admin/settings/audit-export", "settings-alerts": "/admin/settings/alerts", "platform-overview": "/admin", "platform-teams": "/admin/teams", "platform-projects": "/admin/projects", users: "/admin/users", models: "/admin/models", "model-new": "/admin/models/new", providers: "/admin/connections", deployments: "/admin/deployments", catalogs: "/admin/catalogs", policies: "/admin/settings/limits", "settings-general": "/admin/settings/general", "settings-privacy": "/admin/settings/privacy", "settings-email": "/admin/settings/email", "settings-sign-in": "/admin/settings/sign-in", "cost-centers": "/admin/cost-centers", "platform-costs": "/admin/costs", oidc: "/admin/sso-groups", "platform-audit": "/admin/audit", "platform-logs": "/admin/logs", "platform-log-session": "/admin/logs/session", pricing: "/admin/pricing", routing: "/admin/routing", "key-safety": "/admin/key-safety", "platform-model-compare": "/admin/models/compare" };
 /** Workspace pages and their path under /workspaces/{ws}. */
 const workspaceSegments: Partial<Record<Page, string>> = { overview: "", keys: "/keys", grants: "/models", requests: "/logs", "session-detail": "/session", files: "/files", costs: "/costs", "workspace-settings": "/settings", "model-compare": "/models/compare" };
 /** Workspace records routed as /workspaces/{ws}/{collection}/{record}. */
@@ -29,6 +29,7 @@ export function dashboardHref(input: DashboardSearch): string {
   if (page === "home") path = "/home";
   else if (page === "profile") path = "/profile";
   else if (page === "notifications") path = "/notifications";
+  else if (page === "access-requests") path = "/access-requests";
   else if (page === "accept-invitation") path = "/invitations/accept";
   else if (page === "platform-report-run" && record && search.run) path = `/admin/report-schedules/${encodeURIComponent(record)}/runs/${encodeURIComponent(search.run)}`;
   else if (page === "workspace-report-run" && ws && record && search.run) path = `/workspaces/${encodeURIComponent(ws)}/report-schedules/${encodeURIComponent(record)}/runs/${encodeURIComponent(search.run)}`;
@@ -56,6 +57,7 @@ export function parseDashboardLocation(href: string): DashboardSearch | undefine
   if (path === "/home") return { ...metadata, page: "home" };
   if (path === "/profile") return { ...metadata, page: "profile" };
   if (path === "/notifications") return { ...metadata, page: "notifications" };
+  if (path === "/access-requests") return { ...metadata, page: "access-requests" };
   if (path === "/invitations/accept") return { ...metadata, page: "accept-invitation" };
   const parts = path.split("/").slice(1); let id: string | undefined;
   try { id = identifier(decodeURIComponent(parts[parts[0] === "admin" ? 2 : 1] ?? "")); } catch { return; }

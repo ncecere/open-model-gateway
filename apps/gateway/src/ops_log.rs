@@ -63,7 +63,7 @@ fixed_enum!(Job {
     LoginAttemptPrune => "login_attempt_prune", SessionPrune => "session_prune",
     StorageUsage => "storage_usage", Compaction => "compaction", Partitions => "partitions",
     Rollups => "rollups", HistoryVerify => "history_verify", Lifecycle => "lifecycle",
-    FileSweep => "file_sweep"
+    FileSweep => "file_sweep", ReportScheduler => "report_scheduler"
 });
 /// Shared `Delivery` failures plus `Rejected` (a partial-success collector
 /// acknowledgement also degrades the exporter).
