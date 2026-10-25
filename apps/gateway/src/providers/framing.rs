@@ -26,22 +26,88 @@ pub(super) fn status(status: reqwest::StatusCode) -> Result<()> {
     })
 }
 pub(super) async fn body(response: reqwest::Response) -> Result<Value> {
-    if response
-        .content_length()
-        .is_some_and(|n| n > BODY_LIMIT as u64)
-    {
+    body_limit(response, BODY_LIMIT).await
+}
+pub(super) async fn body_limit(response: reqwest::Response, limit: usize) -> Result<Value> {
+    if response.content_length().is_some_and(|n| n > limit as u64) {
         return Err(InferenceError::InvalidUpstream);
     }
     let mut bytes = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(transport)?;
-        if chunk.len() > BODY_LIMIT - bytes.len() {
+        if chunk.len() > limit.saturating_sub(bytes.len()) {
             return Err(InferenceError::InvalidUpstream);
         }
         bytes.extend_from_slice(&chunk);
     }
     serde_json::from_slice(&bytes).map_err(|_| InferenceError::InvalidUpstream)
+}
+/// Read only a small bounded error envelope to classify context overflow.
+/// Never return, log or retain upstream text; all public messages are constants.
+pub(super) async fn generation_status(response: reqwest::Response) -> Result<reqwest::Response> {
+    generation_status_with(response, classified_error).await
+}
+pub(super) async fn anthropic_generation_status(
+    response: reqwest::Response,
+) -> Result<reqwest::Response> {
+    generation_status_with(response, anthropic_error).await
+}
+type ErrorClassifier = fn(&Value) -> Option<InferenceError>;
+async fn generation_status_with(
+    response: reqwest::Response,
+    classify: ErrorClassifier,
+) -> Result<reqwest::Response> {
+    if response.status().is_success() {
+        return Ok(response);
+    }
+    let code = response.status().as_u16();
+    if code == 529 || code == 503 {
+        return Err(InferenceError::Overloaded);
+    }
+    if matches!(code, 400 | 413 | 422) {
+        if let Ok(value) = body_limit(response, 16 * 1024).await
+            && let Some(error) = classify(&value)
+        {
+            return Err(error);
+        }
+        return Err(InferenceError::UpstreamRejected);
+    }
+    status(response.status())?;
+    Err(InferenceError::InvalidUpstream)
+}
+/// Classify known error semantics, discarding all diagnostic text immediately.
+pub(super) fn classified_error(value: &Value) -> Option<InferenceError> {
+    let error = &value["error"];
+    // An explicit code wins, even when unknown/non-string. Do not let a
+    // secondary type or quoted client text reinterpret its meaning.
+    let code = match error.get("code").filter(|v| !v.is_null()) {
+        Some(code) => code.as_str()?,
+        None => error["type"].as_str()?,
+    };
+    match code {
+        "context_length_exceeded" | "prompt_too_long" | "too_many_tokens" => {
+            Some(InferenceError::ContextLength)
+        }
+        "overloaded_error" | "overloaded" => Some(InferenceError::Overloaded),
+        "rate_limit_error" | "rate_limit_exceeded" => Some(InferenceError::Busy),
+        _ => None,
+    }
+}
+/// Anthropic documents context overflow as invalid_request_error with a
+/// `prompt is too long:` prefix, rather than a dedicated structured code.
+/// This exception is native-only, never a generic substring search.
+pub(super) fn anthropic_error(value: &Value) -> Option<InferenceError> {
+    if let Some(error) = classified_error(value) {
+        return Some(error);
+    }
+    let error = &value["error"];
+    if error.get("code").is_some_and(|v| !v.is_null()) || error["type"] != "invalid_request_error" {
+        return None;
+    }
+    let message = error["message"].as_str()?;
+    (message == "prompt is too long" || message.starts_with("prompt is too long:"))
+        .then_some(InferenceError::ContextLength)
 }
 pub(super) fn check_sse(response: &reqwest::Response) -> Result<()> {
     if !response
@@ -154,6 +220,62 @@ pub(super) fn usage(value: &Value) -> Result<crate::inference::types::Usage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn structured_error_codes_precede_diagnostic_text() {
+        use serde_json::json;
+        for (error, expected) in [
+            (
+                json!({"code":"rate_limit_exceeded","message":"Client said prompt is too long"}),
+                Some(InferenceError::Busy),
+            ),
+            (
+                json!({"code":"overloaded_error","message":"Client said maximum context length"}),
+                Some(InferenceError::Overloaded),
+            ),
+            (
+                json!({"code":"unrelated_error","type":"overloaded_error","message":"prompt is too long"}),
+                None,
+            ),
+            (
+                json!({"code":402,"type":"overloaded_error","message":"prompt is too long"}),
+                None,
+            ),
+            (
+                json!({"type":"invalid_request_error","message":"Client said prompt is too long"}),
+                None,
+            ),
+            (json!({"message":"prompt is too long"}), None),
+            (
+                json!({"code":"context_length_exceeded","message":"SECRET"}),
+                Some(InferenceError::ContextLength),
+            ),
+        ] {
+            assert_eq!(classified_error(&json!({"error":error})), expected);
+        }
+    }
+
+    #[test]
+    fn context_text_fallback_is_only_anthropic_invalid_request_prefix() {
+        use serde_json::json;
+        assert_eq!(
+            anthropic_error(
+                &json!({"error":{"type":"invalid_request_error","message":"prompt is too long: 123 tokens"}})
+            ),
+            Some(InferenceError::ContextLength)
+        );
+        for error in [
+            json!({"type":"invalid_request_error","message":"Client quoted prompt is too long"}),
+            json!({"type":"rate_limit_error","message":"prompt is too long"}),
+            json!({"code":"unrelated_error","type":"invalid_request_error","message":"prompt is too long"}),
+            json!({"code":"rate_limit_exceeded","type":"invalid_request_error","message":"prompt is too long"}),
+        ] {
+            assert_eq!(
+                anthropic_error(&json!({"error":error})),
+                classified_error(&json!({"error":error}))
+            );
+        }
+    }
+
     #[tokio::test]
     async fn native_transport_drop_cancels_body_and_frames() {
         use axum::{

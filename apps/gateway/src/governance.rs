@@ -1517,7 +1517,10 @@ async fn free_rejection(
 ) -> Result<bool, InferenceError> {
     let u = record.usage;
     if record.outcome != Outcome::Failed
-        || record.error != Some(InferenceError::UpstreamRejected)
+        || !matches!(
+            record.error,
+            Some(InferenceError::UpstreamRejected | InferenceError::ContextLength)
+        )
         || u.input_tokens.is_some()
         || u.output_tokens.is_some()
         || u.billing.is_some()

@@ -8,6 +8,7 @@ mod batches;
 pub(crate) mod branding;
 mod catalogs;
 mod compare;
+mod deployment_configuration;
 mod directory;
 mod files;
 pub(crate) mod governance;
@@ -18,6 +19,9 @@ mod logs;
 mod me;
 mod members;
 mod models_ux;
+#[cfg(test)]
+#[path = "../management_openapi/mod.rs"]
+mod openapi;
 mod requests;
 pub(crate) mod resources;
 mod scheduled_reports;

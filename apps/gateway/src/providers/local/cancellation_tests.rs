@@ -80,6 +80,7 @@ async fn pending_local_embeddings_and_chat_stream_drop_cancel_http_body() {
             let _ = task.await;
         } else {
             let r = ChatRequest {
+                messages_options: None,
                 model: "public".into(),
                 messages: vec![Message {
                     role: Role::User,

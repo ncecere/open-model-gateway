@@ -160,6 +160,7 @@ pub(crate) const ROUTES: &[Route] = &[
     route!("GET", "/v1/models", InferenceKey, DENIED),
     route!("POST", "/v1/chat/completions", InferenceKey, DENIED),
     route!("POST", "/v1/responses", InferenceKey, DENIED),
+    // Also /v1/messages?beta=true: queries never widen this exact POST template.
     route!("POST", "/v1/messages", InferenceKey, DENIED),
     route!("POST", "/v1/embeddings", InferenceKey, DENIED),
     route!("POST", "/v1/realtime/client_secrets", InferenceKey, DENIED),
@@ -970,6 +971,12 @@ pub(crate) const ROUTES: &[Route] = &[
         "/api/v1/platform/deployments/{id}",
         PlatformWrite,
         CATALOG_WRITE
+    ),
+    route!(
+        "POST",
+        "/api/v1/platform/deployments/{id}/configuration/preview",
+        PlatformWrite,
+        DENIED
     ),
     route!("GET", "/api/v1/platform/holds", PlatformRead, PLATFORM_READ),
     route!("GET", "/api/v1/platform/audit", PlatformRead, PLATFORM_READ),

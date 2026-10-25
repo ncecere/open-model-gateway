@@ -222,6 +222,13 @@ async fn every_json_management_write_rejects_unknown_fields_after_valid_control(
         json!({"model_id":model_id,"provider_connection_id":connection,"upstream_model":"matrix-new","enabled":false})
     );
     case!(
+        "deployment_configuration::preview",
+        "POST",
+        format!("{platform}/deployments/{deployment}/configuration/preview"),
+        &f.admin,
+        json!({"enabled":false})
+    );
+    case!(
         "resources::update_deployment",
         "PATCH",
         format!("{platform}/deployments/{deployment}"),

@@ -295,6 +295,16 @@ DO $$ DECLARE fu uuid:=gen_random_uuid(); BEGIN
  END;
 END $$;
 SET LOCAL ROLE gateway_runtime;
+-- TEMP is a database privilege (including PostgreSQL's default PUBLIC grant),
+-- not a schema CREATE privilege. Exercise the refusal, not just its ACL bit.
+-- An unexpected successful CREATE and every other probe roll back together.
+DO $$ BEGIN
+ BEGIN
+  CREATE TEMP TABLE omg_runtime_temp_probe(id integer) ON COMMIT DROP;
+  RAISE EXCEPTION 'runtime CREATE TEMP TABLE allowed';
+ EXCEPTION WHEN insufficient_privilege THEN NULL;
+ END;
+END $$;
 SELECT version,checksum,success FROM public._sqlx_migrations ORDER BY version;
 -- Take the normal management lock before any probe can touch an existing
 -- saved destination (including the rollback-only full-capacity case).
