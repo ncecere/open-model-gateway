@@ -140,7 +140,7 @@ fn every_variant_has_a_fixed_severity_body_name_and_slug() {
 fn only_generation_finish_may_carry_a_trace_id_and_it_is_hexadecimal() {
     let with_trace = OpsEvent::FinalizationNeedsReconciliation {
         finalizer: Finalizer::GenerationFinish,
-        trace: Some(LogTraceId::from_provenance("0123456789abcdef".into())),
+        trace: Some(LogTraceId::for_test("0123456789abcdef")),
     };
     let record = log_record(&with_trace, 1, 0);
     assert_eq!(record["traceId"], "0123456789abcdef");
@@ -278,21 +278,33 @@ fn queued(event: OpsEvent) -> Queued {
     }
 }
 
+fn pending(receiver: mpsc::Receiver<Queued>) -> Pending {
+    Pending {
+        receiver,
+        in_flight: 0,
+    }
+}
+
 #[tokio::test]
 async fn batch_bounds_at_most_100_records_per_call() {
     let built = exporter("http://127.0.0.1:1/v1/logs");
-    let (sender, mut receiver) = mpsc::channel(QUEUE);
+    let (sender, receiver) = mpsc::channel(QUEUE);
+    let mut pending = pending(receiver);
     for _ in 0..150 {
         sender
             .try_send(queued(OpsEvent::ConfigListenerDown))
             .unwrap();
     }
-    assert_eq!(receiver.len(), 150);
-    send_batch(&built, &mut receiver).await;
+    assert_eq!(pending.receiver.len(), 150);
+    send_batch(&built, &mut pending).await;
     assert_eq!(
-        receiver.len(),
+        pending.receiver.len(),
         50,
         "at most MAX_BATCH records are consumed by one send_batch call"
+    );
+    assert_eq!(
+        pending.in_flight, 0,
+        "accounted back to zero after the exchange"
     );
 }
 
@@ -301,7 +313,7 @@ fn oversized_record_is_dropped_as_record_limit_not_fabricated() {
     let huge_trace = "a".repeat(600);
     let event = OpsEvent::FinalizationNeedsReconciliation {
         finalizer: Finalizer::GenerationFinish,
-        trace: Some(LogTraceId::from_provenance(huge_trace)),
+        trace: Some(LogTraceId::for_test(&huge_trace)),
     };
     let record = log_record(&event, 1, 0);
     assert!(json_size(&record) > MAX_RECORD);
@@ -365,6 +377,49 @@ fn limiter_admits_one_per_30_seconds_then_suppresses_and_accounts_once() {
         "the next admitted event carries the saturating suppressed count"
     );
     assert_eq!(limiter.suppressed[index].load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn concurrent_admission_never_bursts_past_one_and_accounts_every_suppression() {
+    // Real OS threads, not cooperative single-thread scheduling: `admit`
+    // has no `.await`, so only true parallelism can exercise the race the
+    // compare-exchange fixes (a plain load-then-store could let several
+    // threads all observe "ready" and all admit).
+    let limiter = std::sync::Arc::new(Limiter::default());
+    let index = OpsEvent::ConfigListenerDown.index();
+    const CALLERS: usize = 64;
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(CALLERS));
+    let mut tasks = Vec::new();
+    for _ in 0..CALLERS {
+        let limiter = limiter.clone();
+        let barrier = barrier.clone();
+        tasks.push(tokio::task::spawn_blocking(move || {
+            barrier.wait();
+            limiter.admit(index)
+        }));
+    }
+    let mut admitted = 0u64;
+    let mut suppressed_sum = 0u64;
+    for task in tasks {
+        if let Some(carried) = task.await.unwrap() {
+            admitted += 1;
+            suppressed_sum += carried;
+        }
+    }
+    assert_eq!(
+        admitted, 1,
+        "exactly one concurrent caller wins the refill window, never a burst"
+    );
+    // Every suppression a non-winning caller recorded is accounted exactly
+    // once: either carried by the one winner, or still sitting in the
+    // counter (if its CAS happened to land before some callers incremented
+    // it). Either way nothing is double-counted or silently lost.
+    let remaining = limiter.suppressed[index].load(Ordering::Relaxed);
+    assert_eq!(
+        suppressed_sum + remaining,
+        (CALLERS - 1) as u64,
+        "every non-winning call is accounted exactly once"
+    );
 }
 
 #[test]
@@ -444,10 +499,11 @@ fn send(sender: &mpsc::Sender<Queued>, n: usize) {
 async fn collector_accepts_a_batch_and_counts_the_push() {
     let (url, seen, task) = collector(axum::http::StatusCode::OK, "{}", Duration::ZERO).await;
     let built = exporter(&url);
-    let (sender, mut receiver) = mpsc::channel(QUEUE);
+    let (sender, receiver) = mpsc::channel(QUEUE);
+    let mut pending = pending(receiver);
     send(&sender, 3);
     let before = crate::metrics::METRICS.otlp_logs_push_count(Delivery::Accepted);
-    send_batch(&built, &mut receiver).await;
+    send_batch(&built, &mut pending).await;
     assert_eq!(seen.lock().unwrap().len(), 1);
     let body = seen.lock().unwrap()[0].clone();
     assert_eq!(
@@ -473,10 +529,11 @@ async fn collector_partial_success_is_recorded_and_bounded_by_sent_count() {
     )
     .await;
     let built = exporter(&url);
-    let (sender, mut receiver) = mpsc::channel(QUEUE);
+    let (sender, receiver) = mpsc::channel(QUEUE);
+    let mut pending = pending(receiver);
     send(&sender, 2);
     let before = crate::metrics::METRICS.otlp_logs_rejected_count();
-    send_batch(&built, &mut receiver).await;
+    send_batch(&built, &mut pending).await;
     assert_eq!(
         crate::metrics::METRICS.otlp_logs_rejected_count(),
         before + 2,
@@ -494,11 +551,12 @@ async fn collector_http_error_counts_http_status_and_drops_the_batch_as_delivery
     )
     .await;
     let built = exporter(&url);
-    let (sender, mut receiver) = mpsc::channel(QUEUE);
+    let (sender, receiver) = mpsc::channel(QUEUE);
+    let mut pending = pending(receiver);
     send(&sender, 4);
     let before_push = crate::metrics::METRICS.otlp_logs_push_count(Delivery::HttpStatus);
     let before_drop = crate::metrics::METRICS.otlp_logs_drop_count(DropReason::Delivery);
-    send_batch(&built, &mut receiver).await;
+    send_batch(&built, &mut pending).await;
     assert_eq!(
         crate::metrics::METRICS.otlp_logs_push_count(Delivery::HttpStatus),
         before_push + 1
@@ -520,17 +578,57 @@ async fn collector_timeout_never_retries_and_counts_timeout() {
         std::future::pending::<()>().await
     });
     let built = exporter(&format!("http://{address}/v1/logs"));
-    let (sender, mut receiver) = mpsc::channel(QUEUE);
+    let (sender, receiver) = mpsc::channel(QUEUE);
+    let mut pending = pending(receiver);
     send(&sender, 1);
     let before = crate::metrics::METRICS.otlp_logs_push_count(Delivery::Timeout);
     let started = std::time::Instant::now();
-    send_batch(&built, &mut receiver).await;
+    send_batch(&built, &mut pending).await;
     assert!(started.elapsed() < Duration::from_secs(3));
     assert_eq!(
         crate::metrics::METRICS.otlp_logs_push_count(Delivery::Timeout),
         before + 1
     );
     task.abort();
+}
+
+/// A forced abort (the outer drain deadline firing while an exchange is
+/// still in flight) must never lose those records uncounted: `Pending`'s
+/// `Drop` accounts `in_flight` even when the task is cut off mid-`.await`,
+/// not just on a normal return.
+#[tokio::test]
+async fn forced_abort_mid_exchange_counts_in_flight_records_as_shutdown_drops() {
+    // Accepts the connection but never answers: the exchange stays
+    // suspended (inside otlp::post's own 2 s internal timeout) until
+    // something external cancels it.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let hang = tokio::spawn(async move {
+        while let Ok((_socket, _)) = listener.accept().await {
+            std::future::pending::<()>().await;
+        }
+    });
+    let built = exporter(&format!("http://{address}/v1/logs"));
+    let (sender, receiver) = mpsc::channel(QUEUE);
+    send(&sender, 5);
+    let (_stop, stopping) = oneshot::channel();
+    // A short interval so the first (and, here, only) batch starts quickly.
+    let task = tokio::spawn(worker(built, receiver, Duration::from_millis(10), stopping));
+    // Comfortably inside the hang and well under otlp::post's own 2 s
+    // internal timeout, so the task is known to still be suspended inside
+    // `exporter.send(...).await`, with `pending.in_flight == 5`.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let before = crate::metrics::METRICS.otlp_logs_drop_count(DropReason::Shutdown);
+    task.abort();
+    // Awaiting an aborted handle completes only once the task (and its
+    // locals, including `Pending`) has actually finished dropping.
+    let _ = task.await;
+    assert_eq!(
+        crate::metrics::METRICS.otlp_logs_drop_count(DropReason::Shutdown),
+        before + 5,
+        "the in-flight batch is counted even though the task was aborted mid-exchange"
+    );
+    hang.abort();
 }
 
 // ---- runtime: shutdown and the disabled path -------------------------------
