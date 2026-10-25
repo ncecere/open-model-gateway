@@ -906,7 +906,7 @@ fn check_if_match(headers: &HeaderMap, digest: &str) -> Result<(), ApiError> {
                 && v.bytes()
                     .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
         })
-        .ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, IF_MATCH_MALFORMED))?;
+        .ok_or(ApiError(StatusCode::BAD_REQUEST, IF_MATCH_MALFORMED))?;
     if inner != digest {
         return Err(ApiError(
             StatusCode::PRECONDITION_FAILED,

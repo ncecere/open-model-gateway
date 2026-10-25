@@ -1377,6 +1377,174 @@ async fn entitlement_loss_suspended_user_with_a_surviving_platform_grant_shows_w
     );
 }
 
+/// Adversarial finding (lifecycle.rs, round 6, MEDIUM): deleting a user's
+/// *sole* platform mapping must show the cascading loss of every other,
+/// unrelated shared-workspace membership they hold -- a manual Team
+/// membership is only reachable with live platform entitlement
+/// (`effective_workspace_memberships`), and losing the only platform grant
+/// suspends the user outright, whatever the grant row itself survives as.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn deleting_a_sole_platform_mapping_shows_the_cascading_loss_of_an_unrelated_team_membership(
+    pool: PgPool,
+) {
+    let f = fixture(&pool).await;
+    let issuer = "https://idp.example.test";
+    let user = inert_user(&pool, "cascading-loss-delete@example.test").await;
+    let (status, created) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        "/api/v1/platform/oidc/group-mappings",
+        json!({"issuer":issuer,"group_value":"staff","target_kind":"platform","platform_role":"user","enabled":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let map = id(&created);
+    sqlx::query("INSERT INTO platform_role_grants(user_id,role,source,mapping_id) VALUES($1,'user','group',$2)")
+        .bind(user)
+        .bind(map)
+        .execute(&pool)
+        .await
+        .unwrap();
+    // Unrelated to this mapping entirely: a manually-granted Team membership.
+    sqlx::query("INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source) VALUES($1,$2,'member','manual')")
+        .bind(f.team)
+        .bind(user)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let (status, preview) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        &path_for(map),
+        json!({"delete": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let lost = entry_for(&preview["diff"]["workspace_membership_lost"], user);
+    assert_eq!(lost["before"], "member");
+    assert_eq!(lost["after"], Value::Null);
+    let digest = preview["digest"].as_str().unwrap().to_owned();
+
+    assert_eq!(
+        call_if_match(
+            &f.s,
+            &f.admin,
+            "DELETE",
+            &format!("/api/v1/platform/oidc/group-mappings/{map}"),
+            json!({}),
+            &digest,
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert!(
+        sqlx::query_scalar::<_, bool>("SELECT disabled_at IS NOT NULL FROM users WHERE id=$1")
+            .bind(user)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        "losing the sole platform entitlement suspends the user"
+    );
+    let membership: Option<String> = sqlx::query_scalar(
+        "SELECT role FROM effective_workspace_memberships WHERE workspace_id=$1 AND user_id=$2",
+    )
+    .bind(f.team)
+    .bind(user)
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        membership, None,
+        "matches the preview: the unrelated Team membership is lost too, despite its own grant row surviving"
+    );
+}
+
+/// The same adversarial finding, exercised through an *edit* (disabling
+/// the mapping, not deleting it) instead of a delete.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn editing_a_sole_platform_mapping_to_disabled_shows_the_cascading_loss_of_an_unrelated_project_membership(
+    pool: PgPool,
+) {
+    let f = fixture(&pool).await;
+    let issuer = "https://idp.example.test";
+    let user = inert_user(&pool, "cascading-loss-edit@example.test").await;
+    let (status, created) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        "/api/v1/platform/oidc/group-mappings",
+        json!({"issuer":issuer,"group_value":"staff","target_kind":"platform","platform_role":"user","enabled":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let map = id(&created);
+    sqlx::query("INSERT INTO platform_role_grants(user_id,role,source,mapping_id) VALUES($1,'user','group',$2)")
+        .bind(user)
+        .bind(map)
+        .execute(&pool)
+        .await
+        .unwrap();
+    // Unrelated to this mapping entirely: a manually-granted Project membership.
+    sqlx::query("INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source) VALUES($1,$2,'admin','manual')")
+        .bind(f.project)
+        .bind(user)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let (status, preview) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        &path_for(map),
+        json!({"enabled": false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let lost = entry_for(&preview["diff"]["workspace_membership_lost"], user);
+    assert_eq!(lost["before"], "admin");
+    assert_eq!(lost["after"], Value::Null);
+    let digest = preview["digest"].as_str().unwrap().to_owned();
+
+    assert_eq!(
+        call_if_match(
+            &f.s,
+            &f.admin,
+            "PATCH",
+            &format!("/api/v1/platform/oidc/group-mappings/{map}"),
+            json!({"enabled": false}),
+            &digest,
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert!(
+        sqlx::query_scalar::<_, bool>("SELECT disabled_at IS NOT NULL FROM users WHERE id=$1")
+            .bind(user)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        "losing the sole platform entitlement suspends the user"
+    );
+    let membership: Option<String> = sqlx::query_scalar(
+        "SELECT role FROM effective_workspace_memberships WHERE workspace_id=$1 AND user_id=$2",
+    )
+    .bind(f.project)
+    .bind(user)
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        membership, None,
+        "matches the preview: the unrelated Project membership is lost too"
+    );
+}
+
 /// Review #89 item 3: renaming/deleting a mapping that is a user's sole
 /// platform entitlement suspends them and revokes *every* key they hold
 /// (any workspace, `directory::revoke_human_credentials`), not only keys in

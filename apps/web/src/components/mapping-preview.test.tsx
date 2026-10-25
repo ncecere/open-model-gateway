@@ -9,10 +9,13 @@ import { ActionProvider, Button } from "./ui";
 import { testClient } from "../lib/test-fixtures";
 
 const noImmediate = { applies: false, blocked_by_last_admin: false, platform_role_revoked: [], workspace_membership_revoked: [], users_suspended: [], keys_revoked_count: 0 };
+// Realistic digests (`mapping_digest`, directory.rs): 64 lowercase hex characters.
+const DIGEST_A = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".slice(0, 64);
+const DIGEST_B = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210".slice(0, 64);
 const basePreview = {
   membership_basis: "scim" as const,
   complete: true,
-  digest: "deadbeef",
+  digest: DIGEST_A,
   immediate: noImmediate,
   diff: {
     platform_role_gained: [{ user_id: "u1", email: "a@example.test", display_name: null, before: null, after: "auditor", workspace_id: null }],
@@ -127,7 +130,7 @@ describe("group-mapping review", () => {
       .fn()
       .mockResolvedValueOnce(Response.json(basePreview))
       .mockResolvedValueOnce(Response.json({ error: { code: "412", message: "The mapping was changed since this proposal was reviewed", reason: "precondition_failed" } }, { status: 412 }))
-      .mockResolvedValueOnce(Response.json({ ...basePreview, digest: "freshdigest" }));
+      .mockResolvedValueOnce(Response.json({ ...basePreview, digest: DIGEST_B }));
     vi.stubGlobal("fetch", fetch);
     const user = view(createRequest);
     await user.click(screen.getByRole("button", { name: /^Open review$/ }));
@@ -136,11 +139,36 @@ describe("group-mapping review", () => {
     await screen.findByRole("dialog", { name: /^Create this SSO group mapping\?$/ });
     await user.click(screen.getByRole("button", { name: /^Create mapping$/ }));
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
-    expect((fetch.mock.calls[1][1] as RequestInit).headers).toMatchObject({ "If-Match": "deadbeef" });
+    // The server requires a quoted ETag-shaped value (directory.rs's
+    // `check_if_match`); an unquoted digest is refused as malformed.
+    expect((fetch.mock.calls[1][1] as RequestInit).headers).toMatchObject({ "If-Match": `"${DIGEST_A}"` });
     await screen.findByText(/was changed since this proposal was reviewed/);
     // onStale reopened a fresh review behind the error dialog.
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
     expect(fetch.mock.calls[2][1]).toMatchObject({ method: "POST" });
+  });
+
+  it("a stale 412 triggers a fresh re-preview, not just a retried apply", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(basePreview))
+      .mockResolvedValueOnce(Response.json({ error: { code: "412", message: "The mapping was changed since this proposal was reviewed", reason: "precondition_failed" } }, { status: 412 }))
+      .mockResolvedValueOnce(Response.json({ ...basePreview, digest: DIGEST_B }));
+    vi.stubGlobal("fetch", fetch);
+    const user = view(createRequest);
+    await user.click(screen.getByRole("button", { name: /^Open review$/ }));
+    await screen.findByText(/^Platform role gained \(1\)$/);
+    await user.click(screen.getByRole("button", { name: /^Continue to confirmation$/ }));
+    await screen.findByRole("dialog", { name: /^Create this SSO group mapping\?$/ });
+    await user.click(screen.getByRole("button", { name: /^Create mapping$/ }));
+    await screen.findByText(/was changed since this proposal was reviewed/);
+    // The reopened review is a genuine re-preview -- a third POST to the
+    // preview path, not a retried apply -- and it renders the freshly
+    // fetched content, not the stale one.
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
+    expect(fetch.mock.calls[2][0]).toBe(createRequest.previewPath);
+    expect(fetch.mock.calls[2][1]).toMatchObject({ method: "POST" });
+    await screen.findByText(/^Platform role gained \(1\)$/);
   });
 
   it("cancelling the review never applies, and restores focus to the originating trigger", async () => {

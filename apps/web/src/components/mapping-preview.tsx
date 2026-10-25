@@ -147,7 +147,10 @@ export function MappingReviewDialog({ request, onClose }: { request: MappingRevi
         try {
           return await api(request.applyPath, {
             method: request.applyMethod,
-            headers: preview.digest ? { "If-Match": preview.digest } : undefined,
+            // The server compares this against a quoted ETag-shaped digest
+            // (`"<64 lowercase hex>"`, directory.rs's `check_if_match`); an
+            // unquoted value is refused outright as malformed.
+            headers: preview.digest ? { "If-Match": `"${preview.digest}"` } : undefined,
             ...(request.applyMethod === "DELETE" ? {} : { body: request.body }),
             signal,
           });

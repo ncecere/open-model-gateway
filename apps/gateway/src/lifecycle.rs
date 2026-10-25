@@ -438,7 +438,18 @@ fn workspace_role_name(rank: i32) -> Option<String> {
 /// suspended user with a *surviving*, unrelated platform grant reactivates
 /// during reconciliation and so still gains the workspace). Using the
 /// user's raw current `disabled_at`/grant state for `after`, as before,
-/// missed both.
+/// missed both. Candidates also include every *other*, unrelated
+/// shared-workspace membership (manual or group) a platform-entitlement
+/// candidate -- a roster member, or a current holder of
+/// `proposal.existing_mapping_id`'s own platform grants, the exact same
+/// set [`preview_platform_effect`] evaluates -- already holds (adversarial
+/// finding, round 6): a platform mapping's deletion/edit can suspend or
+/// reactivate a user outright, which cascades into *every* Team/Project
+/// membership they hold, not only a workspace this mapping happens to
+/// also name. A workspace-target proposal cannot itself change platform
+/// entitlement, so these extra pairs are harmless no-ops (`before`
+/// unaffected, filtered out below) whenever nothing about the user's
+/// entitlement actually changes.
 pub(crate) async fn preview_workspace_effect(
     tx: &mut Transaction<'_, Postgres>,
     proposal: &GroupGrantProposal<'_>,
@@ -457,6 +468,8 @@ pub(crate) async fn preview_workspace_effect(
              SELECT unnest($1::uuid[]) user_id,$4::uuid workspace_id WHERE $3='workspace' AND $6 AND $4 IS NOT NULL
              UNION
              SELECT g.user_id,g.workspace_id FROM workspace_membership_grants g WHERE g.mapping_id=$2 AND g.source='group' AND g.revoked_at IS NULL
+             UNION
+             SELECT g.user_id,g.workspace_id FROM workspace_membership_grants g JOIN workspaces w ON w.id=g.workspace_id AND w.kind IN ('team','project') WHERE g.revoked_at IS NULL AND (g.user_id=ANY($1::uuid[]) OR EXISTS(SELECT 1 FROM platform_role_grants pg WHERE pg.mapping_id=$2 AND pg.source='group' AND pg.revoked_at IS NULL AND pg.user_id=g.user_id))
            ) x WHERE workspace_id IS NOT NULL
          ),
          after_entitlement AS (
