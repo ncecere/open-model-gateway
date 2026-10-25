@@ -432,7 +432,7 @@ struct Exporter {
 impl Exporter {
     fn envelope(&self, records: &[Value]) -> Value {
         json!({"resourceLogs":[{
-            "resource": {"attributes": crate::otlp::resource_attributes(self.environment, self.instance)},
+            "resource": {"attributes": crate::otlp::resource_attributes(self.environment, self.instance, env!("CARGO_PKG_VERSION"))},
             "scopeLogs": [{
                 "scope": {"name": "omg.ops", "version": env!("CARGO_PKG_VERSION")},
                 "logRecords": records

@@ -196,7 +196,8 @@ fn envelope_resource_matches_metrics_shared_helper_and_scope_is_omg_ops() {
         resource["attributes"],
         crate::otlp::resource_attributes(
             crate::config::Environment::Development,
-            uuid::Uuid::nil()
+            uuid::Uuid::nil(),
+            env!("CARGO_PKG_VERSION")
         )
     );
     assert_eq!(
@@ -591,9 +592,14 @@ async fn collector_timeout_never_retries_and_counts_timeout() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let task = tokio::spawn(async move {
-        // Accept and never answer: the client's own exchange deadline fires.
-        let _ = listener.accept().await;
-        std::future::pending::<()>().await
+        // Accept and never answer. The accepted socket must stay bound (not
+        // `let _ = ...`, which would drop and close it immediately,
+        // resetting the connection and producing a fast Transport error
+        // instead of the exchange's own timeout): keep it alive for as long
+        // as this future is suspended below.
+        if let Ok((_socket, _)) = listener.accept().await {
+            std::future::pending::<()>().await
+        }
     });
     let built = exporter(&format!("http://{address}/v1/logs"));
     let (sender, receiver) = mpsc::channel(QUEUE);

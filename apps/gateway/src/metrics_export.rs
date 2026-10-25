@@ -450,7 +450,7 @@ impl Encoder {
     }
     fn envelope(&self, metrics: Vec<Value>) -> Value {
         json!({"resourceMetrics":[{
-            "resource":{"attributes":crate::otlp::resource_attributes(self.environment, self.instance)},
+            "resource":{"attributes":crate::otlp::resource_attributes(self.environment, self.instance, env!("CARGO_PKG_VERSION"))},
             "scopeMetrics":[{"scope":{"name":"omg.metrics","version":env!("CARGO_PKG_VERSION")},"metrics":metrics}]
         }]})
     }

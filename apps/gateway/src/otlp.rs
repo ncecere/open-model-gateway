@@ -45,13 +45,16 @@ pub(crate) static INSTANCE: LazyLock<Result<uuid::Uuid, crate::entropy::EntropyU
 /// `service.instance.id`: the resource attributes shared by metrics and
 /// operational logs (traces use the first three only). Only this attribute
 /// carries the per-process UUID; it is never an installation or user id.
+/// `version` is the caller's own `env!("CARGO_PKG_VERSION")`: this module
+/// stays free of process configuration, including compile-time env macros.
 pub(crate) fn resource_attributes(
     environment: crate::config::Environment,
     instance: uuid::Uuid,
+    version: &str,
 ) -> Value {
     json!([
         {"key":"service.name","value":{"stringValue":"open-model-gateway"}},
-        {"key":"service.version","value":{"stringValue":env!("CARGO_PKG_VERSION")}},
+        {"key":"service.version","value":{"stringValue":version}},
         {"key":"deployment.environment.name","value":{"stringValue":environment.as_str()}},
         {"key":"service.instance.id","value":{"stringValue":instance.to_string()}}
     ])
