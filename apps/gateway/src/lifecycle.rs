@@ -243,6 +243,24 @@ pub(crate) struct GroupGrantProposal<'a> {
     pub(crate) workspace_role: Option<&'a str>,
     pub(crate) enabled: bool,
 }
+/// Capped-roster false-loss fix (#89): how to decide whether an arbitrary
+/// user -- not only one that happened to land inside the capped roster
+/// array -- is *currently* a member of the mapping's group, independent of
+/// `group_mapping_preview::ROSTER_LIMIT` truncation. Mirrors `roster()`'s
+/// own two membership sources exactly (a SCIM roster when the group is
+/// SCIM-managed, matched by `display_name`/`external_id`; otherwise the
+/// sign-in-derived set of users already holding a `source='group'` grant
+/// from this issuer/group value), but as a per-user `EXISTS` check instead
+/// of array membership, so a capped-out existing grant holder is still
+/// correctly recognized as a member. The roster array passed alongside
+/// this to [`preview_platform_effect`]/[`preview_workspace_effect`] remains
+/// capped and is used only to *discover* additional (gain) candidates;
+/// losses must never be decided by whether a user landed inside it.
+pub(crate) struct GroupMembershipBasis<'a> {
+    pub(crate) is_scim: bool,
+    pub(crate) issuer: &'a str,
+    pub(crate) group_value: &'a str,
+}
 /// Every group-sourced grant an existing mapping currently produces,
 /// unconditionally -- exactly the rows `directory::revoke_mapping_grants`
 /// revokes the instant a PATCH changes any field or a DELETE commits,
@@ -332,8 +350,11 @@ fn platform_role_name(rank: i32) -> Option<String> {
 /// member plus every current holder of `proposal.existing_mapping_id`'s own
 /// platform grants, after reconciliation would apply `proposal` -- i.e. with
 /// this mapping's own current contribution excluded from "after" and its
-/// new contribution (if enabled, platform-targeted and the user is in
-/// `roster`) added back. A disabled (not cleaned) user's `before` is `None`
+/// new contribution (if enabled, platform-targeted and the user is still a
+/// current group member per `membership`, checked independently of the
+/// capped `roster` array so a capped-out existing holder is never shown
+/// losing a mapping that still produces their grant) added back. A
+/// disabled (not cleaned) user's `before` is `None`
 /// (no current entitlement) even if their grant rows are not yet revoked,
 /// matching `effective_platform_roles`. `after` only counts those rows for a
 /// currently *active* user, or a currently disabled one exactly when the
@@ -342,12 +363,14 @@ fn platform_role_name(rank: i32) -> Option<String> {
 /// AND cleanup_due_at>now()`, review #89-4): an administratively suspended
 /// user, or one whose grace window already expired, stays at `after=None`
 /// regardless of any grant row, because nothing in the real write path
-/// would lift their suspension. Cleaned users are always excluded. Never bounded here -- the caller (roster is already
-/// capped) truncates and counts.
+/// would lift their suspension. Cleaned users are always excluded. Never
+/// bounded here -- the caller (roster is already capped) truncates and
+/// counts.
 pub(crate) async fn preview_platform_effect(
     tx: &mut Transaction<'_, Postgres>,
     proposal: &GroupGrantProposal<'_>,
     roster: &[Uuid],
+    membership: &GroupMembershipBasis<'_>,
 ) -> Result<(Vec<PlatformEffectRow>, Vec<PlatformEffectRow>), sqlx::Error> {
     #[derive(sqlx::FromRow)]
     struct Row {
@@ -358,18 +381,26 @@ pub(crate) async fn preview_platform_effect(
         currently_disabled: bool,
     }
     let sql = "WITH m(id,target_kind,platform_role,enabled) AS (VALUES ($2::uuid,$3::text,$4::text,$5::boolean)),
-         candidates AS (SELECT DISTINCT u FROM (SELECT unnest($1::uuid[]) u UNION SELECT g.user_id FROM platform_role_grants g WHERE g.mapping_id=$2 AND g.source='group' AND g.revoked_at IS NULL) x)
+         candidates AS (SELECT DISTINCT u FROM (SELECT unnest($1::uuid[]) u UNION SELECT g.user_id FROM platform_role_grants g WHERE g.mapping_id=$2 AND g.source='group' AND g.revoked_at IS NULL) x),
+         is_member AS (
+           SELECT c.u,
+             CASE WHEN $6::boolean THEN EXISTS(SELECT 1 FROM scim_group_members sm JOIN scim_groups sg ON sg.id=sm.group_id WHERE (sg.display_name=$7 OR sg.external_id=$7) AND sm.user_id=c.u)
+             ELSE EXISTS(SELECT 1 FROM platform_role_grants g JOIN oidc_group_mappings mm ON mm.id=g.mapping_id WHERE g.source='group' AND g.revoked_at IS NULL AND mm.issuer=$8 AND mm.group_value=$7 AND g.user_id=c.u)
+               OR EXISTS(SELECT 1 FROM workspace_membership_grants g JOIN oidc_group_mappings mm ON mm.id=g.mapping_id WHERE g.source='group' AND g.revoked_at IS NULL AND mm.issuer=$8 AND mm.group_value=$7 AND g.user_id=c.u)
+             END AS member
+           FROM candidates c
+         )
          SELECT c.u AS user_id,
            CASE WHEN usr.disabled_at IS NOT NULL THEN 0 ELSE coalesce((SELECT max(CASE g.role WHEN 'admin' THEN 3 WHEN 'auditor' THEN 2 ELSE 1 END) FROM platform_role_grants g WHERE g.user_id=c.u AND g.revoked_at IS NULL),0) END AS before_rank,
            CASE WHEN usr.disabled_at IS NOT NULL AND NOT coalesce(usr.disable_reason='entitlement_loss' AND usr.cleanup_due_at>now(),false) THEN 0 ELSE
              greatest(
                coalesce((SELECT max(CASE g.role WHEN 'admin' THEN 3 WHEN 'auditor' THEN 2 ELSE 1 END) FROM platform_role_grants g WHERE g.user_id=c.u AND g.revoked_at IS NULL AND ($2::uuid IS NULL OR g.mapping_id IS DISTINCT FROM $2)),0),
-               CASE WHEN c.u=ANY($1::uuid[]) AND m.enabled AND m.target_kind='platform' THEN CASE m.platform_role WHEN 'admin' THEN 3 WHEN 'auditor' THEN 2 ELSE 1 END ELSE 0 END
+               CASE WHEN im.member AND m.enabled AND m.target_kind='platform' THEN CASE m.platform_role WHEN 'admin' THEN 3 WHEN 'auditor' THEN 2 ELSE 1 END ELSE 0 END
              )
            END AS after_rank,
            coalesce(usr.disable_reason='entitlement_loss' AND usr.cleanup_due_at>now(),false) AS reactivation_eligible,
            usr.disabled_at IS NOT NULL AS currently_disabled
-         FROM candidates c CROSS JOIN m JOIN users usr ON usr.id=c.u
+         FROM candidates c CROSS JOIN m JOIN users usr ON usr.id=c.u JOIN is_member im ON im.u=c.u
          WHERE usr.cleaned_at IS NULL";
     let rows: Vec<Row> = sqlx::query_as(sql)
         .bind(roster)
@@ -377,6 +408,9 @@ pub(crate) async fn preview_platform_effect(
         .bind(proposal.target_kind.as_str())
         .bind(proposal.platform_role)
         .bind(proposal.enabled)
+        .bind(membership.is_scim)
+        .bind(membership.group_value)
+        .bind(membership.issuer)
         .fetch_all(&mut **tx)
         .await?;
     let mut gained = Vec::new();
@@ -424,7 +458,12 @@ fn workspace_role_name(rank: i32) -> Option<String> {
 /// proposal targets a workspace) plus every (user, workspace) pair any
 /// current grant of `proposal.existing_mapping_id` already names -- so an
 /// edit that moves a mapping to a different workspace shows the old
-/// workspace's loss and the new workspace's gain, never just one.
+/// workspace's loss and the new workspace's gain, never just one. The
+/// mapping's own new contribution (both the entitlement check below and
+/// the workspace-role check in the final `SELECT`) is gated on
+/// `membership`, an independent per-user `EXISTS` check, never on whether
+/// the candidate happened to land inside the capped `roster` array (#89
+/// overflow fix): the roster array only discovers additional candidates.
 /// `effective_workspace_memberships` requires live platform entitlement
 /// too (review #89-4), so `before` is forced to `None` for a user with no
 /// *current* active platform grant or who is currently disabled (ineligible
@@ -454,6 +493,7 @@ pub(crate) async fn preview_workspace_effect(
     tx: &mut Transaction<'_, Postgres>,
     proposal: &GroupGrantProposal<'_>,
     roster: &[Uuid],
+    membership: &GroupMembershipBasis<'_>,
 ) -> Result<(Vec<WorkspaceEffectRow>, Vec<WorkspaceEffectRow>), sqlx::Error> {
     #[derive(sqlx::FromRow)]
     struct Row {
@@ -472,25 +512,33 @@ pub(crate) async fn preview_workspace_effect(
              SELECT g.user_id,g.workspace_id FROM workspace_membership_grants g JOIN workspaces w ON w.id=g.workspace_id AND w.kind IN ('team','project') WHERE g.revoked_at IS NULL AND (g.user_id=ANY($1::uuid[]) OR EXISTS(SELECT 1 FROM platform_role_grants pg WHERE pg.mapping_id=$2 AND pg.source='group' AND pg.revoked_at IS NULL AND pg.user_id=g.user_id))
            ) x WHERE workspace_id IS NOT NULL
          ),
+         is_member AS (
+           SELECT DISTINCT p.user_id AS u,
+             CASE WHEN $8::boolean THEN EXISTS(SELECT 1 FROM scim_group_members sm JOIN scim_groups sg ON sg.id=sm.group_id WHERE (sg.display_name=$9 OR sg.external_id=$9) AND sm.user_id=p.user_id)
+             ELSE EXISTS(SELECT 1 FROM platform_role_grants g JOIN oidc_group_mappings mm ON mm.id=g.mapping_id WHERE g.source='group' AND g.revoked_at IS NULL AND mm.issuer=$10 AND mm.group_value=$9 AND g.user_id=p.user_id)
+               OR EXISTS(SELECT 1 FROM workspace_membership_grants g JOIN oidc_group_mappings mm ON mm.id=g.mapping_id WHERE g.source='group' AND g.revoked_at IS NULL AND mm.issuer=$10 AND mm.group_value=$9 AND g.user_id=p.user_id)
+             END AS member
+           FROM pairs p
+         ),
          after_entitlement AS (
            SELECT DISTINCT p.user_id,
              (CASE WHEN usr.disabled_at IS NOT NULL AND NOT coalesce(usr.disable_reason='entitlement_loss' AND usr.cleanup_due_at>now(),false) THEN 0 ELSE
                greatest(
                  coalesce((SELECT max(CASE g.role WHEN 'admin' THEN 3 WHEN 'auditor' THEN 2 ELSE 1 END) FROM platform_role_grants g WHERE g.user_id=p.user_id AND g.revoked_at IS NULL AND ($2::uuid IS NULL OR g.mapping_id IS DISTINCT FROM $2)),0),
-                 CASE WHEN p.user_id=ANY($1::uuid[]) AND m.enabled AND m.target_kind='platform' THEN CASE m.platform_role WHEN 'admin' THEN 3 WHEN 'auditor' THEN 2 ELSE 1 END ELSE 0 END
+                 CASE WHEN im.member AND m.enabled AND m.target_kind='platform' THEN CASE m.platform_role WHEN 'admin' THEN 3 WHEN 'auditor' THEN 2 ELSE 1 END ELSE 0 END
                )
              END) > 0 AS entitled
-           FROM pairs p CROSS JOIN m JOIN users usr ON usr.id=p.user_id
+           FROM pairs p CROSS JOIN m JOIN users usr ON usr.id=p.user_id JOIN is_member im ON im.u=p.user_id
          )
          SELECT p.user_id,p.workspace_id,
            CASE WHEN NOT (usr.disabled_at IS NULL AND EXISTS(SELECT 1 FROM platform_role_grants pg WHERE pg.user_id=p.user_id AND pg.revoked_at IS NULL)) THEN 0 ELSE coalesce((SELECT max(CASE g.role WHEN 'owner' THEN 3 WHEN 'admin' THEN 2 ELSE 1 END) FROM workspace_membership_grants g WHERE g.user_id=p.user_id AND g.workspace_id=p.workspace_id AND g.revoked_at IS NULL),0) END AS before_rank,
            CASE WHEN NOT ae.entitled THEN 0 ELSE
              greatest(
                coalesce((SELECT max(CASE g.role WHEN 'owner' THEN 3 WHEN 'admin' THEN 2 ELSE 1 END) FROM workspace_membership_grants g WHERE g.user_id=p.user_id AND g.workspace_id=p.workspace_id AND g.revoked_at IS NULL AND ($2::uuid IS NULL OR g.mapping_id IS DISTINCT FROM $2)),0),
-               CASE WHEN p.user_id=ANY($1::uuid[]) AND p.workspace_id=$4 AND m.enabled AND m.target_kind='workspace' THEN CASE m.workspace_role WHEN 'admin' THEN 2 ELSE 1 END ELSE 0 END
+               CASE WHEN im.member AND p.workspace_id=$4 AND m.enabled AND m.target_kind='workspace' THEN CASE m.workspace_role WHEN 'admin' THEN 2 ELSE 1 END ELSE 0 END
              )
            END AS after_rank
-         FROM pairs p CROSS JOIN m JOIN users usr ON usr.id=p.user_id JOIN workspaces w ON w.id=p.workspace_id JOIN after_entitlement ae ON ae.user_id=p.user_id
+         FROM pairs p CROSS JOIN m JOIN users usr ON usr.id=p.user_id JOIN workspaces w ON w.id=p.workspace_id JOIN after_entitlement ae ON ae.user_id=p.user_id JOIN is_member im ON im.u=p.user_id
          WHERE usr.cleaned_at IS NULL AND w.disabled_at IS NULL";
     let rows: Vec<Row> = sqlx::query_as(sql)
         .bind(roster)
@@ -500,6 +548,9 @@ pub(crate) async fn preview_workspace_effect(
         .bind(proposal.workspace_role)
         .bind(proposal.enabled)
         .bind(proposal.platform_role)
+        .bind(membership.is_scim)
+        .bind(membership.group_value)
+        .bind(membership.issuer)
         .fetch_all(&mut **tx)
         .await?;
     let mut gained = Vec::new();

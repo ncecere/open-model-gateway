@@ -474,10 +474,21 @@ async fn evaluate(
     scim_issuer: &ScimIssuer,
 ) -> Result<Value, ApiError> {
     let (members, basis, complete) = roster(tx, issuer, group_value, scim_issuer).await?;
+    // Review #89 overflow fix: whether an existing grant holder is still a
+    // group member must never be decided by whether they landed inside the
+    // capped `members` array -- it is checked independently (per user,
+    // against the full SCIM/sign-in-derived source) by the evaluator
+    // itself. `members` remains useful, and still capped, purely to
+    // discover additional (gain) candidates.
+    let membership = lifecycle::GroupMembershipBasis {
+        is_scim: basis == "scim",
+        issuer,
+        group_value,
+    };
     let (platform_gained_rows, platform_lost_rows) =
-        lifecycle::preview_platform_effect(tx, proposal, &members).await?;
+        lifecycle::preview_platform_effect(tx, proposal, &members, &membership).await?;
     let (workspace_gained_rows, workspace_lost_rows) =
-        lifecycle::preview_workspace_effect(tx, proposal, &members).await?;
+        lifecycle::preview_workspace_effect(tx, proposal, &members, &membership).await?;
     let (platform_role_gained, platform_gained_total, platform_gained_truncated) =
         render_platform(tx, platform_gained_rows).await?;
     let (platform_role_lost, platform_lost_total, platform_lost_truncated) =
