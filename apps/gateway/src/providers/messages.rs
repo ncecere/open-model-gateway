@@ -57,10 +57,11 @@ pub(crate) fn validate_beta_headers<'a>(
             if count >= 32 || token.is_empty() {
                 return Err(invalid());
             }
-            if DENIED_BETA_PREFIXES
-                .iter()
-                .any(|prefix| token.starts_with(*prefix))
-            {
+            if DENIED_BETA_PREFIXES.iter().any(|prefix| {
+                token
+                    .get(..prefix.len())
+                    .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+            }) {
                 denied.push(token.to_owned());
             }
             Ok(count + 1)

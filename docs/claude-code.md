@@ -28,7 +28,7 @@ Send one inference credential, not both Bearer and `x-api-key`. The gateway cons
 
 Beta names are an open list, as Anthropic's [gateway protocol](https://code.claude.com/docs/en/llm-gateway-protocol) requires. New Claude Code releases need not wait for a gateway allowlist update. `claude-code-20250219`, `extended-cache-ttl-2025-04-11`, tool-search, effort, OAuth and structured-output betas are forwarded verbatim. Body-field validation and cache-price admission still apply independently.
 
-The gateway denies only tokens beginning with these reviewed prefixes:
+The gateway denies only tokens beginning with these reviewed prefixes (case-insensitive):
 
 - `context-1m-`: unmodeled long-context premium pricing.
 - `code-execution-`, `web-search-`, `web-fetch-`, `computer-use-`: unsupported hosted capabilities and additional charges.
@@ -42,7 +42,7 @@ Unexpected value(s) `context-1m-2025-08-07` for the `anthropic-beta` header. Ple
 
 Operators may set `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` on clients to disable experimental capabilities instead. To request a denylist change, open a GitHub issue with the capability/pricing evidence and a mock wire/refusal contract. See the [matrix](protocol-matrix.md#claude-code-field-rules) for the complete policy.
 
-For native cache hints, ask the administrator to publish a compatible immutable v2/v3 deployment price: the 5-minute cache-write category must be priced for absent/5-minute TTL, and the 1-hour category for `ttl:1h`. Mixed requests need both; the conservative monetary hold must also be finite. Missing prices, v1 single-rate prices and unknown/not-applicable required categories refuse with 400 naming `cache_control` before any reservation or upstream request. The `extended-cache-ttl-*` beta is allowed; its paired `cache_control.ttl:1h` is priced or refused by this cache gate, not the beta filter. Anthropic's usual write prices are 1.25× base input for 5 minutes and 2× for 1 hour; publish the applicable model's rates. Holds use the existing conservative full-input bound for each priced cache category plus `max_tokens`; settlement charges observed disjoint counts without double charging aggregate writes. Cache-enabled batch lines use gateway-run per-line admission rather than native Message Batches.
+For native cache hints, ask the administrator to publish a compatible immutable v2/v3 deployment price. Cache reads must always be explicitly priced. The 5-minute cache-write category must be priced for absent/5-minute TTL, and the 1-hour category for `ttl:1h`. Mixed requests need both write categories; the conservative monetary hold must also be finite. Missing prices, v1 single-rate prices and unknown/not-applicable required categories refuse with 400 naming `cache_control` before any reservation or upstream request. The `extended-cache-ttl-*` beta is allowed; its paired `cache_control.ttl:1h` is priced or refused by this cache gate, not the beta filter. Anthropic's usual write prices are 1.25× base input for 5 minutes and 2× for 1 hour; publish the applicable model's rates. Holds use the existing conservative full-input bound for each priced cache category plus `max_tokens`; settlement charges observed disjoint counts without double charging aggregate writes. Cache-enabled batch lines use gateway-run per-line admission rather than native Message Batches.
 
 ## Current behavior and limits
 

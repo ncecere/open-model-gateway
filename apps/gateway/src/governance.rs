@@ -359,7 +359,7 @@ fn checked_cost(input: u64, output: u64, i: i64, o: i64) -> Result<i64, billing:
             .and_then(|b| a.checked_add(b).ok_or(billing::BillingError::Overflow))
     })
 }
-/// Native cache hints require explicitly priced TTL categories. The existing
+/// Native cache hints require explicitly priced reads and TTL writes. The existing
 /// v2/v3 bound independently reserves the *full input ceiling* for each priced
 /// cache category, including the highest requested write rate, plus output.
 /// This intentionally conservative bound also covers per-component rounding;
@@ -377,6 +377,11 @@ fn require_native_cache_price(
         Some(p) if p.pricing_version == 3 => billing::v3::cache_rates(&p.lines()?.0),
         _ => return Err(incompatible()), // No price or v1 cannot price TTL writes.
     };
+    // Any cached prompt can become a cache hit on a later request, regardless
+    // of its write TTL. A finite write hold alone cannot price that settlement.
+    if !matches!(rates.read, CacheRate::Priced { .. }) {
+        return Err(incompatible());
+    }
     for control in controls {
         let rate = match control.get("ttl").and_then(serde_json::Value::as_str) {
             None | Some("5m") => rates.write_5m,
