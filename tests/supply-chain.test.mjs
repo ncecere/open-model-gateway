@@ -390,9 +390,11 @@ export function parseToolchainToml(text) {
       if (!sm) throw new Error(`rust-toolchain.toml: ${key} must be a plain quoted string, got: ${raw}`);
       table[key] = sm[1];
     } else if (key === "components" || key === "targets") {
-      const am = raw.match(/^\[\s*((?:"[^"]*"\s*,?\s*)*)\]$/);
+      // Linear (no nested optional quantifiers; CodeQL js/redos): items are
+      // separated by a required comma, with one optional trailing comma.
+      const am = raw.match(/^\[\s*(?:("[^"]*"(?:\s*,\s*"[^"]*")*)\s*(?:,\s*)?)?\]$/);
       if (!am) throw new Error(`rust-toolchain.toml: ${key} must be a flat array of quoted strings, got: ${raw}`);
-      table[key] = [...am[1].matchAll(/"([^"]*)"/g)].map(mm => mm[1]);
+      table[key] = [...(am[1] ?? "").matchAll(/"([^"]*)"/g)].map(mm => mm[1]);
     } else {
       throw new Error(`rust-toolchain.toml: unexpected key in [toolchain]: ${key}`);
     }
