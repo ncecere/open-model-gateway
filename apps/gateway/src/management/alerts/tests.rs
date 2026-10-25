@@ -88,7 +88,7 @@ async fn key_expiry_live_visibility_shared_personal_service_and_old_binary(pool:
             )
             .await
             .0,
-            StatusCode::FORBIDDEN
+            StatusCode::NOT_FOUND
         );
     }
     let payload = serde_json::to_string(&feed(&f, &f.owner).await).unwrap();
@@ -417,7 +417,7 @@ async fn workspace_rules_belong_to_shared_admins_and_personal_is_built_in(pool: 
             call(&f.s, user, "GET", &ws_rules(f.personal), json!({}))
                 .await
                 .0,
-            StatusCode::FORBIDDEN
+            StatusCode::NOT_FOUND
         );
         assert_eq!(
             call(
@@ -429,7 +429,7 @@ async fn workspace_rules_belong_to_shared_admins_and_personal_is_built_in(pool: 
             )
             .await
             .0,
-            StatusCode::FORBIDDEN
+            StatusCode::NOT_FOUND
         );
     }
 }

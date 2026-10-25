@@ -1,6 +1,12 @@
 -- Run as gateway_migrator after EVERY enterprise migration, never as runtime.
 -- Reviewed enterprise operation/column allowlist. New tables/functions fail closed.
 BEGIN;
+-- Only the connected, dedicated gateway database: PostgreSQL grants TEMP to
+-- PUBLIC by default, so revoking the runtime role's explicit grant is not enough.
+-- Run as the database/schema owner; preserve its privileges for migrations.
+DO $$ BEGIN
+ EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC, gateway_runtime', current_database());
+END $$;
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM gateway_runtime;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM gateway_runtime;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, gateway_runtime;

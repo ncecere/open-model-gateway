@@ -31,7 +31,7 @@ fn workspace_authority_matches_independent_expected_table() {
             false,
             None,
             false,
-            Err(StatusCode::FORBIDDEN),
+            Err(StatusCode::NOT_FOUND),
         ),
         (
             "foreign personal/auditor",
@@ -41,7 +41,7 @@ fn workspace_authority_matches_independent_expected_table() {
             false,
             None,
             false,
-            Err(StatusCode::FORBIDDEN),
+            Err(StatusCode::NOT_FOUND),
         ),
         (
             "foreign personal/admin and owner membership",
@@ -51,7 +51,7 @@ fn workspace_authority_matches_independent_expected_table() {
             false,
             Some("owner"),
             false,
-            Err(StatusCode::FORBIDDEN),
+            Err(StatusCode::NOT_FOUND),
         ),
         (
             "own personal without membership",

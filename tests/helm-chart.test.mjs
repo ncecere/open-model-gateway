@@ -90,6 +90,64 @@ test("loadtest profile lets loadgen reach the gateway and the gateway reach the 
   assert.match(egress, /port: 8000/);
 });
 
+test("CNPG fresh bootstrap restricts database ACLs without locking out operational roles (#315)", () => {
+  const base = ["-f", join(chart, "ci/cnpg-values.yaml")];
+  const defaults = { databaseName: "gateway", runtimeName: "gateway_runtime", ownerName: "gateway_migrator", database: '"gateway"', runtime: '"gateway_runtime"' };
+  const special = {
+    databaseName: '"db # tag: value', runtimeName: '"runtime # tag: value', ownerName: '"owner # tag: value',
+    database: '"""db # tag: value"', runtime: '"""runtime # tag: value"',
+  };
+  const cases = [
+    { ...defaults, extra: [] },
+    { ...defaults, databaseName: "custom-db", runtimeName: 'runtime"role', database: '"custom-db"', runtime: '"runtime""role"',
+      extra: ["--set", "cnpg.cluster.database=custom-db", "--set", 'cnpg.cluster.roles.runtime.name=runtime"role'] },
+    { ...defaults, extra: ["--set", "cnpg.pooler.enabled=false"] },
+    { ...special, extra: [
+      "--set-json", `cnpg.cluster.database=${JSON.stringify(special.databaseName)}`,
+      "--set-json", `cnpg.cluster.roles.runtime.name=${JSON.stringify(special.runtimeName)}`,
+      "--set-json", `cnpg.cluster.roles.migrator.name=${JSON.stringify(special.ownerName)}`,
+    ] },
+  ];
+  for (const { extra, databaseName, runtimeName, ownerName, database, runtime } of cases) {
+    const [cluster] = docsOfKind(helmTemplate([...base, ...extra]), "Cluster");
+    // Require quoted YAML strings and round-trip punctuation/leading quotes exactly.
+    assert.equal(JSON.parse(cluster.match(/^      database: (.+)$/m)[1]), databaseName);
+    assert.equal(JSON.parse(cluster.match(/^      owner: (.+)$/m)[1]), ownerName);
+    assert.equal(JSON.parse(cluster.match(/^      - name: (.+)$/m)[1]), runtimeName);
+    // SQL list entries use JSON-compatible YAML scalars, so escaped SQL identifiers
+    // are checked as executed SQL rather than matching their YAML escapes.
+    const init = cluster.match(/^      postInitSQL:\n((?:        - .*\n)+)/m)?.[1];
+    const app = cluster.match(/^      postInitApplicationSQL:\n((?:        - .*\n)+)/m)?.[1];
+    assert.ok(init, "missing fresh-init maintenance ACL SQL");
+    assert.ok(app, "missing fresh-init application ACL SQL");
+    const statements = section => section.trim().split("\n").map(line => JSON.parse(line.trim().slice(2)));
+    const initSQL = statements(init);
+    const appSQL = statements(app);
+    for (const role of ["cnpg_pooler_pgbouncer", "cnpg_metrics_exporter", "streaming_replica"]) {
+      assert.ok(initSQL.includes(`CREATE ROLE ${role} LOGIN PASSWORD NULL;`), `${role} must exist before its grant (CNPG creates it later)`);
+    }
+    assert.ok(initSQL.includes(`CREATE ROLE ${runtime} NOLOGIN;`), "managed runtime must exist before explicit revokes; CNPG supplies its login/password later");
+    const grant = "GRANT CONNECT ON DATABASE postgres, template1 TO cnpg_pooler_pgbouncer, cnpg_metrics_exporter, streaming_replica;";
+    const revoke = `REVOKE CONNECT ON DATABASE postgres, template1 FROM PUBLIC, ${runtime};`;
+    assert.ok(initSQL.includes(grant));
+    assert.ok(initSQL.indexOf(grant) > 3, "create roles before granting CONNECT");
+    assert.ok(initSQL.indexOf(revoke) > initSQL.indexOf(grant), "preserve operations before revoking PUBLIC");
+    // Pin the complete ordered arrays, not just required statements: an extra
+    // later grant must never silently undo these revocations.
+    assert.deepEqual(initSQL, [
+      "CREATE ROLE cnpg_pooler_pgbouncer LOGIN PASSWORD NULL;",
+      "CREATE ROLE cnpg_metrics_exporter LOGIN PASSWORD NULL;",
+      "CREATE ROLE streaming_replica LOGIN PASSWORD NULL;",
+      `CREATE ROLE ${runtime} NOLOGIN;`,
+      "GRANT CONNECT ON DATABASE postgres, template1 TO cnpg_pooler_pgbouncer, cnpg_metrics_exporter, streaming_replica;",
+      `REVOKE CONNECT ON DATABASE postgres, template1 FROM PUBLIC, ${runtime};`,
+    ]);
+    assert.deepEqual(appSQL, [`REVOKE TEMPORARY ON DATABASE ${database} FROM PUBLIC, ${runtime};`]);
+    assert.doesNotMatch([...initSQL, ...appSQL].join("\n"), /REVOKE ALL|GRANT TEMP|REVOKE CONNECT ON DATABASE "(?:gateway|custom-db)"/);
+  }
+  assert.equal(docsOfKind(helmTemplate(profiles["external-db"]), "Cluster").length, 0);
+});
+
 test("CNPG primary shuts down quickly so failover is not held up by pooled connections", () => {
   const [cluster] = docsOfKind(helmTemplate(["-f", join(chart, "ci/cnpg-values.yaml")]), "Cluster");
   // CNPG's default smart shutdown waits 180 s for clients; pooled and LISTEN sessions never leave.
