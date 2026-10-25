@@ -123,6 +123,117 @@ async fn claude_code_beta_query_reaches_real_engine_without_forwarding_inference
     assert!(serialized.contains("continue"));
 }
 #[tokio::test]
+async fn native_frontend_preserves_beta_values_and_blocks_through_the_engine() {
+    let captures = Captures::default();
+    let native = json!({"id":"private","type":"message","role":"assistant","model":"private","content":[{"type":"thinking","thinking":"reason","signature":"opaque+/=="},{"type":"text","text":"answer"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":3,"output_tokens":4}});
+    let mock = upstream(200, native.clone(), captures.clone()).await;
+    let adapter = crate::providers::anthropic::AnthropicAdapter::for_test(
+        Arc::new(Resolver),
+        mock.url.clone(),
+    );
+    let (app, repository) = frontend_adapter(Arc::new(adapter));
+    let system = json!([{"type":"text","text":"instructions","cache_control":{"type":"ephemeral","ttl":"1h"}}]);
+    let mut input = wire(
+        json!({"model":"configured-name","max_tokens":8192,"system":system,"thinking":{"type":"adaptive"},"metadata":{"user_id":"do-not-forward"},"messages":[{"role":"user","content":"hello"}]}),
+    );
+    input.headers_mut().append(
+        "anthropic-beta",
+        "claude-code-20250219, extended-cache-ttl-2025-04-11, tool-search-2025-10-19"
+            .parse()
+            .unwrap(),
+    );
+    let response = app.oneshot(input).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let output: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(output["content"], native["content"]);
+    assert_eq!(output["model"], "configured-name");
+    assert_eq!(repository.starts.load(Ordering::SeqCst), 1);
+    let captures = captures.lock().unwrap();
+    let (headers, body) = &captures[0];
+    assert_eq!(headers["x-api-key"], "server-held-provider-key");
+    assert!(!headers.contains_key("authorization"));
+    assert_eq!(
+        headers
+            .get_all("anthropic-beta")
+            .iter()
+            .map(|v| v.to_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "interleaved-thinking-2025-05-14",
+            "claude-code-20250219, extended-cache-ttl-2025-04-11, tool-search-2025-10-19"
+        ]
+    );
+    assert_eq!(body["system"], system);
+    assert_eq!(body["max_tokens"], 8192);
+    assert!(body.get("metadata").is_none());
+    assert!(
+        !body
+            .to_string()
+            .contains("inference-key-must-not-leave-gateway")
+    );
+}
+
+#[tokio::test]
+async fn denied_betas_use_anthropic_retry_wording_before_admission() {
+    let captures = Captures::default();
+    let mock = upstream(200, json!({"id":"private","type":"message","role":"assistant","model":"private","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":3,"output_tokens":1}}), captures.clone()).await;
+    let adapter = crate::providers::anthropic::AnthropicAdapter::for_test(
+        Arc::new(Resolver),
+        mock.url.clone(),
+    );
+    let (app, repository) = frontend_adapter(Arc::new(adapter));
+    for (values, denied) in [
+        (vec!["context-1m-2025-08-07"], "context-1m-2025-08-07"),
+        (vec!["CONTEXT-1M-2025-08-07"], "CONTEXT-1M-2025-08-07"),
+        (
+            vec!["claude-code-20250219, Web-Search-2025-03-05"],
+            "Web-Search-2025-03-05",
+        ),
+        (
+            vec![
+                "claude-code-20250219",
+                "effort-2025-11-24, context-1m-2025-08-07, files-api-2025-04-14",
+            ],
+            "context-1m-2025-08-07, files-api-2025-04-14",
+        ),
+    ] {
+        let mut request =
+            wire(json!({"model":"m","max_tokens":32,"messages":[{"role":"user","content":"hi"}]}));
+        request.headers_mut().remove("anthropic-beta");
+        for value in values {
+            request
+                .headers_mut()
+                .append("anthropic-beta", value.parse().unwrap());
+        }
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let bytes = axum::body::to_bytes(response.into_body(), 32768)
+            .await
+            .unwrap();
+        let actual: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            actual,
+            json!({"type":"error","error":{"type":"invalid_request_error","message":format!("Unexpected value(s) `{denied}` for the `anthropic-beta` header. Please consult our documentation at docs.anthropic.com or try again without the header.")}})
+        );
+        assert_eq!(repository.starts.load(Ordering::SeqCst), 0);
+        assert!(captures.lock().unwrap().is_empty());
+    }
+    // Claude Code's capability recovery is a new request without rejected betas.
+    let mut request =
+        wire(json!({"model":"m","max_tokens":32,"messages":[{"role":"user","content":"hi"}]}));
+    request.headers_mut().insert(
+        "anthropic-beta",
+        "claude-code-20250219, effort-2025-11-24".parse().unwrap(),
+    );
+    assert_eq!(app.oneshot(request).await.unwrap().status(), StatusCode::OK);
+    assert_eq!(repository.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(captures.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn upstream_errors_have_anthropic_status_and_never_expose_upstream_bodies() {
     for (upstream_status, upstream_body, status, kind, message) in [
         (
@@ -193,30 +304,17 @@ async fn messages_nonstream_provider_bound_allows_over_four_mib_and_refuses_over
 }
 
 #[tokio::test]
-async fn native_anthropic_fidelity_refusals_do_not_admit_or_dispatch() {
+async fn native_anthropic_unsupported_fields_do_not_admit_or_dispatch() {
     let captures = Captures::default();
     let mock = upstream(200, json!({}), captures.clone()).await;
     for (extra, field) in [
         (
-            json!({"system":[{"type":"text","text":"x","cache_control":{"type":"ephemeral","ttl":"1h"}}]}),
-            "cache_control",
-        ),
-        (json!({"thinking":{"type":"adaptive"}}), "thinking"),
-        (
-            json!({"output_config":{"effort":"high"}}),
-            "output_config.effort",
+            json!({"output_config":{"format":{"type":"json_schema","schema":{"type":"object"}}}}),
+            "output_config.format",
         ),
         (
-            json!({"output_config":{"task_budget":{"type":"tokens","total":64000}}}),
-            "output_config.task_budget",
-        ),
-        (
-            json!({"context_management":{"edits":[]}}),
-            "context_management",
-        ),
-        (
-            json!({"tools":[{"name":"lookup","input_schema":{"type":"object"},"defer_loading":false}]}),
-            "defer_loading",
+            json!({"tools":[{"name":"lookup","input_schema":{"type":"object"},"strict":true}]}),
+            "strict",
         ),
     ] {
         let adapter = crate::providers::anthropic::AnthropicAdapter::for_test(

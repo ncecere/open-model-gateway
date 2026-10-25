@@ -29,11 +29,23 @@ impl std::error::Error for EntropyUnavailable {}
 /// Fill `dest` from the OS CSPRNG, or fail closed (`dest` must then be
 /// discarded).
 pub fn fill(dest: &mut [u8]) -> Result<(), EntropyUnavailable> {
+    fill_quiet(dest).map_err(|_| failed())
+}
+
+fn fill_quiet(dest: &mut [u8]) -> Result<(), EntropyUnavailable> {
     #[cfg(any(test, feature = "integration-tests"))]
     if seam::failing() {
-        return Err(failed());
+        return Err(EntropyUnavailable);
     }
-    SysRng.try_fill_bytes(dest).map_err(|_| failed())
+    SysRng.try_fill_bytes(dest).map_err(|_| EntropyUnavailable)
+}
+
+/// Non-secret optional telemetry identity: fail without logging or a fallback.
+/// Secret generation must keep using `fill`/`bytes` and its diagnostics.
+pub(crate) fn bytes_quiet<const N: usize>() -> Result<[u8; N], EntropyUnavailable> {
+    let mut out = [0u8; N];
+    fill_quiet(&mut out)?;
+    Ok(out)
 }
 
 /// `N` bytes from the OS CSPRNG.
@@ -108,6 +120,15 @@ mod tests {
             assert_eq!(hex_token(), Err(EntropyUnavailable));
         }
         assert!(bytes::<8>().is_ok());
+    }
+
+    #[test]
+    fn optional_identity_uses_the_same_fallible_source_without_a_fallback() {
+        {
+            let _fail = seam::fail_on_this_thread();
+            assert_eq!(bytes_quiet::<16>(), Err(EntropyUnavailable));
+        }
+        assert!(bytes_quiet::<16>().is_ok());
     }
 
     /// Secrets are generated only here: no other production module uses

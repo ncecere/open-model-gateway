@@ -41,6 +41,7 @@ impl ProviderAdapter for OpsMock {
         _request: ChatRequest,
     ) -> Result<ProviderOutput, InferenceError> {
         Ok(ProviderOutput::Complete(ChatResponse {
+            messages_content: None,
             content: Some("ok".into()),
             tool_calls: vec![],
             finish_reason: FinishReason::Stop,
