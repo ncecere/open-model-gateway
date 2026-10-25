@@ -49,6 +49,36 @@ Watch these System metrics (Prometheus names below; OTLP counters omit `_total`)
 
 The metrics exporter's own diagnostics are fixed-enum `metrics exporter state changed` warnings only on transitions into or out of an outage, not every failed push. Those warnings include no destination, header names/values, transport error text or collector response text. A DNS/egress policy refusal is additionally logged at WARN by the shared egress layer with purpose, host and resolved address, one warning per attempt (see [#321](https://github.com/ncecere/open-model-gateway/issues/321)). Monitor silence at the receiver too: a failed exporter cannot report its current failure through that same destination.
 
+## OTLP operational logs (#294)
+
+Each configured `serve` replica may also run one optional OTLP/HTTP **JSON** operational-logs worker: typed, closed infrastructure events only, disabled by default. There is **no tracing-subscriber bridge**: ordinary `tracing` calls, prompts, responses, request/execution ids, model names and collector/error text never leave the process through this transport. Seven fixed event kinds exist, each with a fixed body, severity and catalogue attributes (fixed enums only):
+
+| Event (`event.name=omg.ops.<name>`) | Severity | Meaning |
+|---|---|---|
+| `exporter_degraded` | WARN | The traces or metrics exporter (`signal=traces\|metrics`) entered an outage: a failed exchange or a partial-success rejection. Audit-exporter transitions are excluded; audit stays on its own pipeline. |
+| `exporter_recovered` | INFO (opt-in) | The first fully accepted exchange after an outage. |
+| `egress_refused` | WARN | A complete outbound refusal by the [address policy](#outbound-connections), by `purpose`. The logs exporter's own resolver/client never emits this event (no feedback); every other purpose, including audit, is unaffected. |
+| `lease_lost` | WARN | This replica observed a work lease's takeover or local-trust expiry, once per lost term; a graceful shutdown release never emits this. |
+| `config_listener_down` | WARN | The configuration change LISTEN connection's first failure or a connected-to-disconnected transition; rearmed on the next successful connection. An unconfigured listener never emits this. |
+| `finalization_needs_reconciliation` | ERROR | An inference, realtime or async-job finalization write failed on an existing failed-accounting branch, by `finalizer=generation_finish\|generation_cancel\|realtime_finish\|realtime_cancel\|job_fail\|job_cancel`. Only `generation_finish` may carry a hexadecimal `traceId`, from the same shared-admission-proven correlation traces already use; personal, pre-admission, realtime and job events stay uncorrelated. |
+| `background_job_failed` | WARN | A leased or unleased singleton background job's run failed or timed out, by `job` (the eleven background jobs) and `failure=error\|timeout`. |
+
+### Settings
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GATEWAY_LOGS_OTLP_URL` | unset (disabled) | Full collector URL with exactly `/v1/logs`. Verified HTTPS with public roots, no credentials, query or fragment. HTTP is allowed only on development loopback. Must not normalize-equal the active `GATEWAY_AUDIT_OTLP_URL`: URL equality cannot detect a collector alias, so route operational and audit logs through separately routed credentials/pipelines. |
+| `GATEWAY_LOGS_OTLP_HEADERS_ENV` | unset | Name of a dedicated secret variable holding `Key=Value,Key2=Value2` collector headers; the same bounds and dedicated-pointer rules as the metrics/trace headers. Requires the URL. |
+| `GATEWAY_LOGS_OTLP_MIN_SEVERITY` | `warn` | `info`, `warn` or `error`. Recovery (`exporter_recovered`) is INFO and hidden unless set to `info`. Requires the URL. |
+
+`OTEL_*` settings are never read. Reuses the shared endpoint/header validation, export transport (no proxy, redirect, retry or TLS relaxation) and the [outbound address policy](#outbound-connections), including the development-loopback-only HTTP tightening (#313). Invalid settings stop startup.
+
+### Bounds, privacy and shutdown
+
+One worker; a 1,024-record `try_send` queue; records capped at 512 bytes; batches of at most 100 records/64 KiB every 5 seconds (overdue ticks skipped, never replayed). A per-variant limiter admits at most one event every 30 seconds (burst one); the next admitted event of that variant carries an `omg.ops.suppressed_count` integer attribute for the ones skipped in between. Severity filtering happens before limiting: an event below the floor is never counted as suppressed. Producers only perform bounded atomic operations and a non-blocking send; encoding and the HTTP exchange happen only on the worker, off every request/background hot path. Shutdown closes admission immediately (no new event enqueues), then allows the current exchange and one immediate final batch within the **same shared 3-second traces/metrics/logs drain budget** used by the other exporters, concurrently, not an additional serial phase. Records the collector refuses in a partial-success acknowledgement are counted, not retried.
+
+Watch `gateway_otlp_logs_pushes_total{outcome}`, `gateway_otlp_logs_rejected_records_total`, `gateway_otlp_logs_dropped_total{reason="queue_full\|record_limit\|body_limit\|delivery\|shutdown"}` and `gateway_otlp_logs_suppressed_total{event}`. These are System families, with the same resource attributes (including `service.instance.id`) as [OTLP metrics](#otlp-metrics-99); exporter self-observations never recursively generate another operational-log event.
+
 ## Configuration reference
 
 | Variable | Default | Purpose |
