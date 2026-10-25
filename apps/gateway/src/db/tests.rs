@@ -112,14 +112,24 @@ async fn begin_preserves_session_read_only_policy(pool: PgPool) {
         .fetch_one(&pool)
         .await
         .unwrap();
-    sqlx::query(&format!(
-        "ALTER DATABASE \"{}\" SET default_transaction_read_only=on",
-        database.replace('"', "\"\"")
+    // Both defaults change on one session opened before either change: a pool
+    // connection opened after the read-only default would refuse the second
+    // ALTER DATABASE with 25006 (#329). Only new sessions see the defaults.
+    let database = database.replace('"', "\"\"");
+    let mut session = pool.acquire().await.unwrap();
+    sqlx::raw_sql(&format!(
+        "ALTER DATABASE \"{database}\" SET default_transaction_isolation='serializable'; \
+         ALTER DATABASE \"{database}\" SET default_transaction_read_only=on"
     ))
-    .execute(&pool)
+    .execute(&mut *session)
     .await
     .unwrap();
-    let fresh = elevated_pool(&pool, "serializable", false).await;
+    drop(session);
+    let fresh = PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with((*pool.connect_options()).clone())
+        .await
+        .unwrap();
     for timeout_setup in [false, true] {
         let mut tx = start(&fresh, timeout_setup).await;
         let settings: (String, String, String) = sqlx::query_as(
