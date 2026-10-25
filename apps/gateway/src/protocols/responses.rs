@@ -402,7 +402,7 @@ fn render(output: ProviderOutput, id: String, model: String, created: u64) -> Re
         }
         ProviderOutput::Stream(mut stream) => {
             let events = async_stream::stream! {
-                let mut seq = 0; let mut start = snapshot(&id, &model, created, &ChatResponse { content: None, tool_calls: vec![], finish_reason: FinishReason::Stop, usage: Usage::default() }); start["status"] = "in_progress".into();
+                let mut seq = 0; let mut start = snapshot(&id, &model, created, &ChatResponse { messages_content: None, content: None, tool_calls: vec![], finish_reason: FinishReason::Stop, usage: Usage::default() }); start["status"] = "in_progress".into();
                 yield Ok::<_,Infallible>(numbered("response.created", json!({"response":start}), &mut seq));
                 yield Ok(numbered("response.in_progress", json!({"response":start}), &mut seq));
                 // Text is forwarded as it arrives (message item at index 0, as in the
@@ -460,6 +460,7 @@ pub(super) struct Accumulator {
     reason: Option<FinishReason>,
     usage: Usage,
     bytes: usize,
+    native_bytes: usize,
     limit: Option<usize>,
 }
 impl Accumulator {
@@ -471,6 +472,21 @@ impl Accumulator {
     }
     pub(super) fn push(&mut self, event: ChatEvent) -> Result<bool> {
         match event {
+            ChatEvent::MessagesBlock(value) if self.reason.is_none() => {
+                if !matches!(
+                    value["type"].as_str(),
+                    Some("content_block_start" | "content_block_delta" | "content_block_stop")
+                ) {
+                    return Err(InferenceError::InvalidUpstream);
+                }
+                self.native_bytes = self
+                    .native_bytes
+                    .checked_add(value.to_string().len())
+                    .ok_or(InferenceError::InvalidUpstream)?;
+                if self.native_bytes > self.limit.unwrap_or(OUTPUT_LIMIT) {
+                    return Err(InferenceError::InvalidUpstream);
+                }
+            }
             ChatEvent::Delta { text, tool_calls } if self.reason.is_none() => {
                 let size = text.as_ref().map_or(0, String::len)
                     + tool_calls
@@ -526,6 +542,7 @@ impl Accumulator {
             }
         }
         Ok(ChatResponse {
+            messages_content: None,
             content: self.text,
             tool_calls: self.tools.into_values().collect(),
             finish_reason: self.reason.ok_or(InferenceError::InvalidUpstream)?,

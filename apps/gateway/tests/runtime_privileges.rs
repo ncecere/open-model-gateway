@@ -1974,6 +1974,7 @@ mod jobs_fake {
     }
     fn answer() -> ChatResponse {
         ChatResponse {
+            messages_content: None,
             content: Some("probe".into()),
             tool_calls: vec![],
             finish_reason: FinishReason::Stop,

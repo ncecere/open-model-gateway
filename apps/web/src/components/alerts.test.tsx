@@ -47,6 +47,15 @@ describe("Admin › Settings › Alerts", () => {
     expect(screen.getAllByRole("link", { name: /New rule/ })[0]!.getAttribute("href")).toBe("/admin/alerts/new");
     client.clear();
   });
+  it("labels firing and clearing generation suppression separately", async () => {
+    const email = { status: "suppressed", suppression_reason: "workspace_generation_limit", recipients: 0, sent: 0, failed: 0, error: null };
+    serve(admin, path => path.startsWith("/api/v1/platform/alerts/events") ? { data: [{ ...notification, state: "resolved", resolved_at: "2026-10-09T00:00:00Z", resolution: "cleared", email, cleared_email: email }], has_more: false } : undefined);
+    const { client } = await mount("/admin/settings/alerts?tab=history");
+    expect(await screen.findByText("Email: Not emailed — workspace notification limit")).toBeTruthy();
+    expect(screen.getByText("Clearing email: Not emailed — workspace notification limit")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("fingerprint");
+    client.clear();
+  });
   it("shows aggregate retry and exhaustion facts without recipient details", async () => {
     const email = { status: "pending", recipients: 2, sent: 1, failed: 0, error: "connection", attempt_count: 2, retrying: true, waiting: 1, exhausted: 0, next_attempt_at: "2026-10-22T10:00:00Z" };
     serve(admin, path => path.startsWith("/api/v1/platform/alerts/events") ? { data: [{ ...notification, email }, { ...notification, id: "e2", summary: "Exhausted delivery", email: { ...email, status: "failed", sent: 0, waiting: 0, retrying: false, exhausted: 1, next_attempt_at: null } }], has_more: false } : undefined);

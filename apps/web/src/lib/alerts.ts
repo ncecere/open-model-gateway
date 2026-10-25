@@ -26,14 +26,14 @@ export type AlertRule = {
   firing: number; last_fired_at: string | null; created_at: string; updated_at: string;
 };
 export type RuleList = { data: AlertRule[]; /** Personal workspaces: the built-in budget alert (nothing configurable). */ builtin?: { thresholds: number[]; budget_layers: BudgetLayer[] } | null; writable?: boolean };
-export type EmailOutcome = { status: "pending" | "sent" | "partial" | "failed" | "not_configured" | "no_recipients"; recipients: number; sent: number; failed: number; error: string | null; /** Additive post-v0.7.0 retry metadata; older gateways omit it. */ attempt_count?: number; retrying?: boolean; next_attempt_at?: string | null; waiting?: number; exhausted?: number };
+export type EmailOutcome = { status: "pending" | "sent" | "partial" | "failed" | "not_configured" | "no_recipients" | "suppressed"; suppression_reason?: "workspace_generation_limit" | null; recipients: number; sent: number; failed: number; error: string | null; /** Additive post-v0.7.0 retry metadata; older gateways omit it. */ attempt_count?: number; retrying?: boolean; next_attempt_at?: string | null; waiting?: number; exhausted?: number };
 /** Incident kinds: rule kinds plus the built-in incidents that never come from a rule: the SCIM last-admin safeguard, missing history partitions, history orphans and authorized key-expiry reminders (7-day/1-day). */
 export type AlertEventKind = AlertKind | "scim_last_admin" | "partitions_missing" | "history_orphans" | "key_expiring" | "aged_unknown_hold";
 export type AlertEvent = {
   id: string; rule: { id: string; name: string; scope: "installation" | "workspace"; deleted: boolean } | null; builtin: boolean; kind: AlertEventKind;
   state: "firing" | "resolved"; severity: "warning" | "critical"; level: number; summary: string; details: Record<string, unknown>;
   workspace: { id: string; name: string; kind: "personal" | "team" | "project" } | null; connection: { id: string; name: string; provider: string } | null;
-  fired_at: string; resolved_at: string | null; resolution: "cleared" | "superseded" | "rule_disabled" | null; email: EmailOutcome | null;
+  fired_at: string; resolved_at: string | null; resolution: "cleared" | "superseded" | "rule_disabled" | null; email: EmailOutcome | null; cleared_email?: EmailOutcome | null;
 };
 export type Notification = AlertEvent & { read: boolean };
 export type NotificationSummary = { unread: number; firing: number };
@@ -220,7 +220,7 @@ export function whereText(e: Pick<AlertEvent, "workspace" | "connection" | "buil
 /** Secondary label of an incident: its rule, or which built-in alert fired it. */
 export const sourceText = (e: Pick<AlertEvent, "rule" | "kind">) => e.rule?.name ?? (e.kind === "scim_last_admin" ? "Built-in SCIM safeguard" : e.kind === "partitions_missing" ? "Built-in partition check" : e.kind === "history_orphans" ? "Built-in history check" : e.kind === "key_expiring" ? "Built-in key-expiry reminder" : e.kind === "aged_unknown_hold" ? "Built-in aged-hold review" : "Built-in budget alert");
 export const resolutionLabels: Record<NonNullable<AlertEvent["resolution"]>, string> = { cleared: "Cleared", superseded: "Replaced by a higher level", rule_disabled: "Rule turned off" };
-export const emailLabels: Record<EmailOutcome["status"], string> = { pending: "Waiting", sent: "Sent", partial: "Partly sent", failed: "Failed", not_configured: "Email not set up", no_recipients: "No recipients" };
+export const emailLabels: Record<EmailOutcome["status"], string> = { pending: "Waiting", sent: "Sent", partial: "Partly sent", failed: "Failed", not_configured: "Email not set up", no_recipients: "No recipients", suppressed: "Not emailed — workspace notification limit" };
 /** Aggregate status only: never recipient identities or fingerprints. */
 export function emailStatusText(email: EmailOutcome): string {
   if (email.status === "pending") return `${email.retrying ? "Retrying" : "Waiting"}${email.waiting ? ` · ${email.waiting} waiting` : ""}`;

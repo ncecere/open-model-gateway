@@ -831,6 +831,12 @@ impl Engine {
                             };
                             if matches!(next,Err(InferenceError::Timeout)) && Instant::now()>=deadline {guard.health_observation=false;}
                             let item = match next {
+                                Ok(ChatEvent::MessagesBlock(_)) if finished_choice => Err(InferenceError::InvalidUpstream),
+                                Ok(ChatEvent::MessagesBlock(value)) => {
+                                    let text = value["delta"]["thinking"].as_str().or_else(|| value["content_block"]["thinking"].as_str());
+                                    guard.first_token(text, &[]);
+                                    Ok(ChatEvent::MessagesBlock(value))
+                                }
                                 Ok(ChatEvent::Delta { .. }) if finished_choice => Err(InferenceError::InvalidUpstream),
                                 Ok(ChatEvent::Delta { text, tool_calls }) => { guard.first_token(text.as_deref(), &tool_calls); Ok(ChatEvent::Delta { text, tool_calls }) }
                                 Ok(ChatEvent::Finish(_)) if finished_choice => Err(InferenceError::InvalidUpstream),

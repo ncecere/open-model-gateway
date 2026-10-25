@@ -9,6 +9,8 @@ use sqlx::PgPool;
 mod aged_hold;
 #[path = "fair_dispatch_tests.rs"]
 mod fair_dispatch;
+#[path = "generation_tests.rs"]
+mod generation;
 
 async fn expiry_now(s: &Seed) -> DateTime<Utc> {
     sqlx::query_scalar("SELECT clock_timestamp()")
@@ -1463,10 +1465,7 @@ async fn evaluation_alone_never_runs_outbox_cleanup(pool: PgPool) {
         .unwrap()
         .unwrap();
     let claim = claim.unwrap();
-    sqlx::query("UPDATE alert_deliveries SET created_at=clock_timestamp()-interval '25 hours'")
-        .execute(&s.pool)
-        .await
-        .unwrap();
+    age_outbox(&s).await;
     sqlx::query("UPDATE alert_recipient_outbox SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE state='leased'").execute(&s.pool).await.unwrap();
     assert!(evaluate_once(&s.store).await.unwrap().is_some());
     let (status, state): (String, String) = sqlx::query_as(
@@ -1529,6 +1528,13 @@ async fn outbox_incident(s: &Seed, emails: &str) -> Uuid {
         .await
         .unwrap();
     rule
+}
+// Test-owner clock travel for retry/cleanup, not a runtime quota bypass.
+async fn age_outbox(s: &Seed) {
+    let mut tx = s.pool.begin().await.unwrap();
+    sqlx::raw_sql("ALTER TABLE alert_deliveries DISABLE TRIGGER alert_delivery_generation_immutable; UPDATE alert_deliveries SET created_at=clock_timestamp()-interval '25 hours'; ALTER TABLE alert_deliveries ENABLE TRIGGER alert_delivery_generation_immutable")
+        .execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
 }
 async fn outbox_due(s: &Seed) {
     sqlx::query("UPDATE alert_recipient_outbox SET next_attempt_at=clock_timestamp()-interval '1 second' WHERE state='waiting'").execute(&s.pool).await.unwrap();
@@ -1996,10 +2002,7 @@ async fn outbox_24h_cleanup_preserves_success_and_exhausts_leases(pool: PgPool) 
         .unwrap()
         .unwrap();
     let claim = claim.unwrap();
-    sqlx::query("UPDATE alert_deliveries SET created_at=clock_timestamp()-interval '25 hours'")
-        .execute(&s.pool)
-        .await
-        .unwrap();
+    age_outbox(&s).await;
     sqlx::query("UPDATE alert_recipient_outbox SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE state='leased'").execute(&s.pool).await.unwrap();
     deliver_pending(&s.store, 25).await;
     assert!(!outbox::complete(&s.store, &claim, Ok(())).await.unwrap());

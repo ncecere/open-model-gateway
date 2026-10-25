@@ -259,6 +259,7 @@ enum BudgetCommand {
 }
 
 fn main() -> Result<()> {
+    let process_start_unix_nano = open_model_gateway::telemetry::now_unix_nanos();
     // Arguments only: no clap argument reads the environment.
     let cli = Cli::parse();
     if let Some(Command::Healthcheck {
@@ -303,7 +304,7 @@ fn main() -> Result<()> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
-        .block_on(run(cli))
+        .block_on(run(cli, process_start_unix_nano))
 }
 
 fn healthcheck(url: Option<&str>, timeout: &str, allow_non_loopback: bool) -> Result<()> {
@@ -362,7 +363,7 @@ async fn wait_for_database(config: &Config, schema: bool, timeout_seconds: u64) 
 /// production.
 const DEFAULT_LOG_FILTER: &str = "open_model_gateway=info";
 
-async fn run(cli: Cli) -> Result<()> {
+async fn run(cli: Cli, process_start_unix_nano: u64) -> Result<()> {
     tracing_subscriber::fmt()
         .json()
         .with_writer(std::io::stderr)
@@ -956,6 +957,14 @@ async fn run(cli: Cli) -> Result<()> {
                     .await;
                 }
             });
+            // Independent of the Prometheus listener and traces; the Store
+            // already carries leases and all configured listeners are bound.
+            let metrics_export = open_model_gateway::metrics_export::Runtime::start(
+                config.metrics_export,
+                config.environment,
+                process_start_unix_nano,
+                store.clone(),
+            );
             let served = axum::serve(
                 listener,
                 http::router_with_identity(store, web, engine, identity)
@@ -966,9 +975,19 @@ async fn run(cli: Cli) -> Result<()> {
             )
             .with_graceful_shutdown(shutdown_signal())
             .await;
-            if let Some(traces) = traces {
-                traces.shutdown().await;
-            }
+            // Both exporters share the same shutdown window, not serial 3s drains.
+            tokio::join!(
+                async {
+                    if let Some(traces) = traces {
+                        traces.shutdown().await;
+                    }
+                },
+                async {
+                    if let Some(metrics_export) = metrics_export {
+                        metrics_export.shutdown().await;
+                    }
+                },
+            );
             if let Some(alerts) = alerts {
                 alerts.abort();
                 let _ = alerts.await;
@@ -1101,6 +1120,10 @@ mod demo {
             migrations.last().unwrap()["version"]
         );
         assert_eq!(migrations[0]["version"], 1);
+        // At least this release's newest migration; later releases add more.
+        assert!(value["latest_version"].as_i64().unwrap() >= 60);
+        assert!(migrations.iter().any(|m| m["version"] == 58));
+        assert!(migrations.iter().any(|m| m["version"] == 59));
         assert!(
             migrations
                 .iter()
@@ -1262,6 +1285,11 @@ mod demo {
             alert_webhooks: Default::default(),
             inference_limits: Default::default(),
             metrics_listen: None,
+            metrics_export: open_model_gateway::config::MetricsExportConfig::from_lookup(
+                |_| None,
+                open_model_gateway::config::Environment::Development,
+            )
+            .unwrap(),
             database_max_connections: 10,
             reporting_database_url: None,
             reporting_max_lag: std::time::Duration::from_secs(30),

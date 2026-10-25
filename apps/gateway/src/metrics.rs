@@ -46,7 +46,40 @@ const RESERVATION_REFRESH: Duration = Duration::from_secs(15);
 
 // Pending work is bounded by its admission window; terminal failures must
 // remain visible for a full observation window after completion/cleanup.
-const ALERT_DELIVERY_COUNTS: &str = "SELECT recent.*,pending.* FROM (SELECT count(*) FILTER(WHERE retrying),count(*) FILTER(WHERE exhausted>0),count(*) FILTER(WHERE status IN ('failed','partial')) FROM alert_deliveries WHERE (status='pending' AND created_at>clock_timestamp()-interval '24 hours') OR (status<>'pending' AND completed_at>clock_timestamp()-interval '24 hours')) recent CROSS JOIN (SELECT count(DISTINCT bucket_id),floor(greatest(0,coalesce(extract(epoch FROM clock_timestamp()-min(created_at)),0)))::bigint FROM alert_deliveries WHERE status='pending') pending";
+const ALERT_DELIVERY_COUNTS: &str = "SELECT recent.*,pending.* FROM (SELECT count(*) FILTER(WHERE retrying),count(*) FILTER(WHERE exhausted>0),count(*) FILTER(WHERE status IN ('failed','partial')),count(*) FILTER(WHERE status='suppressed') FROM alert_deliveries WHERE (status='pending' AND created_at>clock_timestamp()-interval '24 hours') OR (status<>'pending' AND completed_at>clock_timestamp()-interval '24 hours')) recent CROSS JOIN (SELECT count(DISTINCT bucket_id),floor(greatest(0,coalesce(extract(epoch FROM clock_timestamp()-min(created_at)),0)))::bigint FROM alert_deliveries WHERE status='pending') pending";
+
+// Shared with the retained-history EXPLAIN harness: measure the exact collector SQL.
+// Separate branches can use the existing waiting/leased partial indexes and
+// 0062's completed_at-leading terminal index. statement_timestamp() is a stable
+// range bound; volatile clock_timestamp() would filter retained history instead.
+// One statement retains one snapshot/deadline and always emits all six states.
+// Only waiting needs the destination join: its live generation must match;
+// the foreign key already guarantees destination existence for the other states.
+const ALERT_WEBHOOK_COUNTS: &str = r#"
+WITH counts AS (
+    SELECT 'waiting'::text AS state,count(*)::bigint AS n,
+        coalesce(max(greatest(0,extract(epoch FROM statement_timestamp()-q.created_at))),0)::bigint AS age
+    FROM alert_webhook_outbox q
+    JOIN alert_webhook_destinations d ON d.id=q.destination_id
+    WHERE q.state='waiting' AND q.destination_generation=d.enable_generation
+    UNION ALL
+    SELECT 'leased',count(*)::bigint,0::bigint
+    FROM alert_webhook_outbox WHERE state='leased'
+    UNION ALL
+    SELECT state,count(*)::bigint,0::bigint
+    FROM alert_webhook_outbox
+    WHERE state IN ('sent','failed','exhausted','ineligible')
+        AND completed_at>statement_timestamp()-interval '24 hours'
+    GROUP BY state
+)
+SELECT s.state,coalesce(c.n,0)::bigint,coalesce(c.age,0)::bigint
+FROM unnest(ARRAY['waiting','leased','sent','failed','exhausted','ineligible']) s(state)
+LEFT JOIN counts c ON c.state=s.state
+"#;
+
+#[cfg(all(test, feature = "integration-tests"))]
+#[path = "metrics/webhook_tests.rs"]
+mod webhook_tests;
 
 pub const CONTENT_TYPE: &str = "application/openmetrics-text; version=1.0.0; charset=utf-8";
 
@@ -517,7 +550,7 @@ impl Metrics {
         );
         registry.register(
             "alert_email_deliveries",
-            "Pending deliveries created or terminal failures completed in the last 24 hours",
+            "Pending deliveries created or terminal failures/suppressions completed in the last 24 hours",
             metrics.alert_delivery_queue.clone(),
         );
         registry.register(
@@ -1311,11 +1344,12 @@ impl Metrics {
         }
         match tokio::time::timeout(
             Duration::from_secs(2),
-            sqlx::query_as::<_, (i64, i64, i64, i64, i64)>(ALERT_DELIVERY_COUNTS).fetch_one(pool),
+            sqlx::query_as::<_, (i64, i64, i64, i64, i64, i64)>(ALERT_DELIVERY_COUNTS)
+                .fetch_one(pool),
         )
         .await
         {
-            Ok(Ok((retrying, exhausted, failed, buckets, oldest_age))) => {
+            Ok(Ok((retrying, exhausted, failed, suppressed, buckets, oldest_age))) => {
                 self.alert_pending_buckets.get_or_create(&[]).set(buckets);
                 self.alert_oldest_pending_age
                     .get_or_create(&[])
@@ -1324,6 +1358,7 @@ impl Metrics {
                     ("retrying", retrying),
                     ("exhausted", exhausted),
                     ("failed", failed),
+                    ("suppressed", suppressed),
                 ] {
                     self.alert_delivery_queue
                         .get_or_create(&[("state", state.to_owned())])
@@ -1332,11 +1367,20 @@ impl Metrics {
             }
             _ => self.collection_error("alert_email"),
         }
-        match tokio::time::timeout(Duration::from_secs(2), sqlx::query_as::<_, (String,i64,i64)>("SELECT s.state,count(q.id)::bigint,coalesce(max(greatest(0,extract(epoch FROM clock_timestamp()-q.created_at))) FILTER(WHERE s.state='waiting'),0)::bigint FROM unnest(ARRAY['waiting','leased','sent','failed','exhausted','ineligible']) s(state) LEFT JOIN (alert_webhook_outbox q JOIN alert_webhook_destinations d ON d.id=q.destination_id) ON q.state=s.state AND (q.state<>'waiting' OR q.destination_generation=d.enable_generation) AND (q.state IN ('waiting','leased') OR q.completed_at>clock_timestamp()-interval '24 hours') GROUP BY s.state").fetch_all(pool)).await {
+        match tokio::time::timeout(
+            Duration::from_secs(2),
+            sqlx::query_as::<_, (String, i64, i64)>(ALERT_WEBHOOK_COUNTS).fetch_all(pool),
+        )
+        .await
+        {
             Ok(Ok(rows)) => {
-                for (state,count,age) in rows {
-                    if state=="waiting" { self.alert_webhook_oldest.get_or_create(&[]).set(age); }
-                    self.alert_webhook_queue.get_or_create(&[("state",state)]).set(count);
+                for (state, count, age) in rows {
+                    if state == "waiting" {
+                        self.alert_webhook_oldest.get_or_create(&[]).set(age);
+                    }
+                    self.alert_webhook_queue
+                        .get_or_create(&[("state", state)])
+                        .set(count);
                 }
             }
             _ => self.collection_error("alert_webhook"),
@@ -1690,6 +1734,9 @@ mod tests {
             .bind(rule).bind(ws).execute(&pool).await.unwrap();
         sqlx::raw_sql("WITH event AS (INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,summary) VALUES(gen_random_uuid(),'scim_last_admin','scim_last_admin','user',100,'critical','Metrics') RETURNING id) INSERT INTO alert_deliveries(id,event_id,transition,created_at) SELECT gen_random_uuid(),id,'fired',clock_timestamp()-interval '25 hours' FROM event")
             .execute(&pool).await.unwrap();
+        // Owner-only clock travel: admission now deliberately overwrites
+        // caller timestamps. Preserve the original overdue-backlog fixture.
+        sqlx::raw_sql("ALTER TABLE alert_deliveries DISABLE TRIGGER alert_delivery_generation_immutable; UPDATE alert_deliveries SET created_at=clock_timestamp()-CASE WHEN bucket_id='00000000-0000-0000-0000-000000000000' THEN interval '25 hours' ELSE interval '1 hour' END; ALTER TABLE alert_deliveries ENABLE TRIGGER alert_delivery_generation_immutable").execute(&pool).await.unwrap();
         let m = Metrics::new();
         let scrape = m.render(Some(&store)).await;
         assert!(
@@ -1743,6 +1790,8 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        // Owner-only clock travel for the cleanup scenario.
+        sqlx::raw_sql("ALTER TABLE alert_deliveries DISABLE TRIGGER alert_delivery_generation_immutable; UPDATE alert_deliveries SET created_at=clock_timestamp()-interval '25 hours'; ALTER TABLE alert_deliveries ENABLE TRIGGER alert_delivery_generation_immutable").execute(&pool).await.unwrap();
         let before = Metrics::new().render(Some(&store)).await;
         assert!(before.contains("gateway_alert_email_deliveries{state=\"retrying\"} 0"));
         crate::alerts::deliver_pending(&store, 25).await;
@@ -1775,11 +1824,30 @@ mod tests {
                 "clock_timestamp()",
                 &format!("(clock_timestamp()+interval '{age}')"),
             );
-            let counts: (i64, i64, i64, i64, i64) =
+            let counts: (i64, i64, i64, i64, i64, i64) =
                 sqlx::query_as(&later).fetch_one(&pool).await.unwrap();
             assert_eq!((counts.0, counts.1, counts.2), expected);
-            assert_eq!((counts.3, counts.4), (0, 0));
+            assert_eq!((counts.3, counts.4, counts.5), (0, 0, 0));
         }
+    }
+
+    #[cfg(feature = "integration-tests")]
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn alert_generation_suppressed_metric_is_bounded_to_last_24h(pool: sqlx::PgPool) {
+        let store = Store::new(pool.clone());
+        sqlx::raw_sql("WITH events AS (INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,summary) SELECT gen_random_uuid(),'scim_last_admin','scim_last_admin',i::text,1,'critical','Metrics' FROM generate_series(1,101) i RETURNING id) INSERT INTO alert_deliveries(id,event_id,transition) SELECT gen_random_uuid(),id,'fired' FROM events").execute(&pool).await.unwrap();
+        let scrape = Metrics::new().render(Some(&store)).await;
+        assert!(
+            scrape.contains("gateway_alert_email_deliveries{state=\"suppressed\"} 1"),
+            "{scrape}"
+        );
+        let later = ALERT_DELIVERY_COUNTS.replace(
+            "clock_timestamp()",
+            "(clock_timestamp()+interval '25 hours')",
+        );
+        let counts: (i64, i64, i64, i64, i64, i64) =
+            sqlx::query_as(&later).fetch_one(&pool).await.unwrap();
+        assert_eq!(counts.3, 0);
     }
 
     #[tokio::test]

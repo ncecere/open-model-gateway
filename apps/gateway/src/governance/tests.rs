@@ -297,8 +297,54 @@ pub(crate) mod db {
             id
         }
         pub async fn v2(&self, rates: CachePricing) -> Uuid {
+            self.cache_price(self.deployment, 2, rates).await
+        }
+        /// Equivalent immutable v2/v3 cache prices, using canonical meter units.
+        pub async fn cache_price(
+            &self,
+            deployment: Uuid,
+            version: i32,
+            rates: CachePricing,
+        ) -> Uuid {
+            use crate::billing::v3::Meter;
             let id = Uuid::new_v4();
-            sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version,cache_pricing) VALUES($1,$2,1000000,1000000,100,50,2,$3)").bind(id).bind(self.deployment).bind(serde_json::to_value(rates).unwrap()).execute(&self.store.pool).await.unwrap();
+            if version == 2 {
+                sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version,cache_pricing) VALUES($1,$2,1000000,1000000,100,50,2,$3)").bind(id).bind(deployment).bind(serde_json::to_value(rates).unwrap()).execute(&self.store.pool).await.unwrap();
+            } else {
+                assert_eq!(version, 3);
+                let mut lines = Vec::new();
+                for meter in Meter::ALL {
+                    if meter == Meter::Requests {
+                        lines.push(serde_json::json!({"meter":meter,"microusd_per_batch":"0","batch":1,"unit_label":meter.unit_label(1).unwrap(),"sku_label":"Request"}));
+                        continue;
+                    }
+                    let rate = match meter {
+                        Meter::InputTokens | Meter::OutputTokens => CacheRate::Priced {
+                            microusd_per_million: 1_000_000,
+                        },
+                        Meter::CacheReadTokens => rates.read,
+                        Meter::CacheWriteTokens => rates.write,
+                        Meter::CacheWrite5mTokens => rates.write_5m,
+                        Meter::CacheWrite1hTokens => rates.write_1h,
+                        _ => CacheRate::NotApplicable,
+                    };
+                    match rate {
+                        CacheRate::Priced {
+                            microusd_per_million,
+                        } => {
+                            let batch = 1_000_000;
+                            lines.push(serde_json::json!({"meter":meter,"microusd_per_batch":microusd_per_million.to_string(),"batch":batch,"unit_label":meter.unit_label(batch).unwrap(),"sku_label":"Cache test"}));
+                        }
+                        CacheRate::NotApplicable => {
+                            lines.push(serde_json::json!({"meter":meter,"not_applicable":true}))
+                        }
+                        // Missing lines are the stored canonical form of unknown.
+                        CacheRate::Unknown => {}
+                    }
+                }
+                sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_token_limit,output_token_limit,pricing_version,price_lines,max_units) VALUES($1,$2,100,50,3,$3,'{}')")
+                    .bind(id).bind(deployment).bind(serde_json::json!(lines)).execute(&self.store.pool).await.unwrap();
+            }
             id
         }
         pub(crate) async fn policy(

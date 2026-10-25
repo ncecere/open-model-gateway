@@ -1,4 +1,4 @@
-//! A scrape-derived snapshot and OTLP/HTTP JSON encoder; no worker or I/O.
+//! Scrape-derived snapshots, OTLP/HTTP JSON encoding and a single bounded worker.
 //!
 //! Wire mapping: opentelemetry-proto v1.9.0 metrics/v1/metrics.proto and
 //! collector/metrics/v1/metrics_service.proto. Int64/uint64 fields are decimal
@@ -7,6 +7,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::LazyLock,
+    time::Duration,
 };
 
 use serde_json::{Value, json};
@@ -422,11 +423,11 @@ fn sample(mut rest: &str) -> Result<(Labels, &str), DropReason> {
     Ok((labels.into_iter().collect(), value))
 }
 
-// One id for the entire process, across encoder instances. Entropy failure
-// remains an error, never a predictable fallback or a panic.
+// One id for the entire process, across encoder instances. Cache failure too:
+// export stays quietly disabled, never a predictable fallback or another draw.
 static INSTANCE: LazyLock<Result<uuid::Uuid, crate::entropy::EntropyUnavailable>> =
     LazyLock::new(|| {
-        Ok(uuid::Builder::from_random_bytes(crate::entropy::bytes::<16>()?).into_uuid())
+        Ok(uuid::Builder::from_random_bytes(crate::entropy::bytes_quiet::<16>()?).into_uuid())
     });
 
 pub struct Encoder {
@@ -440,9 +441,8 @@ pub struct Encoded {
     pub points: usize,
 }
 impl Encoder {
-    /// Slice 3 must capture the timestamp at process start, NOT per push, and
-    /// quietly disable export if instance-id entropy is unavailable. Acceptance
-    /// UUID privacy checks must exempt only the service.instance.id resource key.
+    /// The caller captures process start, never a per-push timestamp. Failure
+    /// quietly disables export. Only service.instance.id may carry this UUID.
     pub fn new(
         environment: Environment,
         process_start_unix_nano: u64,
@@ -525,6 +525,140 @@ fn json_size(value: &Value) -> usize {
     serde_json::to_vec(value)
         .expect("finite JSON values serialize")
         .len()
+}
+
+const EXCHANGE: Duration = Duration::from_secs(5);
+const DRAIN: Duration = Duration::from_secs(3);
+
+/// Owns one task, with one snapshot/body/exchange and no queue or retry.
+/// Dropping it (including a cancelled shutdown) aborts all network work.
+pub struct Runtime {
+    stop: Option<tokio::sync::oneshot::Sender<()>>,
+    task: tokio::task::JoinHandle<()>,
+}
+impl Runtime {
+    pub fn start(
+        config: crate::config::MetricsExportConfig,
+        environment: Environment,
+        process_start_unix_nano: u64,
+        store: crate::store::Store,
+    ) -> Option<Self> {
+        // Disabled must not initialize INSTANCE, draw entropy or spawn a task.
+        let (url, client) = config.endpoint?;
+        let encoder = Encoder::new(environment, process_start_unix_nano).ok()?;
+        let exporter = Exporter {
+            url,
+            client,
+            headers: config.headers,
+            encoder,
+            traffic: config.traffic,
+        };
+        let (stop, receiver) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(worker(exporter, store, config.interval, receiver));
+        Some(Self {
+            stop: Some(stop),
+            task,
+        })
+    }
+
+    pub async fn shutdown(mut self) {
+        // ONE total budget: cancel any periodic collection/exchange, then
+        // attempt one fresh final snapshot. Never give each phase another 3s.
+        let deadline = tokio::time::Instant::now() + DRAIN;
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if tokio::time::timeout_at(deadline, &mut self.task)
+            .await
+            .is_err()
+        {
+            self.task.abort();
+            let _ = (&mut self.task).await;
+        }
+    }
+}
+impl Drop for Runtime {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+struct Exporter {
+    url: reqwest::Url,
+    client: reqwest::Client,
+    headers: reqwest::header::HeaderMap,
+    encoder: Encoder,
+    traffic: bool,
+}
+impl Exporter {
+    async fn push(&self, store: &crate::store::Store, outage: &mut bool) {
+        let encoded = {
+            let text = crate::metrics::METRICS.render(Some(store)).await;
+            self.encoder.encode(
+                Snapshot::parse(&text, self.traffic),
+                crate::telemetry::now_unix_nanos(),
+            )
+        };
+        // Render has returned: no metrics lock or DB connection crosses HTTP.
+        let result = crate::otlp::post(
+            &self.client,
+            &self.url,
+            &self.headers,
+            encoded.body,
+            encoded.points,
+            "rejectedDataPoints",
+            EXCHANGE,
+        )
+        .await;
+        // Self-observations are visible only in the NEXT snapshot, never a
+        // recursive export. Outcomes/drops are already precreated at zero.
+        encoded.dropped.record(&crate::metrics::METRICS);
+        let outcome = match result {
+            Ok(rejected) => {
+                crate::metrics::METRICS.otlp_metrics_rejected(rejected);
+                Delivery::Accepted
+            }
+            Err(outcome) => outcome,
+        };
+        crate::metrics::METRICS.otlp_metrics_push(outcome);
+        let failed = outcome != Delivery::Accepted;
+        if failed != *outage {
+            // Fixed enum only: no destination, headers, errors or server text.
+            tracing::warn!(outcome = outcome.as_str(), "metrics exporter state changed");
+        }
+        *outage = failed;
+    }
+}
+
+async fn worker(
+    exporter: Exporter,
+    store: crate::store::Store,
+    interval: Duration,
+    mut stop: tokio::sync::oneshot::Receiver<()>,
+) {
+    let mut outage = false;
+    let mut next = tokio::time::Instant::now() + interval;
+    loop {
+        tokio::select! {
+            biased;
+            _ = &mut stop => break,
+            _ = tokio::time::sleep_until(next) => {}
+        }
+        let started = tokio::time::Instant::now();
+        tokio::select! {
+            biased;
+            _ = &mut stop => break,
+            _ = exporter.push(&store, &mut outage) => {}
+        }
+        next = started + interval;
+        let now = tokio::time::Instant::now();
+        if next <= now {
+            // Missed ticks are discarded, not immediately replayed in bursts.
+            next = now + interval;
+        }
+    }
+    // The owning Runtime bounds collection AND HTTP with its single deadline.
+    exporter.push(&store, &mut outage).await;
 }
 
 #[cfg(test)]
