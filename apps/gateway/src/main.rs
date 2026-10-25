@@ -852,7 +852,7 @@ async fn run(cli: Cli, process_start_unix_nano: u64) -> Result<()> {
                         open_model_gateway::leases::run_singleton(
                             &history_leases,
                             open_model_gateway::leases::Lease::Partitions,
-                            "partitions",
+                            open_model_gateway::ops_log::Job::Partitions,
                             std::time::Duration::from_secs(60),
                             |fence| {
                                 let store = history_store.clone();
@@ -871,7 +871,7 @@ async fn run(cli: Cli, process_start_unix_nano: u64) -> Result<()> {
                     open_model_gateway::leases::run_singleton(
                         &history_leases,
                         open_model_gateway::leases::Lease::Rollups,
-                        "rollups",
+                        open_model_gateway::ops_log::Job::Rollups,
                         std::time::Duration::from_secs(50),
                         |fence| {
                             let store = history_store.clone();
@@ -904,7 +904,7 @@ async fn run(cli: Cli, process_start_unix_nano: u64) -> Result<()> {
                     open_model_gateway::leases::run_singleton(
                         &verify_leases,
                         open_model_gateway::leases::Lease::HistoryVerify,
-                        "history_verify",
+                        open_model_gateway::ops_log::Job::HistoryVerify,
                         std::time::Duration::from_secs(900),
                         |fence| {
                             let store = verify_store.clone();
@@ -927,7 +927,7 @@ async fn run(cli: Cli, process_start_unix_nano: u64) -> Result<()> {
                     open_model_gateway::leases::run_singleton(
                         &lifecycle_leases,
                         open_model_gateway::leases::Lease::Lifecycle,
-                        "lifecycle",
+                        open_model_gateway::ops_log::Job::Lifecycle,
                         std::time::Duration::from_secs(30),
                         |fence| {
                             let store = lifecycle_store.clone();
@@ -951,6 +951,11 @@ async fn run(cli: Cli, process_start_unix_nano: u64) -> Result<()> {
                 process_start_unix_nano,
                 store.clone(),
             );
+            // Optional, disabled-by-default OTLP operational logs (#294):
+            // typed events only, independent of traces/metrics/the Prometheus
+            // listener. A collector failure never gates readiness.
+            let logs_export =
+                open_model_gateway::ops_log::Runtime::start(config.logs_export, config.environment);
             let served = axum::serve(
                 listener,
                 http::router_with_identity(store, web, engine, identity)
@@ -961,7 +966,7 @@ async fn run(cli: Cli, process_start_unix_nano: u64) -> Result<()> {
             )
             .with_graceful_shutdown(shutdown_signal())
             .await;
-            // Both exporters share the same shutdown window, not serial 3s drains.
+            // All three exporters share the same shutdown window, not serial 3s drains.
             tokio::join!(
                 async {
                     if let Some(traces) = traces {
@@ -971,6 +976,11 @@ async fn run(cli: Cli, process_start_unix_nano: u64) -> Result<()> {
                 async {
                     if let Some(metrics_export) = metrics_export {
                         metrics_export.shutdown().await;
+                    }
+                },
+                async {
+                    if let Some(logs_export) = logs_export {
+                        logs_export.shutdown().await;
                     }
                 },
             );
@@ -1207,6 +1217,11 @@ mod demo {
             inference_limits: Default::default(),
             metrics_listen: None,
             metrics_export: open_model_gateway::config::MetricsExportConfig::from_lookup(
+                |_| None,
+                open_model_gateway::config::Environment::Development,
+            )
+            .unwrap(),
+            logs_export: open_model_gateway::config::LogsExportConfig::from_lookup(
                 |_| None,
                 open_model_gateway::config::Environment::Development,
             )

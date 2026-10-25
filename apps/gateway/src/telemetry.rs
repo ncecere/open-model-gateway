@@ -809,6 +809,9 @@ async fn worker(exporter: Exporter, mut pending: Pending, mut stop: oneshot::Rec
     // tick boundaries and create a catch-up burst (also true while draining).
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut draining = false;
+    // A separate typed-event transition (#294): no existing stderr diagnostic
+    // for trace delivery outcomes is changed by this tracking.
+    let mut ops_degraded = false;
     let overhead = exporter.body(&[]).len();
     loop {
         if draining {
@@ -851,17 +854,35 @@ async fn worker(exporter: Exporter, mut pending: Pending, mut stop: oneshot::Rec
         let body = exporter.body(&batch);
         debug_assert!(body.len() <= MAX_BODY);
         pending.in_flight = batch.len();
-        match exporter.send(body, batch.len()).await {
+        let failure = match exporter.send(body, batch.len()).await {
             Ok(rejected) => {
                 pending.counts.delivery(Delivery::Accepted);
                 pending.counts.reject(rejected);
+                (rejected > 0).then_some(crate::ops_log::ExportFailure::Rejected)
             }
             Err(outcome) => {
                 pending.counts.delivery(outcome);
                 pending
                     .counts
                     .drop_spans(DropReason::Delivery, batch.len() as u64);
+                Some(crate::ops_log::ExportFailure::from_delivery(outcome))
             }
+        };
+        match (failure, ops_degraded) {
+            (Some(failure), false) => {
+                crate::ops_log::emit(crate::ops_log::OpsEvent::ExporterDegraded {
+                    signal: crate::ops_log::Signal::Traces,
+                    failure,
+                });
+                ops_degraded = true;
+            }
+            (None, true) => {
+                crate::ops_log::emit(crate::ops_log::OpsEvent::ExporterRecovered {
+                    signal: crate::ops_log::Signal::Traces,
+                });
+                ops_degraded = false;
+            }
+            _ => {}
         }
         pending.in_flight = 0;
     }

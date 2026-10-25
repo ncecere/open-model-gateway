@@ -267,6 +267,10 @@ async fn listen_loop(listen: Option<PgPool>, versions: Arc<ConfigVersions>) {
         return std::future::pending().await;
     };
     let mut backoff = Duration::from_millis(250);
+    // Tracks only the typed OpsEvent transition: the first connection
+    // failure, or connected->disconnected, rearmed on the next connection.
+    // Intentionally disabled (no listener configured) never touches this.
+    let mut down = false;
     loop {
         if let Ok(mut listener) = sqlx::postgres::PgListener::connect_with(&pool).await
             && listener.listen(CHANNEL).await.is_ok()
@@ -276,6 +280,7 @@ async fn listen_loop(listen: Option<PgPool>, versions: Arc<ConfigVersions>) {
             versions.listener_up.store(true, Ordering::Release);
             crate::metrics::METRICS.set_config_listener(true);
             backoff = Duration::from_millis(250);
+            down = false;
             // Ok(None): the connection was lost (sqlx would reconnect on the
             // next call; reconnect explicitly instead, flushing the caches).
             while let Ok(Some(notification)) = listener.try_recv().await {
@@ -287,6 +292,13 @@ async fn listen_loop(listen: Option<PgPool>, versions: Arc<ConfigVersions>) {
             crate::metrics::METRICS.set_config_listener(false);
             versions.flush();
             tracing::warn!("configuration change listener disconnected; reconnecting");
+            if !down {
+                down = true;
+                crate::ops_log::emit(crate::ops_log::OpsEvent::ConfigListenerDown);
+            }
+        } else if !down {
+            down = true;
+            crate::ops_log::emit(crate::ops_log::OpsEvent::ConfigListenerDown);
         }
         tokio::time::sleep(backoff).await;
         backoff = (backoff * 2).min(Duration::from_secs(10));

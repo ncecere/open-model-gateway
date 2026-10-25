@@ -1,7 +1,9 @@
 //! Shared OTLP validation and bounded HTTP delivery, not a worker, queue or
 //! retry policy. Signal-specific config, deadlines and wire bodies stay with
 //! the caller. Never expose destinations, header material or transport errors.
-use std::time::Duration;
+use std::{sync::LazyLock, time::Duration};
+
+use serde_json::{Value, json};
 
 macro_rules! fixed_enum {
     ($name:ident { $($variant:ident => $text:literal),+ $(,)? }) => {
@@ -31,12 +33,37 @@ const OTLP_RESERVED_HEADERS: [&str; 9] = [
 ];
 const ACK_LIMIT: usize = 64 * 1024;
 
+/// One id for the entire process, shared by every OTLP signal's resource
+/// attributes. Cache failure too: a signal that cannot draw this identity
+/// stays quietly disabled, never a predictable fallback or another draw.
+pub(crate) static INSTANCE: LazyLock<Result<uuid::Uuid, crate::entropy::EntropyUnavailable>> =
+    LazyLock::new(|| {
+        Ok(uuid::Builder::from_random_bytes(crate::entropy::bytes_quiet::<16>()?).into_uuid())
+    });
+
+/// `service.name`, `service.version`, `deployment.environment.name` and
+/// `service.instance.id`: the resource attributes shared by metrics and
+/// operational logs (traces use the first three only). Only this attribute
+/// carries the per-process UUID; it is never an installation or user id.
+pub(crate) fn resource_attributes(
+    environment: crate::config::Environment,
+    instance: uuid::Uuid,
+) -> Value {
+    json!([
+        {"key":"service.name","value":{"stringValue":"open-model-gateway"}},
+        {"key":"service.version","value":{"stringValue":env!("CARGO_PKG_VERSION")}},
+        {"key":"deployment.environment.name","value":{"stringValue":environment.as_str()}},
+        {"key":"service.instance.id","value":{"stringValue":instance.to_string()}}
+    ])
+}
+
 pub(crate) fn endpoint(
     setting: &str,
     value: &str,
     path: &str,
     environment: crate::config::Environment,
     exchange: Duration,
+    ops_events: bool,
 ) -> anyhow::Result<(reqwest::Url, reqwest::Client)> {
     let invalid = || {
         anyhow::anyhow!(
@@ -84,6 +111,7 @@ pub(crate) fn endpoint(
         development,
         Duration::from_secs(1),
         exchange,
+        ops_events,
     )
     .map_err(|_| invalid())?;
     Ok((url, client))
@@ -202,8 +230,16 @@ pub(crate) fn export_http_client(
     development: bool,
     connect_timeout: Duration,
     exchange_timeout: Duration,
+    ops_events: bool,
 ) -> anyhow::Result<reqwest::Client> {
     let policy = crate::egress::policy().permit_loopback(development);
+    // The logs exporter's own resolver never emits the typed operational
+    // event it transports (no feedback); every other signal is unaffected.
+    let policy = if ops_events {
+        policy
+    } else {
+        policy.without_ops_events()
+    };
     export_http_client_with_policy(url, purpose, policy, connect_timeout, exchange_timeout)
 }
 

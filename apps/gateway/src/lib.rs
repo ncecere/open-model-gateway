@@ -40,6 +40,7 @@ pub mod management;
 pub mod metrics;
 pub mod metrics_export;
 pub mod notify;
+pub mod ops_log;
 pub(crate) mod otlp;
 pub mod partitions;
 pub mod protocols;

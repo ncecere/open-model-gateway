@@ -1077,6 +1077,15 @@ impl ExecutionGuard {
         .and_then(|result| result);
         if result.is_err() {
             tracing::error!(execution_id = %self.id, trace_id = self.log_trace_id.as_deref(), "inference finalization failed; reconciliation required");
+            // Only generation finalization (this call) may carry a trace id,
+            // from the same already shared-admission-proven provenance.
+            crate::ops_log::emit(crate::ops_log::OpsEvent::FinalizationNeedsReconciliation {
+                finalizer: crate::ops_log::Finalizer::GenerationFinish,
+                trace: self
+                    .log_trace_id
+                    .clone()
+                    .map(crate::ops_log::LogTraceId::from_provenance),
+            });
         }
         // Health is advisory; a failed health write never discards a durably accounted response.
         if self.health_observation
@@ -1113,6 +1122,12 @@ impl Drop for ExecutionGuard {
                 }
                 if !matches!(finished, Ok(Ok(()))) {
                     tracing::error!(execution_id = %record.id, trace_id = log_trace_id.as_deref(), "cancelled inference finalization failed; reconciliation required");
+                    // Cancellation never carries a trace id (#294): only the
+                    // explicit `finish` path is generation-finalization-proven.
+                    crate::ops_log::emit(crate::ops_log::OpsEvent::FinalizationNeedsReconciliation {
+                        finalizer: crate::ops_log::Finalizer::GenerationCancel,
+                        trace: None,
+                    });
                 }
             });
         }

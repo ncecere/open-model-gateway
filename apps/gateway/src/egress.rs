@@ -210,6 +210,12 @@ pub struct Policy {
     development: bool,
     private_allow: Networks,
     loopback_only: bool,
+    /// Set only for the operational-logs exporter's own resolver/client, so
+    /// a refusal of its own destination never re-enters the queue it feeds
+    /// (no feedback). Ordinary egress metrics and the stderr warning below
+    /// are unaffected; only the typed `OpsEvent` is suppressed. Default
+    /// `false` so every other purpose emits normally.
+    suppress_ops_events: bool,
 }
 
 impl Policy {
@@ -218,6 +224,7 @@ impl Policy {
             development,
             private_allow,
             loopback_only: false,
+            suppress_ops_events: false,
         }
     }
 
@@ -225,6 +232,12 @@ impl Policy {
     /// a hostname approved as `localhost` resolves to a different address.
     pub(crate) fn only_loopback(mut self) -> Self {
         self.loopback_only = true;
+        self
+    }
+
+    /// Only the logs exporter's own transport uses this: see the field doc.
+    pub(crate) fn without_ops_events(mut self) -> Self {
+        self.suppress_ops_events = true;
         self
     }
 
@@ -246,6 +259,7 @@ impl Policy {
             development: self.development || loopback,
             private_allow: self.private_allow.clone(),
             loopback_only: self.loopback_only,
+            suppress_ops_events: self.suppress_ops_events,
         }
     }
 
@@ -299,6 +313,11 @@ fn denied(purpose: Purpose, host: &str, ip: IpAddr, policy: &Policy) {
         reason = policy.refusal(ip),
         "outbound connection refused by the egress policy"
     );
+    // A complete refusal only (never a partial, still-successful answer);
+    // the logs exporter's own destination is excluded to avoid feedback.
+    if !policy.suppress_ops_events {
+        crate::ops_log::emit(crate::ops_log::OpsEvent::EgressRefused { purpose });
+    }
 }
 
 /// Keep the addresses the policy allows. Refusal is counted and logged only
@@ -484,6 +503,18 @@ mod tests {
 
     fn ip(s: &str) -> IpAddr {
         s.parse().unwrap()
+    }
+
+    #[test]
+    fn without_ops_events_is_logs_exporter_only_and_survives_permit_loopback() {
+        let normal = Policy::default();
+        assert!(!normal.suppress_ops_events);
+        let suppressed = normal.clone().without_ops_events();
+        assert!(suppressed.suppress_ops_events);
+        // permit_loopback (used to build every signal's resolver policy)
+        // must not silently re-enable events for the logs exporter.
+        assert!(suppressed.permit_loopback(true).suppress_ops_events);
+        assert!(!normal.permit_loopback(true).suppress_ops_events);
     }
 
     #[test]

@@ -489,6 +489,7 @@ fn https_client(
         development,
         Duration::from_secs(5),
         REQUEST_TIMEOUT,
+        true,
     )?;
     Ok((url, client))
 }
