@@ -9,6 +9,8 @@ DO $$ DECLARE c text; BEGIN
   IF has_column_privilege('gateway_runtime','public.access_requests',c,'INSERT') THEN RAISE EXCEPTION 'request initialization bypass: %',c; END IF;
  END LOOP;
  IF has_function_privilege('gateway_runtime','public.access_request_reason_cleanup()','EXECUTE') THEN RAISE EXCEPTION 'cleanup trigger callable'; END IF;
+ IF NOT has_function_privilege('gateway_runtime','public.scrub_access_request_reasons()','EXECUTE') THEN RAISE EXCEPTION 'bounded request reason cleanup unavailable'; END IF;
+ IF has_column_privilege('gateway_runtime','public.workspace_membership_grants','access_request_changed_at','UPDATE') THEN RAISE EXCEPTION 'membership change clock mutable'; END IF;
 END $$;
 DO $$ DECLARE r record; t text; BEGIN
  SELECT * INTO STRICT r FROM pg_roles WHERE rolname='gateway_runtime';
@@ -978,6 +980,8 @@ BEGIN
   INSERT INTO users(id,email) VALUES(ru,'request-'||ru||'@example.invalid'),(decider,'decider-'||decider||'@example.invalid');
   INSERT INTO workspaces(id,name,kind,discoverable) VALUES(ws,'Request probe','team',true);
   INSERT INTO access_requests(requester,workspace_id,reason,idempotency_digest,payload_digest) VALUES(ru,ws,'Probe',decode(repeat('ab',32),'hex'),decode(repeat('cd',32),'hex')) RETURNING id INTO req;
+  IF scrub_access_request_reasons()<>0 THEN RAISE EXCEPTION 'active requester reason scrubbed'; END IF;
+  BEGIN UPDATE workspace_membership_grants SET access_request_changed_at=now(); RAISE EXCEPTION 'membership clock rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   BEGIN UPDATE access_requests SET reason='rewrite' WHERE id=req; RAISE EXCEPTION 'request reason mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   BEGIN UPDATE access_requests SET expires_at=now() WHERE id=req; RAISE EXCEPTION 'request expiry mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   BEGIN DELETE FROM access_requests WHERE id=req; RAISE EXCEPTION 'request removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;

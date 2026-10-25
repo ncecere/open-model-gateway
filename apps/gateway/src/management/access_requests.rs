@@ -387,8 +387,9 @@ async fn decision(
     approve: bool,
 ) -> ApiResult {
     let mut tx = resources::installation_tx(s).await?;
-    let (ws, requester): (Uuid, Uuid) =
-        sqlx::query_as("SELECT workspace_id,requester FROM access_requests WHERE id=$1")
+    type SubmissionScope = (Uuid, Uuid, chrono::DateTime<chrono::Utc>);
+    let (ws, requester, submitted_at): SubmissionScope =
+        sqlx::query_as("SELECT workspace_id,requester,created_at FROM access_requests WHERE id=$1")
             .bind(id)
             .fetch_optional(&mut *tx)
             .await?
@@ -429,7 +430,7 @@ async fn decision(
                 e
             });
         }
-        let grant = members::apply_membership_request(&mut tx, ws, requester).await?;
+        let grant = members::apply_membership_request(&mut tx, ws, requester, submitted_at).await?;
         sqlx::query("INSERT INTO access_request_applications(request_id,workspace_id,requester,membership_grant_id) VALUES($1,$2,$3,$4)")
             .bind(id).bind(ws).bind(requester).bind(grant).execute(&mut *tx).await?;
         event(&mut tx, u, ws, id, "applied").await?;

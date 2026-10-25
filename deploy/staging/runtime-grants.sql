@@ -17,6 +17,9 @@ GRANT INSERT(requester,workspace_id,reason,idempotency_digest,payload_digest) ON
 GRANT UPDATE(status,decided_by,decided_at) ON public.access_requests TO gateway_runtime;
 GRANT INSERT(request_id,workspace_id,requester,membership_grant_id) ON public.access_request_applications TO gateway_runtime;
 GRANT UPDATE(discoverable) ON public.workspaces TO gateway_runtime;
+-- Bounded, hold-aware reason erasure only for users already cleaned; no
+-- arbitrary IDs/text and still no UPDATE(reason) or membership clock rewrite.
+GRANT EXECUTE ON FUNCTION public.scrub_access_request_reasons() TO gateway_runtime;
 GRANT SELECT(version,checksum,success) ON public._sqlx_migrations TO gateway_runtime;
 GRANT SELECT ON public.installation,public.users,public.oidc_identities,
  public.platform_role_grants,public.effective_platform_roles,public.cost_centers,

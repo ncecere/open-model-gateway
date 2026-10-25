@@ -122,6 +122,7 @@ pub async fn cleanup_inactive_accounts_fenced(
     store: &Store,
     fence: Option<&crate::leases::Fence>,
 ) -> Result<u64, sqlx::Error> {
+    scrub_access_request_reasons_fenced(store, fence).await?;
     let due: bool = sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM users WHERE disabled_at IS NOT NULL AND cleaned_at IS NULL AND cleanup_due_at<=now() AND NOT {})", crate::legal_holds::user_held("users.id")))
         .fetch_one(&store.pool)
         .await?;
@@ -142,6 +143,28 @@ pub async fn cleanup_inactive_accounts_fenced(
     }
     tx.commit().await?;
     Ok(cleaned)
+}
+
+/// Resume reason erasure after holds end, even though the requester is already
+/// a permanent cleaned tombstone. The owner-run function enforces a 100-row
+/// bound and live user/workspace hold checks without UPDATE(reason) at runtime.
+async fn scrub_access_request_reasons_fenced(
+    store: &Store,
+    fence: Option<&crate::leases::Fence>,
+) -> Result<(), sqlx::Error> {
+    let due:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM access_requests r JOIN users u ON u.id=r.requester WHERE u.cleaned_at IS NOT NULL AND r.reason IS NOT NULL AND NOT EXISTS(SELECT 1 FROM legal_holds h WHERE h.released_at IS NULL AND (h.user_id=r.requester OR h.workspace_id=r.workspace_id)))")
+        .fetch_one(&store.pool).await?;
+    if !due {
+        return Ok(());
+    }
+    let mut tx = crate::db::begin(&store.pool).await?;
+    crate::leases::fence(&mut tx, fence).await?;
+    lock(&mut tx).await?;
+    sqlx::query_scalar::<_, i64>("SELECT scrub_access_request_reasons()")
+        .fetch_one(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 /// #83: at most 100 overdue requests per lifecycle tick. Expiry is also

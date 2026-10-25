@@ -28,10 +28,28 @@ CREATE TABLE access_requests (
  CHECK (status<>'expired' OR decided_by IS NULL)
 );
 CREATE UNIQUE INDEX access_requests_pending_target ON access_requests(requester,target_kind,workspace_id) WHERE status='pending';
-CREATE INDEX access_requests_requester_clock ON access_requests(requester,created_at DESC);
+CREATE INDEX access_requests_requester_clock ON access_requests(requester,created_at DESC,id);
+CREATE INDEX access_requests_platform_clock ON access_requests(created_at DESC,id);
+CREATE INDEX access_requests_reason_cleanup ON access_requests(requester,created_at,id) WHERE reason IS NOT NULL;
 CREATE INDEX access_requests_workspace_clock ON access_requests(workspace_id,created_at DESC,id);
 CREATE INDEX access_requests_expiry ON access_requests(expires_at,id) WHERE status='pending';
 ALTER TABLE workspace_membership_grants ADD CONSTRAINT membership_request_scope UNIQUE(workspace_id,user_id,id);
+-- Existing grant/revocation paths use transaction-time now(). A transaction
+-- begun before submission may commit a later membership change, so those
+-- timestamps cannot safely detect an intervening authorization decision.
+ALTER TABLE workspace_membership_grants ADD COLUMN access_request_changed_at timestamptz NOT NULL DEFAULT clock_timestamp();
+CREATE INDEX membership_access_request_changes ON workspace_membership_grants(workspace_id,user_id,access_request_changed_at);
+CREATE FUNCTION access_request_membership_clock() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ -- Runtime INSERT is table-level: always overwrite a supplied clock. The
+ -- runtime has no UPDATE privilege on this column. Revocations set it even
+ -- when their caller's transaction began before the request's creation.
+ IF TG_OP='INSERT' OR NEW.revoked_at IS DISTINCT FROM OLD.revoked_at THEN
+  NEW.access_request_changed_at:=clock_timestamp();
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER access_request_membership_clock BEFORE INSERT OR UPDATE OF revoked_at ON workspace_membership_grants FOR EACH ROW EXECUTE FUNCTION access_request_membership_clock();
 CREATE TABLE access_request_applications (
  request_id uuid PRIMARY KEY,
  workspace_id uuid NOT NULL,
@@ -69,7 +87,7 @@ BEGIN
   END IF;
   RETURN NEW;
  END IF;
- -- Only the owner-run cleanup trigger can scrub the reason. Runtime has no
+ -- Only the owner-run cleanup trigger/bounded scrubber can scrub the reason. Runtime has no
  -- UPDATE(reason); legal holds are evaluated again by this backstop.
  IF NEW.reason IS DISTINCT FROM OLD.reason AND NEW.reason IS NULL
     AND (to_jsonb(NEW)-'reason')=(to_jsonb(OLD)-'reason')
@@ -121,3 +139,28 @@ BEGIN
 END $$;
 REVOKE ALL ON FUNCTION access_request_reason_cleanup() FROM PUBLIC;
 CREATE TRIGGER access_request_reason_cleanup AFTER UPDATE OF cleaned_at ON users FOR EACH ROW EXECUTE FUNCTION access_request_reason_cleanup();
+
+-- Resume erasure for already-cleaned users after a workspace hold ends.
+-- No caller-selected IDs/text and no general UPDATE(reason) capability.
+CREATE FUNCTION scrub_access_request_reasons() RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path=public,pg_temp AS $$
+DECLARE scrubbed bigint;
+BEGIN
+ -- Also safe if invoked directly by runtime: serialize with hold placement
+ -- and cleanup through their normal catalog/installation lock protocol.
+ -- A snapshot fixed before a lock wait cannot safely recheck a newer hold.
+ IF current_setting('transaction_isolation')<>'read committed' THEN
+  RAISE EXCEPTION 'request reason cleanup requires READ COMMITTED' USING ERRCODE='25000';
+ END IF;
+ PERFORM pg_advisory_xact_lock_shared(72419502);
+ PERFORM public.lock_installation();
+ WITH candidates AS (
+  SELECT r.id FROM public.access_requests r JOIN public.users u ON u.id=r.requester
+  WHERE u.cleaned_at IS NOT NULL AND r.reason IS NOT NULL
+   AND NOT EXISTS(SELECT FROM public.legal_holds h WHERE h.released_at IS NULL AND (h.user_id=r.requester OR h.workspace_id=r.workspace_id))
+  ORDER BY r.created_at,r.id LIMIT 100 FOR UPDATE OF r SKIP LOCKED
+ )
+ UPDATE public.access_requests SET reason=NULL WHERE id IN (SELECT id FROM candidates);
+ GET DIAGNOSTICS scrubbed=ROW_COUNT;
+ RETURN scrubbed;
+END $$;
+REVOKE ALL ON FUNCTION scrub_access_request_reasons() FROM PUBLIC;

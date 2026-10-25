@@ -237,6 +237,7 @@ pub(super) async fn apply_membership_request(
     tx: &mut Transaction<'_, Postgres>,
     ws: Uuid,
     user: Uuid,
+    submitted_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<Uuid, ApiError> {
     if let Err(e) = resources::platform_role_snapshot(tx, user).await {
         return Err(if e.0 == StatusCode::FORBIDDEN {
@@ -245,12 +246,15 @@ pub(super) async fn apply_membership_request(
             e
         });
     }
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workspace_membership_grants WHERE workspace_id=$1 AND user_id=$2 AND revoked_at IS NULL)")
-        .bind(ws).bind(user).fetch_one(&mut **tx).await?;
-    if exists {
+    // A later grant followed by removal is still a superseding decision.
+    // Never restore that membership through an older pending request. The
+    // trigger-owned wall clock covers transactions begun before submission.
+    let changed_or_present: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workspace_membership_grants WHERE workspace_id=$1 AND user_id=$2 AND (revoked_at IS NULL OR access_request_changed_at >= $3))")
+        .bind(ws).bind(user).bind(submitted_at).fetch_one(&mut **tx).await?;
+    if changed_or_present {
         return Err(ApiError(
             StatusCode::CONFLICT,
-            "Requester already has membership",
+            "Membership changed; withdraw and submit a new request",
         ));
     }
     insert_manual_member(tx, ws, user, "member").await

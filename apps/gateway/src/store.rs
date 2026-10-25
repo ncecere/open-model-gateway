@@ -170,6 +170,10 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "admin_api_tokens",
     // 0052 admin API token authentication and audit (#37 PR2)
     "admin_token_attempts",
+    // 0066 self-service membership requests (#83). UUID defaults create no
+    // sequences; functions/triggers/indexes are not relation-preflight inputs.
+    "access_requests",
+    "access_request_applications",
 ];
 /// Partitioned parents (0030/0031). Any partition of one of these in
 /// `public` (`pg_class.relispartition`; month partitions are created ahead of
