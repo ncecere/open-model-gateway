@@ -52,9 +52,13 @@ async function requestAccess(page: Page, team: { name: string }) {
 for (const width of [1440, 390]) {
   test(`requester submits, an admin approves and membership becomes visible at ${width}px`, async ({ browser }) => {
     const team = await createTeam(browser, `Access requests ${width}`);
-    const alex = await signIn(browser, "alex", { width, height: 900 });
-    const blair = await signIn(browser, "blair", { width, height: 900 });
+    // Sign in at the default desktop viewport (the mobile header collapses the account button
+    // the sign-in check waits for), then resize for the rest of the test, as holds.spec.ts does.
+    const alex = await signIn(browser, "alex");
+    const blair = await signIn(browser, "blair");
     try {
+      await alex.page.setViewportSize({ width, height: 900 });
+      await blair.page.setViewportSize({ width, height: 900 });
       // Blair discovers the team and submits a bounded, plain-text reason.
       await blair.page.goto("/access-requests");
       await rowWith(discoverTable(blair.page), team.name).getByRole("button", { name: /^Actions for/ }).click();
@@ -144,8 +148,11 @@ test("the requester can withdraw a pending request before any decision", async (
     await withdraw.getByRole("button", { name: "Withdraw" }).click();
     await expect(withdraw).toBeHidden();
     await expect(row).toContainText("Withdrawn");
-    // A stable row trigger gets focus back, not a dropped reference into the closed dialog/menu.
-    await expect(trigger).toBeFocused();
+    // Withdrawing removes the row's only action, so its trigger unmounts along with the menu: the
+    // table itself (DataTable's built-in recovery for "a deleted row's action", data-table.tsx) is
+    // the stable element that regains focus, not the vanished per-row button.
+    await expect(trigger).toHaveCount(0);
+    await expect(myRequests(blair.page)).toBeFocused();
   } finally { await blair.context.close(); }
 });
 

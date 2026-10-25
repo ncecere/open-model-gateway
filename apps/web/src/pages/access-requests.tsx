@@ -12,9 +12,9 @@ import { UserPlus, Inbox } from "lucide-react";
 import { api, type Session, type Workspace } from "../lib/api";
 import { accessRequestStatusLabels, accessRequestStatusTone, accessRequestTargetsPath, myAccessRequestsPath, newIdempotencyKey, platformAccessRequestDecisionPath, platformAccessRequestsPath, reasonError, withdrawAccessRequestPath, workspaceAccessRequestDecisionPath, workspaceAccessRequestsPath, type AccessRequest, type AccessRequestTarget } from "../lib/access-requests";
 import { permissions } from "../lib/permissions";
-import { Heading, Id, Stack, useAction } from "../components/ui";
+import { Heading, Id, Stack, useAction, useChoices } from "../components/ui";
 import { ResourcePage } from "../components/resource-page";
-import { DirectoryTable } from "../components/people";
+import { DirectoryTable, LocalTable } from "../components/people";
 import { StatusBadge } from "../components/ui/badge/badge";
 import { CellText, type DataTableColumn } from "../components/ui/data-table/data-table";
 import { kindLabels } from "../lib/people";
@@ -78,7 +78,12 @@ function decisionActions(r: AccessRequest, selfId: string, writable: boolean, de
     { label: "Deny…", danger: true, hidden: !writable, disabled, disabledReason, onSelect: () => decide(r, false) },
   ];
 }
-/** Workspace Settings › Access requests (owner/admin). */
+/**
+ * Workspace Settings › Access requests (owner/admin). This is an approval queue, not a history:
+ * the server keeps every decided request for `mine` (the requester's own record) and the platform
+ * page, but once a request here leaves `pending` it has nothing left to do and must stop occupying
+ * the queue — a decided row that lingered would look like an approve/deny that silently failed.
+ */
 export function WorkspaceAccessRequestQueue({ session, workspace }: { session: Session; workspace: Workspace }) {
   const ask = useAction(), writable = permissions(session, workspace).manageTeam;
   const decide = (r: AccessRequest, approve: boolean) => ask({
@@ -92,7 +97,10 @@ export function WorkspaceAccessRequestQueue({ session, workspace }: { session: S
     { id: "status", header: "Status", accessor: r => r.status, cell: r => <StatusCell status={r.status} /> },
     { id: "created", header: "Submitted", accessor: r => r.created_at, cell: r => <span className={s.secondary}>{new Date(r.created_at).toLocaleString()}</span> },
   ];
-  return <DirectoryTable<AccessRequest> path={workspaceAccessRequestsPath(workspace.id)} label="Access requests" storageKey="workspace-access-requests" columns={columns} rowKey={r => r.id} rowLabel={r => r.requester}
+  const choices = useChoices<AccessRequest>(workspaceAccessRequestsPath(workspace.id));
+  const pending = (choices.data ?? []).filter(r => r.status === "pending");
+  return <LocalTable<AccessRequest> rows={pending} loading={choices.isFetching} error={choices.error} retry={() => void choices.refetch()}
+    label="Access requests" storageKey="workspace-access-requests" columns={columns} rowKey={r => r.id} rowLabel={r => r.requester}
     rowActions={r => decisionActions(r, session.user.id, writable, decide)}
     empty={{ icon: <Inbox />, title: "No access requests.", description: "Requests to join this workspace appear here." }} />;
 }
