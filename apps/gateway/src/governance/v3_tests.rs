@@ -403,6 +403,27 @@ async fn free_price_pre_processing_rejection_settles_known_zero(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
+async fn messages_context_length_keeps_existing_rejection_hold_rules(pool: PgPool) {
+    let f = fixture(pool).await;
+    for paid in [false, true] {
+        let mut lines = free_lines();
+        if paid {
+            lines.retain(|l| l["meter"] != "requests");
+            lines.push(line(Meter::Requests, "1", 1));
+        }
+        v3(&f, lines, json!({"requests":"1"})).await;
+        let start = f.start();
+        admit(&f.store, &start, &request(), 30).await.unwrap();
+        finish(&f.store, &rejected(start.id, InferenceError::ContextLength))
+            .await
+            .unwrap();
+        let (state, _, actual, _) = amounts(&f, start.id).await;
+        assert_eq!(state, if paid { "unknown" } else { "settled" });
+        assert_eq!(actual, if paid { None } else { Some(0) });
+    }
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
 async fn other_failures_partial_usage_or_paid_meters_stay_unknown(pool: PgPool) {
     let f = fixture(pool).await;
     v3(&f, free_lines(), json!({})).await;
@@ -421,6 +442,7 @@ async fn other_failures_partial_usage_or_paid_meters_stay_unknown(pool: PgPool) 
     // Not a pre-processing rejection: transport/server failure, timeout, cancel.
     for error in [
         InferenceError::UpstreamUnavailable,
+        InferenceError::Overloaded,
         InferenceError::Timeout,
         InferenceError::InvalidUpstream,
     ] {
