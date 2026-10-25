@@ -2,6 +2,8 @@
 //! privacy of history and in-app notifications.
 use super::*;
 use crate::alerts as core;
+#[path = "aged_hold_tests.rs"]
+mod aged_hold;
 
 const EVENT_FROM: &str = "FROM alert_events e LEFT JOIN alert_rules r ON r.id=e.rule_id LEFT JOIN workspaces w ON w.id=e.workspace_id";
 
@@ -86,7 +88,7 @@ async fn key_expiry_live_visibility_shared_personal_service_and_old_binary(pool:
             )
             .await
             .0,
-            StatusCode::FORBIDDEN
+            StatusCode::NOT_FOUND
         );
     }
     let payload = serde_json::to_string(&feed(&f, &f.owner).await).unwrap();
@@ -415,7 +417,7 @@ async fn workspace_rules_belong_to_shared_admins_and_personal_is_built_in(pool: 
             call(&f.s, user, "GET", &ws_rules(f.personal), json!({}))
                 .await
                 .0,
-            StatusCode::FORBIDDEN
+            StatusCode::NOT_FOUND
         );
         assert_eq!(
             call(
@@ -427,7 +429,7 @@ async fn workspace_rules_belong_to_shared_admins_and_personal_is_built_in(pool: 
             )
             .await
             .0,
-            StatusCode::FORBIDDEN
+            StatusCode::NOT_FOUND
         );
     }
 }

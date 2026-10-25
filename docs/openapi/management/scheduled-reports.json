@@ -1,0 +1,65 @@
+{
+  "operations": {
+    "DELETE /api/v1/platform/report-schedules/{id}": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "DELETE /api/v1/workspaces/{ws}/report-schedules/{id}": {
+      "access": "WorkspaceReportAdmin",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/platform/report-schedules": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/platform/report-schedules/{id}": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/report-schedules": {
+      "access": "WorkspaceReportAdmin",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/report-schedules/{id}": {
+      "access": "WorkspaceReportAdmin",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "PATCH /api/v1/platform/report-schedules/{id}": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "PATCH /api/v1/workspaces/{ws}/report-schedules/{id}": {
+      "access": "WorkspaceReportAdmin",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/platform/report-schedules": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/workspaces/{ws}/report-schedules": {
+      "access": "WorkspaceReportAdmin",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    }
+  },
+  "schemas": {}
+}

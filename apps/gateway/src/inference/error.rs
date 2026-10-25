@@ -20,10 +20,41 @@ impl LimitScope {
     }
 }
 
+/// A bounded request-field identifier, not a value or a serde diagnostic.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FieldName {
+    bytes: [u8; 64],
+    len: u8,
+}
+impl FieldName {
+    pub fn parse(name: &str) -> Option<Self> {
+        if name.is_empty()
+            || name.len() > 64
+            || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        {
+            return None;
+        }
+        let mut bytes = [0; 64];
+        bytes[..name.len()].copy_from_slice(name.as_bytes());
+        Some(Self {
+            bytes,
+            len: name.len() as u8,
+        })
+    }
+    pub fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.bytes[..self.len as usize]).unwrap_or_default()
+    }
+}
+
 /// Safe errors only. Never embed upstream bodies, URLs, credentials or prompts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InferenceError {
     InvalidRequest,
+    /// Static, reviewed field names only; never client values or upstream text.
+    InvalidField(&'static str),
+    UnknownField(FieldName),
+    ContextLength,
+    Overloaded,
     /// The key is no longer valid (revoked, disabled, expired, its user,
     /// membership, service account or workspace no longer active), found by a
     /// live re-check after authentication (for example a per-replica key
@@ -66,7 +97,11 @@ pub enum InferenceError {
 impl InferenceError {
     pub fn code(self) -> &'static str {
         match self {
-            Self::InvalidRequest => "invalid_request_error",
+            Self::InvalidRequest | Self::InvalidField(_) | Self::UnknownField(_) => {
+                "invalid_request_error"
+            }
+            Self::ContextLength => "context_length_exceeded",
+            Self::Overloaded => "overloaded_error",
             Self::Unauthenticated => "authentication_error",
             Self::ModelUnavailable => "model_not_found",
             Self::Unsupported => "unsupported_capability",
@@ -94,7 +129,12 @@ impl InferenceError {
         self.is_budget_denial()
             || matches!(
                 self,
-                Self::Unsupported | Self::TokenReservationExceedsLimit(_) | Self::PriceUnbounded
+                Self::Unsupported
+                    | Self::InvalidField(_)
+                    | Self::UnknownField(_)
+                    | Self::ContextLength
+                    | Self::TokenReservationExceedsLimit(_)
+                    | Self::PriceUnbounded
             )
     }
     /// Seconds a client should wait before retrying (`Retry-After`), if known.
@@ -107,6 +147,10 @@ impl InferenceError {
     pub fn message(self) -> &'static str {
         match self {
             Self::InvalidRequest => "Invalid or unsupported chat request fields",
+            Self::InvalidField(field) => field,
+            Self::UnknownField(_) => "Unknown request field",
+            Self::ContextLength => "prompt is too long",
+            Self::Overloaded => "The provider is overloaded",
             // The authentication layer's message (`http::unauthorized`).
             Self::Unauthenticated => "Invalid or missing API key",
             Self::ModelUnavailable => "Model not found or not available to this workspace",
