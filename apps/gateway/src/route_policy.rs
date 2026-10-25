@@ -110,6 +110,7 @@ pub(crate) const ROUTES: &[Route] = &[
     route!("GET", "/v1/models", InferenceKey, DENIED),
     route!("POST", "/v1/chat/completions", InferenceKey, DENIED),
     route!("POST", "/v1/responses", InferenceKey, DENIED),
+    // Also /v1/messages?beta=true: queries never widen this exact POST template.
     route!("POST", "/v1/messages", InferenceKey, DENIED),
     route!("POST", "/v1/embeddings", InferenceKey, DENIED),
     route!("POST", "/v1/realtime/client_secrets", InferenceKey, DENIED),

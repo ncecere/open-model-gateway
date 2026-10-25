@@ -298,19 +298,21 @@ describe("Add model type and protocols", () => {
     mount([conn("a", "anthropic", "Claude")]);
     expect(protocols()).toEqual([["Chat Completions", true], ["Messages", true]]);
     expect((screen.getByRole("textbox", { name: /Upstream model ID/ }) as HTMLInputElement).placeholder).toBe("claude-sonnet-4-5");
+    // #70: every generation profile now serves Messages; it is offered but
+    // not chosen by default on translated profiles.
     cleanup(); mount([conn("o", "openai", "OpenAI")]);
-    expect(protocols()).toEqual([["Chat Completions", true], ["Responses", true]]);
+    expect(protocols()).toEqual([["Chat Completions", true], ["Responses", true], ["Messages", false]]);
     cleanup(); mount([conn("r", "openrouter", "OpenRouter")]);
-    expect(protocols()).toEqual([["Chat Completions", true]]);
+    expect(protocols()).toEqual([["Chat Completions", true], ["Messages", false]]);
     cleanup(); const user = mount([conn("v", "vllm", "Local")]);
-    expect(protocols()).toEqual([["Chat Completions", true]]);
+    expect(protocols()).toEqual([["Chat Completions", true], ["Messages", false]]);
     expect((await typeOptions(user)).filter(([, disabled]) => disabled).map(([label]) => label?.replace(/\(.*\)/, ""))).toEqual(["Images", "Speech to text", "Text to speech", "System One", "Realtime audio", "Video", "Batch"]);
   });
   it("sends the chosen protocols; switching connection follows the new profile and drops a type it can't serve", async () => {
     const fetch = vi.fn().mockResolvedValue(Response.json({ model_id: "m", deployment_id: "d", price_id: null }, { status: 201 }));
     const user = mount([conn("o", "openai", "OpenAI"), conn("a", "anthropic", "Claude")], fetch);
     await user.click(screen.getByRole("button", { name: "Responses" }));
-    expect(protocols()).toEqual([["Chat Completions", true], ["Responses", false]]);
+    expect(protocols()).toEqual([["Chat Completions", true], ["Responses", false], ["Messages", false]]);
     await user.click(type()); await user.click(await screen.findByRole("option", { name: "Images" }));
     await waitFor(() => expect(type().textContent).toBe("Images"));
     expect(screen.queryByRole("group", { name: "Protocols" })).toBeNull();

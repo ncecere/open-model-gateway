@@ -436,8 +436,14 @@ async fn unsupported_profiles_never_resolve_credentials_or_send() {
             systemone_ok
         );
         for p in [
-            ApiProtocol::Responses,
+            ApiProtocol::ChatCompletions,
             ApiProtocol::Messages,
+            ApiProtocol::Embeddings,
+        ] {
+            assert!(adapter.supports_protocol(p));
+        }
+        for p in [
+            ApiProtocol::Responses,
             ApiProtocol::Images,
             ApiProtocol::AudioSpeech,
             ApiProtocol::Realtime,

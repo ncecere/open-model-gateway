@@ -393,7 +393,9 @@ pub fn may_failover(plan: &RoutePlan, error: InferenceError) -> bool {
         && match error {
             InferenceError::Busy => true,
             // Ambiguous transport failures may already have incurred provider charges.
-            InferenceError::UpstreamUnavailable => plan.allow_ambiguous_failover,
+            InferenceError::UpstreamUnavailable | InferenceError::Overloaded => {
+                plan.allow_ambiguous_failover
+            }
             _ => false,
         }
 }
@@ -402,7 +404,10 @@ fn affects_health(error: Option<InferenceError>) -> bool {
     matches!(
         error,
         None | Some(
-            InferenceError::Busy | InferenceError::UpstreamUnavailable | InferenceError::Timeout
+            InferenceError::Busy
+                | InferenceError::Overloaded
+                | InferenceError::UpstreamUnavailable
+                | InferenceError::Timeout
         )
     )
 }

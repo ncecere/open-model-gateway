@@ -115,6 +115,7 @@ impl LocalAdapter {
         Ok(builder.header(reqwest::header::AUTHORIZATION, header))
     }
     fn encode_chat(&self, target: &Deployment, request: &ChatRequest) -> Result<serde_json::Value> {
+        super::messages::validate(request, super::messages::ProviderClass::Local)?;
         if !self.supports_chat_request(request) {
             return Err(InferenceError::Unsupported);
         }
@@ -175,8 +176,16 @@ impl ProviderAdapter for LocalAdapter {
         }
     }
     fn supports_chat_request(&self, request: &ChatRequest) -> bool {
+        // Parsed Messages strict fields must reach validate_chat_request so the
+        // refusal names `strict` before admission, rather than disappearing at
+        // the coarse gate as a generic unsupported capability. This is not
+        // strict support: the Messages field policy still refuses the field.
         self.capabilities().supports(request)
-            && !request.tools.iter().any(|t| t.strict == Some(true))
+            && (request
+                .messages_options
+                .as_ref()
+                .is_some_and(|o| o.strict_tools)
+                || !request.tools.iter().any(|t| t.strict == Some(true)))
             && !(matches!(self.profile, Profile::Ollama) && request.tool_choice.is_some())
             && !(matches!(self.profile, Profile::OpenAiCompatible)
                 && matches!(
@@ -203,16 +212,26 @@ impl ProviderAdapter for LocalAdapter {
             .send()
             .await
             .map_err(framing::transport)?;
-        framing::status(response.status())?;
+        let response = if request.messages_options.is_some() {
+            framing::generation_status(response).await?
+        } else {
+            framing::status(response.status())?;
+            response
+        };
         if request.stream {
             framing::check_sse(&response)?;
             Ok(ProviderOutput::Stream(openai::decode_stream_profile(
                 response,
                 Some(self.id()),
+                request.messages_options.is_some(),
             )))
         } else {
-            let value = framing::body(response).await?;
-            let response = openai::decode_complete_profile(&value, Some(self.id()))?;
+            let value = framing::body_limit(response, request.response_limit()).await?;
+            let response = openai::decode_complete_protocol(
+                &value,
+                Some(self.id()),
+                request.messages_options.is_some(),
+            )?;
             Ok(ProviderOutput::Complete(response))
         }
     }
