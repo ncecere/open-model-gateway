@@ -161,6 +161,7 @@ pub async fn preview_line(
     output: Option<u32>,
     price_id: Option<Uuid>,
     output_limit: u32,
+    native_cache_controls: &[serde_json::Value],
 ) -> Result<LinePreview, InferenceError> {
     let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
     let price = match price_id {
@@ -168,6 +169,7 @@ pub async fn preview_line(
         None => latest_price(&mut tx, deployment).await?,
     };
     tx.commit().await.map_err(storage)?;
+    require_native_cache_price(price.as_ref(), native_cache_controls)?;
     let Some(p) = price else {
         return Ok(LinePreview::Unpriced);
     };
@@ -370,6 +372,7 @@ pub async fn admit_line(
     expected: &Deployment,
     planned_price: Option<Uuid>,
     output_limit: u32,
+    generation_request: Option<&ChatRequest>,
 ) -> Result<crate::inference::repository::GenerationAdmission, InferenceError> {
     let result = locks::retry_deadlocks!(
         "admission",
@@ -381,7 +384,8 @@ pub async fn admit_line(
             lease_seconds,
             expected,
             planned_price,
-            output_limit
+            output_limit,
+            generation_request
         )
         .await
     );
@@ -398,6 +402,7 @@ async fn admit_line_unobserved(
     expected: &Deployment,
     planned_price: Option<Uuid>,
     output_limit: u32,
+    generation_request: Option<&ChatRequest>,
 ) -> Result<crate::inference::repository::GenerationAdmission, InferenceError> {
     if !(1..=86_400).contains(&lease_seconds)
         || !matches!(
@@ -444,6 +449,11 @@ async fn admit_line_unobserved(
             .await?
             .ok_or(InferenceError::Configuration)?,
     };
+    if current.provider == "anthropic"
+        && let Some(options) = generation_request.and_then(|r| r.messages_options.as_deref())
+    {
+        require_native_cache_price(Some(&p), &options.cache_controls)?;
+    }
     let admission = match workload.output {
         OutputReservation::None => crate::inference::repository::GenerationAdmission {
             max_output_tokens: None,

@@ -1,6 +1,7 @@
 //! Explicit Claude Code field grammar. Nothing here is a passthrough payload.
 use super::super::responses::{message, name, string, validate};
 use super::*;
+use base64::Engine as _;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -88,20 +89,38 @@ fn image(block: &Value, options: &mut MessagesOptions) -> Result<()> {
             if !matches!(
                 source["media_type"].as_str(),
                 Some("image/png" | "image/jpeg" | "image/gif" | "image/webp")
-            ) || source["data"].as_str().is_none_or(str::is_empty)
-            {
+            ) {
                 return Err(invalid("image.source"));
             }
-        }
-        Some("url") => {
-            object(source, &["type", "url"], "image.source")?;
-            if source["url"].as_str().is_none_or(str::is_empty) {
+            let data = source["data"]
+                .as_str()
+                .ok_or_else(|| invalid("image.source.data"))?;
+            // Bound before decoding; the outer 2 MiB HTTP limit still applies.
+            if data.is_empty() || data.len() > (5 * 1024 * 1024_usize).div_ceil(3) * 4 {
+                return Err(invalid("image.source.data"));
+            }
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(data)
+                .map_err(|_| invalid("image.source.data"))?;
+            let valid = match source["media_type"].as_str() {
+                Some("image/png") => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+                Some("image/jpeg") => bytes.starts_with(&[0xff, 0xd8, 0xff]),
+                Some("image/gif") => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
+                Some("image/webp") => {
+                    bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP")
+                }
+                _ => false,
+            };
+            if !valid || bytes.len() > 5 * 1024 * 1024 {
                 return Err(invalid("image.source"));
             }
         }
         _ => return Err(invalid("image.source")),
     }
-    // Never fetch a client image URL. No generation adapter declares image input yet.
+    // No remote URL sources: neither gateway nor upstream may fetch caller URLs.
+    if options.images.len() >= 20 {
+        return Err(invalid("image"));
+    }
     options.images.push(block.clone());
     Ok(())
 }
@@ -260,6 +279,27 @@ impl Request {
             output_config: self.output_config,
             context_management: self.context_management,
             task_budget,
+            // These envelopes are used only after every nested field below has
+            // passed the explicit grammar. Never retain top-level caller JSON.
+            native_messages: self
+                .messages
+                .iter()
+                .map(|m| {
+                    let mut content = match &m.content {
+                        Value::String(text) => json!([{"type":"text","text":text}]),
+                        other => other.clone(),
+                    };
+                    if let Some(blocks) = content.as_array_mut() {
+                        for block in blocks {
+                            if block["type"] == "tool_result" && block.get("content").is_none() {
+                                block["content"] = json!("");
+                            }
+                        }
+                    }
+                    json!({"role":m.role,"content":content})
+                })
+                .collect(),
+            native_tools: self.tools.clone(),
             ..Default::default()
         };
         let mut messages = vec![];
@@ -350,12 +390,9 @@ impl Request {
                         if id.is_empty() {
                             return Err(invalid("tool_result.tool_use_id"));
                         }
-                        if let Some(flag) = block.get("is_error")
-                            && flag.as_bool().ok_or(InferenceError::InvalidRequest)?
-                        {
-                            // The shared result type cannot represent failure. Never
-                            // silently downgrade an error-marked result to success.
-                            return Err(InferenceError::Unsupported);
+                        if let Some(flag) = block.get("is_error") {
+                            options.error_results |=
+                                flag.as_bool().ok_or(InferenceError::InvalidRequest)?;
                         }
                         let content = block
                             .get("content")
@@ -385,10 +422,11 @@ impl Request {
                 messages.push(turn);
             }
         }
-        // Image-only input has no text representation. Preserve its empty
-        // canonical envelope only so the adapter can name the image refusal;
-        // it must never dispatch. Do not invent input for thinking-only history.
-        if messages.is_empty() && !options.images.is_empty() {
+        // Native image/thinking-only turns have no text representation, but
+        // still need a canonical envelope for capability/admission validation.
+        if messages.is_empty()
+            && (!options.images.is_empty() || !options.history_thinking.is_empty())
+        {
             messages.push(Message {
                 role: Role::User,
                 content: None,
