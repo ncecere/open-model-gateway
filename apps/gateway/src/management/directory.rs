@@ -830,15 +830,36 @@ pub(super) fn mapping_digest(
     }
     hex::encode(h.finalize())
 }
-/// `If-Match`, when present, must equal [`mapping_digest`] of the row as it
-/// stands right now (under the same `FOR UPDATE` lock the caller already
-/// holds); absent is the pre-existing behavior (no precondition). Additive:
-/// an older client that never sends it is unaffected.
+const IF_MATCH_MALFORMED: &str = "Malformed If-Match header";
+/// `If-Match`, when present, must be exactly one header carrying a
+/// `"<64 lowercase hex>"` value equal to [`mapping_digest`] of the row as
+/// it stands right now (under the same `FOR UPDATE` lock the caller
+/// already holds); absent is the pre-existing behavior (no precondition).
+/// Additive: an older client that never sends it is unaffected. Review #89
+/// item 5: a duplicated header, a non-text value, or anything other than
+/// one well-formed quoted digest is refused outright (`400`) rather than
+/// silently treated as absent or loosely unquoted/matched.
 fn check_if_match(headers: &HeaderMap, digest: &str) -> Result<(), ApiError> {
-    let Some(expected) = headers.get("if-match").and_then(|v| v.to_str().ok()) else {
+    let mut values = headers.get_all("if-match").iter();
+    let Some(first) = values.next() else {
         return Ok(());
     };
-    if expected.trim().trim_matches('"') != digest {
+    if values.next().is_some() {
+        return Err(ApiError(StatusCode::BAD_REQUEST, IF_MATCH_MALFORMED));
+    }
+    let value = first
+        .to_str()
+        .map_err(|_| ApiError(StatusCode::BAD_REQUEST, IF_MATCH_MALFORMED))?;
+    let inner = value
+        .strip_prefix('"')
+        .and_then(|v| v.strip_suffix('"'))
+        .filter(|v| {
+            v.len() == 64
+                && v.bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        })
+        .ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, IF_MATCH_MALFORMED))?;
+    if inner != digest {
         return Err(ApiError(
             StatusCode::PRECONDITION_FAILED,
             PRECONDITION_FAILED,

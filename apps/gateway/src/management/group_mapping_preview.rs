@@ -22,6 +22,7 @@
 //!   total loss, for example a manual `member` grant left behind after a
 //!   group `admin` mapping is deleted).
 use super::directory::{MappingInput, mapping_digest, validate_mapping};
+use super::settings::SignIn;
 use super::*;
 use crate::lifecycle;
 use std::collections::HashMap;
@@ -119,10 +120,29 @@ async fn require_platform_admin(
     }
     Ok(())
 }
+/// SCIM is bound to exactly one issuer at startup (`identity::ScimRuntime`,
+/// `crate::scim`'s module docs). Review #89 item 2: a mapping's SCIM
+/// roster must never be trusted unless its own `issuer` equals this one.
+/// `Unknown` only happens when no sign-in state was wired into the request
+/// at all; the real router always layers `Extension<SignIn>` (every
+/// `management::router` request carries it), so this is strictly a test-
+/// harness case, kept issuer-agnostic (the pre-existing behavior) rather
+/// than gated, since there is nothing to compare against.
+enum ScimIssuer {
+    Unknown,
+    Configured(Option<String>),
+}
+fn configured_scim_issuer(config: &Option<Extension<SignIn>>) -> ScimIssuer {
+    match config {
+        None => ScimIssuer::Unknown,
+        Some(Extension(c)) => ScimIssuer::Configured(c.0.scim().map(|rt| rt.issuer.clone())),
+    }
+}
 
 async fn preview_new_mapping(
     State(s): State<Store>,
     Extension(u): Extension<ManagementPrincipal>,
+    config: Option<Extension<SignIn>>,
     Json(input): Json<PreviewInput>,
 ) -> DetailedResult {
     // Browser session only (route_policy::TokenPolicy::Denied already
@@ -144,7 +164,8 @@ async fn preview_new_mapping(
         workspace_role: b.workspace_role.as_deref(),
         enabled: b.enabled,
     };
-    let result = evaluate(&mut tx, &b.issuer, &b.group_value, &proposal).await?;
+    let scim_issuer = configured_scim_issuer(&config);
+    let result = evaluate(&mut tx, &b.issuer, &b.group_value, &proposal, &scim_issuer).await?;
     tx.commit().await?;
     Ok(Json(result))
 }
@@ -164,6 +185,7 @@ async fn preview_existing_mapping(
     State(s): State<Store>,
     Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
+    config: Option<Extension<SignIn>>,
     Json(input): Json<PreviewInput>,
 ) -> DetailedResult {
     if u.token_id().is_some() {
@@ -222,7 +244,8 @@ async fn preview_existing_mapping(
         };
         (b.issuer.clone(), b.group_value.clone(), proposal, changed)
     };
-    let mut result = evaluate(&mut tx, &issuer, &group_value, &proposal).await?;
+    let scim_issuer = configured_scim_issuer(&config);
+    let mut result = evaluate(&mut tx, &issuer, &group_value, &proposal, &scim_issuer).await?;
     if fields_changed {
         let immediate = render_immediate(&mut tx, id).await?;
         result["immediate"] = immediate;
@@ -241,18 +264,29 @@ async fn preview_existing_mapping(
 /// (`lifecycle::apply_group_grants`) compares `group_value` by equality,
 /// never case-folded, and SCIM's own membership resolution
 /// (`scim::managed_values`/`member_values`) matches `scim_groups`'
-/// `display_name`/`external_id` the same exact way.
+/// `display_name`/`external_id` the same exact way. `scim_issuer` (review
+/// #89 item 2) is the one issuer SCIM is actually bound to; a mapping
+/// proposed under any other issuer can never receive SCIM-sourced grants in
+/// reality, so its SCIM roster is never trusted even when `group_value`
+/// happens to match a real `scim_groups` row.
 async fn roster(
     tx: &mut Transaction<'_, Postgres>,
     issuer: &str,
     group_value: &str,
+    scim_issuer: &ScimIssuer,
 ) -> Result<(Vec<Uuid>, &'static str, bool), ApiError> {
-    let managed: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM scim_groups WHERE display_name=$1 OR external_id=$1)",
-    )
-    .bind(group_value)
-    .fetch_one(&mut **tx)
-    .await?;
+    let issuer_trusted = match scim_issuer {
+        ScimIssuer::Unknown => true,
+        ScimIssuer::Configured(Some(configured)) => configured == issuer,
+        ScimIssuer::Configured(None) => false,
+    };
+    let managed: bool = issuer_trusted
+        && sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM scim_groups WHERE display_name=$1 OR external_id=$1)",
+        )
+        .bind(group_value)
+        .fetch_one(&mut **tx)
+        .await?;
     if managed {
         let members: Vec<Uuid> = sqlx::query_scalar(
             "SELECT DISTINCT m.user_id FROM scim_group_members m JOIN scim_groups g ON g.id=m.group_id WHERE g.display_name=$1 OR g.external_id=$1 ORDER BY 1 LIMIT $2",
@@ -409,8 +443,9 @@ async fn evaluate(
     issuer: &str,
     group_value: &str,
     proposal: &lifecycle::GroupGrantProposal<'_>,
+    scim_issuer: &ScimIssuer,
 ) -> Result<Value, ApiError> {
-    let (members, basis, complete) = roster(tx, issuer, group_value).await?;
+    let (members, basis, complete) = roster(tx, issuer, group_value, scim_issuer).await?;
     let (platform_gained_rows, platform_lost_rows) =
         lifecycle::preview_platform_effect(tx, proposal, &members).await?;
     let (workspace_gained_rows, workspace_lost_rows) =
