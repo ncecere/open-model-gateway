@@ -154,7 +154,11 @@ pub(crate) async fn platform_write_role_only(
     tx: &mut Transaction<'_, Postgres>,
     user: Uuid,
 ) -> Result<(), ApiError> {
-    if platform_role(tx, user).await? != "admin" {
+    require_platform_admin(&platform_role(tx, user).await?)
+}
+/// The same live role decision for locked mutations and lock-free previews.
+pub(super) fn require_platform_admin(role: &str) -> Result<(), ApiError> {
+    if role != "admin" {
         return Err(denied());
     }
     Ok(())
@@ -599,6 +603,10 @@ pub(super) fn platform_routes() -> Router<Store> {
                 .patch(update_deployment)
                 .delete(delete_deployment),
         )
+        .route(
+            "/api/v1/platform/deployments/{id}/configuration/preview",
+            post(super::deployment_configuration::preview),
+        )
         .route("/api/v1/platform/audit", get(platform_audit))
         .route("/api/v1/platform/server-policy", get(server_policy))
 }
@@ -1004,7 +1012,7 @@ pub(super) async fn insert_model(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Enabled {
-    enabled: bool,
+    pub(super) enabled: bool,
 }
 async fn toggle(
     s: Store,
@@ -1014,12 +1022,11 @@ async fn toggle(
     table: &str,
 ) -> DetailedResult {
     let mut tx = catalog_tx(&s, &u, true).await?;
-    // Enabling a route its connection cannot serve would make the model look
-    // ready while every request fails; disabling is always allowed.
-    if table == "deployments" && b.enabled {
-        route_capability(&mut tx, id).await?;
-    }
-    if sqlx::query(&format!("UPDATE {table} SET enabled=$2 WHERE id=$1"))
+    if table == "deployments" {
+        let change =
+            super::deployment_configuration::DeploymentChange::prepare(&mut tx, &u, id, &b).await?;
+        change.apply(&mut tx).await?;
+    } else if sqlx::query(&format!("UPDATE {table} SET enabled=$2 WHERE id=$1"))
         .bind(id)
         .bind(b.enabled)
         .execute(&mut *tx)
@@ -1220,21 +1227,6 @@ pub(super) async fn insert_deployment(
     )
     .await?;
     Ok(id)
-}
-/// Rejects enabling a route whose connection profile serves none of its
-/// model's protocols (400 `route_unsupported_capability`).
-async fn route_capability(
-    tx: &mut Transaction<'_, Postgres>,
-    deployment: Uuid,
-) -> Result<(), ManagementError> {
-    let row: Option<(String, Vec<String>)> = sqlx::query_as("SELECT p.provider,m.supported_protocols FROM deployments d JOIN provider_connections p ON p.id=d.provider_connection_id JOIN models m ON m.id=d.model_id WHERE d.id=$1").bind(deployment).fetch_optional(&mut **tx).await?;
-    if let Some((provider, protocols)) = row
-        && let Some(reason) =
-            crate::providers::capabilities::unsupported_reason(&provider, &protocols)
-    {
-        return Err(ManagementError::route_unsupported(format!("{reason}.")));
-    }
-    Ok(())
 }
 /// Audit actions recorded as a side effect of a person signing in (not changes they made).
 pub(crate) const SIGN_IN_AUDIT_ACTIONS: &[&str] =

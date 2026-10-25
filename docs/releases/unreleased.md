@@ -12,6 +12,12 @@ Notes for changes on `main` after [v0.8.0](v0.8.0.md). They become the next rele
 
 Adds Vitest contract/component coverage and a real-gateway Playwright journey with a disposable signed loopback receiver and 1440/390-width screenshots. No backend, migration, privilege or dependency changes. See [dashboard administration](../alerts.md#dashboard-administration-slice-3).
 
+## Deployment configuration impact previews (#85)
+
+Platform Admins can review deployment enable/disable changes before confirming: the allowlisted state diff, serving routes gained/lost, last-serving-route warnings and bounded affected Team/Project metadata. The new browser-only `POST /api/v1/platform/deployments/{id}/configuration/preview` requires Origin/CSRF and denies all admin tokens. It shares the typed deployment operation with existing PATCH/DELETE, reads one read-only primary snapshot and writes no configuration, audit, notifications or cache state. Personal effects are omitted, including from counts; no foreign personal IDs, owners, keys or request details are exposed.
+
+No migration or new runtime privilege is required. `expected_revision` is the existing monotonic **catalog configuration version**, not a new deployment revision. It is an observation token only: existing apply behavior, statuses and audit remain unchanged and do not enforce preview preconditions. History/per-target revisions, rollback and bulk actions remain later slices. See [management API](../management-api.md) and [platform administration](../platform-administration.md).
+
 ## Signed alert webhook delivery (#45, slice 2)
 
 Saved enabled receivers now receive `omg.alert.v1` envelopes signed with HMAC-SHA256 over timestamp plus exact queued bytes, with optional dual signatures during the saved overlap (at most 24 hours). Signing variables are resolved only by the dedicated allowlist and require 32–4096 bytes. Short destination-before-outbox claims use generation checks and 90-second owner/token leases; fenced completion preserves terminal outcomes. Dispatch is bounded to 25 steps, a 60-second claiming budget and a 70-second hard timeout, with 1m/5m/30m/2h backoff and at most five attempts in 24 hours. Only connection failures, timeouts, 408/429 and 5xx retry. TLS, credentials, redirects and policy refusals are terminal. Egress checks include literals and checked DNS; proxies, redirects and implicit retries are disabled, requests time out after 10 seconds and response bodies are not read.
