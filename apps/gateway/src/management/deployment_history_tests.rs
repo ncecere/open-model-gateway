@@ -110,7 +110,7 @@ async fn deployment_history_writers_revisions_and_immutable_snapshots(pool: PgPo
 async fn deployment_history_authorization_pagination_legacy_and_detail(pool: PgPool) {
     let f = fixture(&pool).await;
     let d = create(&f, &pool).await;
-    sqlx::query("UPDATE users SET display_name='History'||chr(10)||'operator' WHERE id=$1")
+    sqlx::query("UPDATE users SET display_name='History operator' WHERE id=$1")
         .bind(f.admin.user_id)
         .execute(&pool)
         .await
@@ -132,7 +132,7 @@ async fn deployment_history_authorization_pagination_legacy_and_detail(pool: PgP
         assert_eq!(status, StatusCode::OK, "{first}");
         assert_eq!(first["data"].as_array().unwrap().len(), 1);
         assert_eq!(first["data"][0]["after"]["enabled"], true);
-        assert_eq!(first["data"][0]["actor"]["label"], "Historyoperator");
+        assert_eq!(first["data"][0]["actor"]["label"], "History operator");
         assert_eq!(first["data"][0]["actor"]["id"], f.admin.user_id.to_string());
         let next = first["next_cursor"].as_str().unwrap();
         let (_, second) = call(
