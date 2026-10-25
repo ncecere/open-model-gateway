@@ -289,11 +289,19 @@ impl Limiter {
         loop {
             let last = self.last[index].load(Ordering::Acquire);
             if last != 0 && now.saturating_sub(last) < REFILL.as_millis() as u64 {
-                // Saturating, never a silent wraparound back to zero.
-                let _ =
-                    self.suppressed[index].fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| {
-                        Some(v.saturating_add(1))
-                    });
+                // Saturating, never a silent wraparound back to zero. An
+                // explicit CAS loop (not `fetch_update`, deprecated on newer
+                // stable toolchains) so every supported toolchain builds cleanly.
+                let counter = &self.suppressed[index];
+                let mut current = counter.load(Ordering::Acquire);
+                while let Err(actual) = counter.compare_exchange_weak(
+                    current,
+                    current.saturating_add(1),
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    current = actual;
+                }
                 return None;
             }
             if self.last[index]
