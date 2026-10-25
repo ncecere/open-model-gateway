@@ -2,6 +2,12 @@
 
 Notes for changes on `main` after [v0.8.0](v0.8.0.md). They become the next release's notes.
 
+## Self-service membership requests (#83, slice A)
+
+Adds browser-only APIs for discovering opted-in active Teams/Projects, submitting/withdrawing one's own membership requests, and live workspace-admin/platform approval queues. Discoverability defaults off and only Platform Admins can change it. Approval atomically applies a linked manual `member` grant; self-approval, stale membership and entitlement loss fail closed. Replays return the recorded outcome without regranting. PostgreSQL owns seven-day expiry, terminal transitions and replica-safe caps (20 pending, five submissions/minute, 50/rolling day); rate refusals include `Retry-After`. Reasons are bounded plain text, excluded from audit, included in subject export and scrubbed by hold-aware cleanup. Lifecycle expiry is bounded to 100 per tick. Model requests, notifications and UI remain later slices.
+
+**Schema/API impact:** migration **0066_access_requests.sql**, new exact browser-only routes, and narrow runtime column grants/privilege probes. Explicitly apply migration/grants only on the selected enterprise database; never reset an old installation. This change is held until reserved migrations **0059–0065** land and the ordered prefix is complete. See [management API](../management-api.md#self-service-membership-requests-83-slice-a) and [identity](../identity.md#self-service-membership-requests).
+
 ## Signed alert webhook delivery (#45, slice 2)
 
 Saved enabled receivers now receive `omg.alert.v1` envelopes signed with HMAC-SHA256 over timestamp plus exact queued bytes, with optional dual signatures during the saved overlap (at most 24 hours). Signing variables are resolved only by the dedicated allowlist and require 32–4096 bytes. Short destination-before-outbox claims use generation checks and 90-second owner/token leases; fenced completion preserves terminal outcomes. Dispatch is bounded to 25 steps, a 60-second claiming budget and a 70-second hard timeout, with 1m/5m/30m/2h backoff and at most five attempts in 24 hours. Only connection failures, timeouts, 408/429 and 5xx retry. TLS, credentials, redirects and policy refusals are terminal. Egress checks include literals and checked DNS; proxies, redirects and implicit retries are disabled, requests time out after 10 seconds and response bodies are not read.
