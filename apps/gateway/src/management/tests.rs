@@ -62,6 +62,8 @@ mod project_tests;
 mod read_scale_tests;
 #[path = "resources/tests.rs"]
 mod resource_tests;
+#[path = "scheduled_report_csv_tests.rs"]
+mod scheduled_report_csv_tests;
 #[path = "scheduled_report_read_tests.rs"]
 mod scheduled_report_read_tests;
 #[path = "scheduled_reports_tests.rs"]

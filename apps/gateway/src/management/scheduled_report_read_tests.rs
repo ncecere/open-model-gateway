@@ -7,6 +7,15 @@ async fn occurrence(
     owner: &BrowserPrincipal,
     ws: Option<Uuid>,
 ) -> (Uuid, Uuid, String) {
+    occurrence_body(f, pool, owner, ws, None).await
+}
+pub(super) async fn occurrence_body(
+    f: &Fixture,
+    pool: &PgPool,
+    owner: &BrowserPrincipal,
+    ws: Option<Uuid>,
+    body: Option<Value>,
+) -> (Uuid, Uuid, String) {
     let kind = if ws == Some(f.personal) {
         "personal"
     } else if ws.is_some() {
@@ -29,7 +38,10 @@ async fn occurrence(
         .await
         .unwrap()
         .unwrap();
-    let body = crate::scheduled_reports::snapshot(&f.s, &c).await.unwrap();
+    let body = match body {
+        Some(body) => body,
+        None => crate::scheduled_reports::snapshot(&f.s, &c).await.unwrap(),
+    };
     assert!(
         crate::scheduled_reports::complete(&f.s, &fence, &c, &body)
             .await
