@@ -1085,7 +1085,8 @@ mod demo {
             migrations.last().unwrap()["version"]
         );
         assert_eq!(migrations[0]["version"], 1);
-        assert_eq!(value["latest_version"], 60);
+        // At least this release's newest migration; later releases add more.
+        assert!(value["latest_version"].as_i64().unwrap() >= 60);
         assert!(migrations.iter().any(|m| m["version"] == 58));
         assert!(migrations.iter().any(|m| m["version"] == 59));
         assert!(
