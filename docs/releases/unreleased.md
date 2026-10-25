@@ -102,6 +102,8 @@ Claims use one captured database timestamp as an index range bound to skip expir
 
 ## Fixed
 
+- **Telemetry export egress refusals no longer repeat or name the collector (#321).** The shared outbound address policy now has a per-purpose logging policy. Provider, OIDC, storage, catalog, SMTP, audit and alert-webhook refusals are unchanged: every refusal still names the host, resolved address and reason. Telemetry/OTLP export (traces today, metrics once #324 ships) logs a fixed, destination-free warning only when that purpose's connectivity actually changes - into refusal, or back to allowed - never on every export attempt, matching the exporters' own transition-only, fixed-enum diagnostics. Address enforcement and `gateway_egress_denied_total{purpose}` are unchanged for every purpose. See [operations](../operations.md#outbound-connections).
+
 - **Bounded dashboard access refresh (#291).** A refused management GET now triggers at most one automatic session refresh per navigation. A repeated refusal retires private cached data and one-time credentials and shows a stable permission notice instead of remounting and retrying indefinitely. Navigating rearms automatic refresh; an explicit access refresh can recover the denied view, and a 401 still ends the session.
 
 ## Added
