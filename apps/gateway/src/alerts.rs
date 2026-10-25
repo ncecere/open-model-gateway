@@ -29,7 +29,10 @@ use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 mod outbox;
+pub(crate) mod webhooks;
 pub use outbox::deliver_pending;
+mod aged_hold;
+pub(crate) use aged_hold::{aged_hold_tick, aged_hold_visible};
 
 use crate::{
     email::{SmtpSettings, TlsMode},
@@ -173,6 +176,8 @@ pub enum Kind {
     /// (no `alert_rules` row, like `Source::Builtin`'s personal budget
     /// alerts): never a rule kind, never accepted by rule validation.
     KeyExpiring,
+    /// Fixed 24h/168h unknown-hold review; built in, never a rule.
+    AgedUnknownHold,
 }
 impl Kind {
     pub fn parse(value: &str) -> Option<Self> {
@@ -186,6 +191,7 @@ impl Kind {
             "spend_threshold" => Some(Self::Spend),
             "admission_ceiling" => Some(Self::AdmissionCeiling),
             "key_expiring" => Some(Self::KeyExpiring),
+            "aged_unknown_hold" => Some(Self::AgedUnknownHold),
             _ => None,
         }
     }
@@ -200,6 +206,7 @@ impl Kind {
             Self::Spend => "spend_threshold",
             Self::AdmissionCeiling => "admission_ceiling",
             Self::KeyExpiring => "key_expiring",
+            Self::AgedUnknownHold => "aged_unknown_hold",
         }
     }
 }
@@ -879,7 +886,7 @@ async fn evaluate_rule(
         Some(Kind::AdmissionCeiling) => ceiling_conditions(tx, rule, now).await,
         // Never a rule kind (no `alert_rules` row can have it); evaluated by
         // `key_expiring_tick` instead, outside the rule/builtin job loop.
-        Some(Kind::KeyExpiring) => Ok(vec![]),
+        Some(Kind::KeyExpiring | Kind::AgedUnknownHold) => Ok(vec![]),
         None => Ok(vec![]),
     }
 }
@@ -891,6 +898,21 @@ pub struct Changes {
     pub resolved: usize,
 }
 
+/// Prelock the complete bucket union before any incident row locks/writes.
+/// SQL sorts actual signed advisory keys (UUID order is not lock-key order).
+/// All multi-bucket producers (rules, key expiry and aged holds) use this
+/// before incident writes, never incrementally per condition.
+pub(crate) async fn lock_delivery_buckets(
+    tx: &mut Transaction<'_, Postgres>,
+    buckets: &[Uuid],
+) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT alert_delivery_lock_buckets($1)")
+        .bind(buckets)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
 /// Apply `conditions` to the open incidents of `source`: fire new subjects,
 /// resolve cleared ones, supersede changed levels. Idempotent.
 async fn reconcile(
@@ -899,6 +921,16 @@ async fn reconcile(
     kind: Kind,
     conditions: Vec<Condition>,
 ) -> Result<Changes, sqlx::Error> {
+    // Include cleared subjects as well as new conditions; sorting conditions
+    // alone would miss a bucket whose only transition this tick is clearing.
+    let mut buckets: Vec<Uuid> = sqlx::query_scalar("SELECT coalesce(workspace_id,'00000000-0000-0000-0000-000000000000'::uuid) FROM alert_events WHERE resolved_at IS NULL AND rule_id IS NOT DISTINCT FROM $1 AND builtin IS NOT DISTINCT FROM $2")
+        .bind(source.rule()).bind(source.builtin()).fetch_all(&mut **tx).await?;
+    buckets.extend(
+        conditions
+            .iter()
+            .map(|c| c.workspace_id.unwrap_or(Uuid::nil())),
+    );
+    lock_delivery_buckets(tx, &buckets).await?;
     let open: Vec<(Uuid, String, i32)> = sqlx::query_as("SELECT id,subject_key,level FROM alert_events WHERE resolved_at IS NULL AND rule_id IS NOT DISTINCT FROM $1 AND builtin IS NOT DISTINCT FROM $2 FOR UPDATE")
         .bind(source.rule())
         .bind(source.builtin())
@@ -1052,12 +1084,6 @@ pub(crate) async fn key_expiring_tick(
     now: DateTime<Utc>,
 ) -> Result<Changes, sqlx::Error> {
     let mut changes = Changes::default();
-    changes.resolved += sqlx::query(KEY_EXPIRY_RETIRE)
-        .bind(now)
-        .bind(KEY_EXPIRY_PROGRESS)
-        .execute(&mut **tx)
-        .await?
-        .rows_affected() as usize;
     // Apply each workspace's remaining allowance BEFORE the global LIMIT:
     // even an earlier-expiring backlog cannot fill the tick with skipped rows.
     // Resolved incidents still count, and no dedup row is written for excess keys.
@@ -1076,6 +1102,16 @@ pub(crate) async fn key_expiring_tick(
         .bind(KEY_EXPIRY_PROGRESS)
         .fetch_all(&mut **tx)
         .await?;
+    let buckets: Vec<Uuid> = candidates.iter().map(|c| c.2).collect();
+    lock_delivery_buckets(tx, &buckets).await?;
+    // Retiring still precedes inserts (urgent reminders need the open slot),
+    // but all bucket locks now precede these incident writes too.
+    changes.resolved += sqlx::query(KEY_EXPIRY_RETIRE)
+        .bind(now)
+        .bind(KEY_EXPIRY_PROGRESS)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected() as usize;
     for (key_id, expires_at, workspace_id, threshold) in candidates {
         let id = Uuid::new_v4();
         let plural = if threshold == 1 { "" } else { "s" };
@@ -1250,10 +1286,9 @@ pub async fn evaluate_once_fenced(
             }
         }
     }
-    // Key-expiry reminders (#100): built in, evaluated once per tick, in its
-    // own fenced transaction that waits for the same lock, exactly like
-    // every other job above.
-    {
+    // Built-ins each get their OWN fenced transaction and post-lock DB
+    // timestamp. A missing migration fails only this job, not the loop.
+    for kind in [Kind::KeyExpiring, Kind::AgedUnknownHold] {
         report.rules += 1;
         let mut tx = crate::db::begin(&store.pool).await?;
         crate::leases::fence(&mut tx, fence).await?;
@@ -1270,7 +1305,11 @@ pub async fn evaluate_once_fenced(
             let now = sqlx::query_scalar("SELECT clock_timestamp()")
                 .fetch_one(&mut *tx)
                 .await?;
-            key_expiring_tick(&mut tx, now).await
+            match kind {
+                Kind::KeyExpiring => key_expiring_tick(&mut tx, now).await,
+                Kind::AgedUnknownHold => aged_hold_tick(&mut tx, now).await,
+                _ => unreachable!(),
+            }
         }
         .await;
         match outcome {
@@ -1294,6 +1333,7 @@ pub(crate) async fn fire_scim_last_admin(
     tx: &mut Transaction<'_, Postgres>,
     resource: &str,
 ) -> Result<bool, sqlx::Error> {
+    lock_delivery_buckets(tx, &[Uuid::nil()]).await?;
     let id = Uuid::new_v4();
     let inserted = sqlx::query("INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,summary,details) VALUES($1,$2,$2,$2,1,'critical',$3,jsonb_build_object('resource',$4::text)) ON CONFLICT DO NOTHING")
         .bind(id)
@@ -1316,6 +1356,7 @@ pub(crate) async fn fire_scim_last_admin(
 /// The SCIM last-admin incident clears once a second active Platform Admin
 /// exists (the installation is no longer one SCIM change away from lockout).
 async fn resolve_scim_last_admin(tx: &mut Transaction<'_, Postgres>) -> Result<usize, sqlx::Error> {
+    lock_delivery_buckets(tx, &[Uuid::nil()]).await?;
     let open: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM alert_events WHERE builtin=$1 AND resolved_at IS NULL AND (SELECT count(*) FROM effective_platform_roles WHERE role='admin')>=2 FOR UPDATE")
         .bind(SCIM_LAST_ADMIN)
         .fetch_all(&mut **tx)
@@ -1575,6 +1616,7 @@ pub fn start(store: Store, every: Duration) -> tokio::task::JoinHandle<()> {
                     tracing::warn!("alert evaluation incomplete; retrying next interval")
                 }
             }
+            webhooks::deliver(&store).await;
             // `deliver_pending_within` stops claiming once a further send could
             // overrun SEND_BUDGET, and its cleanup has its own bound. The worst
             // case is cleanup, then one send started just inside the budget, so

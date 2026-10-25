@@ -261,6 +261,8 @@ pub(super) const TOKEN_READY_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/v1/platform/alerts/webhooks/{id}"),
     ("PATCH", "/api/v1/platform/alerts/webhooks/{id}"),
     ("DELETE", "/api/v1/platform/alerts/webhooks/{id}"),
+    ("POST", "/api/v1/platform/alerts/webhooks/{id}/test"),
+    ("GET", "/api/v1/platform/alerts/webhooks/{id}/deliveries"),
     ("POST", "/api/v1/platform/users/{user}/sessions/revoke"),
     ("GET", "/api/v1/platform/batches"),
 ];

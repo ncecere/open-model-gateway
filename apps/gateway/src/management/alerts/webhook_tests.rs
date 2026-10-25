@@ -1,5 +1,7 @@
 use super::*;
 const WEBHOOKS: &str = "/api/v1/platform/alerts/webhooks";
+#[path = "webhook_delivery_api_tests.rs"]
+mod delivery_api;
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn webhook_running_gateway_sessions_scopes_rotation_and_revocation(pool: PgPool) {
@@ -40,7 +42,7 @@ async fn webhook_running_gateway_sessions_scopes_rotation_and_revocation(pool: P
         (token.id, token.token)
     }
     let (write_id, write) = mint(&pool, f.admin.user_id, "settings:write").await;
-    let (_, read) = mint(&pool, f.admin.user_id, "platform:read").await;
+    let (read_id, read) = mint(&pool, f.admin.user_id, "platform:read").await;
     let (_, wrong) = mint(&pool, f.admin.user_id, "governance:write").await;
     let (_, read_write) = mint(&pool, f.admin.user_id, "platform:read,settings:write").await;
     let mock = crate::identity::tests::MockProvider::start(None).await;
@@ -124,6 +126,85 @@ async fn webhook_running_gateway_sessions_scopes_rotation_and_revocation(pool: P
     let path = format!("{WEBHOOKS}/{id}");
     assert_eq!(created["enabled"], false);
     assert_eq!(created["url"], "https://example.test/private-path");
+    let test_path = format!("{path}/test");
+    let deliveries_path = format!("{path}/deliveries");
+    // These new routes must pass through the real live-token and browser
+    // Origin/CSRF guards too, not just handler-level principal checks.
+    for token in [&read, &wrong] {
+        assert_eq!(
+            client
+                .post(format!("{base}{test_path}"))
+                .bearer_auth(token)
+                .json(&json!({}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            403
+        );
+    }
+    for token in [&write, &wrong] {
+        assert_eq!(
+            client
+                .get(format!("{base}{deliveries_path}"))
+                .bearer_auth(token)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            403
+        );
+    }
+    for (has_csrf, origin) in [
+        (false, Some("http://127.0.0.1:3000")),
+        (true, None),
+        (true, Some("https://evil.test")),
+    ] {
+        let mut request = client
+            .post(format!("{base}{test_path}"))
+            .header("cookie", format!("omg_session={cookie}"));
+        if has_csrf {
+            request = request.header("x-csrf-token", &csrf);
+        }
+        if let Some(origin) = origin {
+            request = request.header("origin", origin);
+        }
+        assert_eq!(request.json(&json!({})).send().await.unwrap().status(), 403);
+    }
+    assert_eq!(
+        client
+            .post(format!("{base}{WEBHOOKS}"))
+            .header("cookie", format!("omg_session={cookie}"))
+            .header("x-csrf-token", &csrf)
+            .json(&body)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403,
+        "create also requires Origin"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM alert_webhook_outbox WHERE destination_id=$1"
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0,
+        "refused test requests must not enqueue"
+    );
+    assert_eq!(
+        client
+            .get(format!("{base}{deliveries_path}"))
+            .bearer_auth(&read)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
     for route in [WEBHOOKS, path.as_str()] {
         let redacted: Value = client
             .get(format!("{base}{route}"))
@@ -207,6 +288,21 @@ async fn webhook_running_gateway_sessions_scopes_rotation_and_revocation(pool: P
     }
     assert_eq!(client.patch(format!("{base}{path}")).bearer_auth(&write).json(&json!({"enabled":true,"previous_secret_ref":"env:HOOK_OLD","previous_secret_until":(chrono::Utc::now()+chrono::Duration::hours(1)).to_rfc3339()})).send().await.unwrap().status(),200);
     assert_eq!(
+        browser(
+            reqwest::Method::POST,
+            &test_path,
+            true,
+            "http://127.0.0.1:3000"
+        )
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap()
+        .status(),
+        200,
+        "valid browser test request must reach the handler"
+    );
+    assert_eq!(
         client
             .patch(format!("{base}{path}"))
             .bearer_auth(&write)
@@ -240,6 +336,9 @@ async fn webhook_running_gateway_sessions_scopes_rotation_and_revocation(pool: P
     crate::admin_tokens::revoke_admin_token(&mut tx, write_id)
         .await
         .unwrap();
+    crate::admin_tokens::revoke_admin_token(&mut tx, read_id)
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
     assert_eq!(
         client
@@ -251,6 +350,38 @@ async fn webhook_running_gateway_sessions_scopes_rotation_and_revocation(pool: P
             .unwrap()
             .status(),
         401
+    );
+    assert_eq!(
+        client
+            .post(format!("{base}{test_path}"))
+            .bearer_auth(&write)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+    assert_eq!(
+        client
+            .get(format!("{base}{deliveries_path}"))
+            .bearer_auth(&read)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM alert_webhook_outbox WHERE destination_id=$1"
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        1,
+        "revoked test token must not enqueue another delivery"
     );
     // Bypass middleware to model a preflight racing revocation: write_tx must
     // still reject the stale principal inside its own transaction.

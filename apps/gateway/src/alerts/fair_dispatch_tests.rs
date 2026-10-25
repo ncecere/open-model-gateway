@@ -18,8 +18,42 @@ async fn backlog(s: &Seed, workspace: Option<Uuid>, n: i32, age_seconds: i32) {
         &format!("{scope},'budget_threshold',ARRAY['local'],ARRAY[100],ARRAY['fair@example.test']"),
     )
     .await;
-    sqlx::query("WITH events AS (INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary) SELECT gen_random_uuid(),$1,'budget_threshold',i::text,100,'warning',$2,'Fair dispatch' FROM generate_series(1,$3) i RETURNING id) INSERT INTO alert_deliveries(id,event_id,transition,created_at) SELECT gen_random_uuid(),id,'fired',clock_timestamp()-make_interval(secs=>$4) FROM events")
-        .bind(r).bind(workspace).bind(n).bind(age_seconds).execute(&s.pool).await.unwrap();
+    let sql = "WITH events AS (INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary) SELECT gen_random_uuid(),$1,'budget_threshold',i::text,100,'warning',$2,'Fair dispatch' FROM generate_series(1,$3) i RETURNING id) INSERT INTO alert_deliveries(id,event_id,transition,created_at) SELECT gen_random_uuid(),id,'fired',clock_timestamp()-make_interval(secs=>$4) FROM events";
+    let generation_schema: bool = sqlx::query_scalar("SELECT EXISTS(SELECT FROM information_schema.columns WHERE table_name='alert_deliveries' AND column_name='quota_charged')").fetch_one(&s.pool).await.unwrap();
+    if generation_schema {
+        // Seed a PRE-UPGRADE backlog, not fresh generation. Keep the large
+        // 30k-row/overdue fixtures and their original dispatch assertions:
+        // current admission intentionally cannot generate such a backlog.
+        let mut tx = s.pool.begin().await.unwrap();
+        sqlx::query("ALTER TABLE alert_deliveries DISABLE TRIGGER alert_delivery_set_bucket")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let historical = sql.replace("transition,created_at)", "transition,created_at,bucket_id)")
+            .replace("make_interval(secs=>$4) FROM events", "make_interval(secs=>$4),coalesce($2,'00000000-0000-0000-0000-000000000000'::uuid) FROM events");
+        sqlx::query(&historical)
+            .bind(r)
+            .bind(workspace)
+            .bind(n)
+            .bind(age_seconds)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("ALTER TABLE alert_deliveries ENABLE TRIGGER alert_delivery_set_bucket")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+    } else {
+        sqlx::query(sql)
+            .bind(r)
+            .bind(workspace)
+            .bind(n)
+            .bind(age_seconds)
+            .execute(&s.pool)
+            .await
+            .unwrap();
+    }
 }
 
 #[sqlx::test(migrations = false)]

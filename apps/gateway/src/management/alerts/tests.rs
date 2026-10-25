@@ -2,6 +2,49 @@
 //! privacy of history and in-app notifications.
 use super::*;
 use crate::alerts as core;
+#[path = "aged_hold_tests.rs"]
+mod aged_hold;
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn alert_generation_history_fired_and_cleared_preserves_privacy(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let (status, r) = call(&f.s, &f.owner, "POST", &ws_rules(f.team), json!({"name":"Generation","kind":"budget_threshold","budget_layers":["local"],"thresholds":[100],"notify_workspace_admins":true})).await;
+    assert_eq!(status, StatusCode::OK, "{r}");
+    let rule = Uuid::parse_str(r["id"].as_str().unwrap()).unwrap();
+    sqlx::query("WITH events AS (INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary) SELECT gen_random_uuid(),$1,'budget_threshold',i::text,100,'critical',$2,'Generation' FROM generate_series(1,101) i RETURNING id) INSERT INTO alert_deliveries(id,event_id,transition) SELECT gen_random_uuid(),id,'fired' FROM events")
+        .bind(rule).bind(f.team).execute(&pool).await.unwrap();
+    let event: Uuid =
+        sqlx::query_scalar("SELECT event_id FROM alert_deliveries WHERE status='suppressed'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    core::resolve(&mut tx, event, "cleared").await.unwrap();
+    tx.commit().await.unwrap();
+    let path = format!(
+        "/api/v1/workspaces/{}/alerts/events?status=resolved",
+        f.team
+    );
+    let (status, h) = call(&f.s, &f.owner, "GET", &path, json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(h["data"].as_array().unwrap().len(), 1);
+    for field in ["email", "cleared_email"] {
+        assert_eq!(h["data"][0][field]["status"], "suppressed");
+        assert_eq!(
+            h["data"][0][field]["suppression_reason"],
+            "workspace_generation_limit"
+        );
+        assert_eq!(h["data"][0][field]["recipients"], 0);
+    }
+    for user in [&f.admin, &f.auditor, &f.outsider] {
+        assert!(feed(&f, user).await.is_empty());
+    }
+    assert_eq!(
+        call(&f.s, &f.member, "GET", &path, json!({})).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert!(!h.to_string().contains("fingerprint"));
+}
 
 const EVENT_FROM: &str = "FROM alert_events e LEFT JOIN alert_rules r ON r.id=e.rule_id LEFT JOIN workspaces w ON w.id=e.workspace_id";
 
@@ -508,7 +551,12 @@ async fn notifications_follow_live_authority_and_never_leak_private_details(pool
     assert_eq!(mine.len(), 2, "{mine:?}");
     for event in &mine {
         let email = event["email"].as_object().unwrap();
-        assert_eq!(email.len(), 10, "aggregate allowlist only");
+        assert_eq!(
+            email.len(),
+            11,
+            "aggregate allowlist plus suppression reason only"
+        );
+        assert_eq!(email["suppression_reason"], Value::Null);
         assert_eq!(email["retrying"], true);
         assert_eq!(email["waiting"], 1);
         assert!(email["next_attempt_at"].is_string());

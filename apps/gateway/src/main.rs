@@ -1090,6 +1090,9 @@ mod demo {
             migrations.last().unwrap()["version"]
         );
         assert_eq!(migrations[0]["version"], 1);
+        assert_eq!(value["latest_version"], 60);
+        assert!(migrations.iter().any(|m| m["version"] == 58));
+        assert!(migrations.iter().any(|m| m["version"] == 59));
         assert!(
             migrations
                 .iter()

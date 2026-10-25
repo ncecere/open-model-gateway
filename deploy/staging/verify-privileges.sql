@@ -122,6 +122,9 @@ DO $$ DECLARE r record; t text; BEGIN
   IF has_column_privilege('gateway_runtime','public.alert_recipient_outbox',t,'INSERT') THEN RAISE EXCEPTION 'outbox initial state bypass'; END IF;
   IF NOT has_column_privilege('gateway_runtime','public.alert_recipient_outbox',t,'UPDATE') THEN RAISE EXCEPTION 'outbox not maintainable'; END IF;
  END LOOP;
+ FOREACH t IN ARRAY ARRAY['quota_charged','suppression_reason','created_at'] LOOP
+  IF has_column_privilege('gateway_runtime','public.alert_deliveries',t,'UPDATE') THEN RAISE EXCEPTION 'mutable alert generation metadata'; END IF;
+ END LOOP;
  IF has_any_column_privilege('gateway_runtime','public.alert_reads','UPDATE') THEN RAISE EXCEPTION 'read marks rewritable'; END IF;
  FOREACH t IN ARRAY ARRAY['id','scope','workspace_id','kind','created_by','created_at'] LOOP
   IF has_column_privilege('gateway_runtime','public.alert_rules',t,'UPDATE') THEN RAISE EXCEPTION 'mutable alert rule identity: %',t; END IF;
@@ -176,7 +179,7 @@ DO $$ DECLARE r record; t text; BEGIN
   IF has_column_privilege('gateway_runtime','public.batch_route_waits',t,'UPDATE') THEN RAISE EXCEPTION 'mutable batch demand identity: %',t; END IF;
  END LOOP;
  IF has_table_privilege('gateway_runtime','public.batch_route_waits','TRUNCATE') THEN RAISE EXCEPTION 'batch demand truncatable'; END IF;
- IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units','valid_model_protocols_base','valid_cost_components_base','valid_price_lines_base','valid_upstream_job_id','rate_reserved_tokens','rate_contribution','omg_scope_key','omg_type_key','omg_scope_lock_audit_order','omg_lock_scopes','omg_admission_locks','omg_lock_scope_rows','omg_catalog_lock_mode','omg_scope_lock_exclusive','omg_config_bump','omg_lease_acquire','omg_lease_fence','omg_lease_complete','omg_lease_release','omg_ensure_partitions','omg_partition_coverage','omg_partition_bounds','omg_month_start','omg_next_month','omg_usage_aggregate','omg_usage_rows','omg_admin_tokens_revoke_owner','omg_admin_tokens_require_read_committed','omg_admin_tokens_require_owner_lock','valid_admin_token_scopes','valid_admin_token_allowlist','alert_webhook_summary','alert_webhook_payload','omg_report_prune_snapshots')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
+ IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units','valid_model_protocols_base','valid_cost_components_base','valid_price_lines_base','valid_upstream_job_id','rate_reserved_tokens','rate_contribution','omg_scope_key','omg_type_key','omg_scope_lock_audit_order','omg_lock_scopes','omg_admission_locks','omg_lock_scope_rows','omg_catalog_lock_mode','omg_scope_lock_exclusive','omg_config_bump','omg_lease_acquire','omg_lease_fence','omg_lease_complete','omg_lease_release','omg_ensure_partitions','omg_partition_coverage','omg_partition_bounds','omg_month_start','omg_next_month','omg_usage_aggregate','omg_usage_rows','omg_admin_tokens_revoke_owner','omg_admin_tokens_require_read_committed','omg_admin_tokens_require_owner_lock','valid_admin_token_scopes','valid_admin_token_allowlist','alert_webhook_summary','alert_webhook_payload','alert_delivery_lock_buckets','alert_delivery_recent_count','omg_report_prune_snapshots')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
  -- Change notifications (0028): seeded topics, forward-only versions, triggers present.
  IF has_table_privilege('gateway_runtime','public.config_versions','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.config_versions','topic','UPDATE') THEN RAISE EXCEPTION 'configuration topics mutable'; END IF;
  IF NOT has_table_privilege('gateway_runtime','public.config_versions','SELECT') OR NOT has_column_privilege('gateway_runtime','public.config_versions','version','UPDATE') THEN RAISE EXCEPTION 'configuration versions not maintainable by runtime'; END IF;
@@ -643,6 +646,10 @@ BEGIN
   INSERT INTO alert_deliveries(id,event_id,transition) VALUES(gen_random_uuid(),ev,'fired');
   IF EXISTS(SELECT 1 FROM alert_deliveries WHERE event_id=ev AND bucket_id<>ws) THEN RAISE EXCEPTION 'legacy insert missed workspace bucket'; END IF;
   BEGIN UPDATE alert_deliveries SET bucket_id=gen_random_uuid() WHERE event_id=ev; RAISE EXCEPTION 'delivery bucket rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  IF NOT EXISTS(SELECT FROM alert_deliveries WHERE event_id=ev AND quota_charged AND suppression_reason IS NULL) THEN RAISE EXCEPTION 'runtime generation admission not charged'; END IF;
+  BEGIN UPDATE alert_deliveries SET quota_charged=false WHERE event_id=ev; RAISE EXCEPTION 'quota refund allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE alert_deliveries SET suppression_reason=NULL WHERE event_id=ev; RAISE EXCEPTION 'suppression rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE alert_deliveries SET created_at=clock_timestamp()-interval '25 hours' WHERE event_id=ev; RAISE EXCEPTION 'generation clock rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   INSERT INTO alert_recipient_outbox(delivery_id,fingerprint) SELECT id,sha256('probe'::bytea) FROM alert_deliveries WHERE event_id=ev;
   UPDATE alert_deliveries SET initialized=true WHERE event_id=ev;
   UPDATE alert_recipient_outbox SET state='leased',attempt_count=1,lease_owner=gen_random_uuid(),lease_token=gen_random_uuid(),lease_expires_at=now()+interval '90 seconds' WHERE delivery_id IN(SELECT id FROM alert_deliveries WHERE event_id=ev);
@@ -665,6 +672,23 @@ BEGIN
   BEGIN INSERT INTO alert_rules(id,scope,workspace_id,kind,name,spike_factor_percent,min_spend_microusd) VALUES(gen_random_uuid(),'workspace',personal,'spend_spike','Personal rule',300,1); RAISE EXCEPTION 'personal alert rule allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN INSERT INTO alert_rules(id,scope,workspace_id,kind,name,window_minutes,consecutive_failures) VALUES(gen_random_uuid(),'workspace',ws,'provider_failing','Workspace upstream',15,3); RAISE EXCEPTION 'workspace connection rule allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN INSERT INTO alert_events(id,rule_id,builtin,kind,subject_key,level,severity,summary) VALUES(gen_random_uuid(),ar,'personal_budget','budget_threshold','x',1,'warning','x'); RAISE EXCEPTION 'ambiguous alert source allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  -- #101 C (0058): source-less incidents, one open per shared scope;
+  -- the personal aggregate contains no workspace identity. No new grants.
+  DECLARE aev uuid:=gen_random_uuid(); pev uuid:=gen_random_uuid(); envelope jsonb; BEGIN
+   INSERT INTO alert_events(id,kind,subject_key,workspace_id,level,severity,summary,details) VALUES(aev,'aged_unknown_hold','workspace:'||ws,ws,1,'warning','Holds with unknown cost are over 24 hours old','{"threshold_hours":24}');
+   BEGIN INSERT INTO alert_events(id,kind,subject_key,workspace_id,level,severity,summary,details) VALUES(gen_random_uuid(),'aged_unknown_hold','workspace:'||ws,ws,1,'warning','Holds with unknown cost are over 24 hours old','{"threshold_hours":24}'); RAISE EXCEPTION 'duplicate aged incident allowed'; EXCEPTION WHEN unique_violation THEN NULL; END;
+   BEGIN INSERT INTO alert_events(id,kind,subject_key,level,severity,summary,details) VALUES(gen_random_uuid(),'aged_unknown_hold','personal',3,'warning','x','{}'); RAISE EXCEPTION 'bad aged level allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+   BEGIN INSERT INTO alert_events(id,kind,subject_key,workspace_id,level,severity,summary,details) VALUES(gen_random_uuid(),'aged_unknown_hold','workspace:'||personal,personal,1,'warning','Holds with unknown cost are over 24 hours old','{"threshold_hours":24}'); RAISE EXCEPTION 'personal identity in aged incident'; EXCEPTION WHEN check_violation THEN NULL; END;
+   INSERT INTO alert_events(id,kind,subject_key,level,severity,summary,details) VALUES(pev,'aged_unknown_hold','personal',2,'critical','Holds with unknown cost are over 168 hours old','{"threshold_hours":168}');
+   IF alert_webhook_payload(gen_random_uuid(),aev,'fired') IS NOT NULL THEN RAISE EXCEPTION 'workspace aged incident exported'; END IF;
+   envelope=alert_webhook_payload(gen_random_uuid(),pev,'fired')::jsonb;
+   IF envelope IS NULL OR envelope->'event'->>'summary'<>'Holds with unknown cost need review' OR (SELECT count(*) FROM jsonb_object_keys(envelope->'event'))<>6 THEN RAISE EXCEPTION 'unsafe installation aged projection'; END IF;
+   IF alert_webhook_payload(gen_random_uuid(),pev,'resolved') IS NOT NULL THEN RAISE EXCEPTION 'resolved aged webhook allowed'; END IF;
+   PERFORM id FROM alert_events WHERE id=aev FOR UPDATE;
+   UPDATE alert_events SET resolved_at=clock_timestamp(),resolution='cleared' WHERE id=aev;
+   BEGIN UPDATE alert_events SET details='{}' WHERE id=aev; RAISE EXCEPTION 'aged details rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+   BEGIN DELETE FROM alert_events WHERE id=aev; RAISE EXCEPTION 'aged incident deletion allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  END;
   -- Key-expiry reminders (0049/#100): built in (no rule, no builtin label),
   -- permanent dedup, resolution never re-enables attribution UPDATE, and the
   -- scope trigger refuses a mismatched workspace.
@@ -1029,5 +1053,24 @@ BEGIN
   BEGIN INSERT INTO work_leases(name) VALUES('probe'); RAISE EXCEPTION 'lease creation allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   BEGIN DELETE FROM work_leases; RAISE EXCEPTION 'lease removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  END;
+END $$;
+-- 0059 executable admission probes, as runtime, on a fresh isolated bucket.
+DO $$ DECLARE ws uuid:=gen_random_uuid(); r uuid:=gen_random_uuid(); d uuid; suppressed_id uuid; BEGIN
+ INSERT INTO workspaces(id,name,kind) VALUES(ws,'Generation ACL probe','team');
+ INSERT INTO alert_rules(id,scope,workspace_id,kind,name,budget_layers,thresholds)
+  VALUES(r,'workspace',ws,'budget_threshold','Generation ACL probe',ARRAY['local'],ARRAY[100]);
+ WITH events AS (INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary)
+  SELECT gen_random_uuid(),r,'budget_threshold',i::text,100,'critical',ws,'Generation probe' FROM generate_series(1,101) i RETURNING id)
+ INSERT INTO alert_deliveries(id,event_id,transition) SELECT gen_random_uuid(),id,'fired' FROM events;
+ IF (SELECT count(*) FROM alert_deliveries WHERE bucket_id=ws AND quota_charged)<>100
+  OR (SELECT count(*) FROM alert_deliveries WHERE bucket_id=ws AND status='pending')<>100 THEN RAISE EXCEPTION 'runtime generation limit bypass'; END IF;
+ SELECT id INTO STRICT suppressed_id FROM alert_deliveries WHERE bucket_id=ws AND status='suppressed'
+  AND suppression_reason='workspace_generation_limit' AND NOT quota_charged AND recipients=0 AND attempt_count=0 AND completed_at IS NOT NULL;
+ SELECT id INTO STRICT d FROM alert_deliveries WHERE bucket_id=ws AND status='pending' LIMIT 1;
+ INSERT INTO alert_recipient_outbox(delivery_id,fingerprint) SELECT d,sha256(i::text::bytea) FROM generate_series(1,50) i;
+ BEGIN INSERT INTO alert_recipient_outbox(delivery_id,fingerprint) VALUES(d,sha256('51'::bytea)); RAISE EXCEPTION '51st alert recipient allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+ BEGIN INSERT INTO alert_recipient_outbox(delivery_id,fingerprint) VALUES(suppressed_id,sha256('suppressed'::bytea)); RAISE EXCEPTION 'suppressed recipient snapshot allowed'; EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'alert recipient snapshot already closed' THEN RAISE; END IF; END;
+ BEGIN UPDATE alert_deliveries SET quota_charged=false WHERE id=d; RAISE EXCEPTION 'runtime quota refund allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN UPDATE alert_deliveries SET suppression_reason=NULL WHERE id=suppressed_id; RAISE EXCEPTION 'runtime suppression rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
 END $$;
 ROLLBACK;

@@ -17,6 +17,8 @@ async fn db_collector_label_keys_match_golden(pool: sqlx::PgPool) {
         "gateway_reservations_held",
         "gateway_alert_email_deliveries",
         "gateway_report_email_recipients",
+        "gateway_alert_webhook_deliveries",
+        "gateway_alert_webhook_oldest_waiting_seconds",
         "gateway_alert_delivery_pending_buckets",
         "gateway_alert_delivery_oldest_pending_age_seconds",
     ] {
@@ -143,7 +145,8 @@ pub(crate) fn populated_registry() -> &'static Metrics {
     m.set_report_queue(0, false, 0);
     m.set_partition_months("requests", 2);
     m.observe_rollup_hours("new", 1);
-    // These five families are populated only by the DB refresh; prime their
+    m.observe_alert_webhook("sent");
+    // These seven families are populated only by the DB refresh; prime their
     // known state labels without requiring a DB for this characterization.
     m.pool_connections
         .get_or_create(&[("state", "idle".into())])
@@ -158,6 +161,10 @@ pub(crate) fn populated_registry() -> &'static Metrics {
     m.report_delivery_queue
         .get_or_create(&[("state", "waiting".into())])
         .set(0);
+    m.alert_webhook_queue
+        .get_or_create(&[("state", "waiting".into())])
+        .set(3);
+    m.alert_webhook_oldest.get_or_create(&[]).set(17);
     m.alert_pending_buckets.get_or_create(&[]).set(0);
     m.alert_oldest_pending_age.get_or_create(&[]).set(0);
     m
@@ -186,6 +193,7 @@ async fn prometheus_family_types_and_label_keys_match_golden() {
             observed.insert(name.clone());
             if let Some((_, rest)) = line.split_once('{') {
                 let (labels, _) = rest.split_once('}').unwrap();
+                // A populated Family<L0, Gauge> emits valid empty braces.
                 for label in labels.split(',').filter(|label| !label.is_empty()) {
                     let (key, _) = label.split_once('=').unwrap();
                     if key != "le" {

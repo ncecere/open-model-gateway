@@ -6,6 +6,9 @@ gateway_alert_email_attempts counter outcome Traffic
 gateway_alert_email_deliveries gauge state Traffic
 gateway_alert_evaluations counter result System
 gateway_alert_rule_failures counter - System
+gateway_alert_webhook_attempts counter outcome Traffic
+gateway_alert_webhook_deliveries gauge state Traffic
+gateway_alert_webhook_oldest_waiting_seconds gauge - Traffic
 gateway_audit_export_deliveries counter outcome System
 gateway_audit_export_oldest_seconds gauge - System
 gateway_audit_export_queued gauge - System
