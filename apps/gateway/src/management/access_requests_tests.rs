@@ -1,5 +1,7 @@
 //! Membership requests: disposable real PostgreSQL, no mocked authorization queries.
 use super::*;
+#[path = "access_requests_review_tests.rs"]
+mod review;
 
 async fn discover(pool: &PgPool, ws: Uuid) {
     sqlx::query("UPDATE workspaces SET discoverable=true WHERE id=$1")

@@ -656,6 +656,19 @@ mod tests {
         let (first, second) = tokio::join!(store.migrate_enterprise(), store.migrate_enterprise());
         first.unwrap();
         second.unwrap();
+        // The current schema (including 0066) must survive a fresh migration,
+        // startup preflight and a later migrate, not just SQLx's test setup.
+        for relation in ["access_requests", "access_request_applications"] {
+            assert!(
+                sqlx::query_scalar::<_, bool>("SELECT to_regclass($1) IS NOT NULL")
+                    .bind(relation)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+            );
+        }
+        store.preflight_enterprise().await.unwrap();
+        store.migrate_enterprise().await.unwrap();
         assert!(store.is_ready().await);
         sqlx::query("UPDATE _sqlx_migrations SET checksum='\\x00'::bytea")
             .execute(&pool)

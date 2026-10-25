@@ -22,10 +22,24 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         .execute(&mut *connection).await.unwrap();
     // The same embedded files and code path as `open-model-gateway grants apply|verify`.
     let store = open_model_gateway::store::Store::new(pool.clone());
+    // Real operator/startup chain, including every embedded migration (0066).
+    // This used to fail before grants: 0066's tables were missing from preflight.
+    store.migrate_enterprise().await.unwrap();
+    store.preflight_enterprise().await.unwrap();
     store.apply_runtime_grants().await.unwrap();
     // Idempotent: reapplying after every migration must succeed.
     store.apply_runtime_grants().await.unwrap();
     store.verify_runtime_grants().await.unwrap();
+    assert!(
+        store.is_ready().await,
+        "migrate → grants → startup readiness"
+    );
+    store.migrate_enterprise().await.unwrap(); // subsequent upgrades must preflight too
+    let runtime_startup = runtime_pool(&pool).await;
+    let runtime_store = open_model_gateway::store::Store::new(runtime_startup.clone());
+    runtime_store.preflight_enterprise().await.unwrap();
+    assert!(runtime_store.is_ready().await);
+    runtime_startup.close().await;
     for table in [
         "users",
         "api_keys",
@@ -123,11 +137,50 @@ async fn access_requests_run_as_runtime(pool: &PgPool) {
         .execute(&mut *tx)
         .await
         .unwrap();
+    let hold = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO legal_holds(id,workspace_id,reference) VALUES($1,$2,'RUNTIME-REQUEST-HOLD')",
+    )
+    .bind(hold)
+    .bind(ws)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
     sqlx::query("UPDATE users SET cleaned_at=now(),disabled_at=now() WHERE id=$1")
         .bind(requester)
         .execute(&mut *tx)
         .await
         .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT scrub_access_request_reasons()")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap(),
+        0,
+        "active hold wins"
+    );
+    assert!(
+        sqlx::query_scalar::<_, Option<String>>("SELECT reason FROM access_requests WHERE id=$1")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    sqlx::query("UPDATE legal_holds SET released_at=now(),released_by_user_id=$2 WHERE id=$1")
+        .bind(hold)
+        .bind(decider)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT scrub_access_request_reasons()")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap(),
+        1,
+        "runtime can resume bounded cleanup after release"
+    );
     assert_eq!(
         sqlx::query_scalar::<_, Option<String>>("SELECT reason FROM access_requests WHERE id=$1")
             .bind(id)
