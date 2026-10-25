@@ -273,7 +273,6 @@ fn error_body(e: InferenceError) -> Value {
 }
 pub(super) fn status(e: InferenceError) -> StatusCode {
     match e {
-        InferenceError::Unsupported => StatusCode::BAD_REQUEST,
         InferenceError::UpstreamUnavailable
         | InferenceError::Overloaded
         | InferenceError::RouteCoolingDown(_) => StatusCode::from_u16(529).unwrap(),

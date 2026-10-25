@@ -280,8 +280,10 @@ async fn messages_errors_are_anthropic_bounded_and_have_correct_status() {
             "image",
         ),
         (
+            // No deployment serves the request: a gateway configuration
+            // answer, kept as 501 as on every protocol.
             InferenceError::Unsupported,
-            400,
+            501,
             "invalid_request_error",
             InferenceError::Unsupported.message(),
         ),
