@@ -884,6 +884,10 @@ fn verify_receipt(
             "gateway_background_runs",
             "gateway_history_partition_months_ahead",
             "gateway_work_lease_terms",
+            // #102: set only by the leased report scheduler's bounded check.
+            "gateway_report_due_backlog",
+            "gateway_report_due_backlog_capped",
+            "gateway_report_oldest_due_lag_seconds",
         ] {
             assert!(
                 expected_system.remove(lease_dependent),
