@@ -65,7 +65,7 @@ export const attemptStatuses = ["succeeded", "failed", "cancelled", "indetermina
 export type ListStatus = typeof listStatuses[number];
 export const rangePresets = ["today", "7d", "30d", "90d", "month", "custom"] as const;
 export type RangePreset = typeof rangePresets[number];
-export const dashboardTabs = ["alerts", "rules", "history", "overview", "members", "invitations", "models", "policy", "audit", "service-accounts", "settings", "deployments", "pricing", "routing", "limits", "catalogs", "model-access", "groups", "roles", "general", "effective", "local", "inherited", "installation", "personal", "team", "project", "costs", "keys", "routes", "availability", "workspaces", "explore", "records", "chart", "holds", "activity", "defaults", "requests", "generations", "sessions", "batches", "access"] as const;
+export const dashboardTabs = ["alerts", "rules", "history", "webhooks", "overview", "members", "invitations", "models", "policy", "audit", "service-accounts", "settings", "deployments", "pricing", "routing", "limits", "catalogs", "model-access", "groups", "roles", "general", "effective", "local", "inherited", "installation", "personal", "team", "project", "costs", "keys", "routes", "availability", "workspaces", "explore", "records", "chart", "holds", "activity", "defaults", "requests", "generations", "sessions", "batches", "access"] as const;
 export const identifier = (value: unknown) => typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._~-]{0,127}$/.test(value) ? value : undefined;
 export function dashboardSearch(search: Record<string, unknown>): DashboardSearch {
   const result: DashboardSearch = { ws: identifier(search.ws), page: typeof search.page === "string" && pages.includes(search.page as Page) ? search.page as Page : undefined };
