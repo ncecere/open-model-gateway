@@ -3,7 +3,7 @@
 # production image. Build from the repository root:
 #   docker build -f deploy/loadtest/Dockerfile -t omg-loadtest:local .
 # No Docker Hub pulls (docs/verification.md): Google's mirror and distroless.
-FROM mirror.gcr.io/library/rust:1.99.0-bookworm@sha256:114c7a4425406451c2866b6aafe69fe29b1b298832db1277d411ac73c82d04d6 AS build
+FROM mirror.gcr.io/library/rust:1.99.1-bookworm@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8 AS build
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY apps/gateway/ apps/gateway/

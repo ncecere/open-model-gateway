@@ -346,9 +346,11 @@ test("every workflow action is pinned to a commit SHA with a version comment", (
 });
 
 test("every Dockerfile base image is pinned by digest", () => {
+  const files = allDockerfiles();
+  assert.ok(files.length >= 2, "expected to find the root and deploy/loadtest Dockerfiles");
   const unpinned = [];
-  for (const file of ["Dockerfile", "deploy/loadtest/Dockerfile"]) {
-    readFileSync(join(root, file), "utf8").split("\n").forEach((line, i) => {
+  for (const { file, text } of files) {
+    text.split("\n").forEach((line, i) => {
       const m = line.match(/^FROM\s+(\S+)/i);
       if (m && !/@sha256:[0-9a-f]{64}$/.test(m[1])) unpinned.push(`${file}:${i + 1} ${m[1]}`);
     });
@@ -358,27 +360,94 @@ test("every Dockerfile base image is pinned by digest", () => {
 
 // ---- Rust toolchain pin (#354) ----
 //
-// rust-toolchain.toml, every `dtolnay/rust-toolchain` step's `toolchain:` input and the
-// Dockerfile's `rust:<version>-bookworm` build stage must all name the same exact version.
-// A floating channel (`stable`, `beta`, `nightly`, with or without a date) anywhere here
-// defeats the whole point: CI would no longer compile with the same compiler as local gates
-// and release builds (PR #348's local-pass/CI-fail divergence).
+// rust-toolchain.toml, every Rust build stage in every Dockerfile, and every
+// `dtolnay/rust-toolchain` step's `toolchain:` input must all name the same exact version,
+// and nothing in a workflow may override the pin at run time. A floating channel (`stable`,
+// `beta`, `nightly`, with or without a date) or an override (`RUSTUP_TOOLCHAIN`, `rustup
+// default|override|toolchain install`, `cargo +<toolchain>`) anywhere defeats the whole
+// point: CI would no longer compile with the same compiler as local gates and release
+// builds (PR #348's local-pass/CI-fail divergence).
 
 const FLOATING_RUST_CHANNEL = /^(stable|beta|nightly)(-\d{4}-\d{2}-\d{2})?$/i;
+
+// Minimal, strict parser for rust-toolchain.toml's [toolchain] table only (there is no TOML
+// dependency in this repository). It refuses anything the file does not actually use
+// (a second [toolchain] table, unquoted/multi-line values, an unexpected key, a
+// non-flat-array components/targets value) instead of silently ignoring it.
+export function parseToolchainToml(text) {
+  const lines = text.split("\n").map(l => l.replace(/#.*$/, "").trim()).filter(Boolean);
+  const start = lines.indexOf("[toolchain]");
+  if (start === -1) throw new Error("rust-toolchain.toml has no [toolchain] table");
+  if (lines.indexOf("[toolchain]", start + 1) !== -1) throw new Error("rust-toolchain.toml has more than one [toolchain] table");
+  const table = {};
+  for (let i = start + 1; i < lines.length && !lines[i].startsWith("["); i++) {
+    const m = lines[i].match(/^(\w+)\s*=\s*(.+)$/);
+    if (!m) throw new Error(`rust-toolchain.toml: unparseable line in [toolchain]: ${lines[i]}`);
+    const [, key, raw] = m;
+    if (key === "channel" || key === "profile") {
+      const sm = raw.match(/^"([^"]*)"$/);
+      if (!sm) throw new Error(`rust-toolchain.toml: ${key} must be a plain quoted string, got: ${raw}`);
+      table[key] = sm[1];
+    } else if (key === "components" || key === "targets") {
+      const am = raw.match(/^\[\s*((?:"[^"]*"\s*,?\s*)*)\]$/);
+      if (!am) throw new Error(`rust-toolchain.toml: ${key} must be a flat array of quoted strings, got: ${raw}`);
+      table[key] = [...am[1].matchAll(/"([^"]*)"/g)].map(mm => mm[1]);
+    } else {
+      throw new Error(`rust-toolchain.toml: unexpected key in [toolchain]: ${key}`);
+    }
+  }
+  if (!("channel" in table)) throw new Error("rust-toolchain.toml: [toolchain] has no channel");
+  return table;
+}
 
 function readRustToolchainChannel() {
   const text = readLocalFromRepo("rust-toolchain.toml");
   if (text === null) throw new Error("rust-toolchain.toml is missing");
-  const m = text.match(/^\s*channel\s*=\s*"([^"]+)"\s*$/m);
-  if (!m) throw new Error('rust-toolchain.toml has no channel = "..." line');
-  return m[1];
+  return parseToolchainToml(text).channel;
 }
 
-function readDockerfileRustVersion(file) {
-  const text = readFileSync(join(root, file), "utf8");
-  const m = text.match(/FROM\s+\S*\/library\/rust:(\d+\.\d+\.\d+)-bookworm@sha256:[0-9a-f]{64}/);
-  if (!m) throw new Error(`${file}: no pinned rust:<version>-bookworm base image found`);
-  return m[1];
+// Every `Dockerfile` anywhere in the repository (not a fixed list), skipping directories
+// that are never source: VCS internals, dependency/build output.
+const DOCKERFILE_SKIP_DIRS = /^(\.git|node_modules|target.*|dist|\.turbo)$/;
+export function findDockerfiles(dir = root) {
+  const out = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (e.isDirectory()) {
+      if (DOCKERFILE_SKIP_DIRS.test(e.name)) continue;
+      out.push(...findDockerfiles(join(dir, e.name)));
+    } else if (e.name === "Dockerfile") {
+      out.push(join(dir, e.name));
+    }
+  }
+  return out;
+}
+const allDockerfiles = () => findDockerfiles().map(p => ({ file: p.slice(root.length), text: readFileSync(p, "utf8") }));
+
+// Every `FROM mirror.gcr.io/library/rust:<version>-bookworm@sha256:<digest>` line in one
+// Dockerfile's text (every build stage, not just the first match).
+export function parseDockerfileRustStages(file, text) {
+  const out = [];
+  text.split("\n").forEach((line, i) => {
+    const m = line.match(/^FROM\s+(\S+)/i);
+    if (!m) return;
+    const rm = m[1].match(/\/library\/rust:(\d+\.\d+\.\d+)-bookworm@sha256:([0-9a-f]{64})$/);
+    if (rm) out.push({ file, line: i + 1, version: rm[1], digest: rm[2] });
+  });
+  return out;
+}
+
+// Every Rust stage must pin the same version as rust-toolchain.toml, and every Dockerfile
+// pinning that same version must pin the identical digest (it is the same published image).
+export function rustVersionViolations(stages, channel) {
+  const out = [];
+  const digestByVersion = new Map();
+  for (const s of stages) {
+    if (s.version !== channel) out.push(`${s.file}:${s.line}: pins rust ${s.version}-bookworm, rust-toolchain.toml pins ${channel}`);
+    const seen = digestByVersion.get(s.version);
+    if (seen === undefined) digestByVersion.set(s.version, s.digest);
+    else if (seen !== s.digest) out.push(`${s.file}:${s.line}: digest ${s.digest} for rust:${s.version}-bookworm disagrees with another Dockerfile's ${seen}`);
+  }
+  return out;
 }
 
 // Every `dtolnay/rust-toolchain` step anywhere (workflow jobs and composite action `runs`),
@@ -403,13 +472,14 @@ function dtolnayToolchainSteps() {
   return found;
 }
 
-test("rust-toolchain.toml, every dtolnay/rust-toolchain step and the Dockerfile pin the same exact Rust version (#354)", () => {
+test("rust-toolchain.toml, every Dockerfile's Rust build stage and every dtolnay/rust-toolchain step pin the same exact version (#354)", () => {
   const channel = readRustToolchainChannel();
   assert.match(channel, /^\d+\.\d+\.\d+$/, "rust-toolchain.toml channel must be an exact x.y.z version, not a floating channel");
   assert.doesNotMatch(channel, FLOATING_RUST_CHANNEL, "rust-toolchain.toml channel must not float");
 
-  const dockerfileVersion = readDockerfileRustVersion("Dockerfile");
-  assert.equal(dockerfileVersion, channel, `Dockerfile pins rust:${dockerfileVersion}-bookworm, which disagrees with rust-toolchain.toml's ${channel}`);
+  const stages = allDockerfiles().flatMap(({ file, text }) => parseDockerfileRustStages(file, text));
+  assert.ok(stages.length >= 2, "expected a rust:<version>-bookworm stage in both the root and deploy/loadtest Dockerfiles");
+  assert.deepEqual(rustVersionViolations(stages, channel), []);
 
   const steps = dtolnayToolchainSteps();
   assert.ok(steps.length > 0, "expected at least one dtolnay/rust-toolchain step in the workflows");
@@ -437,6 +507,98 @@ test("no dtolnay/rust-toolchain reference carries a floating-channel version com
       },
     });
   }
+});
+
+// Structural checks above require the pin and catch disagreement; these catch a workflow
+// (or local composite action) separately overriding it at run time, even though the pinned
+// step itself is correct.
+function envRustOverrides(file, env, where) {
+  if (env && typeof env === "object" && "RUSTUP_TOOLCHAIN" in env) return [`${file}: ${where} sets RUSTUP_TOOLCHAIN, which can override the pinned toolchain`];
+  return [];
+}
+
+function runRustOverrides(file, where, script) {
+  const out = [];
+  const joined = script.replace(/^[ \t]*#.*$/gm, "");
+  if (/\bRUSTUP_TOOLCHAIN\b/.test(joined)) out.push(`${file}: ${where} references RUSTUP_TOOLCHAIN`);
+  if (/\brustup\s+(default|override\s+set|toolchain\s+install)\b/.test(joined)) out.push(`${file}: ${where} runs a rustup command that can select an unpinned toolchain`);
+  if (/\bcargo\s+\+\S/.test(joined)) out.push(`${file}: ${where} invokes 'cargo +<toolchain>', bypassing the pin`);
+  return out;
+}
+
+function withToolchainOverrides(file, where, withBlock, channel) {
+  if (!withBlock || typeof withBlock !== "object" || !("toolchain" in withBlock)) return [];
+  const v = String(withBlock.toolchain ?? "");
+  if (FLOATING_RUST_CHANNEL.test(v) || v !== channel) return [`${file}: ${where} sets toolchain '${v}', which disagrees with the pinned ${channel}`];
+  return [];
+}
+
+export function allRustOverrideViolations(files, channel) {
+  const out = [];
+  for (const { file, text } of files.filter(f => f.file.includes("workflows/") || f.file.includes("actions/"))) {
+    const data = toData(parseStrict(text, file));
+    out.push(...envRustOverrides(file, data.env, "workflow env"));
+    for (const [name, job] of jobsOf(data)) {
+      out.push(...envRustOverrides(file, job.env, `job '${name}' env`));
+      stepsOf(job).forEach((step, i) => {
+        out.push(...envRustOverrides(file, step.env, `job '${name}' step ${i + 1} env`));
+        out.push(...withToolchainOverrides(file, `job '${name}' step ${i + 1}`, step.with, channel));
+        if (typeof step.run === "string") out.push(...runRustOverrides(file, `job '${name}' step ${i + 1}`, step.run));
+      });
+    }
+    stepsOf(data.runs).forEach((step, i) => {
+      out.push(...envRustOverrides(file, step.env, `composite step ${i + 1} env`));
+      out.push(...withToolchainOverrides(file, `composite step ${i + 1}`, step.with, channel));
+      if (typeof step.run === "string") out.push(...runRustOverrides(file, `composite step ${i + 1}`, step.run));
+    });
+  }
+  return out;
+}
+
+test("no workflow or local composite action overrides the pinned Rust toolchain at run time (#354)", () => {
+  const channel = readRustToolchainChannel();
+  assert.deepEqual(allRustOverrideViolations(repoFiles(), channel), []);
+});
+
+// ---- fixtures: each override/mismatch kind above must actually be caught ----
+
+test("fixtures: the strict rust-toolchain.toml parser fails closed on unexpected shape", () => {
+  assert.throws(() => parseToolchainToml('[toolchain]\nchannel = stable\n'), /quoted string/);
+  assert.throws(() => parseToolchainToml('[toolchain]\nchannel = "stable"\nextra = 1\n'), /unexpected key/);
+  assert.throws(() => parseToolchainToml('[toolchain]\n[toolchain]\nchannel = "1.99.1"\n'), /more than one/);
+  assert.throws(() => parseToolchainToml('channel = "1.99.1"\n'), /no \[toolchain\]/);
+  assert.throws(() => parseToolchainToml('[toolchain]\ncomponents = [rustfmt]\nchannel = "1.99.1"\n'), /flat array/);
+  assert.throws(() => parseToolchainToml('[toolchain]\nprofile = minimal\nchannel = "1.99.1"\n'), /quoted string/);
+  assert.doesNotThrow(() => parseToolchainToml('[toolchain]\nchannel = "1.99.1"\ncomponents = ["rustfmt", "clippy"]\n'));
+});
+
+test("fixtures: mismatched Rust build-stage versions and digests across Dockerfiles are caught", () => {
+  const stageIn = (file, ref) => parseDockerfileRustStages(file, `FROM mirror.gcr.io/library/rust:${ref} AS build\n`);
+  const a = stageIn("A/Dockerfile", `1.99.1-bookworm@sha256:${"a".repeat(64)}`);
+  const sameVersionDiffDigest = stageIn("B/Dockerfile", `1.99.1-bookworm@sha256:${"b".repeat(64)}`);
+  const wrongVersion = stageIn("C/Dockerfile", `1.98.0-bookworm@sha256:${"a".repeat(64)}`);
+  assert.equal(rustVersionViolations([...a, ...sameVersionDiffDigest], "1.99.1").length, 1, "same version, different digest must be caught");
+  assert.equal(rustVersionViolations([...a, ...wrongVersion], "1.99.1").length, 1, "wrong version must be caught");
+  assert.equal(rustVersionViolations([...a], "1.99.1").length, 0, "one matching stage passes");
+  assert.equal(rustVersionViolations([...a, ...stageIn("B/Dockerfile", `1.99.1-bookworm@sha256:${"a".repeat(64)}`)], "1.99.1").length, 0, "two Dockerfiles pinning the identical tag and digest pass");
+});
+
+test("fixtures: Rust toolchain overrides are caught, without false-positiving on unrelated 'stable' tags", () => {
+  const channel = "1.99.1";
+  const SHA1 = "a".repeat(40);
+  const wf = steps => [{ file: "fixture.yml", text: `name: f\non: push\njobs:\n  j:\n    runs-on: ubuntu-24.04\n    steps:\n${steps}` }];
+
+  assert.equal(allRustOverrideViolations(wf(`      - run: echo hi\n        env:\n          RUSTUP_TOOLCHAIN: stable\n`), channel).length, 1, "RUSTUP_TOOLCHAIN env");
+  assert.equal(allRustOverrideViolations(wf(`      - run: rustup default stable\n`), channel).length, 1, "rustup default");
+  assert.equal(allRustOverrideViolations(wf(`      - run: rustup toolchain install nightly\n`), channel).length, 1, "rustup toolchain install");
+  assert.equal(allRustOverrideViolations(wf(`      - run: rustup override set beta\n`), channel).length, 1, "rustup override set");
+  assert.equal(allRustOverrideViolations(wf(`      - run: cargo +nightly test\n`), channel).length, 1, "cargo +toolchain");
+  assert.equal(allRustOverrideViolations(wf(`      - uses: dtolnay/rust-toolchain@${SHA1} # stable\n        with:\n          toolchain: stable\n`), channel).length, 1, "floating toolchain input");
+  assert.equal(allRustOverrideViolations(wf(`      - uses: dtolnay/rust-toolchain@${SHA1} # 1.98.0\n        with:\n          toolchain: "1.98.0"\n`), channel).length, 1, "wrong exact toolchain input");
+  // Correctly pinned, and unrelated commands/tags, must not false-positive.
+  assert.deepEqual(allRustOverrideViolations(wf(`      - uses: dtolnay/rust-toolchain@${SHA1} # 1.99.1\n        with:\n          toolchain: "1.99.1"\n`), channel), []);
+  assert.deepEqual(allRustOverrideViolations(wf(`      - run: echo hi\n`), channel), []);
+  assert.deepEqual(allRustOverrideViolations(wf(`      - uses: docker/setup-buildx-action@${SHA1} # v4\n        with:\n          driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1@sha256:${"c".repeat(64)}\n`), channel), []);
 });
 
 test("jobs that can write use only allowlisted actions (#194)", () => {
