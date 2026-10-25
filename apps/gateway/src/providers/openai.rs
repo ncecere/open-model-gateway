@@ -641,6 +641,7 @@ fn decode_shape(value: &Value, profile: Option<&str>, messages: bool) -> Result<
         }
     }
     Ok(ChatResponse {
+        messages_content: None,
         content,
         tool_calls,
         finish_reason: finish(&choice["finish_reason"])?,

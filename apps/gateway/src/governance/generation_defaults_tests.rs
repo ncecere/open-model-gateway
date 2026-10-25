@@ -221,6 +221,7 @@ impl ProviderAdapter for Recording {
             ])))
         } else {
             ProviderOutput::Complete(ChatResponse {
+                messages_content: None,
                 content: Some("ok".into()),
                 tool_calls: vec![],
                 finish_reason: FinishReason::Stop,
@@ -360,6 +361,7 @@ impl ProviderAdapter for CeilingSensitive {
     ) -> Result<ProviderOutput, InferenceError> {
         self.seen.lock().unwrap().push(request.max_output_tokens);
         Ok(ProviderOutput::Complete(ChatResponse {
+            messages_content: None,
             content: Some("ok".into()),
             tool_calls: vec![],
             finish_reason: FinishReason::Stop,

@@ -898,6 +898,21 @@ pub struct Changes {
     pub resolved: usize,
 }
 
+/// Prelock the complete bucket union before any incident row locks/writes.
+/// SQL sorts actual signed advisory keys (UUID order is not lock-key order).
+/// All multi-bucket producers (rules, key expiry and aged holds) use this
+/// before incident writes, never incrementally per condition.
+pub(crate) async fn lock_delivery_buckets(
+    tx: &mut Transaction<'_, Postgres>,
+    buckets: &[Uuid],
+) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT alert_delivery_lock_buckets($1)")
+        .bind(buckets)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
 /// Apply `conditions` to the open incidents of `source`: fire new subjects,
 /// resolve cleared ones, supersede changed levels. Idempotent.
 async fn reconcile(
@@ -906,6 +921,16 @@ async fn reconcile(
     kind: Kind,
     conditions: Vec<Condition>,
 ) -> Result<Changes, sqlx::Error> {
+    // Include cleared subjects as well as new conditions; sorting conditions
+    // alone would miss a bucket whose only transition this tick is clearing.
+    let mut buckets: Vec<Uuid> = sqlx::query_scalar("SELECT coalesce(workspace_id,'00000000-0000-0000-0000-000000000000'::uuid) FROM alert_events WHERE resolved_at IS NULL AND rule_id IS NOT DISTINCT FROM $1 AND builtin IS NOT DISTINCT FROM $2")
+        .bind(source.rule()).bind(source.builtin()).fetch_all(&mut **tx).await?;
+    buckets.extend(
+        conditions
+            .iter()
+            .map(|c| c.workspace_id.unwrap_or(Uuid::nil())),
+    );
+    lock_delivery_buckets(tx, &buckets).await?;
     let open: Vec<(Uuid, String, i32)> = sqlx::query_as("SELECT id,subject_key,level FROM alert_events WHERE resolved_at IS NULL AND rule_id IS NOT DISTINCT FROM $1 AND builtin IS NOT DISTINCT FROM $2 FOR UPDATE")
         .bind(source.rule())
         .bind(source.builtin())
@@ -1059,12 +1084,6 @@ pub(crate) async fn key_expiring_tick(
     now: DateTime<Utc>,
 ) -> Result<Changes, sqlx::Error> {
     let mut changes = Changes::default();
-    changes.resolved += sqlx::query(KEY_EXPIRY_RETIRE)
-        .bind(now)
-        .bind(KEY_EXPIRY_PROGRESS)
-        .execute(&mut **tx)
-        .await?
-        .rows_affected() as usize;
     // Apply each workspace's remaining allowance BEFORE the global LIMIT:
     // even an earlier-expiring backlog cannot fill the tick with skipped rows.
     // Resolved incidents still count, and no dedup row is written for excess keys.
@@ -1083,6 +1102,16 @@ pub(crate) async fn key_expiring_tick(
         .bind(KEY_EXPIRY_PROGRESS)
         .fetch_all(&mut **tx)
         .await?;
+    let buckets: Vec<Uuid> = candidates.iter().map(|c| c.2).collect();
+    lock_delivery_buckets(tx, &buckets).await?;
+    // Retiring still precedes inserts (urgent reminders need the open slot),
+    // but all bucket locks now precede these incident writes too.
+    changes.resolved += sqlx::query(KEY_EXPIRY_RETIRE)
+        .bind(now)
+        .bind(KEY_EXPIRY_PROGRESS)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected() as usize;
     for (key_id, expires_at, workspace_id, threshold) in candidates {
         let id = Uuid::new_v4();
         let plural = if threshold == 1 { "" } else { "s" };
@@ -1304,6 +1333,7 @@ pub(crate) async fn fire_scim_last_admin(
     tx: &mut Transaction<'_, Postgres>,
     resource: &str,
 ) -> Result<bool, sqlx::Error> {
+    lock_delivery_buckets(tx, &[Uuid::nil()]).await?;
     let id = Uuid::new_v4();
     let inserted = sqlx::query("INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,summary,details) VALUES($1,$2,$2,$2,1,'critical',$3,jsonb_build_object('resource',$4::text)) ON CONFLICT DO NOTHING")
         .bind(id)
@@ -1326,6 +1356,7 @@ pub(crate) async fn fire_scim_last_admin(
 /// The SCIM last-admin incident clears once a second active Platform Admin
 /// exists (the installation is no longer one SCIM change away from lockout).
 async fn resolve_scim_last_admin(tx: &mut Transaction<'_, Postgres>) -> Result<usize, sqlx::Error> {
+    lock_delivery_buckets(tx, &[Uuid::nil()]).await?;
     let open: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM alert_events WHERE builtin=$1 AND resolved_at IS NULL AND (SELECT count(*) FROM effective_platform_roles WHERE role='admin')>=2 FOR UPDATE")
         .bind(SCIM_LAST_ADMIN)
         .fetch_all(&mut **tx)

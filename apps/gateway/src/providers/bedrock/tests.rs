@@ -432,6 +432,7 @@ async fn tools_json_and_stream_tool_indices_usage_after_finish() {
                 order.push("usage");
             }
             ChatEvent::Done => order.push("done"),
+            ChatEvent::MessagesBlock(_) => panic!("native Anthropic event on Converse"),
         }
     }
     assert_eq!(starts, 1);

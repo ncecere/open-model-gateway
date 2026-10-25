@@ -7,14 +7,14 @@
 //!   `ended`; delete: `DELETE …/{id}`.
 //!
 //! Lines are encoded with the same canonical translation as interactive
-//! requests (`super::encode`) and results decoded with `super::decode`.
+//! requests (`super::encode`) and results decoded with `super::decode_for`.
 //! Upstream `custom_id`s are the gateway's `l<n>`; error messages are never
 //! read (codes only); bodies are never logged.
 use axum::body::Bytes;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 
-use super::{AnthropicAdapter, decode, encode};
+use super::{AnthropicAdapter, decode_for, encode};
 use crate::{
     inference::{error::InferenceError, types::Deployment},
     jobs::types::*,
@@ -54,6 +54,15 @@ pub(super) fn encode_native_line(
     };
     if !endpoint.is_generation() || r.stream {
         return Err(InferenceError::InvalidRequest);
+    }
+    // Native batch plans aggregate maxima, not request TTL requirements. Force
+    // cache-enabled lines onto the gateway-run path, whose per-line admission
+    // checks the pinned TTL price before creating a reservation or dispatching.
+    if r.messages_options
+        .as_ref()
+        .is_some_and(|o| !o.cache_controls.is_empty())
+    {
+        return Err(InferenceError::InvalidField("cache_control"));
     }
     let mut params = encode(&target.upstream_model, r)?;
     // Batch params never stream.
@@ -266,9 +275,10 @@ pub(super) fn decode_native_result(endpoint: BatchEndpoint, line: &[u8]) -> Resu
         .to_owned();
     let result = &value["result"];
     let outcome = match result["type"].as_str() {
-        Some("succeeded") => {
-            NativeOutcome::Succeeded(Box::new(BatchResponse::Chat(decode(&result["message"])?)))
-        }
+        Some("succeeded") => NativeOutcome::Succeeded(Box::new(BatchResponse::Chat(decode_for(
+            &result["message"],
+            matches!(endpoint, BatchEndpoint::Messages),
+        )?))),
         Some("errored") => {
             let error = &result["error"]["error"];
             let code = error["type"].as_str().unwrap_or("");
