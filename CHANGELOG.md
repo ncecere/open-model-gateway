@@ -6,7 +6,11 @@ The project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). 
 
 ## [Unreleased]
 
-Changes after v0.8.0: [unreleased notes](docs/releases/unreleased.md).
+Changes after v0.9.0: [unreleased notes](docs/releases/unreleased.md).
+
+## [0.9.0]
+
+Scheduled cost reports, signed alert webhooks, fair and bounded alert dispatch, aged unknown-hold alerts, OTLP metrics and operational logs, and the Claude Code field grammar on native Anthropic routes. Scheduled cost reports (#102): weekly/monthly schedules for installation, cost-center, Team/Project and personal scopes, bounded aggregate generation and link-only email delivery, authorized report reads and aggregate CSV. Saved, HMAC-signed alert webhooks with a dashboard (#45). Bounded API-key issuance (#253) and fair per-workspace alert email dispatch (#253, #277). Built-in aged unknown-hold alerts with Platform-Admin email (#101). Opt-in OTLP metrics (#99) and OTLP operational logs (#294). Claude Code Messages field grammar and native Anthropic fidelity (#70). Deployment configuration history and change-impact previews (#86, #85). OIDC group-mapping preview (#89). Self-service Team/Project membership requests (#83, slice A). Provider-reported cost reconciliation against uploaded Anthropic Cost Report JSON (#48, first slice). A drift-checked management OpenAPI contract skeleton (#81, PR1). **Breaking:** local-upstream approvals in special-use address ranges are now refused at startup instead of only warning (#203); development-only plain-HTTP telemetry/audit exports are now loopback-only after DNS resolution (#313); another owner's personal workspace now returns a consistent `404` on workspace-scoped management routes (#282); `grants apply` now revokes `TEMPORARY` from `PUBLIC` and the runtime role (#295); fresh chart-managed CNPG installs restrict database ACLs, with a documented remediation for existing clusters (#315). **Migrations `0053` to `0067`** (schema now 0067): apply `migrate` then `grants apply` explicitly; stop older alert evaluators before `0059` and every older replica before `0067`. Rust toolchain pinned to 1.99.1 (#354). See [release and upgrade notes](docs/releases/v0.9.0.md), which cover upgrades from v0.8.0.
 
 ## [0.8.0]
 
@@ -62,7 +66,8 @@ Alerts, key safety, model compare, SCIM, JWKS refresh, metrics and backup toolin
 
 The single-enterprise rebuild: Team, Project and personal workspaces, OIDC platform roles, catalogs, multimodal workloads across five provider families, immutable micro-USD accounting, logs and Admin settings. Migrations `0001` to `0010`. Notes: [`docs/releases/v0.1.0.md`](docs/releases/v0.1.0.md).
 
-[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/ncecere/open-model-gateway/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/ncecere/open-model-gateway/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/ncecere/open-model-gateway/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/ncecere/open-model-gateway/compare/v0.7.0...v0.7.1
