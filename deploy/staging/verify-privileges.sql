@@ -72,6 +72,7 @@ DO $$ DECLARE r record; t text; BEGIN
  IF has_table_privilege('gateway_runtime','public.scim_state','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.scim_state','singleton','UPDATE') THEN RAISE EXCEPTION 'scim state row replaceable'; END IF;
  -- Scheduled reports (0061/0063/0065): configuration, publication and shared delivery.
  IF NOT has_column_privilege('gateway_runtime','public.alert_deliveries','report_run_id','INSERT') OR has_column_privilege('gateway_runtime','public.alert_deliveries','report_run_id','UPDATE') THEN RAISE EXCEPTION 'report delivery lineage ACL'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgrelid='public.alert_deliveries'::regclass AND tgname IN ('alert_delivery_set_bucket','alert_delivery_report_bucket','alert_delivery_generation_immutable') AND tgenabled='O' AND NOT tgisinternal)<>3 THEN RAISE EXCEPTION 'report/alert generation guards missing or disabled'; END IF;
  IF NOT EXISTS(SELECT FROM pg_constraint WHERE conrelid='public.alert_deliveries'::regclass AND conname='alert_deliveries_source' AND convalidated) OR NOT EXISTS(SELECT FROM pg_constraint WHERE conrelid='public.alert_deliveries'::regclass AND conname='alert_deliveries_source_state' AND convalidated) THEN RAISE EXCEPTION 'report delivery source guards missing'; END IF;
  IF NOT has_table_privilege('gateway_runtime','public.report_schedules','SELECT') OR has_table_privilege('gateway_runtime','public.report_schedules','INSERT,UPDATE,DELETE,TRUNCATE') THEN RAISE EXCEPTION 'report schedule table ACL'; END IF;
  FOREACH t IN ARRAY ARRAY['id','scope_kind','workspace_id','cost_center_id','created_by','configuration_revision','created_at','updated_at'] LOOP
@@ -330,6 +331,12 @@ END $$;
 DO $$ BEGIN
  BEGIN UPDATE alert_deliveries SET report_run_id=report_run_id; RAISE EXCEPTION 'report delivery identity mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  BEGIN INSERT INTO alert_deliveries(id,report_run_id,transition) VALUES(gen_random_uuid(),gen_random_uuid(),'fired'); RAISE EXCEPTION 'unpublished report delivery allowed'; EXCEPTION WHEN no_data_found THEN NULL; END;
+ BEGIN INSERT INTO alert_deliveries(id,event_id,report_run_id,transition) VALUES(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'fired'); RAISE EXCEPTION 'mixed-source delivery allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+ BEGIN INSERT INTO alert_deliveries(id,report_run_id,transition,initialized) VALUES(gen_random_uuid(),gen_random_uuid(),'fired',true); RAISE EXCEPTION 'preinitialized report delivery allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+ -- The report trigger is invoked by INSERT, never callable with runtime's
+ -- own authority; quota metadata remains immutable under the shared ACL.
+ IF has_function_privilege('gateway_runtime','public.report_delivery_set_bucket()','EXECUTE') THEN RAISE EXCEPTION 'report trigger directly executable'; END IF;
+ BEGIN UPDATE alert_deliveries SET quota_charged=true WHERE report_run_id IS NOT NULL; RAISE EXCEPTION 'report quota metadata mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
 END $$;
 -- 0063 refusal probes never take/steal the running scheduler's lease. The
 -- successful primary snapshot + fenced publication path runs in the disposable

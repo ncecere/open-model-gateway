@@ -177,6 +177,9 @@ GRANT UPDATE(state,attempt_count,next_attempt_at,lease_owner,lease_token,lease_e
 -- 0061/0063/0065 report configuration, generation and delivery. 0065 reuses
 -- alert_deliveries/alert_recipient_outbox SELECT/INSERT and bounded outcome
 -- UPDATE grants above; report_run_id is insert-only, trigger-validated lineage.
+-- 0065's report_delivery_set_bucket is an invoker trigger (no EXECUTE grant).
+-- 0059's quota_charged/suppression_reason/created_at remain non-updatable;
+-- report INSERTs are forced uncharged without changing alert admission grants.
 -- No new table privileges or destination/address write API.
 -- Scope, creator, creation time and configuration revision are not writable.
 GRANT SELECT ON public.report_schedules,public.report_schedule_recipients TO gateway_runtime;
