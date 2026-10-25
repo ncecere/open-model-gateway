@@ -10,6 +10,8 @@ Additive migration **0067_configuration_history** adds an append-only, schema-ve
 
 **API compatibility:** preview `expected_revision` changes from `catalog:<version>` to the decimal-string deployment enablement revision. Dependency topic versions remain separate. This is still observation-only: existing apply routes do not enforce revision preconditions (#87 follows).
 
+**Stop older writers before 0067:** stop (or scale to zero) every replica from before this release before running `migrate`, as the documented maintenance → migrate-at-0 → activate rollout does. An older replica that changes a deployment after 0067 is applied still gets its change captured atomically, but the captured snapshot is attributed to System and its own audit event appears as a second history entry.
+
 **Rollout:** this stacked draft reserves 0067; migrations 0059–0066 belong to other PRs. Do not deploy it until the ordered migration prefix is present and all coordinator gates/reviews pass. Apply `migrate` and `grants apply` explicitly to an approved target before serving; never reset, backfill or auto-migrate an existing installation. This is a minor-release schema/API change, not a standalone release claim.
 
 ## Deployment configuration impact previews (#85)
