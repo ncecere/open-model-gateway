@@ -271,9 +271,13 @@ pub(crate) async fn mapping_active_grants(
 /// exactly but as a read: whether the write would be refused outright
 /// (stranding the last platform admin), which currently-active users would
 /// lose their only platform entitlement and be suspended, and how many
-/// currently-active keys would be permanently revoked for losing their only
-/// workspace membership. Never touches `api_keys` or `users`: a prediction,
-/// not a write.
+/// distinct currently-active keys would be permanently revoked -- review
+/// #89-3: `disable_for_entitlement_loss` revokes *every* key a newly
+/// unentitled user holds (any workspace), not only the one lost workspace
+/// membership's keys, so a user counted in `users_suspended` has all of
+/// their keys counted here too, counted once even if they also lose a
+/// specific workspace's membership independently. Never touches `api_keys`
+/// or `users`: a prediction, not a write.
 pub(crate) struct ImmediateConsequences {
     pub(crate) strands_last_admin: bool,
     pub(crate) users_suspended: Vec<Uuid>,
@@ -287,8 +291,12 @@ pub(crate) async fn immediate_consequences(
         .bind(mapping_id).fetch_one(&mut **tx).await?;
     let users_suspended: Vec<Uuid> = sqlx::query_scalar("SELECT DISTINCT g.user_id FROM platform_role_grants g JOIN users u ON u.id=g.user_id WHERE g.mapping_id=$1 AND g.source='group' AND g.revoked_at IS NULL AND u.disabled_at IS NULL AND u.cleaned_at IS NULL AND NOT EXISTS(SELECT 1 FROM platform_role_grants g2 WHERE g2.user_id=g.user_id AND g2.revoked_at IS NULL AND g2.mapping_id IS DISTINCT FROM $1) ORDER BY g.user_id")
         .bind(mapping_id).fetch_all(&mut **tx).await?;
-    let keys_revoked_count: i64 = sqlx::query_scalar("SELECT count(*) FROM workspace_membership_grants g JOIN api_keys k ON k.workspace_id=g.workspace_id AND k.issued_to_user_id=g.user_id WHERE g.mapping_id=$1 AND g.source='group' AND g.revoked_at IS NULL AND k.revoked_at IS NULL AND NOT EXISTS(SELECT 1 FROM workspace_membership_grants g2 WHERE g2.workspace_id=g.workspace_id AND g2.user_id=g.user_id AND g2.revoked_at IS NULL AND g2.mapping_id IS DISTINCT FROM $1)")
-        .bind(mapping_id).fetch_one(&mut **tx).await?;
+    let keys_revoked_count: i64 = sqlx::query_scalar("SELECT count(DISTINCT k.id) FROM api_keys k WHERE k.revoked_at IS NULL AND (
+        k.issued_to_user_id=ANY($2::uuid[])
+        OR EXISTS(SELECT 1 FROM workspace_membership_grants g WHERE g.mapping_id=$1 AND g.source='group' AND g.revoked_at IS NULL AND g.user_id=k.issued_to_user_id AND g.workspace_id=k.workspace_id
+          AND NOT EXISTS(SELECT 1 FROM workspace_membership_grants g2 WHERE g2.workspace_id=g.workspace_id AND g2.user_id=g.user_id AND g2.revoked_at IS NULL AND g2.mapping_id IS DISTINCT FROM $1))
+      )")
+        .bind(mapping_id).bind(&users_suspended).fetch_one(&mut **tx).await?;
     Ok(ImmediateConsequences {
         strands_last_admin,
         users_suspended,
@@ -327,10 +335,14 @@ fn platform_role_name(rank: i32) -> Option<String> {
 /// new contribution (if enabled, platform-targeted and the user is in
 /// `roster`) added back. A disabled (not cleaned) user's `before` is `None`
 /// (no current entitlement) even if their grant rows are not yet revoked,
-/// matching `effective_platform_roles`; `after` still counts those rows,
-/// because reconciliation reads grant rows, not `disabled_at`, and lifts
-/// entitlement-loss suspension precisely when it finds one. Cleaned users
-/// are always excluded. Never bounded here -- the caller (roster is already
+/// matching `effective_platform_roles`. `after` only counts those rows for a
+/// currently *active* user, or a currently disabled one exactly when the
+/// real reactivation condition in `synchronize_groups`/
+/// `synchronize_scim_groups` would fire (`disable_reason='entitlement_loss'
+/// AND cleanup_due_at>now()`, review #89-4): an administratively suspended
+/// user, or one whose grace window already expired, stays at `after=None`
+/// regardless of any grant row, because nothing in the real write path
+/// would lift their suspension. Cleaned users are always excluded. Never bounded here -- the caller (roster is already
 /// capped) truncates and counts.
 pub(crate) async fn preview_platform_effect(
     tx: &mut Transaction<'_, Postgres>,
@@ -349,11 +361,13 @@ pub(crate) async fn preview_platform_effect(
          candidates AS (SELECT DISTINCT u FROM (SELECT unnest($1::uuid[]) u UNION SELECT g.user_id FROM platform_role_grants g WHERE g.mapping_id=$2 AND g.source='group' AND g.revoked_at IS NULL) x)
          SELECT c.u AS user_id,
            CASE WHEN usr.disabled_at IS NOT NULL THEN 0 ELSE coalesce((SELECT max(CASE g.role WHEN 'admin' THEN 3 WHEN 'auditor' THEN 2 ELSE 1 END) FROM platform_role_grants g WHERE g.user_id=c.u AND g.revoked_at IS NULL),0) END AS before_rank,
-           greatest(
-             coalesce((SELECT max(CASE g.role WHEN 'admin' THEN 3 WHEN 'auditor' THEN 2 ELSE 1 END) FROM platform_role_grants g WHERE g.user_id=c.u AND g.revoked_at IS NULL AND ($2::uuid IS NULL OR g.mapping_id IS DISTINCT FROM $2)),0),
-             CASE WHEN c.u=ANY($1::uuid[]) AND m.enabled AND m.target_kind='platform' THEN CASE m.platform_role WHEN 'admin' THEN 3 WHEN 'auditor' THEN 2 ELSE 1 END ELSE 0 END
-           ) AS after_rank,
-           (usr.disable_reason='entitlement_loss' AND usr.cleanup_due_at>now()) AS reactivation_eligible,
+           CASE WHEN usr.disabled_at IS NOT NULL AND NOT coalesce(usr.disable_reason='entitlement_loss' AND usr.cleanup_due_at>now(),false) THEN 0 ELSE
+             greatest(
+               coalesce((SELECT max(CASE g.role WHEN 'admin' THEN 3 WHEN 'auditor' THEN 2 ELSE 1 END) FROM platform_role_grants g WHERE g.user_id=c.u AND g.revoked_at IS NULL AND ($2::uuid IS NULL OR g.mapping_id IS DISTINCT FROM $2)),0),
+               CASE WHEN c.u=ANY($1::uuid[]) AND m.enabled AND m.target_kind='platform' THEN CASE m.platform_role WHEN 'admin' THEN 3 WHEN 'auditor' THEN 2 ELSE 1 END ELSE 0 END
+             )
+           END AS after_rank,
+           coalesce(usr.disable_reason='entitlement_loss' AND usr.cleanup_due_at>now(),false) AS reactivation_eligible,
            usr.disabled_at IS NOT NULL AS currently_disabled
          FROM candidates c CROSS JOIN m JOIN users usr ON usr.id=c.u
          WHERE usr.cleaned_at IS NULL";
@@ -410,9 +424,13 @@ fn workspace_role_name(rank: i32) -> Option<String> {
 /// proposal targets a workspace) plus every (user, workspace) pair any
 /// current grant of `proposal.existing_mapping_id` already names -- so an
 /// edit that moves a mapping to a different workspace shows the old
-/// workspace's loss and the new workspace's gain, never just one. Computed
-/// purely within each workspace's own membership (not cross-referenced
-/// against a simultaneous platform-entitlement change in the same edit).
+/// workspace's loss and the new workspace's gain, never just one.
+/// `effective_workspace_memberships` requires live platform entitlement
+/// too (review #89-4), so both `before` and `after` are forced to `None`
+/// for a user with no current active platform grant or who is currently
+/// disabled -- this reuses that *current* entitlement state for `after` as
+/// well (not cross-referenced against a simultaneous platform-entitlement
+/// change the same edit might also make).
 pub(crate) async fn preview_workspace_effect(
     tx: &mut Transaction<'_, Postgres>,
     proposal: &GroupGrantProposal<'_>,
@@ -434,11 +452,13 @@ pub(crate) async fn preview_workspace_effect(
            ) x WHERE workspace_id IS NOT NULL
          )
          SELECT p.user_id,p.workspace_id,
-           CASE WHEN usr.disabled_at IS NOT NULL THEN 0 ELSE coalesce((SELECT max(CASE g.role WHEN 'owner' THEN 3 WHEN 'admin' THEN 2 ELSE 1 END) FROM workspace_membership_grants g WHERE g.user_id=p.user_id AND g.workspace_id=p.workspace_id AND g.revoked_at IS NULL),0) END AS before_rank,
-           greatest(
-             coalesce((SELECT max(CASE g.role WHEN 'owner' THEN 3 WHEN 'admin' THEN 2 ELSE 1 END) FROM workspace_membership_grants g WHERE g.user_id=p.user_id AND g.workspace_id=p.workspace_id AND g.revoked_at IS NULL AND ($2::uuid IS NULL OR g.mapping_id IS DISTINCT FROM $2)),0),
-             CASE WHEN p.user_id=ANY($1::uuid[]) AND p.workspace_id=$4 AND m.enabled AND m.target_kind='workspace' THEN CASE m.workspace_role WHEN 'admin' THEN 2 ELSE 1 END ELSE 0 END
-           ) AS after_rank
+           CASE WHEN NOT (usr.disabled_at IS NULL AND EXISTS(SELECT 1 FROM platform_role_grants pg WHERE pg.user_id=p.user_id AND pg.revoked_at IS NULL)) THEN 0 ELSE coalesce((SELECT max(CASE g.role WHEN 'owner' THEN 3 WHEN 'admin' THEN 2 ELSE 1 END) FROM workspace_membership_grants g WHERE g.user_id=p.user_id AND g.workspace_id=p.workspace_id AND g.revoked_at IS NULL),0) END AS before_rank,
+           CASE WHEN NOT (usr.disabled_at IS NULL AND EXISTS(SELECT 1 FROM platform_role_grants pg WHERE pg.user_id=p.user_id AND pg.revoked_at IS NULL)) THEN 0 ELSE
+             greatest(
+               coalesce((SELECT max(CASE g.role WHEN 'owner' THEN 3 WHEN 'admin' THEN 2 ELSE 1 END) FROM workspace_membership_grants g WHERE g.user_id=p.user_id AND g.workspace_id=p.workspace_id AND g.revoked_at IS NULL AND ($2::uuid IS NULL OR g.mapping_id IS DISTINCT FROM $2)),0),
+               CASE WHEN p.user_id=ANY($1::uuid[]) AND p.workspace_id=$4 AND m.enabled AND m.target_kind='workspace' THEN CASE m.workspace_role WHEN 'admin' THEN 2 ELSE 1 END ELSE 0 END
+             )
+           END AS after_rank
          FROM pairs p CROSS JOIN m JOIN users usr ON usr.id=p.user_id JOIN workspaces w ON w.id=p.workspace_id
          WHERE usr.cleaned_at IS NULL AND w.disabled_at IS NULL";
     let rows: Vec<Row> = sqlx::query_as(sql)
