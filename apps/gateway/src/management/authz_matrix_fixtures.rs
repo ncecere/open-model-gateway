@@ -25,6 +25,12 @@ impl Targets {
             .bind(provider).execute(pool).await.unwrap();
         sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model) VALUES($1,$2,$3,'matrix-disabled')")
             .bind(deployment).bind(model).bind(provider).execute(pool).await.unwrap();
+        let change: Uuid =
+            sqlx::query_scalar("SELECT id FROM configuration_changes WHERE deployment_id=$1")
+                .bind(deployment)
+                .fetch_one(pool)
+                .await
+                .unwrap();
         let execution = Uuid::new_v4();
         let video_execution = Uuid::new_v4();
         for execution in [execution, video_execution] {
@@ -74,6 +80,7 @@ impl Targets {
             ("model", model.to_string()),
             ("provider", provider.to_string()),
             ("deployment", deployment.to_string()),
+            ("change", change.to_string()),
             ("execution", execution.to_string()),
             ("root", execution.to_string()),
             ("session", session_id.to_string()),
@@ -188,6 +195,7 @@ impl Targets {
             "key",
             "model",
             "deployment",
+            "change",
             "execution",
             "root",
             "hold",

@@ -129,6 +129,106 @@ async fn deployment_preview_browser_only_origin_csrf_and_live_roles(pool: PgPool
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
+async fn deployment_history_browser_only_get_live_authorization(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let mock = MockProvider::start(None).await;
+    let identity = mock.state(pool.clone()).await;
+    let engine = crate::inference::Engine::new(
+        std::sync::Arc::new(f.s.clone()),
+        crate::providers::ProviderRegistry::default(),
+        crate::inference::EngineLimits::default(),
+    )
+    .unwrap();
+    let app = crate::http::router_with_identity(f.s.clone(), None, engine, identity);
+    let id = Uuid::new_v4();
+    let event = Uuid::new_v4();
+    sqlx::query("INSERT INTO audit_events(id,actor_user_id,action,resource_type,resource_id) VALUES($1,$2,'configuration.updated','deployments',$3)").bind(event).bind(f.admin.user_id).bind(id).execute(&pool).await.unwrap();
+    let path = format!("/api/v1/platform/deployments/{id}/configuration/history");
+    let admin = session(&pool, &f.admin).await;
+    let auditor = session(&pool, &f.auditor).await;
+    let user = session(&pool, &f.owner).await;
+    let (status, created) = call(&f.s, &f.admin, "POST", "/api/v1/platform/admin-tokens", json!({"name":"History denied","scopes":["platform:read","catalog:write"],"expires_in_days":1})).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    // Existing token mutation authority is unchanged, and trigger-created audit
+    // and history retain its attribution even though history reads are denied.
+    let m = model(&pool, "history-token").await;
+    let p = Uuid::new_v4();
+    sqlx::query("INSERT INTO provider_connections(id,name,provider,credential_ref) VALUES($1,'Token history','openai','env:UNUSED')").bind(p).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model) VALUES($1,$2,$3,'history-token')").bind(id).bind(m).bind(p).execute(&pool).await.unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/platform/deployments/{id}"))
+                .header("content-type", "application/json")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", created["token"].as_str().unwrap()),
+                )
+                .body(Body::from(r#"{"enabled":true}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let attribution: (Uuid, Uuid) = sqlx::query_as("SELECT a.actor_user_id,a.admin_token_id FROM configuration_changes c JOIN audit_events a ON (a.id,a.created_at)=(c.audit_event_id,c.audit_created_at) WHERE c.deployment_id=$1 AND c.revision=2").bind(id).fetch_one(&pool).await.unwrap();
+    assert_eq!(attribution.0, f.admin.user_id);
+    assert_eq!(
+        attribution.1,
+        Uuid::parse_str(created["id"].as_str().unwrap()).unwrap()
+    );
+    for url in [path.clone(), format!("{path}/{event}")] {
+        // Safe GET needs neither CSRF nor same-origin mutation approval.
+        for reader in [&admin, &auditor] {
+            assert_eq!(
+                request(
+                    &app,
+                    "GET",
+                    &url,
+                    Some(reader),
+                    None,
+                    false,
+                    "https://foreign.example"
+                )
+                .await,
+                StatusCode::OK
+            );
+        }
+        assert_eq!(
+            request(&app, "GET", &url, Some(&user), None, false, ORIGIN).await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            request(
+                &app,
+                "GET",
+                &url,
+                None,
+                created["token"].as_str(),
+                false,
+                ORIGIN
+            )
+            .await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            request(&app, "GET", &url, None, None, false, ORIGIN).await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    sqlx::query("DELETE FROM platform_role_grants WHERE user_id=$1")
+        .bind(f.auditor.user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        request(&app, "GET", &path, Some(&auditor), None, false, ORIGIN).await,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
 async fn key_expiry_history_and_feed_use_real_router_authorization(pool: PgPool) {
     let f = fixture(&pool).await;
     let ws_admin = user(&pool, "expiry-workspace-admin", "user").await;
