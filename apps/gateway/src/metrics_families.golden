@@ -1,5 +1,6 @@
 gateway_admission_denials counter code,scope Traffic
 gateway_admission_seconds histogram outcome,phase Traffic
+gateway_aged_hold_alerts counter result System
 gateway_alert_delivery_oldest_pending_age_seconds gauge - Traffic
 gateway_alert_delivery_pending_buckets gauge - Traffic
 gateway_alert_email_attempts counter outcome Traffic

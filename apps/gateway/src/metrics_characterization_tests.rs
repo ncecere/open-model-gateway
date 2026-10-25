@@ -89,6 +89,25 @@ async fn otlp_self_metrics_are_precreated_fixed_enums_and_record_counts() {
     assert!(after.contains("gateway_otlp_metrics_rejected_points_total 9007199254740993"));
 }
 
+#[tokio::test]
+async fn aged_hold_counters_have_only_fixed_results_and_no_identifiers() {
+    let m = Metrics::new();
+    for result in ["fired", "escalated", "cleared", "deferred", "suppressed"] {
+        m.observe_aged_hold_alerts(result, 2);
+    }
+    let text = m.render(None).await;
+    let samples: Vec<_> = text
+        .lines()
+        .filter(|line| line.starts_with("gateway_aged_hold_alerts_total{"))
+        .collect();
+    assert_eq!(samples.len(), 5);
+    for result in ["fired", "escalated", "cleared", "deferred", "suppressed"] {
+        assert!(samples.contains(
+            &format!("gateway_aged_hold_alerts_total{{result=\"{result}\"}} 2").as_str()
+        ));
+    }
+}
+
 pub(crate) fn fresh_registry() -> &'static Metrics {
     // ScopeLockWait requires a static registry; each caller gets its own.
     Box::leak(Box::new(Metrics::new()))
@@ -119,6 +138,7 @@ pub(crate) fn populated_registry() -> &'static Metrics {
     m.observe_admission_phases(PhaseTimer::start(), "admitted");
     m.observe_settlement_phases(PhaseTimer::start(), "settled");
     m.observe_alert_run("ok", 0);
+    m.observe_aged_hold_alerts("fired", 1);
     m.observe_alert_delivery("delivered");
     m.observe_deadlock_retry("reconciliation");
     drop(m.scope_lock_wait("rows", "admission"));

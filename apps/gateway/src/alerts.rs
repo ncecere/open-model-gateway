@@ -1306,15 +1306,20 @@ pub async fn evaluate_once_fenced(
                 .fetch_one(&mut *tx)
                 .await?;
             match kind {
-                Kind::KeyExpiring => key_expiring_tick(&mut tx, now).await,
+                Kind::KeyExpiring => key_expiring_tick(&mut tx, now)
+                    .await
+                    .map(|changes| (changes, aged_hold::AgedHoldCounts::default())),
                 Kind::AgedUnknownHold => aged_hold_tick(&mut tx, now).await,
                 _ => unreachable!(),
             }
         }
         .await;
         match outcome {
-            Ok(changes) => {
+            Ok((changes, counts)) => {
                 tx.commit().await?;
+                if kind == Kind::AgedUnknownHold {
+                    counts.record(&crate::metrics::METRICS);
+                }
                 report.fired += changes.fired;
                 report.resolved += changes.resolved;
             }
@@ -1494,6 +1499,14 @@ struct Pending {
 // claim is leased, with the same narrow claimed-then-authority-changes race
 // window the outbox documents for every other rule kind.
 fn email_message(row: Pending, installation: String) -> (String, String) {
+    email_message_with_link(row, installation, public_url().as_deref())
+}
+
+fn email_message_with_link(
+    row: Pending,
+    installation: String,
+    link: Option<&str>,
+) -> (String, String) {
     let Pending {
         transition,
         summary,
@@ -1532,13 +1545,20 @@ fn email_message(row: Pending, installation: String) -> (String, String) {
     let (subject, mut body) = email_text(
         &EmailFacts {
             installation,
-            summary,
+            summary: if kind == "aged_unknown_hold" {
+                format!("Aged unknown hold: {summary}")
+            } else {
+                summary
+            },
             resolved,
             critical: severity == "critical",
             scope,
             rule: rule_name.or_else(|| {
                 if kind == "key_expiring" {
                     return Some("Built-in key-expiry reminder".to_owned());
+                }
+                if kind == "aged_unknown_hold" {
+                    return Some("Built-in aged unknown-hold alert".to_owned());
                 }
                 match builtin.as_deref() {
                     Some(SCIM_LAST_ADMIN) => Some("Built-in SCIM safeguard".to_owned()),
@@ -1553,8 +1573,17 @@ fn email_message(row: Pending, installation: String) -> (String, String) {
                 fired_at
             },
         },
-        public_url().as_deref(),
+        link,
     );
+    if kind == "aged_unknown_hold" {
+        // All aged-hold mail is platform-admin-only. Even the personal
+        // aggregate links to the authorized, anonymous platform Holds view;
+        // no workspace, owner, key or request identifier enters these links.
+        let base = link.unwrap_or_default();
+        body.push_str(&format!(
+            "\r\nRetained floors are not upper bounds.\r\nAn unbounded hold has no known limit.\r\nNothing is refunded or released here, and\r\nthese amounts are never added to spend.\r\nA hold settles only when a Platform Admin reconciles it with evidence.\r\n\r\nNotifications: {base}/notifications\r\nOpen holds: {base}/admin/costs?tab=holds\r\n"
+        ));
+    }
     if kind == "key_expiring"
         && let Some(expiry) = key_expires_at
     {
@@ -1704,6 +1733,38 @@ mod unit_tests {
         assert!(parse_interval(Some("-1")).is_err());
         assert!(parse_interval(Some("86401")).is_err());
         assert!(parse_interval(Some("soon")).is_err());
+    }
+
+    #[test]
+    fn aged_hold_email_copy_and_absolute_or_relative_navigation_are_explicit() {
+        for link in [None, Some("https://gateway.example.test")] {
+            for (severity, hours) in [("warning", 24), ("critical", 168)] {
+                let row = Pending {
+                    transition: "fired".into(),
+                    summary: format!("Holds with unknown cost are over {hours} hours old"),
+                    severity: severity.into(),
+                    fired_at: DateTime::<Utc>::UNIX_EPOCH,
+                    resolved_at: None,
+                    rule_name: None,
+                    workspace_name: None,
+                    workspace_kind: None,
+                    connection_name: None,
+                    builtin: None,
+                    kind: "aged_unknown_hold".into(),
+                    key_expires_at: None,
+                };
+                let (subject, body) = email_message_with_link(row, "Enterprise".into(), link);
+                assert!(subject.contains("Aged unknown hold:"));
+                assert!(subject.contains("Installation"));
+                assert!(body.contains("Built-in aged unknown-hold alert"));
+                assert!(!body.contains("Built-in budget alert"));
+                assert!(body.contains("Retained floors are not upper bounds."));
+                assert!(body.contains("Nothing is refunded or released here"));
+                let base = link.unwrap_or_default();
+                assert!(body.contains(&format!("Notifications: {base}/notifications")));
+                assert!(body.contains(&format!("Open holds: {base}/admin/costs?tab=holds")));
+            }
+        }
     }
 
     #[test]
