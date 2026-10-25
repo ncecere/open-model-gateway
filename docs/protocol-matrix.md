@@ -117,7 +117,8 @@ The frontend validates the complete field grammar into `ChatRequest.messages_opt
 | `stop_sequences` | Forward | Map `stop` | Map `stopSequences` | Map `stop` |
 | `metadata.user_id` (up to 256 characters) | Gateway client label only; not forwarded | Map to gateway client label only | Map to gateway client label only | Map to gateway client label only |
 | Ordinary function tools, `tool_choice:auto/none/any/tool` | Existing mapping | Existing mapping | Existing constraints | Existing profile constraints |
-| `tool_result.is_error:true`, `tool_choice.disable_parallel_tool_use` | **400**, no faithful shared representation yet | **400** | **400** | **400** |
+| `tool_result.is_error:true` | **501** `unsupported_capability`, no faithful shared representation yet | **501** | **501** | **501** |
+| `tool_choice.disable_parallel_tool_use` | **400**, no faithful shared representation yet | **400** | **400** | **400** |
 | Unknown fields, including nested fields and unknown fields set to null | **400**, naming the field | **400**, naming the field | **400**, naming the field | **400**, naming the field |
 
 `thinking.budget_tokens` must be at least 1024 and below `max_tokens`; the budget is included in, never added to, the unchanged output reservation. Context edits support `clear_tool_uses_20250919` and `clear_thinking_20251015`; new edit types require an explicit rule. JSON schemas and tool inputs are application data, not gateway field allowlists. Image URLs are never fetched by the frontend. No inference credential, prompt body or thinking signature is logged or stored by this path.

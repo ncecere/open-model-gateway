@@ -87,7 +87,7 @@ fn empty_successful_tool_result_defaults_are_absent_only() {
         parse(request(
             json!({"type":"tool_result","tool_use_id":"call-ping","is_error":true})
         )),
-        Err(InferenceError::InvalidField("tool_result.is_error"))
+        Err(InferenceError::Unsupported)
     ));
     for block in [
         json!({"type":"tool_result","tool_use_id":"call-ping","content":null}),

@@ -353,7 +353,9 @@ impl Request {
                         if let Some(flag) = block.get("is_error")
                             && flag.as_bool().ok_or(InferenceError::InvalidRequest)?
                         {
-                            return Err(invalid("tool_result.is_error"));
+                            // The shared result type cannot represent failure. Never
+                            // silently downgrade an error-marked result to success.
+                            return Err(InferenceError::Unsupported);
                         }
                         let content = block
                             .get("content")
