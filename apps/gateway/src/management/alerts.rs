@@ -158,8 +158,8 @@ pub(super) fn validate(b: RuleInput, workspace: bool) -> Result<Valid, ApiError>
         return Err(invalid());
     }
     let kind = Kind::parse(&b.kind).ok_or_else(invalid)?;
-    // #100: key_expiring is a built-in event kind, never a configurable rule.
-    if kind == Kind::KeyExpiring {
+    // Built-in event kinds never have a configurable rule.
+    if matches!(kind, Kind::KeyExpiring | Kind::AgedUnknownHold) {
         return Err(invalid());
     }
     if workspace && matches!(kind, Kind::Provider | Kind::Spend | Kind::AdmissionCeiling) {
@@ -228,7 +228,7 @@ pub(super) fn validate(b: RuleInput, workspace: bool) -> Result<Valid, ApiError>
                     && b.min_requests.is_none()
             }
             // Rejected above already; kept exhaustive for the compiler.
-            Kind::KeyExpiring => false,
+            Kind::KeyExpiring | Kind::AgedUnknownHold => false,
         };
     if !allowed {
         return Err(invalid());
@@ -301,7 +301,7 @@ pub(super) fn validate(b: RuleInput, workspace: bool) -> Result<Valid, ApiError>
             v.window_minutes = Some(minutes);
         }
         // Unreachable: rejected above already.
-        Kind::KeyExpiring => return Err(invalid()),
+        Kind::KeyExpiring | Kind::AgedUnknownHold => return Err(invalid()),
         Kind::ErrorRate | Kind::Provider => {
             let minutes = b.window_minutes.ok_or_else(invalid)?;
             if !(5..=1440).contains(&minutes) {
@@ -789,14 +789,9 @@ async fn platform_events(
     let mut out = events(
         &mut tx,
         &q,
-        // Installation rules plus the built-in installation incidents (SCIM
-        // last-admin safeguard, missing history partitions). key_expiring is
-        // never shown in platform history: it has neither `rule_id` nor
-        // `builtin` set, so it already fails to match either branch here.
-        // (`$7` is unused on this scope; the trailing clause is a no-op that
-        // only satisfies Postgres's parameter count for the shared `events`
-        // helper.)
-        "(r.scope='installation' OR e.builtin IN ('scim_last_admin','partitions_missing','history_orphans')) AND $6::uuid IS NULL AND ($7::uuid IS NOT NULL OR $7::uuid IS NULL)",
+        // Platform history explicitly includes aged holds. Key-expiry still
+        // needs its key-specific authority, never platform role alone.
+        &format!("(r.scope='installation' OR e.builtin IN ('scim_last_admin','partitions_missing','history_orphans') OR ({})) AND $6::uuid IS NULL", core::aged_hold_visible("$7")),
         None,
         u.user_id(),
     )
@@ -815,8 +810,9 @@ async fn workspace_events(
     // History stays admin/reader-only, matching the route boundary. A holder
     // without that role uses Notifications; even readers need live key authority.
     let key_visible = core::key_expiry_visible("$7");
+    let aged_visible = core::aged_hold_visible("$7");
     let scope = format!(
-        "e.workspace_id=$6 AND ((r.scope='workspace' OR e.builtin IS NOT NULL) OR ({key_visible}))"
+        "e.workspace_id=$6 AND ((r.scope='workspace' OR e.builtin IS NOT NULL) OR ({key_visible}) OR ({aged_visible}))"
     );
     let out = events(&mut tx, &q, &scope, Some(ws), u.user_id()).await?;
     tx.commit().await?;
@@ -828,8 +824,9 @@ async fn workspace_events(
 /// Incidents the caller may see, by live authority (`$1` caller, `$2` platform reader).
 fn visible() -> String {
     let key_visible = core::key_expiry_visible("$1");
+    let aged_visible = core::aged_hold_visible("$1");
     format!(
-        "e.fired_at>now()-interval '90 days' AND ((e.builtin IS NOT NULL AND w.kind='personal' AND w.owner_user_id=$1 AND w.disabled_at IS NULL) OR (r.scope='installation' AND $2) OR (e.builtin IN ('scim_last_admin','partitions_missing','history_orphans') AND $2) OR (r.scope='workspace' AND w.kind IN ('team','project') AND w.disabled_at IS NULL AND (EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=e.workspace_id AND m.user_id=$1 AND m.role IN ('owner','admin')) OR (r.notify_platform_admins AND $2))) OR ({key_visible}))"
+        "e.fired_at>now()-interval '90 days' AND ((e.builtin IS NOT NULL AND w.kind='personal' AND w.owner_user_id=$1 AND w.disabled_at IS NULL) OR (r.scope='installation' AND $2) OR (e.builtin IN ('scim_last_admin','partitions_missing','history_orphans') AND $2) OR (r.scope='workspace' AND w.kind IN ('team','project') AND w.disabled_at IS NULL AND (EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=e.workspace_id AND m.user_id=$1 AND m.role IN ('owner','admin')) OR (r.notify_platform_admins AND $2))) OR ({key_visible}) OR ({aged_visible}))"
     )
 }
 

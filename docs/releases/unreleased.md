@@ -12,6 +12,29 @@ Saved enabled receivers now receive `omg.alert.v1` envelopes signed with HMAC-SH
 
 Adds `POST /platform/alerts/webhooks/{id}/test` (fixed saved-receiver single attempt, no body or `{}`, transactionally audited limits 2/user/minute, 2/destination/minute, 20/installation/hour) and `GET /platform/alerts/webhooks/{id}/deliveries` (bounded metadata/status, existing redaction). Waiting counts exclude stale generations. Fixed-label attempt/delivery metrics and oldest-waiting age expose failures without destination identifiers. Receiver guidance requires constant-time signatures, ±300-second timestamp checks, header/body delivery-id equality and durable deduplication. Crash-after-acceptance duplicates remain possible; there is no replay endpoint. No new migration or privilege is needed beyond 0057. The UI and broader acceptance work remain slice 3.
 
+## Key dialog lifetime hardening (#276)
+
+Each ask now gets a fresh dialog lifetime (explicit retries within one dialog keep it), and successful non-secret actions cannot be repeated through retained submit callbacks. Key creation and rotation suppress late disclosures after retirement; a creation that completes after retirement, or any 2xx without a token, still invalidates the keys list so the key can be found and revoked. Admitted create requests remain uncancelled on local retirement so a newly created key can appear in the list and be revoked. A successful response missing its token shows an error; retry remains explicit, never automatic.
+
+## Fresh CNPG installs restrict database ACLs (#315)
+
+Fresh, explicitly installed chart-managed CNPG clusters now revoke PUBLIC/runtime CONNECT
+on `postgres` and `template1` and PUBLIC/runtime TEMPORARY on the application database.
+Bootstrap seeds passwordless CNPG operational roles and preserves their maintenance CONNECT
+explicitly; CNPG still supplies replication, monitoring and PgBouncer authentication privileges.
+Application CONNECT is retained. This changes only one-time initdb hooks, not the verifier,
+`grants apply`, migrations, external databases or existing clusters. Existing installations need
+an explicitly reviewed [manual remediation](../postgresql-ha.md#existing-cnpg-cluster-acl-remediation-315),
+including operational-role preconditions and strict tagged verification before restarting gateways.
+See [bootstrap lifecycle evidence](../kubernetes.md#cnpg-bootstrap-database-acls-315) for CNPG 1.30.1.
+The application TEMP revoke overlaps the separate #295 work; this change stays in the CNPG path.
+
+## Runtime TEMP privilege revoked (#295)
+
+`grants apply` now revokes `TEMPORARY` from `PUBLIC` and `gateway_runtime` on the connected gateway database, removing both PostgreSQL's default PUBLIC grant and any old explicit runtime grant. Runtime can no longer create temporary objects to shadow unqualified queries. Runtime code does not need TEMP; migrations that use temporary objects still run as the database/schema owner.
+
+**Upgrade:** this change adds no schema migration or runtime privilege. Explicitly reapply the matching binary's grants as the database/schema/object owner (`gateway_migrator` in staging), then run `grants verify` with a role allowed to `SET ROLE gateway_runtime`; verification now attempts `CREATE TEMP TABLE` and requires its refusal. Use a **dedicated gateway database**: all roles relying on PUBLIC TEMP lose it there, not just runtime. The owner/migrator's privileges and all unrelated databases are unchanged. `serve` never migrates or applies grants automatically. See [database authority](../staging.md#database-authority-and-releases).
+
 ## Transaction isolation independent of PostgreSQL defaults (#281)
 
 Normal gateway transactions now explicitly begin at **READ COMMITTED**, so database, login-role or connection defaults of REPEATABLE READ or SERIALIZABLE cannot leave lock-then-check queries using a stale snapshot. Session defaults are not rewritten, and session read-only policy is still inherited. Intentional reporting snapshots remain REPEATABLE READ and read-only; their bounded-staleness contract and the elevated-isolation refusal guards are unchanged. No migration or new database privilege is needed. See [transaction isolation](../governance.md#transaction-isolation).
@@ -77,7 +100,13 @@ Alert email slots are now shared fairly across workspace buckets, plus one bucke
 
 Claims use one captured database timestamp as an index range bound to skip expired backlog. A claim statement timeout logs a warning and ends dispatch for the tick; cleanup still runs. Label-free gauges `gateway_alert_delivery_pending_buckets` and `gateway_alert_delivery_oldest_pending_age_seconds` expose pending bucket count and oldest age, including overdue work awaiting cleanup. See [alerts](../alerts.md#recipient-outbox-46).
 
+## Fixed
+
+- **Bounded dashboard access refresh (#291).** A refused management GET now triggers at most one automatic session refresh per navigation. A repeated refusal retires private cached data and one-time credentials and shows a stable permission notice instead of remounting and retrying indefinitely. Navigating rearms automatic refresh; an explicit access refresh can recover the denied view, and a 401 still ends the session.
+
 ## Added
+
+- **Aged unknown-hold alerts (#101, slice C).** Migration **0058** adds built-in 24-hour warning / 168-hour critical incidents, with one open incident per shared workspace and one identity-free personal aggregate. In-app visibility follows live platform-reader/shared-admin authority; members and personal owners retain queue access but get no role-only alert. Static incident content links to the Holds tab; silent retirement/escalation, rolling cooldowns and bounded fenced evaluation never mutate accounting or release money. Old replicas cannot see the new source-less kind. Email and dedicated metrics follow in slice D. Apply migrations explicitly; runtime grants need no new authority.
 
 - **OTLP metrics groundwork (#99, slices 1–2).** Shared trace/audit HTTP validation, bounded trace acknowledgements and a scrape-derived metrics snapshot/encoder are implemented. Metrics settings are parsed and validated (`GATEWAY_METRICS_OTLP_URL`, `GATEWAY_METRICS_OTLP_HEADERS_ENV`, `GATEWAY_METRICS_OTLP_INTERVAL_SECONDS`, `GATEWAY_METRICS_OTLP_TRAFFIC`), but **a configured URL explicitly refuses startup in this release**: no metrics worker is wired yet. Leave all four unset. This avoids silently accepting an export that sends nothing. The future traffic opt-in defaults off and includes personal-workspace traffic as identity-free aggregates. The golden inventory pins privacy classes; System families take priority over Traffic under export caps. The encoder permits existing operational-enum `path` labels only on the scope-lock and lock-deadlock-retry families with `admission`, `settlement` or `reconciliation` values. Prometheus adds only fixed-enum exporter health metrics; no schema, dependency or listener change. See [OTLP metrics groundwork](../operations.md#otlp-metrics-groundwork-99-slice-2) for the Traffic data-class decisions and runtime requirements.
 
