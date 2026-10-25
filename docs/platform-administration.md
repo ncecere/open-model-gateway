@@ -35,6 +35,14 @@ Admin/Auditor includes User entitlement. Neither grants another user's private k
 
 Model presence alone is not permission. Inference requires live authorization, enabled target configuration and the key's narrowing restrictions. Losing catalog eligibility retires its selections unless another eligible catalog remains; independent direct access can remain. Removed key selections are not revived by later regrant, and their restriction header remains deny-all when empty.
 
+## Review deployment enablement changes
+
+On a route page, **Review changes** previews the opposite enabled state before the existing Enable/Disable confirmation. The model's route menu also opens this review; retiring a route previews disablement before the existing retirement confirmation. Only browser-session Platform Admins can preview; Auditors remain read-only, and admin tokens cannot call this new endpoint.
+
+Review the enabled-state diff, serving routes gained/lost, models losing their last serving route and affected active shared workspaces. Details are capped at 100 with a total and truncation notice; personal effects are omitted, not represented by an assumed zero. Catalog availability alone is not a selection. The preview respects live catalog inheritance/replacements and independent direct assignments.
+
+Nothing is applied by opening or refreshing the review. **Continue to confirmation** opens the ordinary mutation confirmation; Cancel writes nothing. This is a configuration estimate, not a reservation, price/health test or inference admission simulation. Already-admitted requests may finish. Refresh if configuration changes: this slice returns the existing catalog configuration version as an observation token, but existing apply routes do not enforce preview revision preconditions. Per-target revisions/history, rollback and bulk changes are not part of this slice. See [the API contract](management-api.md) for fields and refusals.
+
 ## Policy defaults and shared ceilings
 
 Type defaults apply **independently to each workspace**, not to a pool of all Teams or Projects. Workspaces without platform overrides follow changes live. A replacement override replaces the type policy even when all fields are null. Local workspace/key restrictions compose with that platform layer and cannot raise or erase a stored local cap merely because a stricter parent currently masks it.

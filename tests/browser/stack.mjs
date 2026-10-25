@@ -2,6 +2,7 @@
 // the gateway binary serving a test-only SPA build, the passwordless local OIDC issuer
 // (tests only) and a deterministic mock upstream. No paid providers, never the demo.
 import { spawn, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { createWriteStream, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -11,7 +12,9 @@ import { createMockUpstream } from "./mock-upstream.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const portBase = Number(process.env.OMG_BROWSER_PORT_BASE ?? 18290);
-export const PORTS = { gateway: portBase + 1, issuer: portBase + 2, upstream: portBase + 3 };
+export const PORTS = { gateway: portBase + 1, issuer: portBase + 2, upstream: portBase + 3, webhook: portBase + 4 };
+export const WEBHOOK_URL = `http://127.0.0.1:${PORTS.webhook}/hook`;
+export const WEBHOOK_SECRET_NAME = "OMG_BROWSER_ALERT_SIGNING";
 export const BASE_URL = `http://127.0.0.1:${PORTS.gateway}`;
 export const ISSUER_URL = `http://127.0.0.1:${PORTS.issuer}`;
 export const UPSTREAM_URL = `http://127.0.0.1:${PORTS.upstream}/v1`;
@@ -25,7 +28,7 @@ const run = (cmd, args, env) => {
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(" ")} failed (${r.status})`);
 };
 
-function gatewayEnv(databaseUrl) {
+function gatewayEnv(databaseUrl, webhookSecret) {
   const envFile = path.join(work, "gateway.env");
   writeFileSync(envFile, "# Browser-suite gateway: configuration comes from the process environment.\n");
   return {
@@ -42,6 +45,10 @@ function gatewayEnv(databaseUrl) {
     GATEWAY_SECRET_ENV_ALLOWLIST: "",
     GATEWAY_LOCAL_UPSTREAMS: JSON.stringify([{ endpoint: UPSTREAM_URL, addresses: ["127.0.0.1"] }]),
     GATEWAY_ALERT_INTERVAL_SECONDS: "0",
+    // Disposable loopback receiver in alert-webhooks.spec.ts; never operator credentials.
+    GATEWAY_ALERT_WEBHOOK_URL_ALLOWLIST: WEBHOOK_URL,
+    GATEWAY_ALERT_WEBHOOK_SECRET_ENV_ALLOWLIST: WEBHOOK_SECRET_NAME,
+    [WEBHOOK_SECRET_NAME]: webhookSecret,
   };
 }
 
@@ -64,8 +71,9 @@ export async function startStack() {
   await admin.query(`CREATE DATABASE ${database}`);
   await admin.end();
   const dbUrl = new URL(adminUrl.href); dbUrl.pathname = `/${database}`;
-  const env = gatewayEnv(dbUrl.href);
-  const state = { database, adminUrl: adminUrl.href };
+  const webhookSecret = randomBytes(32).toString("hex");
+  const env = gatewayEnv(dbUrl.href, webhookSecret);
+  const state = { database, adminUrl: adminUrl.href, webhookSecret };
   try {
     run(binary, ["migrate"], env);
     // Trusted first-administrator provisioning, exactly as an operator would.

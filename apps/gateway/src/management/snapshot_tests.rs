@@ -264,7 +264,7 @@ async fn snapshot_reads_keep_personal_activity_owner_private(pool: PgPool) {
         ] {
             assert_eq!(
                 status(&f.s, u, &format!("/api/v1/workspaces/{personal}/{path}")).await,
-                StatusCode::FORBIDDEN,
+                StatusCode::NOT_FOUND,
                 "{path}"
             );
         }
@@ -457,25 +457,68 @@ async fn cancelled_transaction_begins_never_leak_into_the_next_snapshot(pool: Pg
             // connection first (the pool queues waiters in order).
             sqlx::query("SELECT 1").execute(&one).await.unwrap();
             // A plain pool statement (session lookup, audit, ...) on the same
-            // connection must run outside any transaction.
+            // connection must run outside any transaction. Proven on the
+            // connection itself, with no cross-connection visibility race:
+            // `now()` is frozen at an already-open transaction's start, while
+            // `statement_timestamp()` is this statement's own start time.
+            // They agree only inside the implicit, single-statement
+            // transaction every top-level statement runs in when the
+            // connection is *not* already sitting inside one left open by a
+            // cancelled begin (#339: PostgreSQL's own `ReadyForQuery` for the
+            // dropped begin's rollback already told sqlx the connection is
+            // clean before it was ever released to the pool for reuse here;
+            // `pg_stat_activity.state`, read through a *different* backend,
+            // can still report the stale "idle in transaction" for a few
+            // instructions after that, since it settles via the reused
+            // backend's own next report, not this query's snapshot).
+            // Simple-query protocol: one message, so outside a transaction its
+            // implicit transaction and the statement start together. (The
+            // extended protocol's Bind and Execute can differ.)
+            let no_lingering_transaction: bool = {
+                use sqlx::Row;
+                sqlx::raw_sql("SELECT now() = statement_timestamp()")
+                    .fetch_one(&one)
+                    .await
+                    .unwrap()
+                    .get(0)
+            };
+            assert!(
+                no_lingering_transaction,
+                "{path} cancelled after {pendings} polls left the connection inside an open \
+                 transaction (now() != statement_timestamp() on the reused connection itself)"
+            );
+            // Cross-check `pg_stat_activity` too, but bound the wait for its
+            // report to settle instead of trusting a single read: it is read
+            // through a different backend than the one that just rolled
+            // back, so it may still show the pre-rollback state for a brief
+            // window after that backend's own `ReadyForQuery` already
+            // resolved (proven clean above). A real leak never settles and
+            // still fails this bound.
             let reused: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
                 .fetch_one(&one)
                 .await
                 .unwrap();
-            let state: Option<String> =
-                sqlx::query_scalar("SELECT state FROM pg_stat_activity WHERE pid=$1")
+            let mut state: Option<String> = None;
+            for _ in 0..200 {
+                state = sqlx::query_scalar("SELECT state FROM pg_stat_activity WHERE pid=$1")
                     .bind(reused)
                     .fetch_optional(&pool)
                     .await
                     .unwrap();
+                if state.as_deref() != Some("idle in transaction") {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            assert!(
+                state.as_deref() != Some("idle in transaction"),
+                "{path} cancelled after {pendings} polls left the connection {state:?} \
+                 (pg_stat_activity never settled within 1s)"
+            );
             let mut tx = s
                 .snapshot()
                 .await
                 .unwrap_or_else(|e| panic!("{path} cancelled after {pendings} polls: {e}"));
-            assert!(
-                state.as_deref() != Some("idle in transaction"),
-                "{path} cancelled after {pendings} polls left the connection {state:?}"
-            );
             let (_, isolation, read_only) = served_by(&mut tx).await;
             tx.commit().await.unwrap();
             assert_eq!(

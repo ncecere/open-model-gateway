@@ -225,8 +225,8 @@ for (const width of [1440, 390]) {
         await expectNoHorizontalScroll(page);
         await expectAccessible(page, `personal holds ${width}`);
         await shot(page, `personal-${width}`);
-        // Another person's personal workspace is refused outright (also to platform roles).
-        expect((await api(blair.page, "GET", `/workspaces/${ids.personal}/holds`)).status()).toBe(403);
+        // Another person's personal workspace answers like an unknown one (#282), also to platform roles.
+        expect((await api(blair.page, "GET", `/workspaces/${ids.personal}/holds`)).status()).toBe(404);
       } finally { for (const s of [alex, blair]) await s.context.close(); }
     });
   });
