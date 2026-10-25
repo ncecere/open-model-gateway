@@ -486,6 +486,20 @@ async fn alert_generation_recipient_50_51_and_suppressed_terminal(pool: PgPool) 
     assert_eq!(urgent, ("suppressed".into(), 0, 0));
 }
 
+/// Embedded enterprise migrations through `last`, so this upgrade test keeps
+/// 0059/0060 as the newest step even after later migrations land (applying
+/// 0060 again after a newer one would violate the ordered-prefix lineage).
+fn migrator_through(last: i64) -> sqlx::migrate::Migrator {
+    let all = sqlx::migrate!("./enterprise_migrations");
+    sqlx::migrate::Migrator {
+        migrations: std::borrow::Cow::Owned(
+            all.iter().filter(|m| m.version <= last).cloned().collect(),
+        ),
+        ignore_missing: false,
+        locking: true,
+        no_tx: false,
+    }
+}
 #[sqlx::test(migrations = false)]
 async fn alert_generation_upgrade_0057_old_sql_and_concurrent_index_recovery(pool: PgPool) {
     let all = sqlx::migrate!("./enterprise_migrations");
@@ -509,7 +523,7 @@ async fn alert_generation_upgrade_0057_old_sql_and_concurrent_index_recovery(poo
         .await
         .unwrap();
     sqlx::query("UPDATE alert_deliveries SET status='not_configured',completed_at=clock_timestamp() WHERE event_id=$1").bind(ids[0]).execute(&s.pool).await.unwrap();
-    s.store.migrate_enterprise().await.unwrap();
+    migrator_through(60).run(&s.pool).await.unwrap();
     // No old rows charged, reopened or replayed by the upgrade.
     assert_eq!(
         count(
@@ -532,14 +546,17 @@ async fn alert_generation_upgrade_0057_old_sql_and_concurrent_index_recovery(poo
         .await,
         1
     );
-    // Exact pre-0059 worker finalization shape, unaware of quota metadata.
-    let finalized = sqlx::query("UPDATE alert_deliveries SET status='not_configured',completed_at=clock_timestamp() WHERE event_id=$1 AND status='pending'")
-        .bind(ids[2]).execute(&s.pool).await.unwrap().rows_affected();
-    assert_eq!(finalized, 1);
-    assert_eq!(deliver_pending(&s.store, 25).await, 1);
+    // An interrupted 0060 build: 0060 unrecorded (nothing newer applied yet)
+    // and its concurrent index left invalid. The real migrate command drops
+    // the invalid index, reruns 0060, then applies every later migration.
     sqlx::raw_sql("DELETE FROM _sqlx_migrations WHERE version=60; UPDATE pg_index SET indisvalid=false WHERE indexrelid='public.alert_deliveries_generation_window'::regclass").execute(&s.pool).await.unwrap();
     s.store.migrate_enterprise().await.unwrap();
     assert!(s.store.is_ready().await);
     let valid:bool=sqlx::query_scalar("SELECT indisvalid FROM pg_index WHERE indexrelid='public.alert_deliveries_generation_window'::regclass").fetch_one(&s.pool).await.unwrap();
     assert!(valid);
+    // Exact pre-0059 worker finalization shape, unaware of quota metadata.
+    let finalized = sqlx::query("UPDATE alert_deliveries SET status='not_configured',completed_at=clock_timestamp() WHERE event_id=$1 AND status='pending'")
+        .bind(ids[2]).execute(&s.pool).await.unwrap().rows_affected();
+    assert_eq!(finalized, 1);
+    assert_eq!(deliver_pending(&s.store, 25).await, 1);
 }
