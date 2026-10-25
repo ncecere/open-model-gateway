@@ -342,6 +342,9 @@ cnpg:
     # (measured on bitop-talos, #25). The gateway retries and reconciles
     # interrupted attempts, so a short wait is safe.
     smartShutdownTimeout: 15
+    # Fresh initdb hooks restrict maintenance CONNECT and application TEMP,
+    # preserving CNPG operational roles. Never replayed on existing clusters;
+    # see docs/postgresql-ha.md#existing-cnpg-cluster-acl-remediation-315.
     database: gateway
     # Connection string suffix, e.g. "disable" or "require"; empty uses the
     # driver default. CNPG does not enable TLS on the client port by default.

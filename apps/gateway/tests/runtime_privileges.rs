@@ -3,6 +3,9 @@
 #![allow(clippy::disallowed_methods)]
 //! Explicitly opt in only on the dedicated disposable PostgreSQL test cluster.
 use sqlx::PgPool;
+#[path = "runtime_privileges/temp.rs"]
+mod temp;
+
 #[sqlx::test(migrations = "./enterprise_migrations")]
 #[ignore = "role/maintenance ACL probe: run only on a disposable test PostgreSQL cluster"]
 async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
@@ -13,6 +16,10 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         .unwrap();
     sqlx::raw_sql("DO $$ BEGIN IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='gateway_runtime') THEN CREATE ROLE gateway_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS; END IF; END $$; REVOKE CONNECT ON DATABASE postgres FROM PUBLIC,gateway_runtime; REVOKE CONNECT ON DATABASE template1 FROM PUBLIC,gateway_runtime;")
         .execute(&mut *connection).await.unwrap();
+    // Run TEMP regressions before this fixture's legacy REVOKE ALL below can
+    // mask grants apply's responsibility for PostgreSQL's default PUBLIC TEMP.
+    // The existing dedicated PostgreSQL CI step exercises this suite explicitly.
+    temp::check_runtime_temp_grants(&pool).await;
     let database: String = sqlx::query_scalar("SELECT current_database()")
         .fetch_one(&mut *connection)
         .await
@@ -1374,7 +1381,7 @@ async fn alert_webhooks_run_as_runtime(pool: &PgPool) {
     let identity = open_model_gateway::identity::IdentityState::new(store.clone(), None)
         .await
         .unwrap();
-    let app = open_model_gateway::management::router(identity).with_state(store);
+    let app = open_model_gateway::management::router(identity).with_state(store.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!(
         "http://{}/api/v1/platform/alerts/webhooks",
@@ -1424,6 +1431,37 @@ async fn alert_webhooks_run_as_runtime(pool: &PgPool) {
             .status(),
         400
     );
+    let tested: serde_json::Value = client
+        .post(format!("{item}/test"))
+        .bearer_auth(&token.token)
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let test_id: uuid::Uuid = tested["id"].as_str().unwrap().parse().unwrap();
+    open_model_gateway::alerts::deliver_pending(&store, 25).await;
+    let outcome: (String, i32, Option<String>) = sqlx::query_as(
+        "SELECT state,attempt_count,last_error FROM alert_webhook_outbox WHERE id=$1",
+    )
+    .bind(test_id)
+    .fetch_one(&runtime)
+    .await
+    .unwrap();
+    assert_eq!(outcome, ("failed".into(), 1, Some("credential".into())));
+    let status: serde_json::Value = client
+        .get(format!("{item}/deliveries"))
+        .bearer_auth(&token.token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(status["counts"]["failed"], 1);
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM audit_events WHERE resource_id=$1 AND action='alert_webhook.failed'").bind(test_id).fetch_one(&runtime).await.unwrap(),1);
     let event = uuid::Uuid::new_v4();
     sqlx::query("INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,summary) VALUES($1,'scim_last_admin','scim_last_admin','runtime-webhook',1,'critical','safe')").bind(event).execute(&runtime).await.unwrap();
     sqlx::query(

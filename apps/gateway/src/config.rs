@@ -259,7 +259,7 @@ impl InferenceBaseUrl {
 pub struct AlertWebhookPolicy {
     urls: std::collections::BTreeSet<String>,
     pub(crate) secrets: crate::providers::secrets::EnvSecrets,
-    development: bool,
+    pub(crate) development: bool,
 }
 impl AlertWebhookPolicy {
     pub fn parse(urls: &[String], names: Vec<String>, environment: Environment) -> Result<Self> {

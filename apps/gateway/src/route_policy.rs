@@ -621,6 +621,18 @@ pub(crate) const ROUTES: &[Route] = &[
         PLATFORM_READ
     ),
     route!(
+        "GET",
+        "/api/v1/platform/alerts/webhooks/{id}/deliveries",
+        PlatformRead,
+        PLATFORM_READ
+    ),
+    route!(
+        "POST",
+        "/api/v1/platform/alerts/webhooks/{id}/test",
+        PlatformWrite,
+        SETTINGS_WRITE
+    ),
+    route!(
         "PATCH DELETE",
         "/api/v1/platform/alerts/webhooks/{id}",
         PlatformWrite,

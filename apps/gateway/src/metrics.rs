@@ -185,6 +185,9 @@ pub struct Metrics {
     alert_rule_failures: Counter,
     alert_delivery_attempts: Family<L1, Counter>,
     alert_delivery_queue: Family<L1, Gauge>,
+    alert_webhook_attempts: Family<L1, Counter>,
+    alert_webhook_queue: Family<L1, Gauge>,
+    alert_webhook_oldest: Family<L0, Gauge>,
     alert_pending_buckets: Family<L0, Gauge>,
     alert_oldest_pending_age: Family<L0, Gauge>,
     deadlock_retries: Family<L1, Counter>,
@@ -358,6 +361,9 @@ impl Metrics {
             alert_rule_failures: Counter::default(),
             alert_delivery_attempts: Family::default(),
             alert_delivery_queue: Family::default(),
+            alert_webhook_attempts: Family::default(),
+            alert_webhook_queue: Family::default(),
+            alert_webhook_oldest: Family::default(),
             alert_pending_buckets: Family::default(),
             alert_oldest_pending_age: Family::default(),
             deadlock_retries: Family::default(),
@@ -480,6 +486,21 @@ impl Metrics {
             "alert_rule_failures",
             "Individual alert rules that failed during an evaluation",
             metrics.alert_rule_failures.clone(),
+        );
+        registry.register(
+            "alert_webhook_attempts",
+            "Webhook attempt outcomes (fixed labels only)",
+            metrics.alert_webhook_attempts.clone(),
+        );
+        registry.register(
+            "alert_webhook_deliveries",
+            "Active webhook queue and terminal outcomes completed in the last 24 hours",
+            metrics.alert_webhook_queue.clone(),
+        );
+        registry.register(
+            "alert_webhook_oldest_waiting_seconds",
+            "Age of oldest generation-matching waiting webhook",
+            metrics.alert_webhook_oldest.clone(),
         );
         registry.register(
             "alert_email_attempts",
@@ -1048,6 +1069,12 @@ impl Metrics {
             .inc();
     }
 
+    pub(crate) fn observe_alert_webhook(&self, outcome: &'static str) {
+        self.alert_webhook_attempts
+            .get_or_create(&[("outcome", outcome.to_owned())])
+            .inc();
+    }
+
     pub fn observe_alert_delivery(&self, outcome: &'static str) {
         self.alert_delivery_attempts
             .get_or_create(&[("outcome", outcome.to_owned())])
@@ -1211,6 +1238,8 @@ impl Metrics {
         {
             self.reservations.clear();
             self.alert_delivery_queue.clear();
+            self.alert_webhook_queue.clear();
+            self.alert_webhook_oldest.clear();
             self.alert_pending_buckets.clear();
             self.alert_oldest_pending_age.clear();
             *self
@@ -1251,6 +1280,15 @@ impl Metrics {
                 }
             }
             _ => self.collection_error("alert_email"),
+        }
+        match tokio::time::timeout(Duration::from_secs(2), sqlx::query_as::<_, (String,i64,i64)>("SELECT s.state,count(q.id)::bigint,coalesce(max(greatest(0,extract(epoch FROM clock_timestamp()-q.created_at))) FILTER(WHERE s.state='waiting'),0)::bigint FROM unnest(ARRAY['waiting','leased','sent','failed','exhausted','ineligible']) s(state) LEFT JOIN (alert_webhook_outbox q JOIN alert_webhook_destinations d ON d.id=q.destination_id) ON q.state=s.state AND (q.state<>'waiting' OR q.destination_generation=d.enable_generation) AND (q.state IN ('waiting','leased') OR q.completed_at>clock_timestamp()-interval '24 hours') GROUP BY s.state").fetch_all(pool)).await {
+            Ok(Ok(rows)) => {
+                for (state,count,age) in rows {
+                    if state=="waiting" { self.alert_webhook_oldest.get_or_create(&[]).set(age); }
+                    self.alert_webhook_queue.get_or_create(&[("state",state)]).set(count);
+                }
+            }
+            _ => self.collection_error("alert_webhook"),
         }
         // The workspace lifetime totals rows (0015) count every pending and
         // unknown reservation exactly (each belongs to one workspace): one row

@@ -48,6 +48,9 @@ jiff = { version = "=0.2.38", default-features = false, features = ["std", "tzdb
 # SMTP delivery (invitations, alerts): rustls, async, one connection per message (no pool).
 lettre = { version = "=0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 percent-encoding = "2"
+# The already-locked reqwest transport's typed EOF/closed-connection errors;
+# never classify webhook retryability by attacker-controlled error text.
+hyper = { version = "=1.11.1", default-features = false }
 # Prometheus/OpenMetrics exposition on the optional GATEWAY_METRICS_ADDR listener.
 prometheus-client = "=0.25.1"
 # Secrets come only from the OS CSPRNG (rand::rngs::SysRng, fallible; src/entropy.rs).
