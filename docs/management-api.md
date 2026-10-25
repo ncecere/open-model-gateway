@@ -245,7 +245,7 @@ The dashboard opens it from the checkboxes on Workspace › Models and Admin ›
 
 ### Saved alert webhooks
 
-#45 exposes saved platform destinations, signed delivery, fixed test-send and redacted delivery status. The Webhooks UI follows separately.
+#45 exposes saved platform destinations, signed delivery, fixed test-send and redacted delivery status. The dashboard is **Admin › Settings › Alerts › Webhooks** ([administration](alerts.md#dashboard-administration-slice-3)).
 
 - `GET /platform/alerts/webhooks` returns `{data:[…]}`; `GET /platform/alerts/webhooks/{id}` returns an item. Platform Admin/Auditor; admin tokens need `platform:read`. Status includes `id,label,enabled,created_at,updated_at,signing_configured,overlap_active,previous_secret_until,waiting,exhausted,last_success_at,last_error`. Only browser-session Platform Admins and admin tokens holding both `platform:read` and `settings:write` also receive `url,current_secret_ref,previous_secret_ref`; Auditors and read-only tokens receive none of those fields.
 - `POST /platform/alerts/webhooks`: Platform Admin; token `settings:write`. Required `{label,url,current_secret_ref}` only. The destination always starts disabled. Labels are trimmed, 1–120 characters, without controls. URL must match the operator's canonical URL allowlist; references must be allowlisted `env:NAME`. Save never resolves signing bytes or contacts the receiver. Ten nondeleted destinations maximum (`409` when full).

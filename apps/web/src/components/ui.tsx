@@ -93,9 +93,10 @@ export type Action = { title: string; returnFocus?: HTMLElement; description?: s
 const ActionContext = createContext<(action: Action) => void>(() => { throw new Error("Missing action provider"); });
 export const useAction = () => useContext(ActionContext);
 export function ActionProvider({ children }: { children: ReactNode }) {
-  const [action, setAction] = useState<Action | null>(null);
-  const ask = useCallback((next: Action) => setAction({ ...next, returnFocus: next.returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : undefined) }), []);
-  return <ActionContext.Provider value={ask}>{children}{action && <ActionDialog action={action} onClose={success => { setAction(null); if (success) toast.success(action.successNotice ?? "Changes saved."); }} />}</ActionContext.Provider>;
+  const nextDialogId = useRef(0);
+  const [action, setAction] = useState<(Action & { dialogId: number }) | null>(null);
+  const ask = useCallback((next: Action) => setAction({ ...next, dialogId: ++nextDialogId.current, returnFocus: next.returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : undefined) }), []);
+  return <ActionContext.Provider value={ask}>{children}{action && <ActionDialog key={action.dialogId} action={action} onClose={success => { setAction(null); if (success) toast.success(action.successNotice ?? "Changes saved."); }} />}</ActionContext.Provider>;
 }
 /** A server typeahead for a form field: queries `path` with `q` (debounced) and at most 20 rows; never loads the full list. */
 /** Controlled by the form: it always shows the value that will be submitted (`value`, with its `label`), including after being hidden and shown again. */
@@ -169,16 +170,19 @@ function ActionDialog({ action, onClose }: { action: Action; onClose: (success: 
     event.preventDefault(); if (!mounted.current || retired.current || inFlight.current || sealed.current) return;
     const validation = validateFields(fields, values); setErrors(validation);
     if (Object.keys(validation).length) { document.getElementById(`${id}-${Object.keys(validation)[0]}`)?.focus(); return; }
+    const generation = copyGeneration.current;
     const request = new AbortController(); controller.current = request; inFlight.current = true; setBusy(true); setError(undefined);
     try {
       // Deliberately not useMutation: one-time credentials never enter mutation caches.
       const result = await action.run(Object.fromEntries(Object.entries(values).map(([key, value]) => [key, value.trim()])), request.signal);
       if (!mounted.current || request.signal.aborted) return;
       void client.invalidateQueries({ queryKey: ["api"] }); void client.invalidateQueries({ queryKey: ["session"] });
+      // A completed write still refreshes its list, but retirement forbids disclosure/after.
+      if (retired.current || copyGeneration.current !== generation) return;
       completed.current = true;
       if (action.secretLabel) { const secret = result as OneTimeToken; if (typeof secret?.token !== "string" || !secret.token) throw new Error("No token was returned. Check the list before trying again."); sealed.current = true; /* A disclosed secret seals this dialog: a retained submit must not rotate again. */ setValues({}); setToken(secret.token); }
-      else { action.after?.(result); onClose(true); }
-    } catch (caught) { if (mounted.current && !request.signal.aborted) { setError(caught); if (caught instanceof ApiError && caught.status === 403) void client.invalidateQueries({ queryKey: ["session"] }); } }
+      else { sealed.current = true; action.after?.(result); onClose(true); }
+    } catch (caught) { if (mounted.current && !retired.current && copyGeneration.current === generation && !request.signal.aborted) { setError(caught); if (caught instanceof ApiError && caught.status === 403) void client.invalidateQueries({ queryKey: ["session"] }); } }
     finally { inFlight.current = false; if (mounted.current) setBusy(false); }
   }
   return <><Dialog open title={token ? action.secretLabel! : action.title} description={action.description} hideClose={busy} onOpenChange={open => { if (!open) close(); }} finalFocus={() => action.returnFocus?.isConnected ? action.returnFocus : true} footer={token ? <Button onClick={discard}>I have saved it</Button> : <><Button variant="secondary" disabled={busy} onClick={close}>Cancel</Button><Button type="submit" form={id} variant={action.danger ? "danger" : "primary"} loading={busy}>{action.submitLabel ?? "Save"}</Button></>}>
