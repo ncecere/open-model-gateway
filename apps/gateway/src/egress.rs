@@ -974,4 +974,122 @@ mod tests {
         assert_eq!(ok.status(), 204);
         assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
+
+    /// Captures formatted JSON log lines for one test (same shape as
+    /// `inference::telemetry_tests::Captured`/`management::snapshot_tests::Captured`,
+    /// duplicated locally: those are private to their own modules).
+    #[derive(Clone, Default)]
+    struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Captured {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+        type Writer = Captured;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+    impl Captured {
+        fn text(&self) -> String {
+            String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
+        }
+    }
+
+    /// #321 (GitHub issue #321, "Telemetry export: shared egress refusal
+    /// logs repeat and name the collector host"): a real HTTP client -
+    /// exactly the `reqwest::Client`/`Resolver` path every exporter and
+    /// provider adapter uses (`egress::resolver_with` +
+    /// `.dns_resolver(..)`) - pointed at `localhost`, a real hostname
+    /// resolved by real DNS and refused by a strict (production-like)
+    /// policy (loopback needs `GATEWAY_ENV=development`), not a synthetic
+    /// address. Several repeated connection attempts against that same
+    /// refused destination - what a periodic OTLP exporter does on every
+    /// export interval - currently log the telemetry purpose's refusal
+    /// (naming the collector host and resolved address) on every single
+    /// attempt, instead of once on the transition into refusal. An
+    /// identical provider-purpose client must keep naming the host and
+    /// address on every attempt (unaffected).
+    #[tokio::test]
+    async fn telemetry_refusal_is_transition_only_and_host_free_across_repeated_real_attempts() {
+        let out = Captured::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_writer(out.clone())
+            .with_ansi(false)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        tracing::callsite::rebuild_interest_cache();
+
+        let strict = Policy::default();
+        let telemetry_client = reqwest::Client::builder()
+            .no_proxy()
+            .dns_resolver(resolver_with(Purpose::Telemetry, strict.clone()))
+            .build()
+            .unwrap();
+        let provider_client = reqwest::Client::builder()
+            .no_proxy()
+            .dns_resolver(resolver_with(Purpose::Provider, strict))
+            .build()
+            .unwrap();
+
+        for attempt in 0..4 {
+            assert!(
+                telemetry_client
+                    .get("http://localhost:4318/v1/traces")
+                    .send()
+                    .await
+                    .is_err(),
+                "attempt {attempt}"
+            );
+            // An identical client for a different purpose: unaffected by #321.
+            assert!(
+                provider_client
+                    .get("http://localhost:9/")
+                    .send()
+                    .await
+                    .is_err(),
+                "attempt {attempt}"
+            );
+        }
+
+        let logged = out.text();
+        let telemetry_warnings: Vec<&str> = logged
+            .lines()
+            .filter(|line| line.contains("\"purpose\":\"telemetry\""))
+            .collect();
+        assert_eq!(
+            telemetry_warnings.len(),
+            1,
+            "4 repeated telemetry refusals of the same destination must log only the one transition into refusal: {logged}"
+        );
+        for forbidden in ["localhost", "\"host\"", "\"address\""] {
+            assert!(
+                !telemetry_warnings[0].contains(forbidden),
+                "telemetry refusal must never name the destination (found {forbidden:?}): {}",
+                telemetry_warnings[0]
+            );
+        }
+
+        let provider_warnings: Vec<&str> = logged
+            .lines()
+            .filter(|line| line.contains("\"purpose\":\"provider\""))
+            .collect();
+        assert_eq!(
+            provider_warnings.len(),
+            4,
+            "provider refusal logging is unchanged: every attempt logs: {logged}"
+        );
+        for line in &provider_warnings {
+            assert!(
+                line.contains("localhost"),
+                "provider refusal must still name the host: {line}"
+            );
+        }
+    }
 }
