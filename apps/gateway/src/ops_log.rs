@@ -129,30 +129,7 @@ impl Severity {
     }
 }
 
-/// Opaque proof that a trace id came from existing shared-admission-proven
-/// `log_trace_id` provenance (#98). No crate-wide raw constructor: only code
-/// inside `crate::inference` (where that provenance is computed, right
-/// after admission commits) may mint one, from the value provenance already
-/// computed; no arbitrary string or UUID is accepted elsewhere. `as_str` is
-/// read-only and does not let a caller forge a new value from it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LogTraceId(String);
-impl LogTraceId {
-    pub(in crate::inference) fn from_provenance(hex: String) -> Self {
-        Self(hex)
-    }
-    /// Test fixtures only: compiled out of every production build, so this
-    /// is never a production forgery path.
-    #[cfg(test)]
-    pub(crate) fn for_test(hex: &str) -> Self {
-        Self(hex.to_owned())
-    }
-    /// Read-only: the existing hexadecimal value, for stderr diagnostics and
-    /// the wire `traceId` field. Never lets a caller mint a new value.
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
-    }
-}
+pub use crate::inference::LogTraceId;
 
 /// Seven closed variants (#294). Every field is a fixed, approved enum or
 /// (via the limiter, not a variant field) a bounded integer; there is no
@@ -312,7 +289,11 @@ impl Limiter {
         loop {
             let last = self.last[index].load(Ordering::Acquire);
             if last != 0 && now.saturating_sub(last) < REFILL.as_millis() as u64 {
-                self.suppressed[index].fetch_add(1, Ordering::AcqRel);
+                // Saturating, never a silent wraparound back to zero.
+                let _ =
+                    self.suppressed[index].fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| {
+                        Some(v.saturating_add(1))
+                    });
                 return None;
             }
             if self.last[index]

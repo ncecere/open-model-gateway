@@ -379,6 +379,21 @@ fn limiter_admits_one_per_30_seconds_then_suppresses_and_accounts_once() {
     assert_eq!(limiter.suppressed[index].load(Ordering::Relaxed), 0);
 }
 
+#[test]
+fn suppressed_counter_saturates_instead_of_wrapping_at_the_u64_boundary() {
+    let limiter = Limiter::default();
+    let index = OpsEvent::ConfigListenerDown.index();
+    limiter.suppressed[index].store(u64::MAX, Ordering::Relaxed);
+    // Still inside the same refill window: the increment path runs again.
+    limiter.last[index].store(now_ms(), Ordering::Relaxed);
+    assert_eq!(limiter.admit(index), None, "still suppressed, not refilled");
+    assert_eq!(
+        limiter.suppressed[index].load(Ordering::Relaxed),
+        u64::MAX,
+        "saturates instead of wrapping to zero"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn concurrent_admission_never_bursts_past_one_and_accounts_every_suppression() {
     // Real OS threads, not cooperative single-thread scheduling: `admit`

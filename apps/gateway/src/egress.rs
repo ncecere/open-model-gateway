@@ -322,7 +322,12 @@ fn denied(purpose: Purpose, host: &str, ip: IpAddr, policy: &Policy) {
 
 /// Keep the addresses the policy allows. Refusal is counted and logged only
 /// when none remain (a dual-stack host with one refused record still works,
-/// and that's not an incident); partial drops are debug logs.
+/// and that's not an incident); partial drops are debug logs. A
+/// `loopback_only` policy (development plain HTTP, #313/#325) is the
+/// exception: it never narrows a mixed answer down to its loopback subset,
+/// because a non-loopback record in that answer (a rebound or poisoned
+/// `localhost`, say) is itself the incident, not merely a dropped option.
+/// Such an answer is refused in full.
 pub(crate) fn filter(
     policy: &Policy,
     purpose: Purpose,
@@ -331,6 +336,15 @@ pub(crate) fn filter(
 ) -> anyhow::Result<Vec<SocketAddr>> {
     let (allowed, refused): (Vec<_>, Vec<_>) =
         found.iter().copied().partition(|a| policy.allows(a.ip()));
+    if policy.loopback_only && !refused.is_empty() {
+        if let Some(first) = refused.first() {
+            denied(purpose, host, first.ip(), policy);
+        }
+        anyhow::bail!(
+            "{} connection to {host} refused: a mixed DNS answer included a non-loopback address (loopback-only development HTTP)",
+            purpose.as_str()
+        );
+    }
     if !allowed.is_empty() {
         for addr in &refused {
             tracing::debug!(purpose = purpose.as_str(), host, address = %addr.ip(), reason = policy.refusal(addr.ip()), "egress policy dropped one resolved address");

@@ -373,23 +373,24 @@ mod tests {
     }
 
     /// A real-transport proof, like the traces/metrics mixed-answer test in
-    /// `egress.rs`: a DNS answer mixing a loopback and an otherwise-allowed
-    /// address keeps only the loopback one for `http`, the exact bypass this
-    /// fixes (a `localhost` rebinding or poisoned answer could otherwise
-    /// include a public or allowlisted-private address).
+    /// `egress.rs`: for `http`, a DNS answer mixing a loopback record with an
+    /// otherwise-allowed one is refused in full, not narrowed down to the
+    /// loopback subset (a `localhost` rebinding or poisoned answer must
+    /// never partially succeed just because one record happens to be
+    /// loopback). HTTPS filtering is unaffected.
     #[test]
-    fn mixed_dns_answers_for_http_keep_only_the_loopback_address() {
+    fn mixed_dns_answers_for_http_are_refused_in_full() {
         let sock = |s: &str| std::net::SocketAddr::new(ip(s), 4318);
         let policy = transport_policy(true, "http");
-        assert_eq!(
+        assert!(
             crate::egress::filter(
                 &policy,
                 crate::egress::Purpose::Telemetry,
                 "localhost",
                 vec![sock("127.0.0.1"), sock("8.8.8.8")]
             )
-            .unwrap(),
-            vec![sock("127.0.0.1")]
+            .is_err(),
+            "a single non-loopback record refuses the whole answer"
         );
         assert!(
             crate::egress::filter(
@@ -400,11 +401,33 @@ mod tests {
             )
             .is_err()
         );
-        // Without the fix, a plain `permit_loopback` policy would accept the
-        // public answer too: confirm that IS the unfixed behaviour, so this
-        // test documents the exact bypass closed above.
-        let unfixed = crate::egress::policy().permit_loopback(true);
-        assert!(unfixed.allows(ip("8.8.8.8")));
+        assert_eq!(
+            crate::egress::filter(
+                &policy,
+                crate::egress::Purpose::Telemetry,
+                "localhost",
+                vec![sock("127.0.0.1"), sock("::1")]
+            )
+            .unwrap(),
+            vec![sock("127.0.0.1"), sock("::1")],
+            "an all-loopback answer is unaffected"
+        );
+        // HTTPS keeps the ordinary mixed-answer behaviour (narrow to the
+        // allowed subset), confirming only `http`/loopback_only changed.
+        // `development: false` so the loopback record is actually refused
+        // (not just un-narrowed) and the public one kept.
+        let https = transport_policy(false, "https");
+        assert_eq!(
+            crate::egress::filter(
+                &https,
+                crate::egress::Purpose::Telemetry,
+                "example.invalid",
+                vec![sock("127.0.0.1"), sock("8.8.8.8")]
+            )
+            .unwrap(),
+            vec![sock("8.8.8.8")],
+            "https: the loopback record is dropped, the public one kept"
+        );
     }
 
     #[test]
