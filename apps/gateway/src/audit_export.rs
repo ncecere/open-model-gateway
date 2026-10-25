@@ -313,7 +313,7 @@ impl Exporter {
             secret.len() >= MIN_SECRET_BYTES,
             "the audit webhook secret must be at least {MIN_SECRET_BYTES} bytes"
         );
-        let (url, client) = https_client(URL_ENV, url, development)?;
+        let (url, client) = https_client(URL_ENV, url, crate::egress::Purpose::Audit, development)?;
         Ok(Some(Self {
             transport: Transport::Webhook(Webhook {
                 url,
@@ -327,7 +327,17 @@ impl Exporter {
     /// the URL checks and client of the webhook. `headers` is the
     /// `Key=Value,...` text of the operator's variable; errors never repeat it.
     pub fn otlp(url: &str, headers: Option<&str>, development: bool) -> anyhow::Result<Self> {
-        let (url, client) = https_client(OTLP_URL_ENV, url.trim(), development)?;
+        // #321 round 2 (LOW finding 2): a distinct purpose from the
+        // webhook/syslog `Purpose::Audit`, so this client's resolver (built
+        // once below and reused for every delivery) can apply the same
+        // transition-only, host-free logging the telemetry exporters use,
+        // without quieting webhook/syslog diagnostics.
+        let (url, client) = https_client(
+            OTLP_URL_ENV,
+            url.trim(),
+            crate::egress::Purpose::AuditOtlp,
+            development,
+        )?;
         let headers = match headers {
             None => reqwest::header::HeaderMap::new(),
             Some(text) => parse_otlp_headers(OTLP_HEADERS_ENV_ENV, text)?,
@@ -463,9 +473,13 @@ impl Exporter {
 /// The URL checks and client shared by the webhook and the OTLP collector:
 /// HTTPS only (plain HTTP only to loopback in development), no credentials
 /// or fragment, the outbound address policy, no proxy, redirects or retries.
+/// `purpose` distinguishes the webhook/syslog destination (`Purpose::Audit`)
+/// from the OTLP collector (`Purpose::AuditOtlp`, #321 round 2) so their
+/// egress refusal logging policies can differ.
 fn https_client(
     setting: &str,
     url: &str,
+    purpose: crate::egress::Purpose,
     development: bool,
 ) -> anyhow::Result<(reqwest::Url, reqwest::Client)> {
     let url = reqwest::Url::parse(url).map_err(|_| anyhow::anyhow!("{setting} is not a URL"))?;
@@ -485,7 +499,7 @@ fn https_client(
     );
     let client = export_http_client(
         &url,
-        crate::egress::Purpose::Audit,
+        purpose,
         development,
         Duration::from_secs(5),
         REQUEST_TIMEOUT,
@@ -1205,20 +1219,48 @@ pub async fn status(store: &Store) -> Result<Value, sqlx::Error> {
     Ok(v)
 }
 
-/// The `start` loop's per-delivery log, factored out so its test can drive
-/// it directly with synthetic [`Outcome`]s. `otlp_failing` is accepted but
-/// not yet used by this (pre-#321-round-2) behavior: every `Failed`
-/// outcome names the host, for every transport, exactly as the inline code
-/// it replaces did.
+/// The `start` delivery-failure/recovery log for one run's [`Outcome`]
+/// (#321 round 2, LOW finding 2): the OTLP collector host was otherwise
+/// named on every failed attempt (this loop retries every 2s, backed off),
+/// the same per-attempt destination leak the DNS-refusal layer had for
+/// telemetry export. `otlp_failing` is owned by the caller's single loop
+/// iteration (`start` is one sequential task, never a shared `Exporter`
+/// across tasks, so a plain `Cell` - no atomics - is enough): only an OTLP
+/// exporter logs a fixed, host-free warning on the transition into failure
+/// and back, instead of naming the destination on every attempt. A
+/// webhook/syslog destination's host is unchanged: named on every failure,
+/// which is what operators rely on to triage a misconfigured destination.
 fn log_delivery_outcome(outcome: &Outcome, exporter: &Exporter, otlp_failing: &Cell<bool>) {
-    let _ = otlp_failing;
-    if let Outcome::Failed(category) = *outcome {
-        tracing::warn!(
-            category,
-            host = exporter.host(),
-            transport = exporter.transport(),
-            "audit export delivery failed; retrying with backoff"
-        );
+    match *outcome {
+        Outcome::Failed(category) if exporter.transport() == "otlp" => {
+            if !otlp_failing.replace(true) {
+                tracing::warn!(
+                    category,
+                    transport = "otlp",
+                    "audit export delivery to the OTLP collector failed; retrying with backoff (destination omitted; repeated failures are not re-logged until it recovers)"
+                );
+            }
+        }
+        Outcome::Failed(category) => {
+            tracing::warn!(
+                category,
+                host = exporter.host(),
+                transport = exporter.transport(),
+                "audit export delivery failed; retrying with backoff"
+            );
+        }
+        // Only an actual successful attempt (a delivery or heartbeat) is a
+        // recovery: `Outcome::Idle` can mean "still backing off, not
+        // attempted yet" and must never clear the flag or claim recovery.
+        (Outcome::Delivered(_) | Outcome::Heartbeat)
+            if exporter.transport() == "otlp" && otlp_failing.replace(false) =>
+        {
+            tracing::warn!(
+                transport = "otlp",
+                "audit export delivery to the OTLP collector is succeeding again"
+            );
+        }
+        _ => {}
     }
 }
 
@@ -1252,7 +1294,10 @@ pub fn start(store: Store, exporter: std::sync::Arc<Exporter>) -> tokio::task::J
                 )
                 .await
                 {
-                    Ok(Ok(Outcome::Delivered(n))) if i64::try_from(n).unwrap_or(0) == BATCH => {
+                    Ok(Ok(outcome @ Outcome::Delivered(n)))
+                        if i64::try_from(n).unwrap_or(0) == BATCH =>
+                    {
+                        log_delivery_outcome(&outcome, &exporter, &otlp_failing);
                         continue;
                     }
                     Ok(Ok(outcome @ Outcome::Failed(_))) => {
@@ -1264,7 +1309,10 @@ pub fn start(store: Store, exporter: std::sync::Arc<Exporter>) -> tokio::task::J
                         tracing::warn!("audit export run incomplete; retrying");
                         break;
                     }
-                    Ok(Ok(_)) => break,
+                    Ok(Ok(outcome)) => {
+                        log_delivery_outcome(&outcome, &exporter, &otlp_failing);
+                        break;
+                    }
                 }
             }
         }

@@ -19,13 +19,18 @@
 //! Refusal logging has a per-[`Purpose`] policy ([`Purpose::logging_policy`],
 //! #321): most purposes name the refused host and resolved address on every
 //! attempt, which is what operators expect for provider, OIDC, storage,
-//! catalog, SMTP, audit and alert-webhook egress. Telemetry/OTLP export
-//! destinations are resolved on every export attempt - as often as the
-//! metrics push interval - so that purpose instead logs a fixed, host-free
-//! warning only when its connectivity actually changes (into or out of
-//! refusal), matching the exporters' own transition-only, fixed-enum
-//! diagnostics. The `gateway_egress_denied_total{purpose}` counter and the
-//! address enforcement itself are unchanged for every purpose.
+//! catalog, SMTP, audit (webhook/syslog) and alert-webhook egress.
+//! Telemetry/OTLP export destinations, and the OTLP audit exporter's
+//! destination (a distinct [`Purpose::AuditOtlp`], never the webhook/syslog
+//! [`Purpose::Audit`]), are resolved on every export attempt - as often as
+//! the metrics push interval - so those two purposes instead log a fixed,
+//! host-free warning only when connectivity actually changes (into or out
+//! of refusal), matching the exporters' own transition-only, fixed-enum
+//! diagnostics. This also applies to the dual-stack partial-drop DEBUG
+//! diagnostic (mixed allowed/refused DNS answers): on every attempt for
+//! these two purposes, never the dropped address. The
+//! `gateway_egress_denied_total{purpose}` counter and the address
+//! enforcement itself are unchanged for every purpose.
 
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
@@ -49,6 +54,13 @@ pub enum Purpose {
     Catalog,
     Smtp,
     Audit,
+    /// The audit export destination only when it is an OTLP collector
+    /// (#321 round 2): a distinct purpose from [`Self::Audit`] (which stays
+    /// the webhook/syslog destination's purpose) so the OTLP collector's
+    /// resolver, built once and reused for every delivery, can apply the
+    /// same transition-only, host-free logging the telemetry exporters use
+    /// without quieting the webhook/syslog diagnostics operators rely on.
+    AuditOtlp,
     Telemetry,
     AlertWebhook,
 }
@@ -61,6 +73,7 @@ impl Purpose {
             Self::Catalog => "catalog",
             Self::Smtp => "smtp",
             Self::Audit => "audit",
+            Self::AuditOtlp => "audit_otlp",
             Self::Telemetry => "telemetry",
             Self::AlertWebhook => "alert_webhook",
         }
@@ -69,14 +82,17 @@ impl Purpose {
     /// Whether this purpose's egress refusals are logged (host and resolved
     /// address) on every attempt, or only when its connectivity state
     /// changes (#321: telemetry export's shared egress refusal logs
-    /// repeated and named the collector host on every periodic attempt).
-    /// Only telemetry/OTLP export (traces today, metrics once #324 ships -
-    /// both build their client through `otlp::export_http_client` with this
-    /// same purpose) uses the quieter policy; every other purpose is
+    /// repeated and named the collector host on every periodic attempt;
+    /// round 2 extended this to the OTLP audit exporter, #321 LOW finding
+    /// 2). Telemetry/OTLP export and the OTLP audit exporter (both build
+    /// their one, reused-per-client resolver through
+    /// `otlp::export_http_client`/`audit_export::https_client` with their
+    /// own purpose) use the quieter policy; every other purpose, including
+    /// the audit webhook/syslog destination's own [`Self::Audit`], is
     /// unchanged.
     fn logging_policy(self) -> LoggingPolicy {
         match self {
-            Self::Telemetry => LoggingPolicy::TransitionOnly,
+            Self::Telemetry | Self::AuditOtlp => LoggingPolicy::TransitionOnly,
             Self::Provider
             | Self::Oidc
             | Self::Storage
@@ -343,6 +359,9 @@ fn denied(purpose: Purpose, host: &str, ip: IpAddr, policy: &Policy, transition:
         // #321: logged only on the transition into refusal, never the host
         // or resolved address, so a periodic export attempt that keeps
         // resolving to the same refused destination does not repeat it.
+        // Relaxed: the flag only gates whether this log line itself is
+        // printed; no other memory access is ordered against it, so the
+        // swap's own atomicity (one logger wins the transition) is enough.
         if !transition.swap(true, Ordering::Relaxed) {
             tracing::warn!(
                 purpose = purpose.as_str(),
@@ -409,8 +428,22 @@ fn filter_tracked(
     let (allowed, refused): (Vec<_>, Vec<_>) =
         found.iter().copied().partition(|a| policy.allows(a.ip()));
     if !allowed.is_empty() && (!policy.loopback_only || refused.is_empty()) {
+        // #321 round 2 (LOW finding 1): a mixed DNS answer's dropped
+        // addresses are a DEBUG diagnostic, but for a `TransitionOnly`
+        // purpose (telemetry/OTLP export, the OTLP audit exporter) this is
+        // the same resolve-on-every-attempt path as a full refusal, so it
+        // gets the same destination-free treatment - a fixed classification
+        // only, never the host or dropped address.
         for addr in &refused {
-            tracing::debug!(purpose = purpose.as_str(), host, address = %addr.ip(), reason = policy.refusal(addr.ip()), "egress policy dropped one resolved address");
+            if purpose.logging_policy() == LoggingPolicy::TransitionOnly {
+                tracing::debug!(
+                    purpose = purpose.as_str(),
+                    reason = policy.refusal(addr.ip()),
+                    "egress policy dropped one resolved address (destination omitted)"
+                );
+            } else {
+                tracing::debug!(purpose = purpose.as_str(), host, address = %addr.ip(), reason = policy.refusal(addr.ip()), "egress policy dropped one resolved address");
+            }
         }
         recovered(purpose, transition);
         return Ok(allowed);
