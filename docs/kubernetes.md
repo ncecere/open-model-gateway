@@ -261,7 +261,7 @@ gateway:
         name: omg-metrics-headers
 ```
 
-The Secret's `METRICS_COLLECTOR_HEADERS` key holds `Key=Value,Key2=Value2`; never put its value in `gateway.env` or share it with provider, SMTP, trace or audit credentials. Apply the collector egress rule above for TCP 4318 and allow its private address range in `GATEWAY_EGRESS_PRIVATE_ALLOW`. Production collectors require HTTPS, including in-cluster collectors; plain HTTP is development-loopback-only (post-DNS tightening is tracked separately in #313). Each replica has one worker, no retries or spool, and a single 3-second exporter shutdown budget shared by collection and final delivery, concurrent with trace drain. Collector failure does not affect readiness. The exporter's own warnings are fixed-enum outage transitions without destination, headers or server text; DNS/egress policy refusals additionally produce a shared-egress WARN with purpose, host and resolved address on every attempt (#321). See [OTLP metrics](operations.md#otlp-metrics-99) for privacy classes, caps and outcome metrics. No chart template change is needed.
+The Secret's `METRICS_COLLECTOR_HEADERS` key holds `Key=Value,Key2=Value2`; never put its value in `gateway.env` or share it with provider, SMTP, trace or audit credentials. Apply the collector egress rule above for TCP 4318 and allow its private address range in `GATEWAY_EGRESS_PRIVATE_ALLOW`. Production collectors require HTTPS, including in-cluster collectors; plain HTTP is development-only and connects only to canonical loopback after DNS (#313). Each replica has one worker, no retries or spool, and a single 3-second exporter shutdown budget shared by collection and final delivery, concurrent with trace drain. Collector failure does not affect readiness. The exporter's own warnings are fixed-enum outage transitions without destination, headers or server text; a DNS/egress policy refusal logs one fixed, destination-free warning when connectivity changes, not on every attempt (#321). See [OTLP metrics](operations.md#otlp-metrics-99) for privacy classes, caps and outcome metrics. No chart template change is needed.
 
 ## Failover timing
 
@@ -410,7 +410,7 @@ backup to be lost — see #146 and `docs/operations.md` "Backups and restore" fo
   single-platform archive:
 
   ```sh
-  IMAGE=ghcr.io/ncecere/open-model-gateway:v0.8.0
+  IMAGE=ghcr.io/ncecere/open-model-gateway:v0.9.0
   docker pull "$IMAGE"
   docker save --platform "linux/$(docker version --format '{{.Server.Arch}}')" "$IMAGE" -o omg.tar
   kind load image-archive omg.tar --name <your-kind-cluster>
