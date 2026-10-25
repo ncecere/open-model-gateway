@@ -126,6 +126,7 @@ impl ProviderAdapter for Adapter {
         let events = match self.mode {
             Mode::Complete => {
                 return Ok(ProviderOutput::Complete(ChatResponse {
+                    messages_content: None,
                     content: Some("hello".into()),
                     tool_calls: vec![],
                     finish_reason: FinishReason::Stop,

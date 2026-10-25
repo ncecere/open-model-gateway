@@ -991,7 +991,7 @@ fn steering_headers(attacker: &Upstream) -> Vec<(String, String)> {
 /// A header the protocol itself reads is refused when it is wrong; every other
 /// one is ignored.
 fn header_expect(t: &Target, name: &str) -> Expect {
-    if t.messages() && matches!(name, "anthropic-version" | "anthropic-beta") {
+    if t.messages() && name == "anthropic-version" {
         return Rejected(400, "invalid_request_error");
     }
     Forwarded
@@ -1251,6 +1251,59 @@ async fn steering_control_rejects_accounting_unavailable_after_a_real_upstream_h
     }
 }
 
+/// Reviewed native fields may carry attacker strings as data, never destinations.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn anthropic_fidelity_data_cannot_steer_transport(pool: PgPool) {
+    let w = world(pool).await;
+    let t = targets()
+        .into_iter()
+        .find(|t| t.label == "messages/anthropic")
+        .unwrap();
+    let body = (t.body)(t.model);
+    let ctl = control(
+        &w,
+        t.label,
+        json_request(&w.keys.personal_key.token, t.path, &t.base(), &body),
+    )
+    .await;
+    let attacker = format!("http://{}/steal", w.attacker.authority());
+    let mut rich = body.clone();
+    rich["system"] =
+        json!([{"type":"text","text":attacker,"cache_control":{"type":"ephemeral","ttl":"1h"}}]);
+    rich["thinking"] = json!({"type":"adaptive"});
+    rich["output_config"] = json!({"effort":"high","task_budget":{"type":"tokens","total":64}});
+    rich["context_management"] =
+        json!({"edits":[{"type":"clear_tool_uses_20250919","exclude_tools":[attacker]}]});
+    rich["tools"] = json!([{"name":"lookup","description":attacker,"input_schema":{"type":"object","description":attacker},"defer_loading":true}]);
+    rich["metadata"] = json!({"user_id":attacker});
+    rich["messages"] = json!([{"role":"assistant","content":[{"type":"thinking","thinking":attacker,"signature":attacker},{"type":"redacted_thinking","data":attacker}]},{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}},{"type":"text","text":attacker}]}]);
+    let headers = [t.base(), vec![("anthropic-beta".into(), attacker.clone())]].concat();
+    let _ = send(
+        &w.app,
+        json_request(&w.keys.personal_key.token, t.path, &headers, &rich),
+    )
+    .await;
+    let mut hits = w.approved.take();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].header("anthropic-beta"), Some(attacker.as_str()));
+    hits[0].headers.retain(|(n, _)| n != "anthropic-beta");
+    let actual: Value = serde_json::from_str(&hits[0].body).unwrap();
+    // Compare transport to the control; reviewed body data is asserted exactly
+    // below, not exempted from inspection by a general passthrough allowance.
+    hits[0].body.clone_from(&ctl.hit.body);
+    assert_clean(t.label, "reviewed fidelity fields", &hits[0], &ctl.hit, &w);
+    rich.as_object_mut().unwrap().remove("metadata");
+    let clean: Value = serde_json::from_str(&ctl.hit.body).unwrap();
+    rich["model"] = clean["model"].clone();
+    rich["stream"] = json!(false);
+    assert_eq!(
+        actual, rich,
+        "only reviewed fields move; metadata stays local"
+    );
+    assert_no_attacker(&w, t.label, "reviewed fidelity fields");
+    w.close().await;
+}
+
 /// Every JSON inference protocol, on every adapter and local profile that serves it.
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn no_json_inference_input_can_steer_the_upstream(pool: PgPool) {
@@ -1312,6 +1365,22 @@ async fn no_json_inference_input_can_steer_the_upstream(pool: PgPool) {
 
         // Request headers: ignored, except those the protocol itself reads.
         for (name, value) in steering_headers(&w.attacker) {
+            if t.label == "messages/anthropic" && name == "anthropic-beta" {
+                let (status, text) =
+                    send(&w.app, post(&[(name.clone(), value.clone())], &body)).await;
+                assert_eq!(
+                    (status.as_u16(), reason(&text)),
+                    (ctl.status, ctl.reason.clone())
+                );
+                let mut hits = w.approved.take();
+                assert_eq!(hits.len(), 1);
+                assert_eq!(hits[0].header("anthropic-beta"), Some(value.as_str()));
+                hits[0].headers.retain(|(n, _)| n != "anthropic-beta");
+                assert_clean(t.label, "reviewed beta header", &hits[0], &ctl.hit, &w);
+                assert_eq!(hits[0].body, ctl.hit.body);
+                assert_no_attacker(&w, t.label, "reviewed beta header");
+                continue;
+            }
             let want = header_expect(&t, &name);
             check(name.clone(), post(&[(name, value)], &body), want).await;
         }

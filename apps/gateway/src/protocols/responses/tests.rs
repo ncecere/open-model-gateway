@@ -94,6 +94,7 @@ fn own_snapshots_are_stateless_followup_input() {
         FinishReason::ContentFilter,
     ] {
         let response = ChatResponse {
+            messages_content: None,
             content: Some("First 世界, then tools".into()),
             tool_calls: vec![ToolCall {
                 id: "semantic-call".into(),
@@ -315,6 +316,7 @@ async fn native_terminal_outcomes_map_to_coarse_incomplete_json_and_sse() {
     ] {
         for empty in [false, true] {
             let response = ChatResponse {
+                messages_content: None,
                 content: (!empty).then(|| "世界".into()),
                 tool_calls: vec![],
                 finish_reason: reason,

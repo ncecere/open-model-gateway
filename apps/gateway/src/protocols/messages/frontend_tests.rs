@@ -62,12 +62,12 @@ fn claude_code_field_rules_by_provider_class() {
             true,
         ),
         (
-            json!({"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aW1hZ2U="}}]}]}),
+            json!({"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}]}]}),
             "image",
             true,
         ),
         (
-            json!({"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"c","name":"lookup","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aW1hZ2U="}}]}]}]}),
+            json!({"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"c","name":"lookup","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}]}]}]}),
             "image",
             true,
         ),
@@ -81,7 +81,7 @@ fn claude_code_field_rules_by_provider_class() {
         for class in classes {
             let parsed = request(body.clone()).unwrap();
             let verdict = crate::providers::messages::validate(&parsed, class);
-            if always_refuse || class == ProviderClass::Anthropic {
+            if always_refuse && (field != "image" || class != ProviderClass::Anthropic) {
                 assert!(
                     matches!(verdict, Err(InferenceError::InvalidField(f)) if f == field),
                     "{field}"
@@ -111,10 +111,7 @@ fn cache_hints_have_the_same_rule_at_every_supported_position() {
                 .cache_controls
                 .is_empty()
         );
-        assert!(matches!(
-            crate::providers::messages::validate(&r, ProviderClass::Anthropic),
-            Err(InferenceError::InvalidField("cache_control"))
-        ));
+        assert!(crate::providers::messages::validate(&r, ProviderClass::Anthropic).is_ok());
         for class in [
             ProviderClass::OpenAi,
             ProviderClass::Bedrock,
@@ -227,7 +224,7 @@ fn server_tools_unknown_and_malformed_fields_are_refused() {
 }
 
 #[test]
-fn beta_is_accepted_but_anthropic_forwarding_is_not_faked() {
+fn beta_is_accepted_with_bounded_verbatim_values() {
     let mut headers = HeaderMap::new();
     headers.insert("anthropic-version", "2023-06-01".parse().unwrap());
     headers.append(
@@ -238,17 +235,78 @@ fn beta_is_accepted_but_anthropic_forwarding_is_not_faked() {
     );
     assert!(valid_version(&headers));
     let mut r = request(json!({})).unwrap();
-    r.messages_options.as_mut().unwrap().beta = true;
-    assert!(matches!(
-        crate::providers::messages::validate(&r, ProviderClass::Anthropic),
-        Err(InferenceError::InvalidField("anthropic-beta"))
-    ));
+    r.messages_options.as_mut().unwrap().beta_headers = beta_headers(&headers).unwrap();
+    assert!(crate::providers::messages::validate(&r, ProviderClass::Anthropic).is_ok());
+    assert_eq!(
+        r.messages_options.as_ref().unwrap().beta_headers,
+        vec!["interleaved-thinking-2025-05-14,context-management-2025-06-27"]
+    );
+    headers.insert("anthropic-beta", "x".repeat(1025).parse().unwrap());
+    assert!(!valid_version(&headers));
+    headers.remove("anthropic-beta");
+    for _ in 0..17 {
+        headers.append("anthropic-beta", "x".parse().unwrap());
+    }
+    assert!(!valid_version(&headers));
     for class in [
         ProviderClass::OpenAi,
         ProviderClass::Bedrock,
         ProviderClass::Local,
     ] {
         assert!(crate::providers::messages::validate(&r, class).is_ok());
+    }
+}
+
+#[tokio::test]
+async fn native_thinking_lifecycles_reach_the_client_without_duplicate_text_or_success_on_eof() {
+    let blocks = vec![
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"reason"}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"opaque+/=="}}),
+        json!({"type":"content_block_stop","index":0}),
+        json!({"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}),
+        json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"answer"}}),
+        json!({"type":"content_block_stop","index":1}),
+        json!({"type":"content_block_start","index":2,"content_block":{"type":"redacted_thinking","data":"encrypted+/=="}}),
+        json!({"type":"content_block_stop","index":2}),
+    ];
+    for terminal in [false, true] {
+        let mut events: Vec<_> = blocks
+            .iter()
+            .cloned()
+            .map(|v| Ok(ChatEvent::MessagesBlock(v)))
+            .collect();
+        events.push(Ok(ChatEvent::Delta {
+            text: Some("answer".into()),
+            tool_calls: vec![],
+        }));
+        events.push(Ok(ChatEvent::Finish(FinishReason::Stop)));
+        if terminal {
+            events.push(Ok(ChatEvent::Done));
+        }
+        let response = render(
+            ProviderOutput::Stream(Box::pin(futures_util::stream::iter(events))),
+            "id".into(),
+            "public".into(),
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), OUTPUT_LIMIT)
+            .await
+            .unwrap();
+        let text = std::str::from_utf8(&bytes).unwrap();
+        let values: Vec<Value> = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .map(|s| serde_json::from_str(s).unwrap())
+            .collect();
+        let actual: Vec<_> = values
+            .iter()
+            .filter(|v| v["type"].as_str().unwrap().starts_with("content_block_"))
+            .cloned()
+            .collect();
+        assert_eq!(actual, blocks);
+        assert_eq!(text.matches("answer").count(), 1);
+        assert_eq!(text.contains("event: message_stop"), terminal);
+        assert_eq!(text.contains("event: error"), !terminal);
     }
 }
 

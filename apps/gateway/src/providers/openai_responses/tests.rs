@@ -219,6 +219,7 @@ async fn native_json_and_byte_fragmented_sse() {
 #[tokio::test]
 async fn echoed_output_reconstructs_canonical_upstream_input_without_item_identity() {
     let prior = ChatResponse {
+        messages_content: None,
         content: Some("First 世界".into()),
         tool_calls: vec![ToolCall {
             id: "semantic-call".into(),

@@ -45,7 +45,7 @@ fn strict_text_tool_subset() {
     for block in [
         json!({"type":"image","source":{}}),
         json!({"type":"text","text":"x","cache_control":null}),
-        json!({"type":"tool_result","tool_use_id":"c","content":"bad","is_error":true}),
+        json!({"type":"tool_result","tool_use_id":"c","content":"bad","is_error":null}),
     ] {
         assert!(
             parse(
@@ -83,10 +83,22 @@ fn empty_successful_tool_result_defaults_are_absent_only() {
             assert!(r.messages[1].role == Role::Tool);
         }
     }
+    let error_result = parse(request(
+        json!({"type":"tool_result","tool_use_id":"call-ping","is_error":true}),
+    ))
+    .unwrap();
+    assert!(
+        crate::providers::messages::validate(
+            &error_result,
+            crate::providers::messages::ProviderClass::Anthropic
+        )
+        .is_ok()
+    );
     assert!(matches!(
-        parse(request(
-            json!({"type":"tool_result","tool_use_id":"call-ping","is_error":true})
-        )),
+        crate::providers::messages::validate(
+            &error_result,
+            crate::providers::messages::ProviderClass::OpenAi
+        ),
         Err(InferenceError::Unsupported)
     ));
     for block in [

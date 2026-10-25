@@ -95,6 +95,7 @@ impl ProviderAdapter for Fixture {
             )))
         } else {
             Ok(ProviderOutput::Complete(ChatResponse {
+                messages_content: None,
                 content: Some(text.into()),
                 tool_calls: calls,
                 finish_reason,
@@ -178,10 +179,19 @@ async fn real_client_sdks_accept_all_three_protocols(pool: sqlx::PgPool) {
         "SDK contracts failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    // Thirty-one priced calls, including omission-positive tool roundtrips.
+    // Thirty-three priced calls, including beta/cache/thinking SDK grammar.
     // Malformed/stateful/error-marked followups leave no attempts or dispatch.
     let recorded = recorded.lock().unwrap().clone();
-    assert_eq!(recorded.len(), 31);
+    assert_eq!(recorded.len(), 33);
+    for r in &recorded[31..] {
+        let options = r.messages_options.as_ref().unwrap();
+        assert_eq!(
+            options.beta_headers,
+            ["interleaved-thinking-2025-05-14, caller-only-beta"]
+        );
+        assert_eq!(options.thinking.as_ref().unwrap()["type"], "adaptive");
+        assert_eq!(options.cache_controls[0]["ttl"], "1h");
+    }
     let no_arguments =
         serde_json::json!({"type":"object","properties":{},"additionalProperties":false});
     for (i, r) in recorded.iter().enumerate().take(28).skip(18) {

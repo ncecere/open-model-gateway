@@ -123,6 +123,58 @@ async fn claude_code_beta_query_reaches_real_engine_without_forwarding_inference
     assert!(serialized.contains("continue"));
 }
 #[tokio::test]
+async fn native_frontend_preserves_beta_values_and_blocks_through_the_engine() {
+    let captures = Captures::default();
+    let native = json!({"id":"private","type":"message","role":"assistant","model":"private","content":[{"type":"thinking","thinking":"reason","signature":"opaque+/=="},{"type":"text","text":"answer"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":3,"output_tokens":4}});
+    let mock = upstream(200, native.clone(), captures.clone()).await;
+    let adapter = crate::providers::anthropic::AnthropicAdapter::for_test(
+        Arc::new(Resolver),
+        mock.url.clone(),
+    );
+    let (app, repository) = frontend_adapter(Arc::new(adapter));
+    let system = json!([{"type":"text","text":"instructions","cache_control":{"type":"ephemeral","ttl":"1h"}}]);
+    let mut input = wire(
+        json!({"model":"configured-name","max_tokens":8192,"system":system,"thinking":{"type":"adaptive"},"metadata":{"user_id":"do-not-forward"},"messages":[{"role":"user","content":"hello"}]}),
+    );
+    input.headers_mut().append(
+        "anthropic-beta",
+        "caller-only-beta, second-value".parse().unwrap(),
+    );
+    let response = app.oneshot(input).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let output: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(output["content"], native["content"]);
+    assert_eq!(output["model"], "configured-name");
+    assert_eq!(repository.starts.load(Ordering::SeqCst), 1);
+    let captures = captures.lock().unwrap();
+    let (headers, body) = &captures[0];
+    assert_eq!(headers["x-api-key"], "server-held-provider-key");
+    assert!(!headers.contains_key("authorization"));
+    assert_eq!(
+        headers
+            .get_all("anthropic-beta")
+            .iter()
+            .map(|v| v.to_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "interleaved-thinking-2025-05-14",
+            "caller-only-beta, second-value"
+        ]
+    );
+    assert_eq!(body["system"], system);
+    assert_eq!(body["max_tokens"], 8192);
+    assert!(body.get("metadata").is_none());
+    assert!(
+        !body
+            .to_string()
+            .contains("inference-key-must-not-leave-gateway")
+    );
+}
+
+#[tokio::test]
 async fn upstream_errors_have_anthropic_status_and_never_expose_upstream_bodies() {
     for (upstream_status, upstream_body, status, kind, message) in [
         (
@@ -193,30 +245,17 @@ async fn messages_nonstream_provider_bound_allows_over_four_mib_and_refuses_over
 }
 
 #[tokio::test]
-async fn native_anthropic_fidelity_refusals_do_not_admit_or_dispatch() {
+async fn native_anthropic_unsupported_fields_do_not_admit_or_dispatch() {
     let captures = Captures::default();
     let mock = upstream(200, json!({}), captures.clone()).await;
     for (extra, field) in [
         (
-            json!({"system":[{"type":"text","text":"x","cache_control":{"type":"ephemeral","ttl":"1h"}}]}),
-            "cache_control",
-        ),
-        (json!({"thinking":{"type":"adaptive"}}), "thinking"),
-        (
-            json!({"output_config":{"effort":"high"}}),
-            "output_config.effort",
+            json!({"output_config":{"format":{"type":"json_schema","schema":{"type":"object"}}}}),
+            "output_config.format",
         ),
         (
-            json!({"output_config":{"task_budget":{"type":"tokens","total":64000}}}),
-            "output_config.task_budget",
-        ),
-        (
-            json!({"context_management":{"edits":[]}}),
-            "context_management",
-        ),
-        (
-            json!({"tools":[{"name":"lookup","input_schema":{"type":"object"},"defer_loading":false}]}),
-            "defer_loading",
+            json!({"tools":[{"name":"lookup","input_schema":{"type":"object"},"strict":true}]}),
+            "strict",
         ),
     ] {
         let adapter = crate::providers::anthropic::AnthropicAdapter::for_test(

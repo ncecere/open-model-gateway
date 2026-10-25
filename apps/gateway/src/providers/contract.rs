@@ -220,7 +220,9 @@ pub async fn assert_text_chat_contract(
     while let Some(event) = output.next().await {
         assert!(!done, "events after Done");
         match event.unwrap() {
-            ChatEvent::Delta { .. } => assert!(!finished, "delta after Finish"),
+            ChatEvent::Delta { .. } | ChatEvent::MessagesBlock(_) => {
+                assert!(!finished, "delta after Finish")
+            }
             ChatEvent::Finish(_) => {
                 assert!(!finished, "duplicate Finish");
                 finished = true;

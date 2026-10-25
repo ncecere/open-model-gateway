@@ -223,6 +223,7 @@ impl ProviderAdapter for Fake {
             "slow" => {
                 tokio::time::sleep(Duration::from_millis(300)).await;
                 Ok(ProviderOutput::Complete(ChatResponse {
+                    messages_content: None,
                     content: Some("ok".into()),
                     tool_calls: vec![],
                     finish_reason: FinishReason::Stop,
@@ -230,12 +231,14 @@ impl ProviderAdapter for Fake {
                 }))
             }
             "huge" => Ok(ProviderOutput::Complete(ChatResponse {
+                messages_content: None,
                 content: Some("ok".into()),
                 tool_calls: vec![],
                 finish_reason: FinishReason::Stop,
                 usage: usage(5000, 5),
             })),
             _ => Ok(ProviderOutput::Complete(ChatResponse {
+                messages_content: None,
                 content: Some(format!("answer to {text}")),
                 tool_calls: vec![],
                 finish_reason: FinishReason::Stop,
@@ -351,6 +354,7 @@ impl ProviderAdapter for Fake {
         let custom_id = v["custom_id"].as_str().unwrap().to_owned();
         let outcome = if v["ok"] == json!(true) {
             NativeOutcome::Succeeded(Box::new(BatchResponse::Chat(ChatResponse {
+                messages_content: None,
                 content: Some("native answer".into()),
                 tool_calls: vec![],
                 finish_reason: FinishReason::Stop,

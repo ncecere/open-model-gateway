@@ -223,7 +223,17 @@ for (const block of [
   await assert.rejects(ordinaryAnthropic.messages.create(nativeFollowup(block)), (e) => e.status === 400);
 }
 await assert.rejects(ordinaryAnthropic.messages.create(nativeFollowup({ type: "tool_result", tool_use_id: "ping-call", is_error: true })), (e) => e.status === 501);
-console.log("OpenAI Chat (including omitted function parameters), Responses, and Anthropic Messages (including empty tool success) SDK contracts passed (JSON + streaming helpers)");
+// #70 delivery 2: beta/cache/thinking are accepted grammar, no SDK-side stripping.
+// This fixture is translated; exact native Anthropic wire is covered by Rust HTTP contracts.
+for (const stream of [false, true]) {
+  const args = { model: "company/smart", max_tokens: 32, messages,
+    system: [{ type: "text", text: "instructions", cache_control: { type: "ephemeral", ttl: "1h" } }],
+    thinking: { type: "adaptive" }, output_config: { effort: "high" } };
+  const options = { headers: { "anthropic-beta": "interleaved-thinking-2025-05-14, caller-only-beta" } };
+  if (stream) await ordinaryAnthropic.messages.stream(args, options).finalMessage();
+  else await ordinaryAnthropic.messages.create(args, options);
+}
+console.log("OpenAI Chat, Responses, and Anthropic Messages SDK contracts passed (JSON + streaming helpers, beta/cache/thinking grammar)");
 // Files API (gateway-owned store): the official SDK's multipart order works.
 const jsonl = '{"custom_id":"a","method":"POST","url":"/v1/chat/completions","body":{}}\n';
 const uploaded = await openai.files.create({ file: await toFile(Buffer.from(jsonl), "input.jsonl"), purpose: "batch" });
