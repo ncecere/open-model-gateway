@@ -1073,7 +1073,8 @@ function assertProbePolicy(data) {
     assert.equal(auth.run.trim(), PROBE_AUTH);
     assert.deepEqual(auth.env, { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" });
     assert.equal(probeStep(data, name, "Remove probe credentials").run.trim(), PROBE_CLEANUP);
-    assert.doesNotMatch(executable(job), /imagetools create|docker (?:push|build)\b|gh release|github-release|--recursive|--tag\b|latest-release|:dev-/);
+    assert.doesNotMatch(executable(job), /imagetools create|docker (?:push|build)\b|gh release|github-release|--recursive|--tag\b|latest-release/);
+    if (name !== "probe-prepare") assert.doesNotMatch(executable(job), /:dev-/, "only the read-only preparation may resolve a dev tag");
     assert.ok(steps.indexOf(auth) > 1);
     if (name !== "probe-prepare") {
       const installer = probeStep(data, name, COSIGN_INSTALL_NAME);
@@ -1166,6 +1167,7 @@ test("probe boundary policy rejects widened inputs, authority, handoffs, optiona
       d => { step(d, job, COSIGN_INSTALL_NAME).run = 'cosign version\n' + COSIGN_INSTALL_RUN; },
     ]),
     d => { step(d, "probe-sign", "Sign only the prepared index").run = COSIGN_SIGN_RUN + " --recursive"; },
+    d => { d.jobs["probe-prepare"].steps.push({ run: 'docker buildx imagetools create --tag "${IMAGE}:dev-${GITHUB_SHA:0:12}" "${IMAGE}@${DIGEST}"' }); },
   ];
   for (const mutate of mutations) {
     const data = structuredClone(original);
@@ -1220,9 +1222,18 @@ if (command === 'docker') {
   if (negative && e.NEGATIVE_MODE === 'network') fail('Get https://ghcr.io/v2/: connection reset');
   if (negative && e.NEGATIVE_MODE === 'mixed') fail('no signatures found\\nGet https://ghcr.io/v2/: connection reset');
   if (negative) {
-    if (image.endsWith(e.CHILD)) fail(e.CHILD_ERROR || 'no signatures found');
-    if (identity.includes('wrong-workflow')) fail(e.IDENTITY_ERROR || 'no matching signatures: certificate identity mismatch');
-    fail(e.ISSUER_ERROR || 'no matching signatures: certificate issuer mismatch');
+    const actualIdentity = 'https://github.com/' + e.GITHUB_REPOSITORY + '/.github/workflows/image.yml@' + e.GITHUB_REF;
+    let message;
+    if (image.endsWith(e.CHILD)) message = e.CHILD_ERROR || 'no signatures found';
+    else {
+      const detail = identity.includes('wrong-workflow')
+        ? 'expected SAN value "' + identity + '", got "' + actualIdentity + '"'
+        : 'expected issuer value "' + issuer + '", got "https://token.actions.githubusercontent.com"';
+      const supplied = identity.includes('wrong-workflow') ? e.IDENTITY_ERROR : e.ISSUER_ERROR;
+      message = supplied || 'no matching attestations: failed to verify certificate identity: no matching CertificateIdentity found, last error: ' + detail;
+    }
+    // Cosign 3.1.4/Cobra and main.go report the same source error twice.
+    fail('Error: ' + message + '\\n2026/10/26 12:00:00 error during command execution: ' + message);
   }
   console.log(e.PAYLOAD_JSON || JSON.stringify([{ critical: { image: { 'docker-manifest-digest': e.DIGEST } } }]));
 } else fail('unexpected executable');
@@ -1241,7 +1252,7 @@ if (command === 'docker') {
   const calls = () => existsSync(join(dir, "calls")) ? readFileSync(join(dir, "calls"), "utf8").trim().split("\n").filter(Boolean).map(JSON.parse) : [];
   const authenticate = script => {
     const result = run(script, { GITHUB_TOKEN: "fixture-read-token" });
-    const match = readFileSync(env.GITHUB_ENV, "utf8").match(/^DOCKER_CONFIG=(.+)$/m);
+    const match = [...readFileSync(env.GITHUB_ENV, "utf8").matchAll(/^DOCKER_CONFIG=(.+)$/gm)].at(-1);
     if (match) env.DOCKER_CONFIG = match[1];
     return result;
   };
