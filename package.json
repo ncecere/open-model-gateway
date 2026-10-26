@@ -1,6 +1,6 @@
 {
   "name": "open-model-gateway",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "workspaces": ["apps/web"],
   "engines": { "node": ">=22.12.0" },
@@ -21,6 +21,7 @@
     "test:demo": "node --test tests/demo-oidc.test.mjs && python3 tests/demo-runtime.test.py",
     "test:container": "node --test tests/container-image.test.mjs",
     "test:supply-chain": "node --test tests/supply-chain.test.mjs",
+    "test:ci": "node --test tests/ci.test.mjs",
     "test:conflict-markers": "node --test tests/conflict-markers.test.mjs",
     "test:helm": "helm lint deploy/helm/open-model-gateway && helm lint deploy/helm/open-model-gateway -f deploy/helm/open-model-gateway/ci/external-db-values.yaml && helm lint deploy/helm/open-model-gateway -f deploy/helm/open-model-gateway/ci/cnpg-values.yaml && helm lint deploy/helm/open-model-gateway -f deploy/helm/open-model-gateway/ci/loadtest-values.yaml && node --test tests/helm-chart.test.mjs",
     "test:staging": "python3 tests/staging.test.py && python3 tests/provider-acceptance.test.py && python3 tests/backup.test.py",
