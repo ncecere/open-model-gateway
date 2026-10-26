@@ -353,6 +353,56 @@ test("every Dockerfile base image is pinned by digest", () => {
   assert.deepEqual(unpinned, []);
 });
 
+const RUNTIME_DOCKERFILES = ["Dockerfile", "deploy/loadtest/Dockerfile"];
+const APPROVED_RUNTIME = "gcr.io/distroless/cc-debian13:nonroot@sha256:3ee00291cf386ec52a552e6a858d555debd74776eb4bfa53fa3df2cd6677515e";
+
+export function runtimeBaseViolations(sources) {
+  const out = [];
+  if (JSON.stringify(sources.map(s => s.file).sort()) !== JSON.stringify([...RUNTIME_DOCKERFILES].sort())) out.push("expected exactly the production and load-test Dockerfiles");
+  for (const { file, text } of sources) {
+    const stages = [...(text ?? "").matchAll(/^\s*FROM\s+(--platform=\S+\s+)?(\S+)/gim)].map(m => ({ platform: m[1], ref: m[2] }));
+    const distroless = stages.filter(stage => stage.ref.startsWith("gcr.io/distroless/"));
+    if (distroless.length !== 1 || distroless[0].platform || distroless[0].ref !== APPROVED_RUNTIME || stages.at(-1)?.ref !== APPROVED_RUNTIME) out.push(`${file}: expected one distroless final FROM using the approved Debian 13 index`);
+  }
+  return out;
+}
+
+for (const file of RUNTIME_DOCKERFILES) {
+  test(`${file} uses the approved Debian 13 runtime index (#377)`, () => {
+    assert.deepEqual(runtimeBaseViolations(RUNTIME_DOCKERFILES.map(path => ({
+      file: path, text: path === file ? readLocalFromRepo(path) : `FROM ${APPROVED_RUNTIME}\n`,
+    }))), []);
+  });
+}
+
+test("fixtures: runtime policy rejects independent pin regressions and incomplete inventories (#377)", () => {
+  const good = RUNTIME_DOCKERFILES.map(file => ({ file, text: `FROM ${APPROVED_RUNTIME}\n` }));
+  assert.deepEqual(runtimeBaseViolations(good), []);
+  const mutants = [
+    ["old vulnerable pin", "FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f\n"],
+    ["mutable tag", "FROM gcr.io/distroless/cc-debian13:nonroot\n"],
+    ["unapproved digest, including platform children", `FROM gcr.io/distroless/cc-debian13:nonroot@sha256:${"a".repeat(64)}\n`],
+    ["missing runtime", "FROM scratch\n"],
+    ["duplicate runtime", `FROM ${APPROVED_RUNTIME}\nFROM ${APPROVED_RUNTIME}\n`],
+    ["runtime not final", `FROM ${APPROVED_RUNTIME}\nFROM scratch\n`],
+    ...["linux/amd64", "linux/arm64", "$BUILDPLATFORM", "$TARGETPLATFORM"].map(platform => [
+      `runtime platform override ${platform}`, `FROM --platform=${platform} ${APPROVED_RUNTIME}\n`,
+    ]),
+  ];
+  for (const file of RUNTIME_DOCKERFILES) {
+    for (const [label, text] of mutants) {
+      const violations = runtimeBaseViolations(good.map(source => source.file === file ? { file, text } : source));
+      assert.equal(violations.length, 1, `${file}: ${label}`);
+      assert.ok(violations[0].startsWith(`${file}:`), `${file}: ${label} must flag the mutated file`);
+    }
+  }
+  assert.ok(runtimeBaseViolations([]).length > 0, "empty inventory");
+  for (const source of good) {
+    assert.ok(runtimeBaseViolations([source]).length > 0, `missing peer of ${source.file}`);
+    assert.ok(runtimeBaseViolations([...good, source]).length > 0, `duplicate ${source.file}`);
+  }
+});
+
 test("the Docker PostgreSQL fixture uses exactly one approved digest-pinned image (#369)", () => {
   // Read source only: importing this file would run its Docker lifecycle hooks.
   const text = readLocalFromRepo("tests/container-image.test.mjs");

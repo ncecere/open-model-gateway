@@ -5,7 +5,7 @@ This is a **single-host staging baseline, not approval for public production lau
 ## Architecture and prerequisites
 
 - Docker Engine with Compose v2 or later, Python 3, and curl on the operator machine.
-- Multi-stage `Dockerfile`: Node builds the SPA, Rust builds the locked binary, and the runtime is distroless (`gcr.io/distroless/cc-debian12`, pinned by digest): no shell, package manager, curl, Node or Cargo. The binary is the entrypoint and does its own `_FILE` secret import and health check ([container image](operations.md#container-image)). `GATEWAY_WEB_DIR=/app/web`.
+- Multi-stage `Dockerfile`: Node builds the SPA, Rust builds the locked binary, and the runtime is distroless (`gcr.io/distroless/cc-debian13`, pinned by digest): no shell, package manager, curl, Node or Cargo. The binary is the entrypoint and does its own `_FILE` secret import and health check ([container image](operations.md#container-image)). `GATEWAY_WEB_DIR=/app/web`.
 - Caddy terminates HTTPS and forwards unbuffered SSE to Rust. It has no exposed admin API or access log. Only ingress publishes ports; Postgres and Rust do not.
 - Dedicated PostgreSQL 17 volume/network; the database network is internal. Rust also has outbound connectivity for OIDC/provider calls. This is not an egress firewall.
 - Rust runs as UID/GID 10001, with a read-only root filesystem, dropped Linux capabilities, no-new-privileges, a small `/tmp` tmpfs, and a 150-second shutdown grace period.
