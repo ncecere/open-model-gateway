@@ -329,7 +329,9 @@ In Kubernetes, prefer native HTTP probes (`httpGet` on `/health/live` for livene
 
 ## Container image
 
-The runtime stage is `gcr.io/distroless/cc-debian12` pinned by digest: glibc, libgcc_s, CA certificates and the gateway binary, with the built SPA in `/app/web`. There is no shell, package manager, curl, perl, Node or Cargo. It runs as UID/GID `10001:10001` with `ENTRYPOINT ["/usr/local/bin/open-model-gateway"]` and `CMD ["serve"]`, works with a read-only root filesystem and needs no writable path (staging still mounts a small `/tmp` tmpfs). The binary is PID 1 and handles `SIGTERM` itself; Compose's `init: true` is optional.
+The runtime stage is `gcr.io/distroless/cc-debian13` pinned by digest: glibc, libgcc_s, CA certificates and the gateway binary, with the built SPA in `/app/web`. There is no shell, package manager, curl, perl, Node or Cargo. It runs as UID/GID `10001:10001` with `ENTRYPOINT ["/usr/local/bin/open-model-gateway"]` and `CMD ["serve"]`, works with a read-only root filesystem and needs no writable path (staging still mounts a small `/tmp` tmpfs). The binary is PID 1 and handles `SIGTERM` itself; Compose's `init: true` is optional.
+
+The Debian 13 runtime updates glibc, GCC runtime libraries, timezone data and the CA trust store. Recheck outbound TLS certificate chains against the updated trust store before upgrading; no insecure-TLS bypass is added. The Rust build stage remains on Bookworm, with binary compatibility checked by the native container and staging gates.
 
 What the former `container-entrypoint.sh` did is now done by the binary at startup, for every subcommand except `healthcheck`, before it reads `.env` files or configuration:
 
