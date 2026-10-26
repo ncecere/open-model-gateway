@@ -35,7 +35,7 @@ describe("unavailable workspace bookmarks", () => {
     ["foreign", { ...admin, workspaces: [...admin.workspaces, { ...personal, id: "foreign", name: "Private owner name", owner_user_id: "someone-else" }] }],
     ["disabled", { ...session, workspaces: [...session.workspaces, { ...team, id: "disabled", name: "Disabled private label", disabled_at: "2026-10-01T00:00:00Z" }] }],
     ["staff-only", { ...admin, workspaces: [...admin.workspaces, { ...team, id: "staff-only", name: "Not a membership", role: null }] }],
-  ] as const)("redirects %s to Home with the same non-identifying notice and no resource reads", async (ws, me) => {
+  ] satisfies [string, Session][])("redirects %s to Home with the same non-identifying notice and no resource reads", async (ws, me) => {
     const { router, fetch } = await mount(`/workspaces/${ws}/keys`, me);
     await waitFor(() => expect(router.state.location.pathname).toBe("/home"));
     expect(await screen.findByText(notice)).toBeTruthy();
@@ -51,7 +51,7 @@ describe("unavailable workspace bookmarks", () => {
   });
   it("retains valid workspace access and does not invent a notice on ordinary Home", async () => {
     const { router, fetch } = await mount("/workspaces/team/keys");
-    await screen.findByRole("heading", { name: "API keys", exact: true });
+    await screen.findByRole("heading", { name: /^API keys$/ });
     expect(router.state.location.pathname).toBe("/workspaces/team/keys");
     expect(fetch.mock.calls.some(([path]) => path.startsWith("/api/v1/workspaces/team/keys"))).toBe(true);
     expect(screen.queryByText(notice)).toBeNull();
@@ -61,7 +61,7 @@ describe("unavailable workspace bookmarks", () => {
   });
   it("keeps a page-specific permission denial in its workspace rather than calling the workspace unavailable", async () => {
     const { router, fetch } = await mount("/workspaces/team/report-schedules/schedule/runs/run", { ...session, workspaces: session.workspaces.map(w => w.id === "team" ? { ...w, role: "member" } : w) });
-    await screen.findByRole("heading", { name: "Access not available", exact: true });
+    await screen.findByRole("heading", { name: /^Access not available$/ });
     expect(router.state.location.pathname).toBe("/workspaces/team/report-schedules/schedule/runs/run");
     expect(screen.queryByText(notice)).toBeNull();
     expect(fetch.mock.calls.some(([path]) => path.includes("/report-schedules/"))).toBe(false);

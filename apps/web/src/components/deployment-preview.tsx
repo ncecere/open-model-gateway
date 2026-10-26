@@ -55,7 +55,7 @@ export function DeploymentReviewDialog({ record, name, retire = false, returnFoc
     {q.isError && <ErrorNotice error={q.error} retry={() => void q.refetch()} />}
     {mismatch && <ErrorNotice error={new Error("The gateway returned a different deployment. Confirmation is unavailable.")} />}
     {preview && <Stack gap={4}>
-      <DescriptionList className={s.facts} items={[ 
+      <DescriptionList className={s.facts} items={[
         { label: "Enabled", value: preview.diff.length ? preview.diff.map(d => `${d.before ? "Enabled" : "Disabled"} → ${d.after ? "Enabled" : "Disabled"}`).join(", ") : "No configuration change" },
         { label: "Serving routes gained / lost", value: `${preview.serving_routes_gained.length} / ${preview.serving_routes_lost.length}` },
         { label: "Observed", value: <DateTime value={preview.observed_at} /> },
