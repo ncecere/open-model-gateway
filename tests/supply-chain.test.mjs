@@ -14,7 +14,7 @@
 // against adversarial in-memory workflows at the bottom of this file.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1034,6 +1034,276 @@ test("vendored advisory coverage supplements the unchanged real-graph scan in it
     assert.equal(steps[index].env?.CI, undefined, "fixture must not bypass its CI-required scanner");
     assert.equal(steps[index].env?.CARGO_DENY, undefined, "same pinned tool on PATH");
   }
+});
+
+// ---- isolated publication graph (#371, #372, #374) ----
+
+const publicationFiles = ["image", "branch-images", "loadtest-image", "oci-import"];
+const publicationData = () => Object.fromEntries(publicationFiles.map(name => {
+  const file = `.github/workflows/${name}.yml`;
+  const text = readLocalFromRepo(file);
+  assert.notEqual(text, null, `${file} is required`);
+  return [name, toData(parseStrict(text, file))];
+}));
+const executable = job => stepsOf(job).map(s => s.run ?? "").join("\n");
+
+function assertPublicationGraph(flows) {
+  for (const name of publicationFiles.slice(0, 3)) {
+    const data = flows[name];
+    const build = data.jobs.build;
+    assert.deepEqual(build.permissions, { contents: "read" });
+    assert.doesNotMatch(JSON.stringify(build), /secrets\.|packages|docker\/login-action|push=true|push-by-digest/);
+    const action = stepsOf(build).find(s => actionName(s.uses) === "docker/build-push-action");
+    assert.equal(action.with.outputs, "type=oci,dest=${{ runner.temp }}/image.tar,oci-mediatypes=true");
+    assert.equal(action.with.push, undefined);
+    assert.equal(action.with.tags, undefined);
+    assert.equal(action.with.provenance, "mode=max");
+    assert.match(action.with.attests, /^type=sbom,generator=mirror\.gcr\.io\/docker\/buildkit-syft-scanner:stable-1@sha256:[0-9a-f]{64}$/);
+    const upload = stepsOf(build).find(s => actionName(s.uses) === "actions/upload-artifact");
+    assert.equal(upload.with.path, "${{ runner.temp }}/image.tar");
+    assert.equal(upload.with["if-no-files-found"], "error");
+    assert.equal(upload.with.overwrite, undefined);
+    assert.match(executable(build), /\^sha256:\[0-9a-f\]\{64\}\$/);
+    const calls = Object.values(data.jobs).filter(j => j.uses === "./.github/workflows/oci-import.yml");
+    assert.equal(calls.length, name === "image" ? 2 : 1);
+    for (const call of calls) {
+      assert.deepEqual(call.permissions, { contents: "read", packages: "write" });
+      assert.deepEqual(call.needs, ["build"]);
+      assert.equal(call.with.source_revision, name === "image" ? "${{ github.sha }}" : "${{ needs.build.outputs.source_revision }}");
+      assert.match(call.with.artifact_id, /^\$\{\{ needs\.build\.outputs\.artifact_id(?:_linux_(?:amd64|arm64))? \}\}$/);
+      assert.match(call.with.root_digest, /^\$\{\{ needs\.build\.outputs\.digest(?:_linux_(?:amd64|arm64))? \}\}$/);
+      assert.equal(call.with.image_repository, `ghcr.io/ncecere/open-model-gateway${name === "loadtest-image" ? "-loadtest" : ""}`);
+    }
+    for (const [jobName, job] of jobsOf(data).filter(([, j]) => j.steps && hasWrite(j.permissions))) {
+      assert.doesNotMatch(executable(job), /docker (?:build|run|pull)\b|staging\.py|trivy|cargo|npm|oci-layout/);
+      for (const step of stepsOf(job).filter(s => actionName(s.uses) === "actions/checkout")) {
+        assert.equal(step.with.ref, "${{ github.workflow_sha }}", `${name}/${jobName} uses trusted control code`);
+        assert.equal(step.with["persist-credentials"], false);
+      }
+      assert.match(executable(job), /docker login ghcr\.io --username "\$\{GITHUB_ACTOR\}" --password-stdin/);
+      assert.ok(stepsOf(job).some(s => s.if === "always()" && /docker logout ghcr\.io/.test(s.run ?? "")));
+    }
+  }
+  const image = flows.image;
+  assert.deepEqual(image.jobs.verify.needs, ["import-amd64", "import-arm64"]);
+  assert.deepEqual(image.jobs.publish.needs, ["meta", "import-amd64", "import-arm64", "verify"]);
+  assert.equal(image.jobs.meta.if, "github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')");
+  assert.match(executable(image.jobs.verify), /restore-check/);
+  assert.match(executable(image.jobs.verify), /tests\/container-image\.test\.mjs/);
+  assert.match(executable(image.jobs.verify), /trivy image/);
+  assertCosignPublishPolicy(image);
+  assert.equal(flows["loadtest-image"].jobs.build.steps.find(s => actionName(s.uses) === "docker/build-push-action").with["build-args"], "CARGO_BUILD_JOBS=4");
+  for (const name of ["branch-images", "loadtest-image"]) {
+    const publish = flows[name].jobs.publish;
+    assert.deepEqual(publish.needs, ["build", "import"]);
+    assert.match(executable(publish), /\^\[0-9a-f\]\{40\}\$/);
+    assert.match(executable(publish), /dev-\$\{SOURCE_REVISION:0:12\}/);
+    assert.doesNotMatch(executable(publish), /latest|cosign|trivy/);
+  }
+  const importer = flows["oci-import"];
+  assert.deepEqual(Object.keys(importer.on.workflow_call.inputs).sort(), ["artifact_id", "image_repository", "platform", "root_digest", "source_revision"]);
+  for (const input of Object.values(importer.on.workflow_call.inputs)) assert.deepEqual(input, { required: true, type: "string" });
+  for (const name of ["tools", "preflight"]) assert.deepEqual(importer.jobs[name].permissions, { contents: "read" });
+  assert.deepEqual(importer.jobs.import.permissions, { contents: "read", packages: "write" });
+  assert.deepEqual(importer.jobs.import.needs, ["tools", "preflight"]);
+  for (const job of Object.values(importer.jobs)) {
+    const checkouts = stepsOf(job).filter(s => actionName(s.uses) === "actions/checkout");
+    assert.equal(checkouts.length, 1);
+    assert.deepEqual(checkouts[0].with, { ref: "${{ github.workflow_sha }}", path: "control", "persist-credentials": false });
+  }
+  for (const job of Object.values(importer.jobs)) {
+    assert.equal(job.if, undefined);
+    assert.equal(job["continue-on-error"], undefined);
+    for (const step of stepsOf(job)) {
+      assert.equal(step["continue-on-error"], undefined);
+      if (!step.name?.startsWith("Remove ")) assert.equal(step.if, undefined);
+    }
+  }
+  const tools = executable(importer.jobs.tools);
+  assert.match(tools, /bash control\/\.github\/scripts\/build-oras\.sh/);
+  assert.match(tools, /binary_sha256/);
+  assert.match(tools, /sha256sum/);
+  const imports = stepsOf(importer.jobs.import);
+  const downloads = imports.filter(s => actionName(s.uses) === "actions/download-artifact");
+  assert.equal(downloads.length, 2);
+  assert.deepEqual(downloads.map(s => s.with["artifact-ids"]).sort(), ["${{ inputs.artifact_id }}", "${{ needs.tools.outputs.artifact_id }}"].sort());
+  for (const step of [...downloads, ...stepsOf(importer.jobs.preflight).filter(s => actionName(s.uses) === "actions/download-artifact")]) {
+    assert.equal(step.with["merge-multiple"], true);
+    for (const key of ["name", "pattern", "run-id", "repository", "github-token"]) assert.equal(step.with[key], undefined);
+  }
+  for (const name of ["preflight", "import"]) {
+    const script = executable(importer.jobs[name]);
+    assert.match(script, /inspect_archive/);
+    assert.match(script, /org\.opencontainers\.image\.revision/);
+    assert.match(script, /\^\[1-9\]\[0-9\]\*\$/);
+    assert.match(script, /ghcr\.io\/ncecere\/open-model-gateway\|ghcr\.io\/ncecere\/open-model-gateway-loadtest/);
+    assert.doesNotMatch(script, /tar -x|GITHUB_PATH|docker|cargo|npm|trivy/);
+  }
+  const stage = imports.find(s => /oci-stage\.py/.test(s.run ?? ""));
+  assert.ok(stage);
+  assert.deepEqual(Object.keys(stage.env).sort(), ["GITHUB_ACTOR", "GITHUB_TOKEN"]);
+  assert.match(stage.run, /--archive .* --root .* --platform .* --image .* --tool /);
+  assert.match(stage.run, /\[ "\$\{digest\}" = "\$\{ROOT_DIGEST\}" \]/);
+  assert.match(executable(importer.jobs.import), /binary_sha256/);
+  assert.match(executable(importer.jobs.import), /sha256sum/);
+}
+
+test("all image producers isolate unprivileged builds, verified digest import and native publication", () => assertPublicationGraph(publicationData()));
+
+test("every publication shell snippet parses without executing any build or registry command", () => {
+  for (const [name, data] of Object.entries(publicationData())) {
+    for (const [where, script] of runScripts(data)) {
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-n"], { input: script, encoding: "utf8" });
+      assert.equal(result.status, 0, `${name}: ${where}: ${result.stderr}`);
+    }
+  }
+});
+
+test("fixtures: publication graph refuses widened builders, wrong artifact/control provenance and premature tagging", () => {
+  const original = publicationData();
+  const mutations = [
+    f => { f.image.jobs.build.permissions.packages = "write"; },
+    f => { f["branch-images"].jobs.build.steps.find(s => actionName(s.uses) === "docker/build-push-action").with.provenance = false; },
+    f => { f.image.jobs.publish.needs.pop(); },
+    f => { f["loadtest-image"].jobs.import.with.artifact_id = "${{ inputs.artifact_id }}"; },
+    f => { f["oci-import"].jobs.tools.permissions.packages = "write"; },
+    f => { f["oci-import"].jobs.import.needs.pop(); },
+    f => { f["oci-import"].jobs.preflight.steps.at(-2).if = "false"; },
+    f => { f["oci-import"].jobs.import.steps.find(s => s.id === "stage")["continue-on-error"] = true; },
+    f => { f["oci-import"].jobs.import.steps.find(s => actionName(s.uses) === "actions/checkout").with.ref = "${{ inputs.ref }}"; },
+    f => { f["oci-import"].jobs.import.steps.find(s => actionName(s.uses) === "actions/download-artifact").with.pattern = "*"; },
+    f => { const s = f["oci-import"].jobs.import.steps.filter(s => actionName(s.uses) === "actions/download-artifact"); s[1].with["artifact-ids"] = "${{ inputs.tool_artifact_id }}"; },
+  ];
+  assertPublicationGraph(original);
+  for (const mutate of mutations) {
+    const fixture = structuredClone(original);
+    mutate(fixture);
+    assert.throws(() => assertPublicationGraph(fixture), { name: "AssertionError" });
+  }
+});
+
+// Run the actual workflow shell/Python snippets locally. No registry, build,
+// credentials, stage-utility stand-in or executable transport binary is involved.
+function handoffFixture() {
+  const dir = mkdtempSync(join(tmpdir(), "oci-workflow-"));
+  mkdirSync(join(dir, "image"));
+  mkdirSync(join(dir, "tool"));
+  symlinkSync(root, join(dir, "control"), "dir");
+  const env = {
+    ...process.env, RUNNER_TEMP: dir, GITHUB_ENV: join(dir, "env"),
+    IMAGE_DIR: join(dir, "image"), TOOL_DIR: join(dir, "tool"),
+    ARTIFACT_ID: "123", TOOL_ARTIFACT_ID: "456", ROOT_DIGEST: `sha256:${"a".repeat(64)}`,
+    SOURCE_REVISION: "b".repeat(40), PLATFORM: "linux/amd64", IMAGE: "ghcr.io/ncecere/open-model-gateway",
+  };
+  delete env.GITHUB_TOKEN;
+  delete env.GH_TOKEN;
+  const run = (script, overrides = {}) => spawnSync("bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
+    cwd: dir, env: { ...env, ...overrides }, encoding: "utf8",
+  });
+  return { dir, env, run, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+test("actual importer selector guards reject alternate repos, tags, platforms, revisions and multi/invalid artifact IDs before download", () => {
+  const data = publicationData()["oci-import"];
+  const fixture = handoffFixture();
+  try {
+    for (const name of ["preflight", "import"]) {
+      const script = stepsOf(data.jobs[name]).find(s => s.name === "Refuse invalid handoff selectors before download").run;
+      for (const image of ["ghcr.io/ncecere/open-model-gateway", "ghcr.io/ncecere/open-model-gateway-loadtest"]) {
+        const good = fixture.run(script, { IMAGE: image });
+        assert.equal(good.status, 0, good.stderr);
+      }
+      const bad = [
+        ...["", "0", "01", "-1", "1,2", "1 2", "1\n2", "1e2", "latest"].map(ARTIFACT_ID => ({ ARTIFACT_ID })),
+        ...["ghcr.io/other/open-model-gateway", "ghcr.io/ncecere/open-model-gateway:latest", "ghcr.io/ncecere/open-model-gateway@sha256:x", "ghcr.io/ncecere/open-model-gateway/extra"].map(IMAGE => ({ IMAGE })),
+        { PLATFORM: "linux/arm/v7" }, { PLATFORM: "linux/amd64,linux/arm64" },
+        { ROOT_DIGEST: `sha256:${"A".repeat(64)}` }, { ROOT_DIGEST: "latest" },
+        { SOURCE_REVISION: "main" }, { SOURCE_REVISION: "b".repeat(12) },
+      ];
+      if (name === "import") bad.push({ TOOL_ARTIFACT_ID: "123" }, { TOOL_ARTIFACT_ID: "456,789" }, { TOOL_ARTIFACT_ID: "" });
+      for (const overrides of bad) {
+        writeFileSync(fixture.env.GITHUB_ENV, "");
+        assert.notEqual(fixture.run(script, overrides).status, 0, JSON.stringify(overrides));
+        assert.equal(readFileSync(fixture.env.GITHUB_ENV, "utf8"), "", "refusal precedes artifact directory setup/download");
+      }
+    }
+  } finally { fixture.cleanup(); }
+});
+
+// Reuse the existing bounded synthetic OCI graph builder, not a BuildKit proof.
+function syntheticArchive(fixture, revision = fixture.env.SOURCE_REVISION, arch = "amd64") {
+  const generator = `
+import importlib.util, io, json, sys, tarfile
+spec = importlib.util.spec_from_file_location("fixtures", sys.argv[1])
+fixtures = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(fixtures)
+graph = fixtures.fixture(sys.argv[4], edits={"config": lambda c: dict(c, config={"Labels": {"org.opencontainers.image.revision": sys.argv[3]}})})
+with tarfile.open(sys.argv[2], "w", format=tarfile.USTAR_FORMAT) as archive:
+    for name, data in graph["files"].items():
+        info = tarfile.TarInfo(name)
+        info.size = len(data)
+        archive.addfile(info, io.BytesIO(data))
+print(graph["root"]["digest"])
+`;
+  const result = spawnSync("python3", ["-I", "-", join(root, "tests/oci_layout_test.py"), join(fixture.env.IMAGE_DIR, "image.tar"), revision, arch], { input: generator, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim();
+}
+
+test("actual readonly preflight accepts bound synthetic graphs and refuses extra/hidden/missing/symlink data, wrong roots/platforms/revisions", () => {
+  const script = publicationData()["oci-import"].jobs.preflight.steps.find(s => s.name === "Validate complete OCI graph and source revision without extraction").run;
+  const fixture = handoffFixture();
+  try {
+    for (const arch of ["amd64", "arm64"]) {
+      const digest = syntheticArchive(fixture, fixture.env.SOURCE_REVISION, arch);
+      const good = fixture.run(script, { ROOT_DIGEST: digest, PLATFORM: `linux/${arch}` });
+      assert.equal(good.status, 0, good.stderr);
+    }
+    const digest = syntheticArchive(fixture);
+    const overrides = { ROOT_DIGEST: digest };
+    for (const extra of ["unexpected", ".hidden", "oras"]) {
+      const path = join(fixture.env.IMAGE_DIR, extra);
+      writeFileSync(path, "not OCI content");
+      assert.notEqual(fixture.run(script, overrides).status, 0, extra);
+      rmSync(path);
+    }
+    for (const bad of [{ ROOT_DIGEST: fixture.env.ROOT_DIGEST }, { PLATFORM: "linux/arm64" }, { SOURCE_REVISION: "c".repeat(40) }]) {
+      assert.notEqual(fixture.run(script, { ...overrides, ...bad }).status, 0, JSON.stringify(bad));
+    }
+    const image = join(fixture.env.IMAGE_DIR, "image.tar");
+    rmSync(image);
+    assert.notEqual(fixture.run(script, overrides).status, 0, "missing image");
+    writeFileSync(join(fixture.dir, "outside"), "not an archive");
+    symlinkSync(join(fixture.dir, "outside"), image);
+    assert.notEqual(fixture.run(script, overrides).status, 0, "symlink image");
+  } finally { fixture.cleanup(); }
+});
+
+test("actual writer validation refuses unexpected and tampered transport tools without executing them", () => {
+  const script = publicationData()["oci-import"].jobs.import.steps.find(s => s.name === "Repeat graph and revision checks and verify static tool pin before credentials").run;
+  const fixture = handoffFixture();
+  try {
+    const digest = syntheticArchive(fixture);
+    const tool = join(fixture.env.TOOL_DIR, "oras");
+    const marker = join(fixture.dir, "executed");
+    writeFileSync(tool, `#!/bin/sh\nprintf stolen > '${marker}'\n`);
+    chmodSync(tool, 0o755);
+    const tampered = fixture.run(script, { ROOT_DIGEST: digest });
+    assert.notEqual(tampered.status, 0);
+    assert.match(tampered.stdout + tampered.stderr, /checksum|FAILED/);
+    assert.equal(existsSync(marker), false);
+    for (const extra of [".hidden", "extra"]) {
+      writeFileSync(join(fixture.env.TOOL_DIR, extra), "unexpected");
+      const result = fixture.run(script, { ROOT_DIGEST: digest });
+      assert.notEqual(result.status, 0);
+      assert.doesNotMatch(result.stdout + result.stderr, /checksum|FAILED/, "unexpected entries are refused even before checksum work");
+      rmSync(join(fixture.env.TOOL_DIR, extra));
+    }
+    rmSync(tool);
+    symlinkSync(join(fixture.env.IMAGE_DIR, "image.tar"), tool);
+    assert.notEqual(fixture.run(script, { ROOT_DIGEST: digest }).status, 0);
+    assert.equal(existsSync(marker), false);
+  } finally { fixture.cleanup(); }
 });
 
 // ---- the fetch script ----
