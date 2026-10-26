@@ -14,6 +14,7 @@ Run from the repository root. None of them make paid provider calls or touch the
 | `npm run typecheck:web` / `npm run test:web` / `npm run build:web` | SPA types, Vitest unit/component tests, production build | Node 22 |
 | `npm run test:browser` | Playwright end-to-end journey and axe accessibility scans (below) | Disposable PostgreSQL, Rust, Chromium (`npx playwright install chromium`) |
 | `npm run test:demo` | Local demo issuer and runtime helper | Node, Python 3 |
+| `npm run test:ci` | CI graph/refusal policy and synthetic Cargo/libtest discovery, exact-once sharding and execution counts (no Rust builds) | Node 22, `npm ci` |
 | `npm run test:container` | Runtime image contract (`tests/container-image.test.mjs`): distroless (no shell, package manager, curl, perl, Node or Cargo), UID 10001, read-only root filesystem, `_FILE` secret import and refusal, `serve` never migrates, explicit `migrate`, exec-form `healthcheck`, graceful `SIGTERM` as PID 1 | Docker, Node; builds the image unless `OMG_CONTAINER_IMAGE` names one; uses a throwaway `mirror.gcr.io/library/postgres:17-alpine` on an internal network |
 | `npm run test:staging` | Staging (including the runtime-image checks of `verify`), provider-acceptance and backup helpers | Python 3 |
 | `cargo deny check` | Supply chain: RustSec advisories (vulnerable, unmaintained, unsound, yanked), licence allow-list, duplicate-version warnings, crates.io-only sources; policy in `deny.toml` | [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny) 0.20 (`cargo install cargo-deny --locked` or the release binary); fetches the advisory database |
@@ -22,6 +23,16 @@ Run from the repository root. None of them make paid provider calls or touch the
 | `npm audit --omit=dev --audit-level=high` | Supply chain: high and critical advisories in production npm dependencies (the SPA bundle) | Node 22; reads `package-lock.json` |
 
 CI (`.github/workflows/ci.yml`) runs all of these; the `browser` job uses a PostgreSQL service container, and `test:container` runs in the `staging-image` job (and on each pushed digest in `image.yml`). The binary's startup secret handling and `healthcheck` are also covered by `cargo test` (`apps/gateway/src/startup.rs`, `apps/gateway/src/healthcheck.rs`, `apps/gateway/tests/startup.rs`).
+
+### CI scheduling and Rust shards
+
+CI runs on every pull request, and pushes only to `main` or `v*` tags. New PR runs cancel superseded runs for that PR; each main/tag run has a unique concurrency group and is never cancelled by this policy. CodeQL, branch images and release-image workflows are unchanged.
+
+The protected `gateway` check aggregates `gateway-lint` (fmt/Clippy), all four mandatory `gateway-tests` matrix legs, and `gateway-special`; any failed, skipped, cancelled or missing dependency refuses success. Each test leg has its own PostgreSQL service and SDK dependencies. `.github/scripts/rust-shards.mjs` builds/discovers workspace test targets from structured Cargo output, reconciles metadata, lists each target through Cargo, then distributes sorted gateway-library names round-robin using multiple exact libtest filters in one invocation per shard. Other targets stay whole with deterministic assignment. Terse listings have no footer in libtest, so a pretty listing cross-check supplies the count footer. Selected execution counts and default-ignored counts must match the inventory; ignored/live-opt-in tests keep their previous default behavior. New tests/targets join automatically; unsupported harness/listing formats fail closed. Workspace doctests run once on shard 0.
+
+`gateway-special` exclusively owns `filestore_s3` (Docker required) and both ordinary and ignored `runtime_privileges` runs, followed sequentially by the exact ignored Anthropic terminal probe and backup drill (with an explicit binary build). The terminal test stays ignored in ordinary shards; there is no broad workspace ignored-test sweep. Read-only `staging-image` builds/verifies its own image independently; publishing still needs `gateway`, `web` and `browser`. No test executable artifact crosses into a write job.
+
+The shard runner reports inventories, selected/passed/ignored counts, per-target execution durations and total build/discovery duration. Round-robin balances test counts, not measured runtimes: compare actual CI wall time, slowest shard and runner-minutes after warm and cold runs before claiming a speedup. Parallel jobs still compile independently and can contend for runner capacity.
 
 ### Supply chain
 
@@ -67,7 +78,7 @@ To bump one, change the version in the URL and the checksum together and take th
 
 ### Rust toolchain
 
-`rust-toolchain.toml` pins an exact channel version (currently 1.99.1) with the `rustfmt` and `clippy` components. `rustup` reads it automatically, so a plain `cargo fmt`/`cargo clippy`/`cargo build`/`cargo test` on a machine with `rustup` installs and uses that exact compiler without any extra flag — **local gates must run on the pinned version, not whatever toolchain happened to be default or active before**. Both `ci.yml` jobs that install Rust (`gateway`, `browser`) pass the same version explicitly to the SHA-pinned `dtolnay/rust-toolchain` action's `toolchain:` input, and every Rust build stage in every Dockerfile in the repository — the root `Dockerfile` and `deploy/loadtest/Dockerfile` — uses `rust:1.99.1-bookworm` at the identical digest, pinned by digest. `tests/supply-chain.test.mjs` parses `rust-toolchain.toml` with a small strict TOML-subset parser, finds every Dockerfile by walking the repository (not a fixed list) and checks every `FROM rust:...` stage in each, and fails if any of them disagree; if the channel is not an exact `x.y.z` version; if two Dockerfiles pin the same version at different digests; if any `dtolnay/rust-toolchain` step omits `toolchain:`, sets a floating channel (`stable`, `beta`, `nightly`, with or without a date), or names a different exact version; or if any workflow or local composite action overrides the pin at run time (`RUSTUP_TOOLCHAIN`, `rustup default`/`override set`/`toolchain install`, or `cargo +<toolchain>`).
+`rust-toolchain.toml` pins an exact channel version (currently 1.99.1) with the `rustfmt` and `clippy` components. `rustup` reads it automatically, so a plain `cargo fmt`/`cargo clippy`/`cargo build`/`cargo test` on a machine with `rustup` installs and uses that exact compiler without any extra flag — **local gates must run on the pinned version, not whatever toolchain happened to be default or active before**. All `ci.yml` jobs that install Rust (`gateway-lint`, `gateway-tests`, `gateway-special`, `browser`) pass the same version explicitly to the SHA-pinned `dtolnay/rust-toolchain` action's `toolchain:` input, and every Rust build stage in every Dockerfile in the repository — the root `Dockerfile` and `deploy/loadtest/Dockerfile` — uses `rust:1.99.1-bookworm` at the identical digest, pinned by digest. `tests/supply-chain.test.mjs` parses `rust-toolchain.toml` with a small strict TOML-subset parser, finds every Dockerfile by walking the repository (not a fixed list) and checks every `FROM rust:...` stage in each, and fails if any of them disagree; if the channel is not an exact `x.y.z` version; if two Dockerfiles pin the same version at different digests; if any `dtolnay/rust-toolchain` step omits `toolchain:`, sets a floating channel (`stable`, `beta`, `nightly`, with or without a date), or names a different exact version; or if any workflow or local composite action overrides the pin at run time (`RUSTUP_TOOLCHAIN`, `rustup default`/`override set`/`toolchain install`, or `cargo +<toolchain>`).
 
 `rust-version` fields in `Cargo.toml` (`apps/gateway`, `tools/loadgen`, `tools/mock-upstream`; currently `1.88`) are each crate's **minimum supported Rust version** for crates.io consumers, not the build pin: they are allowed to sit well below 1.99.1 and are not checked against `rust-toolchain.toml`.
 
@@ -76,7 +87,7 @@ This exists because CI and local development can otherwise drift onto different 
 **Bumping the pinned version is a single reviewed PR, never a side effect of another change:**
 
 1. Read the new version's release notes for behavior changes, new lints and deprecations.
-2. Change the version in `rust-toolchain.toml`, both `ci.yml` steps' `toolchain:` input and the `Dockerfile`'s `rust:<version>-bookworm` tag and digest together, in the same commit.
+2. Change the version in `rust-toolchain.toml`, every `ci.yml` Rust setup step's `toolchain:` input and the `Dockerfile`'s `rust:<version>-bookworm` tag and digest together, in the same commit.
 3. Fix any lint or warning the new compiler introduces (CI turns warnings into errors).
 4. Run the full local gates in [Test commands](#test-commands) above on the newly pinned version before opening the PR; `tests/supply-chain.test.mjs` also runs as part of `npm run test:supply-chain`.
 
@@ -89,7 +100,7 @@ GitHub's shared runners hit Docker Hub's anonymous pull limit, and a Docker Hub 
 | Image or tool | Source |
 | --- | --- |
 | `Dockerfile` build stages (`node`, `rust`) | `mirror.gcr.io/library/...`, Google's Docker Hub mirror (the same image digests). No `# syntax=` line: BuildKit's built-in Dockerfile frontend. The runtime base was already `gcr.io/distroless`. |
-| PostgreSQL service containers (`gateway`, `browser` jobs) and `test:container`'s database | `mirror.gcr.io/library/postgres:17-alpine` |
+| PostgreSQL service containers (`gateway-tests`, `gateway-special`, `browser` jobs) and `test:container`'s database | `mirror.gcr.io/library/postgres:17-alpine` |
 | Staging rehearsal PostgreSQL and Caddy | `STAGING_POSTGRES_IMAGE` / `STAGING_CADDY_IMAGE` set to `mirror.gcr.io/library/postgres:17-bookworm` and `mirror.gcr.io/library/caddy:2-alpine` by `ci.yml` and `image.yml`. `deploy/staging/compose.yaml` still defaults to Docker Hub for operators. |
 | BuildKit (`docker/setup-buildx-action`) | `driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1@sha256:…` |
 | SBOM generator | `attests: type=sbom,generator=mirror.gcr.io/docker/buildkit-syft-scanner:stable-1@sha256:…` (replaces `sbom: true`) |
