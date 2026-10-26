@@ -4,14 +4,17 @@
 # Called by ci.yml after the gateway, web and browser jobs pass, on pushes to
 # main (tag sha-<short>) and on v* tags (vX.Y.Z, vX.Y and, for final releases,
 # latest-release). It can also be run by hand on main or a v* tag
-# (workflow_dispatch); other refs are refused. Nothing is tagged latest:
+# (workflow_dispatch); other refs are refused for normal publication. An explicit
+# acceptance_probe may sign/verify a non-main branch's existing dev index only;
+# it never rebuilds, promotes, tags or creates a Release. Nothing is tagged latest:
 # deploy by the digest printed in the job summary.
 #
 # Only a tested image gets a tag. Jobs, in order:
 #   meta     (read)   tags, labels and annotations (docker/metadata-action).
-#   build    (write)  each architecture on a native runner, pushed by digest only
-#                     (untagged), with SBOM and provenance attestations. The digest
-#                     is the job output. Nothing else runs here.
+#   build    (read)   each architecture on a native runner, exported as a complete
+#                     OCI archive with SPDX SBOM and mode=max provenance.
+#   import   (write)  shared first-party-only handoff, after read-only graph/revision
+#                     preflight and a statically verified tool rebuild. Untagged.
 #   verify   (read)   per architecture, pulls that exact digest with a read-only
 #                     token and runs the version check, the isolated staging
 #                     rehearsal (init, db, migrate, up, verify, HTTPS readiness,
@@ -25,8 +28,9 @@
 # compromises of 2026 (a scanner action next to a publish credential, then a
 # compromised build/publish step) are why: a scanner, a test runner or any tool that
 # downloads code at run time gets a read-only token, and a job that can push, sign or
-# release uses only the allowlist in tests/supply-chain.test.mjs (checkout and the
-# docker/* build and login actions, each with the runner's own Buildx checked first).
+# release uses only the first-party allowlist in tests/supply-chain.test.mjs.
+# Docker-owned actions run only in read-only jobs. Writers use native registry-only
+# commands, private credential configurations and trusted workflow-SHA control code.
 # `npm run test:supply-chain` enforces it. The cosign and Trivy binaries are pinned
 # releases fetched by .github/scripts/fetch-verified.sh against a SHA-256 in this file.
 #
@@ -44,6 +48,12 @@ on:
         description: The published multi-arch index digest (sha256:...)
         value: ${{ jobs.publish.outputs.digest }}
   workflow_dispatch:
+    inputs:
+      acceptance_probe:
+        description: Sign and verify only this non-main branch's existing dev index (no normal publication)
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -52,11 +62,268 @@ env:
   IMAGE: ghcr.io/ncecere/open-model-gateway
 
 jobs:
+  # Opt-in branch-only acceptance of the candidate on an already-built dev index.
+  # No rebuild, promotion, release, or normal publisher dependency. A missing dev
+  # tag fails explicitly: wait for branch-images.yml before manually dispatching.
+  probe-prepare:
+    if: github.event_name == 'workflow_dispatch' && inputs.acceptance_probe == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    env:
+      EVENT: ${{ github.event_name }}
+      PROBE: ${{ inputs.acceptance_probe }}
+      REF_TYPE: ${{ github.ref_type }}
+    outputs:
+      digest: ${{ steps.resolve.outputs.digest }}
+      child: ${{ steps.resolve.outputs.child }}
+    steps:
+      - name: Refuse anything except this branch's explicit probe
+        run: |
+          set -euo pipefail
+          [[ "${EVENT}" = workflow_dispatch && "${PROBE}" = true ]]
+          [[ "${GITHUB_REPOSITORY}" = ncecere/open-model-gateway && "${IMAGE}" = ghcr.io/ncecere/open-model-gateway ]]
+          [[ "${REF_TYPE}" = branch && "${GITHUB_REF}" = refs/heads/?* && "${GITHUB_REF}" != refs/heads/main ]]
+          [[ "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ && "${GITHUB_WORKFLOW_SHA}" = "${GITHUB_SHA}" ]]
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Authenticate privately with native Docker
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          export DOCKER_CONFIG
+          DOCKER_CONFIG=$(mktemp -d "${RUNNER_TEMP}/probe-auth.XXXXXXXX")
+          echo "DOCKER_CONFIG=${DOCKER_CONFIG}" >> "$GITHUB_ENV"
+          printf '%s' "${GITHUB_TOKEN}" | docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
+      - name: Resolve and pull the existing dev index (no retry or rebuild)
+        id: resolve
+        run: |
+          set -euo pipefail
+          tag="${IMAGE}:dev-${GITHUB_SHA:0:12}"
+          manifest=$(docker buildx imagetools inspect "${tag}" --format '{{json .Manifest}}') || { echo '::error::dev tag not ready; require the completed branch image workflow'; exit 1; }
+          digest=$(jq -er '.digest | select(type == "string" and test("^sha256:[0-9a-f]{64}$"))' <<<"${manifest}")
+          child=$(docker buildx imagetools inspect --raw "${IMAGE}@${digest}" | jq -er '
+            select(.schemaVersion == 2 and .mediaType == "application/vnd.oci.image.index.v1+json") | .manifests |
+            select(type == "array" and length > 0) |
+            select(all(.[]; .mediaType == "application/vnd.oci.image.manifest.v1+json" and
+              (.digest | type == "string" and test("^sha256:[0-9a-f]{64}$")) and
+              (.size | type == "number" and . > 0 and floor == .))) |
+            [.[] | select(.platform.os == "linux" and .platform.architecture == "amd64")] as $native |
+            select(($native | length) == 1) | $native[0].digest as $child |
+            select(all(.[]; (.platform.os == "linux" and .platform.architecture == "amd64") or
+              (.platform.os == "unknown" and .platform.architecture == "unknown" and
+               .annotations["vnd.docker.reference.type"] == "attestation-manifest" and
+               .annotations["vnd.docker.reference.digest"] == $child))) | $child')
+          [[ "${child}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [ "${child}" != "${digest}" ]
+          docker pull --platform linux/amd64 "${IMAGE}@${child}"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "child=${child}" >> "$GITHUB_OUTPUT"
+      - name: Remove probe credentials
+        if: always()
+        run: |
+          if [ -n "${DOCKER_CONFIG:-}" ] && [ -d "${DOCKER_CONFIG}" ]; then
+            trap 'rm -rf -- "${DOCKER_CONFIG}"' EXIT
+            docker logout ghcr.io
+          fi
+      - name: Check exact revision, native platform and Cargo version without credentials
+        env:
+          CHILD: ${{ steps.resolve.outputs.child }}
+        run: |
+          set -euo pipefail
+          [ ! -d "${DOCKER_CONFIG}" ]
+          docker image inspect "${IMAGE}@${CHILD}" | jq -e --arg revision "${GITHUB_SHA}" '
+            type == "array" and length == 1 and .[0].Os == "linux" and .[0].Architecture == "amd64" and
+            .[0].Config.Labels["org.opencontainers.image.revision"] == $revision' >/dev/null
+          want=$(sed -n 's/^version = "\([^"]*\)"$/\1/p' apps/gateway/Cargo.toml | head -n1)
+          [ -n "${want}" ]
+          got=$(docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges "${IMAGE}@${CHILD}" --version)
+          [ "${got}" = "open-model-gateway ${want}" ]
+
+  probe-sign:
+    if: github.event_name == 'workflow_dispatch' && inputs.acceptance_probe == true
+    needs: [probe-prepare]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    env:
+      EVENT: ${{ github.event_name }}
+      PROBE: ${{ inputs.acceptance_probe }}
+      REF_TYPE: ${{ github.ref_type }}
+      DIGEST: ${{ needs.probe-prepare.outputs.digest }}
+      CHILD: ${{ needs.probe-prepare.outputs.child }}
+    steps:
+      - name: Refuse anything except this branch's explicit probe
+        run: |
+          set -euo pipefail
+          [[ "${EVENT}" = workflow_dispatch && "${PROBE}" = true ]]
+          [[ "${GITHUB_REPOSITORY}" = ncecere/open-model-gateway && "${IMAGE}" = ghcr.io/ncecere/open-model-gateway ]]
+          [[ "${REF_TYPE}" = branch && "${GITHUB_REF}" = refs/heads/?* && "${GITHUB_REF}" != refs/heads/main ]]
+          [[ "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ && "${GITHUB_WORKFLOW_SHA}" = "${GITHUB_SHA}" ]]
+          [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ && "${CHILD}" =~ ^sha256:[0-9a-f]{64}$ && "${CHILD}" != "${DIGEST}" ]]
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Install cosign (pinned release, SHA-256 verified)
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/cosign-bin"
+          bash .github/scripts/fetch-verified.sh https://github.com/sigstore/cosign/releases/download/v3.1.4/cosign-linux-amd64 424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa "${RUNNER_TEMP}/cosign-bin/cosign"
+          chmod 0755 "${RUNNER_TEMP}/cosign-bin/cosign"
+          echo "${RUNNER_TEMP}/cosign-bin" >> "$GITHUB_PATH"
+      - name: Authenticate privately with native Docker
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          export DOCKER_CONFIG
+          DOCKER_CONFIG=$(mktemp -d "${RUNNER_TEMP}/probe-auth.XXXXXXXX")
+          echo "DOCKER_CONFIG=${DOCKER_CONFIG}" >> "$GITHUB_ENV"
+          printf '%s' "${GITHUB_TOKEN}" | docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
+      - name: Sign only the prepared index
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${IMAGE}@${DIGEST}"
+      - name: Remove probe credentials
+        if: always()
+        run: |
+          if [ -n "${DOCKER_CONFIG:-}" ] && [ -d "${DOCKER_CONFIG}" ]; then
+            trap 'rm -rf -- "${DOCKER_CONFIG}"' EXIT
+            docker logout ghcr.io
+          fi
+
+  probe-verify:
+    if: github.event_name == 'workflow_dispatch' && inputs.acceptance_probe == true
+    needs: [probe-prepare, probe-sign]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    env:
+      EVENT: ${{ github.event_name }}
+      PROBE: ${{ inputs.acceptance_probe }}
+      REF_TYPE: ${{ github.ref_type }}
+      DIGEST: ${{ needs.probe-prepare.outputs.digest }}
+      CHILD: ${{ needs.probe-prepare.outputs.child }}
+    steps:
+      - name: Refuse anything except this branch's explicit probe
+        run: |
+          set -euo pipefail
+          [[ "${EVENT}" = workflow_dispatch && "${PROBE}" = true ]]
+          [[ "${GITHUB_REPOSITORY}" = ncecere/open-model-gateway && "${IMAGE}" = ghcr.io/ncecere/open-model-gateway ]]
+          [[ "${REF_TYPE}" = branch && "${GITHUB_REF}" = refs/heads/?* && "${GITHUB_REF}" != refs/heads/main ]]
+          [[ "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ && "${GITHUB_WORKFLOW_SHA}" = "${GITHUB_SHA}" ]]
+          [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ && "${CHILD}" =~ ^sha256:[0-9a-f]{64}$ && "${CHILD}" != "${DIGEST}" ]]
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Install cosign (pinned release, SHA-256 verified)
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/cosign-bin"
+          bash .github/scripts/fetch-verified.sh https://github.com/sigstore/cosign/releases/download/v3.1.4/cosign-linux-amd64 424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa "${RUNNER_TEMP}/cosign-bin/cosign"
+          chmod 0755 "${RUNNER_TEMP}/cosign-bin/cosign"
+          echo "${RUNNER_TEMP}/cosign-bin" >> "$GITHUB_PATH"
+      - name: Authenticate privately with native Docker
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          export DOCKER_CONFIG
+          DOCKER_CONFIG=$(mktemp -d "${RUNNER_TEMP}/probe-auth.XXXXXXXX")
+          echo "DOCKER_CONFIG=${DOCKER_CONFIG}" >> "$GITHUB_ENV"
+          printf '%s' "${GITHUB_TOKEN}" | docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
+      - name: Verify exact root and expected refusals
+        run: |
+          set -euo pipefail
+          umask 077
+          data=$(mktemp -d "${RUNNER_TEMP}/probe-bundles.XXXXXXXX")
+          trap 'rm -rf -- "${data}"' EXIT
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/image.yml@${GITHUB_REF}"
+          issuer=https://token.actions.githubusercontent.com
+          # Online verification still proves registry association with this root.
+          cosign verify --certificate-identity "${identity}" --certificate-oidc-issuer "${issuer}" "${IMAGE}@${DIGEST}" > "${data}/root.json"
+          jq -e --arg digest "${DIGEST}" 'type == "array" and length > 0 and all(.[];
+            .critical.image["docker-manifest-digest"] == $digest)' "${data}/root.json" >/dev/null
+          # Download once; cap the private file at 1 MiB and reject ANY extra byte.
+          cosign download signature "${IMAGE}@${DIGEST}" | {
+            head -c 1048576 > "${data}/signatures.jsonl"
+            [ "$(head -c 1 | wc -c)" -eq 0 ]
+          }
+          [ -s "${data}/signatures.jsonl" ]
+          # Cosign 3.1.4's default is v0.3 DSSE. Download can fall back to legacy;
+          # reject that format (or empty/malformed data), never infer absence.
+          jq -ces 'if length >= 1 and length <= 16 and all(.[];
+            type == "object" and .mediaType == "application/vnd.dev.sigstore.bundle.v0.3+json" and
+            (.dsseEnvelope | type == "object")) then .[] else error("invalid root bundles") end' \
+            "${data}/signatures.jsonl" > "${data}/bundles.jsonl"
+          refuse() {
+            local output line seen=0 expected="$4"
+            if output=$(cosign verify-blob --bundle ./bundle.json --certificate-identity "$2" --certificate-oidc-issuer "$3" "$1" 2>&1); then
+              echo '::error::unexpected successful negative verification'; return 1
+            fi
+            # Local VerifyNewBundle errors have no registry-discovery wrapper.
+            # Cobra/main may duplicate the leaf; every line must be that reason.
+            while IFS= read -r line; do
+              case "${line}" in
+                'Error: '*) line="${line#Error: }" ;;
+                'error during command execution: '*) line="${line#error during command execution: }" ;;
+                *)
+                  if [[ "${line}" =~ ^[0-9]{4}/[0-9]{2}/[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2}\ error\ during\ command\ execution:\ (.*)$ ]]; then
+                    line="${BASH_REMATCH[1]}"
+                  fi
+                  ;;
+              esac
+              [ "${line}" = "${expected}" ] || return 1
+              seen=$((seen + 1))
+            done <<<"${output}"
+            [ "${seen}" -gt 0 ]
+          }
+          policy='failed to verify certificate identity: no matching CertificateIdentity found, last error:'
+          printf -v subject_failure '%s expected SAN value "%s", got "%s"' "${policy}" "${identity/image.yml/wrong-workflow.yml}" "${identity}"
+          printf -v issuer_failure '%s expected issuer value "%s", got "%s"' "${policy}" https://wrong-issuer.invalid "${issuer}"
+          while IFS= read -r bundle; do
+            work=$(mktemp -d "${data}/bundle.XXXXXXXX")
+            (
+              # payloadBytes tries a file before payloadDigest: start EMPTY so
+              # no pseudo-digest filename can shadow WithArtifactDigest.
+              cd "${work}"
+              printf '%s\n' "${bundle}" > bundle.json
+              [ "$(wc -c < bundle.json)" -le 1048576 ]
+              cosign verify-blob --bundle ./bundle.json --certificate-identity "${identity}" --certificate-oidc-issuer "${issuer}" "${DIGEST}"
+              refuse "${DIGEST}" "${identity/image.yml/wrong-workflow.yml}" "${issuer}" "${subject_failure}"
+              refuse "${DIGEST}" "${identity}" https://wrong-issuer.invalid "${issuer_failure}"
+              # Same verified root bundle, different artifact: actual binding proof.
+              refuse "${CHILD}" "${identity}" "${issuer}" 'failed to verify signature: provided artifact digest does not match any digest in statement'
+            )
+          done < "${data}/bundles.jsonl"
+      - name: Remove probe credentials
+        if: always()
+        run: |
+          if [ -n "${DOCKER_CONFIG:-}" ] && [ -d "${DOCKER_CONFIG}" ]; then
+            trap 'rm -rf -- "${DOCKER_CONFIG}"' EXIT
+            docker logout ghcr.io
+          fi
+
   # Tags, labels and annotations. Read-only: docker/metadata-action only computes
   # strings (it reads the repository's metadata through the API), so it stays out of
   # the jobs that push and sign.
   meta:
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    if: (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && !(github.event_name == 'workflow_dispatch' && inputs.acceptance_probe == true)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -73,6 +340,7 @@ jobs:
           images: ${{ env.IMAGE }}
           labels: |
             org.opencontainers.image.title=open-model-gateway
+            org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.licenses=MIT
 
       - name: Tags and annotations of the multi-arch index
@@ -95,9 +363,8 @@ jobs:
             org.opencontainers.image.title=open-model-gateway
             org.opencontainers.image.licenses=MIT
 
-  # Builds and pushes each architecture by digest. This job can write packages, so
-  # it runs the checkout, the Docker setup, login and build actions and nothing else
-  # from outside this repository. Testing the image is the verify job's work.
+  # Native builds have no package grant, registry login or push credentials.
+  # Each immutable artifact contains exactly one complete, uncompressed OCI TAR.
   build:
     name: build (${{ matrix.platform }})
     needs: [meta]
@@ -113,12 +380,12 @@ jobs:
     timeout-minutes: 75
     permissions:
       contents: read
-      packages: write
-    # One output per architecture: each matrix leg sets only its own, and GitHub
-    # merges the legs' outputs. verify and publish fail on an empty or malformed one.
+    # Distinct names avoid last-finisher-wins reusable-matrix outputs.
     outputs:
       digest_linux_amd64: ${{ steps.record.outputs.digest_linux_amd64 }}
       digest_linux_arm64: ${{ steps.record.outputs.digest_linux_arm64 }}
+      artifact_id_linux_amd64: ${{ steps.record.outputs.artifact_id_linux_amd64 }}
+      artifact_id_linux_arm64: ${{ steps.record.outputs.artifact_id_linux_arm64 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -129,61 +396,90 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
         run: echo "PLATFORM_PAIR=${PLATFORM//\//-}" >> "$GITHUB_ENV"
 
-      # setup-buildx-action downloads the latest Buildx, unchecked, when the runner has
-      # none. This job can write, so fail here instead; the action's `version` input
-      # (which also downloads) stays unset. tests/supply-chain.test.mjs enforces both.
       - name: Require the runner's own Buildx
         run: docker buildx version
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
-          # BuildKit from mirror.gcr.io instead of Docker Hub.
           driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
 
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Untagged: nothing points at this digest until it has been tested.
-      - name: Build and push by digest (${{ matrix.platform }})
+      - name: Build a complete OCI archive (${{ matrix.platform }})
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: ${{ matrix.platform }}
           labels: ${{ needs.meta.outputs.build_labels }}
-          outputs: type=image,"name=${{ env.IMAGE }}",push-by-digest=true,name-canonical=true,push=true
-          # SBOM generator from mirror.gcr.io (`sbom: true` pulls it from Docker Hub).
+          outputs: type=oci,dest=${{ runner.temp }}/image.tar,oci-mediatypes=true
           attests: type=sbom,generator=mirror.gcr.io/docker/buildkit-syft-scanner:stable-1@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9
           provenance: mode=max
           cache-from: type=gha,scope=image-${{ env.PLATFORM_PAIR }}
           cache-to: type=gha,mode=max,scope=image-${{ env.PLATFORM_PAIR }}
 
-      - name: Record the pushed digest
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: upload
+        with:
+          name: image-${{ env.PLATFORM_PAIR }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/image.tar
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Record immutable per-platform handoff
         id: record
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
         run: |
-          [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::the build returned no image digest ('${DIGEST}')"; exit 1; }
+          set -euo pipefail
+          [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "${ARTIFACT_ID}" =~ ^[1-9][0-9]*$ ]]
           echo "digest_${PLATFORM_PAIR//-/_}=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "artifact_id_${PLATFORM_PAIR//-/_}=${ARTIFACT_ID}" >> "$GITHUB_OUTPUT"
+
+  import-amd64:
+    needs: [build]
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/oci-import.yml
+    with:
+      artifact_id: ${{ needs.build.outputs.artifact_id_linux_amd64 }}
+      root_digest: ${{ needs.build.outputs.digest_linux_amd64 }}
+      platform: linux/amd64
+      image_repository: ghcr.io/ncecere/open-model-gateway
+      source_revision: ${{ github.sha }}
+
+  import-arm64:
+    needs: [build]
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/oci-import.yml
+    with:
+      artifact_id: ${{ needs.build.outputs.artifact_id_linux_arm64 }}
+      root_digest: ${{ needs.build.outputs.digest_linux_arm64 }}
+      platform: linux/arm64
+      image_repository: ghcr.io/ncecere/open-model-gateway
+      source_revision: ${{ github.sha }}
 
   # Tests the pushed digest of each architecture on a native runner with a
   # read-only token: anything that runs here (the image under test, Trivy, the
   # staging stack, the tools they download) cannot push, sign or release.
   verify:
     name: verify (${{ matrix.platform }})
-    needs: [build]
+    needs: [import-amd64, import-arm64]
     strategy:
       fail-fast: true
       matrix:
         include:
           - platform: linux/amd64
             runner: ubuntu-24.04
+            import_job: import-amd64
             digest_output: digest_linux_amd64
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
+            import_job: import-arm64
             digest_output: digest_linux_arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -191,10 +487,10 @@ jobs:
       contents: read
       packages: read # pull the pushed digest
     env:
-      DIGEST: ${{ needs.build.outputs[matrix.digest_output] }}
-      # Staging rehearsal images (deploy/staging/compose.yaml defaults to Docker Hub).
-      STAGING_POSTGRES_IMAGE: mirror.gcr.io/library/postgres:17-bookworm
-      STAGING_CADDY_IMAGE: mirror.gcr.io/library/caddy:2-alpine
+      DIGEST: ${{ needs[matrix.import_job].outputs[matrix.digest_output] }}
+      # Approved staging rehearsal digest pins; same mirror defaults as Compose.
+      STAGING_POSTGRES_IMAGE: mirror.gcr.io/library/postgres@sha256:858bb5e98eed02eb8cafbcdc007f9a65d1b613972028944a8ec2133ccaf80d27
+      STAGING_CADDY_IMAGE: mirror.gcr.io/library/caddy@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -226,7 +522,10 @@ jobs:
         env:
           REF_TYPE: ${{ github.ref_type }}
           TAG: ${{ github.ref_name }}
+          SOURCE_REVISION: ${{ github.sha }}
         run: |
+          revision=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${IMAGE}@${DIGEST}")
+          [ "${revision}" = "${SOURCE_REVISION}" ] || { echo '::error::image source revision mismatch'; exit 1; }
           want=$(sed -n 's/^version = "\([^"]*\)"$/\1/p' apps/gateway/Cargo.toml | head -n1)
           got=$(docker run --rm "${IMAGE}@${DIGEST}" --version)
           echo "image reports: ${got}"
@@ -315,10 +614,10 @@ jobs:
 
   # Joins the tested digests into one index, tags and signs it. It starts only
   # when every verify leg passed. It can push and sign (id-token), so it uses the
-  # allowlisted docker/* actions and a pinned cosign binary, and gets the tested
-  # digests from the build job's outputs.
+  # first-party actions and a pinned cosign binary. Registry-only native Buildx
+  # joins the exact staged roots, preserving their SBOM/provenance associations.
   publish:
-    needs: [meta, build, verify]
+    needs: [meta, import-amd64, import-arm64, verify]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     outputs:
@@ -328,36 +627,46 @@ jobs:
       packages: write
       id-token: write # cosign keyless signing (Sigstore OIDC)
     steps:
-      # The checkout is for .github/scripts/fetch-verified.sh (the cosign download).
+      # Trusted control script, never an image-source input ref.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
 
-      # setup-buildx-action downloads the latest Buildx, unchecked, when the runner has
-      # none. This job can write, so fail here instead; the action's `version` input
-      # (which also downloads) stays unset. tests/supply-chain.test.mjs enforces both.
+      # Metadata is untrusted data; only this server-controlled ref may set tags.
+      - name: Validate publication tags before credentials
+        env:
+          TAGS: ${{ needs.meta.outputs.tags }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: python3 -I .github/scripts/publication-tags.py
+
       - name: Require the runner's own Buildx
         run: docker buildx version
 
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-        with:
-          # BuildKit from mirror.gcr.io instead of Docker Hub.
-          driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
-
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Authenticate with a private native Docker configuration
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          export DOCKER_CONFIG
+          DOCKER_CONFIG=$(mktemp -d "${RUNNER_TEMP}/docker-auth.XXXXXXXX")
+          echo "DOCKER_CONFIG=${DOCKER_CONFIG}" >> "$GITHUB_ENV"
+          printf '%s' "${GITHUB_TOKEN}" | docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
 
       - name: Tag the tested digests as one multi-arch image
         id: index
         env:
           TAGS: ${{ needs.meta.outputs.tags }}
           ANNOTATIONS: ${{ needs.meta.outputs.annotations }}
-          DIGEST_AMD64: ${{ needs.build.outputs.digest_linux_amd64 }}
-          DIGEST_ARM64: ${{ needs.build.outputs.digest_linux_arm64 }}
+          DIGEST_AMD64: ${{ needs.import-amd64.outputs.digest_linux_amd64 }}
+          DIGEST_ARM64: ${{ needs.import-arm64.outputs.digest_linux_arm64 }}
         run: |
+          set -euo pipefail
+          umask 077
+          private=$(mktemp -d "${RUNNER_TEMP}/oci-index.XXXXXXXX")
+          trap 'rm -rf -- "${private}"' EXIT
           for d in "${DIGEST_AMD64}" "${DIGEST_ARM64}"; do
             [[ "${d}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::expected 2 tested digests (amd64, arm64); got '${DIGEST_AMD64}' and '${DIGEST_ARM64}'"; exit 1; }
           done
@@ -365,28 +674,41 @@ jobs:
           while IFS= read -r tag; do [ -n "${tag}" ] && args+=(--tag "${tag}"); done <<<"${TAGS}"
           while IFS= read -r note; do [ -n "${note}" ] && args+=(--annotation "${note}"); done <<<"${ANNOTATIONS}"
           sources=("${IMAGE}@${DIGEST_AMD64}" "${IMAGE}@${DIGEST_ARM64}")
-          docker buildx imagetools create "${args[@]}" "${sources[@]}"
-          first=$(head -n1 <<<"${TAGS}")
-          digest=$(docker buildx imagetools inspect "${first}" --format '{{json .Manifest}}' | jq -r .digest)
-          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no index digest for ${first}"; exit 1; }
-          platforms=$(docker buildx imagetools inspect --raw "${IMAGE}@${digest}" \
-            | jq -r '[.manifests[] | select(.platform != null and .platform.os != "unknown") | .platform.os + "/" + .platform.architecture] | sort | join(",")')
-          if [ "${platforms}" != "linux/amd64,linux/arm64" ]; then
-            echo "::error::index ${digest} has platforms '${platforms}'"
-            exit 1
-          fi
+          docker buildx imagetools create "${args[@]}" "${sources[@]}" --metadata-file "${private}/metadata.json"
+          # Buildx writes this descriptor only after successful pushes. Never
+          # resolve a mutable tag to select the root that will be signed.
+          digest=$(jq -er '."containerimage.descriptor".digest' "${private}/metadata.json")
+          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::invalid creation digest"; exit 1; }
+          docker buildx imagetools inspect --raw "${IMAGE}@${DIGEST_AMD64}" > "${private}/amd64.json"
+          docker buildx imagetools inspect --raw "${IMAGE}@${DIGEST_ARM64}" > "${private}/arm64.json"
+          docker buildx imagetools inspect --raw "${IMAGE}@${digest}" > "${private}/index.json"
+          python3 -I .github/scripts/oci-index.py "${private}/metadata.json" \
+            "${private}/amd64.json" "${DIGEST_AMD64}" \
+            "${private}/arm64.json" "${DIGEST_ARM64}" \
+            "${private}/index.json" "${digest}"
+          # Native --raw preserves exact bytes, without adding a newline. An
+          # alias race fails closed; it can never change the candidate digest.
+          while IFS= read -r tag; do
+            [ -n "${tag}" ] || continue
+            docker buildx imagetools inspect --raw "${tag}" > "${private}/tag.json"
+            hashed=$(sha256sum "${private}/tag.json")
+            [ "sha256:${hashed%% *}" = "${digest}" ] || { echo "::error::publication tag changed"; exit 1; }
+          done <<<"${TAGS}"
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 
-      # cosign v3.0.6, the release cosign-installer v4.1.2 installed; the SHA-256 is
-      # that release's cosign_checksums.txt entry for cosign-linux-amd64. Fetched by
-      # the checksum-verifying script instead of an installer action, so no
-      # third-party code runs next to the OIDC token. Keep the version and checksum
-      # in step when bumping.
+      # cosign v3.1.4 candidate: its published amd64 SPDX SBOM binds this binary
+      # to Go 1.27.3 (GO-2026-6809 fixed); v3.0.6 used Go 1.25.7. Exposure is
+      # conditional on system trust state, not evidence of compromise. The SHA-256
+      # is the published cosign_checksums.txt entry for cosign-linux-amd64.
+      # Code/policy staging only, not approval to execute or publish: independent
+      # reviews, authenticated artifact verification and real keyless/OCI/SPDX/
+      # release-checksum checks remain pending, including signer/Rekor changes.
+      # Keep the version and checksum in step; verify before chmod or execution.
       - name: Install cosign (pinned release, SHA-256 verified)
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/cosign-bin"
-          bash .github/scripts/fetch-verified.sh https://github.com/sigstore/cosign/releases/download/v3.0.6/cosign-linux-amd64 c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74 "${RUNNER_TEMP}/cosign-bin/cosign"
+          bash .github/scripts/fetch-verified.sh https://github.com/sigstore/cosign/releases/download/v3.1.4/cosign-linux-amd64 424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa "${RUNNER_TEMP}/cosign-bin/cosign"
           chmod 0755 "${RUNNER_TEMP}/cosign-bin/cosign"
           echo "${RUNNER_TEMP}/cosign-bin" >> "$GITHUB_PATH"
 
@@ -425,6 +747,14 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Remove registry credentials
+        if: always()
+        run: |
+          if [ -n "${DOCKER_CONFIG:-}" ] && [ -d "${DOCKER_CONFIG}" ]; then
+            trap 'rm -rf -- "${DOCKER_CONFIG}"' EXIT
+            docker logout ghcr.io
+          fi
+
   # GitHub Release for a v* tag, after its image is tested, scanned, tagged
   # and signed: notes from docs/releases/vX.Y.Z.md (the base version for -rc
   # tags) plus the image digest and verification command, and as assets the
@@ -441,13 +771,22 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
 
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Require the runner's own Buildx
+        run: docker buildx version
+
+      - name: Authenticate with a private native Docker configuration
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          export DOCKER_CONFIG
+          DOCKER_CONFIG=$(mktemp -d "${RUNNER_TEMP}/docker-auth.XXXXXXXX")
+          echo "DOCKER_CONFIG=${DOCKER_CONFIG}" >> "$GITHUB_ENV"
+          printf '%s' "${GITHUB_TOKEN}" | docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
 
       - name: Create the GitHub Release
         env:
@@ -455,3 +794,11 @@ jobs:
           TAG: ${{ github.ref_name }}
           DIGEST: ${{ needs.publish.outputs.digest }}
         run: bash scripts/github-release.sh
+
+      - name: Remove registry credentials
+        if: always()
+        run: |
+          if [ -n "${DOCKER_CONFIG:-}" ] && [ -d "${DOCKER_CONFIG}" ]; then
+            trap 'rm -rf -- "${DOCKER_CONFIG}"' EXIT
+            docker logout ghcr.io
+          fi

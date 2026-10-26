@@ -1,11 +1,8 @@
-# Load-test image for a cluster capacity run (docs/kubernetes.md "Loadtest profile (P8)"):
-# ghcr.io/ncecere/open-model-gateway-loadtest:dev-<first 12 characters of the commit>, built from
-# deploy/loadtest/Dockerfile (the gateway, the mock upstream and the load generator).
-#
-# Built only on request (a run is long and rare): Actions › loadtest-image › Run workflow, or
-# `gh workflow run loadtest-image.yml -f ref=<branch|tag|commit>`. Like branch-images.yml it is a
-# development build: linux/amd64, no latest or version tag, not scanned or signed, never a
-# production image. prune-dev-images.yml deletes old dev-<12 hex> tags of this package too.
+# On-request development load-test image (docs/kubernetes.md, loadtest profile):
+# ghcr.io/ncecere/open-model-gateway-loadtest:dev-<commit SHA12>.
+# linux/amd64; NOT scanned, rehearsed or signed, never latest/a version/production.
+# SPDX/SLSA data now accompanies the validated OCI handoff, not a certification.
+# prune-dev-images.yml deletes old dev-<12 hex> tags of this package too.
 name: loadtest-image
 
 on:
@@ -25,58 +22,48 @@ concurrency:
 
 jobs:
   build:
-    name: Build open-model-gateway-loadtest
+    name: Build open-model-gateway-loadtest (read-only)
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
       contents: read
-      packages: write
+    outputs:
+      artifact_id: ${{ steps.record.outputs.artifact_id }}
+      digest: ${{ steps.record.outputs.digest }}
+      source_revision: ${{ steps.name.outputs.sha }}
     steps:
+      # Only image source uses the optional ref. Importer control code never does.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
-      - name: Name the image
+      - name: Record the source revision
         id: name
         run: |
           set -euo pipefail
           sha="$(git rev-parse HEAD)"
-          {
-            echo "sha=$sha"
-            echo "tag=dev-${sha:0:12}"
-            echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/open-model-gateway-loadtest"
-          } >> "$GITHUB_OUTPUT"
+          [[ "${sha}" =~ ^[0-9a-f]{40}$ ]]
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
 
-      # setup-buildx-action downloads the latest Buildx, unchecked, when the runner has
-      # none. This job can write, so fail here instead; the action's `version` input
-      # (which also downloads) stays unset. tests/supply-chain.test.mjs enforces both.
       - name: Require the runner's own Buildx
         run: docker buildx version
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
-          # BuildKit from mirror.gcr.io instead of Docker Hub.
           driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
 
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push
+      - name: Build a complete OCI archive without registry credentials
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: deploy/loadtest/Dockerfile
           platforms: linux/amd64
-          push: true
-          tags: ${{ steps.name.outputs.image }}:${{ steps.name.outputs.tag }}
+          outputs: type=oci,dest=${{ runner.temp }}/image.tar,oci-mediatypes=true
           build-args: CARGO_BUILD_JOBS=4
-          provenance: false
-          sbom: false
+          attests: type=sbom,generator=mirror.gcr.io/docker/buildkit-syft-scanner:stable-1@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9
+          provenance: mode=max
           labels: |
             org.opencontainers.image.title=open-model-gateway-loadtest
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
@@ -85,14 +72,83 @@ jobs:
           cache-from: type=gha,scope=loadtest-linux-amd64
           cache-to: type=gha,mode=max,scope=loadtest-linux-amd64
 
-      - name: Summary
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: upload
+        with:
+          name: loadtest-image-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/image.tar
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Record immutable image handoff
+        id: record
         env:
-          IMAGE: ${{ steps.name.outputs.image }}
-          TAG: ${{ steps.name.outputs.tag }}
           DIGEST: ${{ steps.build.outputs.digest }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
         run: |
-          {
-            echo "\`$IMAGE:$TAG\`"
-            echo ""
-            echo "digest \`$DIGEST\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "${ARTIFACT_ID}" =~ ^[1-9][0-9]*$ ]]
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "artifact_id=${ARTIFACT_ID}" >> "$GITHUB_OUTPUT"
+
+  import:
+    needs: [build]
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/oci-import.yml
+    with:
+      artifact_id: ${{ needs.build.outputs.artifact_id }}
+      root_digest: ${{ needs.build.outputs.digest }}
+      platform: linux/amd64
+      image_repository: ghcr.io/ncecere/open-model-gateway-loadtest
+      source_revision: ${{ needs.build.outputs.source_revision }}
+
+  publish:
+    needs: [build, import]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/ncecere/open-model-gateway-loadtest
+      DIGEST: ${{ needs.import.outputs.digest }}
+      SOURCE_REVISION: ${{ needs.build.outputs.source_revision }}
+    steps:
+      - name: Require the runner's own Buildx
+        run: docker buildx version
+
+      - name: Authenticate with a private native Docker configuration
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          umask 077
+          export DOCKER_CONFIG
+          DOCKER_CONFIG=$(mktemp -d "${RUNNER_TEMP}/docker-auth.XXXXXXXX")
+          echo "DOCKER_CONFIG=${DOCKER_CONFIG}" >> "$GITHUB_ENV"
+          printf '%s' "${GITHUB_TOKEN}" | docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
+
+      - name: Tag only the imported root as dev-SHA12
+        run: |
+          set -euo pipefail
+          [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          tag="${IMAGE}:dev-${SOURCE_REVISION:0:12}"
+          docker buildx imagetools create --prefer-index=false --tag "${tag}" "${IMAGE}@${DIGEST}"
+          got=$(docker buildx imagetools inspect "${tag}" --format '{{json .Manifest}}' | jq -er .digest)
+          [ "${got}" = "${DIGEST}" ]
+          printf '`%s`\n\ndigest `%s`\n' "${tag}" "${DIGEST}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove registry credentials
+        if: always()
+        run: |
+          if [ -n "${DOCKER_CONFIG:-}" ] && [ -d "${DOCKER_CONFIG}" ]; then
+            trap 'rm -rf -- "${DOCKER_CONFIG}"' EXIT
+            docker logout ghcr.io
+          fi

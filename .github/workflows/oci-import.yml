@@ -1,0 +1,261 @@
+# Shared, digest-only OCI handoff. Image bytes are data, never tools or code.
+# The caller grants the ceiling; each preparation job explicitly drops write.
+# oci-stage.py is the separately reviewed transport boundary: no tag is created here.
+name: oci-import
+
+on:
+  workflow_call:
+    inputs:
+      artifact_id:
+        required: true
+        type: string
+      root_digest:
+        required: true
+        type: string
+      platform:
+        required: true
+        type: string
+      image_repository:
+        required: true
+        type: string
+      source_revision:
+        required: true
+        type: string
+    outputs:
+      digest:
+        description: Exact staged OCI root digest
+        value: ${{ jobs.import.outputs.digest }}
+      digest_linux_amd64:
+        description: Staged root when platform is linux/amd64
+        value: ${{ jobs.import.outputs.digest_linux_amd64 }}
+      digest_linux_arm64:
+        description: Staged root when platform is linux/arm64
+        value: ${{ jobs.import.outputs.digest_linux_arm64 }}
+
+permissions:
+  contents: read
+
+jobs:
+  tools:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.record.outputs.artifact_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: control
+          persist-credentials: false
+
+      - name: Rebuild and verify the dedicated transport tool
+        run: |
+          set -euo pipefail
+          umask 077
+          tool_dir=$(mktemp -d "${RUNNER_TEMP}/oci-tool.XXXXXXXX")
+          echo "TOOL_DIR=${tool_dir}" >> "$GITHUB_ENV"
+          bash control/.github/scripts/build-oras.sh "${tool_dir}/oras"
+          [ -f "${tool_dir}/oras" ]
+          [ ! -L "${tool_dir}/oras" ]
+          expected=$(jq -er '.binary_sha256 | select(test("^[0-9a-f]{64}$"))' control/.github/tools/oras.json)
+          printf '%s  %s\n' "${expected}" "${tool_dir}/oras" | sha256sum --check --strict -
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: upload
+        with:
+          name: oras-${{ inputs.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ inputs.artifact_id }}-${{ github.run_attempt }}
+          path: ${{ env.TOOL_DIR }}/oras
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Record immutable tool artifact ID
+        id: record
+        env:
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+        run: |
+          set -euo pipefail
+          [[ "${ARTIFACT_ID}" =~ ^[1-9][0-9]*$ ]]
+          echo "artifact_id=${ARTIFACT_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Remove tool handoff
+        if: always()
+        run: rm -rf -- "${TOOL_DIR:-}"
+
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      ARTIFACT_ID: ${{ inputs.artifact_id }}
+      ROOT_DIGEST: ${{ inputs.root_digest }}
+      PLATFORM: ${{ inputs.platform }}
+      IMAGE: ${{ inputs.image_repository }}
+      SOURCE_REVISION: ${{ inputs.source_revision }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: control
+          persist-credentials: false
+
+      - name: Refuse invalid handoff selectors before download
+        run: |
+          set -euo pipefail
+          [[ "${ARTIFACT_ID}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${ROOT_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          case "${PLATFORM}" in linux/amd64|linux/arm64) ;; *) exit 1 ;; esac
+          case "${IMAGE}" in ghcr.io/ncecere/open-model-gateway|ghcr.io/ncecere/open-model-gateway-loadtest) ;; *) exit 1 ;; esac
+          umask 077
+          image_dir=$(mktemp -d "${RUNNER_TEMP}/oci-image.XXXXXXXX")
+          echo "IMAGE_DIR=${image_dir}" >> "$GITHUB_ENV"
+
+      # No name, pattern, token or run/repository override: one immutable ID in this run.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ inputs.artifact_id }}
+          path: ${{ env.IMAGE_DIR }}
+          merge-multiple: true
+
+      - name: Validate complete OCI graph and source revision without extraction
+        run: |
+          set -euo pipefail
+          shopt -s dotglob nullglob
+          entries=("${IMAGE_DIR}"/*)
+          [ "${#entries[@]}" -eq 1 ]
+          [ "${entries[0]}" = "${IMAGE_DIR}/image.tar" ]
+          [ -f "${IMAGE_DIR}/image.tar" ]
+          [ ! -L "${IMAGE_DIR}/image.tar" ]
+          python3 -I - <<'PY'
+          import importlib.util, json, os, tarfile
+          spec = importlib.util.spec_from_file_location("oci_layout", "control/.github/scripts/oci-layout.py")
+          layout = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(layout)
+          path = os.path.join(os.environ["IMAGE_DIR"], "image.tar")
+          report = layout.inspect_archive(path, os.environ["ROOT_DIGEST"], os.environ["PLATFORM"])
+          runnable = next(child for child in report["index"]["manifests"]
+                          if child["platform"]["os"] == "linux")
+          # Only read JSON already bounded and digest-checked by inspect_archive.
+          with tarfile.open(path, mode="r:") as archive:
+              def document(digest):
+                  return json.load(archive.extractfile("blobs/sha256/" + digest[7:]))
+              manifest = document(runnable["digest"])
+              config = document(manifest["config"]["digest"])
+          revision = config.get("config", {}).get("Labels", {}).get("org.opencontainers.image.revision")
+          if revision != os.environ["SOURCE_REVISION"]:
+              raise ValueError("config source revision mismatch")
+          PY
+
+      - name: Remove image handoff
+        if: always()
+        run: rm -rf -- "${IMAGE_DIR:-}"
+
+  import:
+    needs: [tools, preflight]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.stage.outputs.digest }}
+      digest_linux_amd64: ${{ steps.stage.outputs.digest_linux_amd64 }}
+      digest_linux_arm64: ${{ steps.stage.outputs.digest_linux_arm64 }}
+    env:
+      ARTIFACT_ID: ${{ inputs.artifact_id }}
+      TOOL_ARTIFACT_ID: ${{ needs.tools.outputs.artifact_id }}
+      ROOT_DIGEST: ${{ inputs.root_digest }}
+      PLATFORM: ${{ inputs.platform }}
+      IMAGE: ${{ inputs.image_repository }}
+      SOURCE_REVISION: ${{ inputs.source_revision }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: control
+          persist-credentials: false
+
+      - name: Refuse invalid handoff selectors before download
+        run: |
+          set -euo pipefail
+          [[ "${ARTIFACT_ID}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${TOOL_ARTIFACT_ID}" =~ ^[1-9][0-9]*$ ]]
+          [ "${ARTIFACT_ID}" != "${TOOL_ARTIFACT_ID}" ]
+          [[ "${ROOT_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          case "${PLATFORM}" in linux/amd64|linux/arm64) ;; *) exit 1 ;; esac
+          case "${IMAGE}" in ghcr.io/ncecere/open-model-gateway|ghcr.io/ncecere/open-model-gateway-loadtest) ;; *) exit 1 ;; esac
+          umask 077
+          image_dir=$(mktemp -d "${RUNNER_TEMP}/oci-image.XXXXXXXX")
+          tool_dir=$(mktemp -d "${RUNNER_TEMP}/oci-tool.XXXXXXXX")
+          echo "IMAGE_DIR=${image_dir}" >> "$GITHUB_ENV"
+          echo "TOOL_DIR=${tool_dir}" >> "$GITHUB_ENV"
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ inputs.artifact_id }}
+          path: ${{ env.IMAGE_DIR }}
+          merge-multiple: true
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.tools.outputs.artifact_id }}
+          path: ${{ env.TOOL_DIR }}
+          merge-multiple: true
+
+      - name: Repeat graph and revision checks and verify static tool pin before credentials
+        run: |
+          set -euo pipefail
+          shopt -s dotglob nullglob
+          images=("${IMAGE_DIR}"/*)
+          tools=("${TOOL_DIR}"/*)
+          [ "${#images[@]}" -eq 1 ]
+          [ "${images[0]}" = "${IMAGE_DIR}/image.tar" ]
+          [ "${#tools[@]}" -eq 1 ]
+          [ "${tools[0]}" = "${TOOL_DIR}/oras" ]
+          [ -f "${IMAGE_DIR}/image.tar" ]
+          [ ! -L "${IMAGE_DIR}/image.tar" ]
+          [ -f "${TOOL_DIR}/oras" ]
+          [ ! -L "${TOOL_DIR}/oras" ]
+          expected=$(jq -er '.binary_sha256 | select(test("^[0-9a-f]{64}$"))' control/.github/tools/oras.json)
+          printf '%s  %s\n' "${expected}" "${TOOL_DIR}/oras" | sha256sum --check --strict -
+          python3 -I - <<'PY'
+          import importlib.util, json, os, tarfile
+          spec = importlib.util.spec_from_file_location("oci_layout", "control/.github/scripts/oci-layout.py")
+          layout = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(layout)
+          path = os.path.join(os.environ["IMAGE_DIR"], "image.tar")
+          report = layout.inspect_archive(path, os.environ["ROOT_DIGEST"], os.environ["PLATFORM"])
+          runnable = next(child for child in report["index"]["manifests"]
+                          if child["platform"]["os"] == "linux")
+          with tarfile.open(path, mode="r:") as archive:
+              def document(digest):
+                  return json.load(archive.extractfile("blobs/sha256/" + digest[7:]))
+              manifest = document(runnable["digest"])
+              config = document(manifest["config"]["digest"])
+          revision = config.get("config", {}).get("Labels", {}).get("org.opencontainers.image.revision")
+          if revision != os.environ["SOURCE_REVISION"]:
+              raise ValueError("config source revision mismatch")
+          PY
+          chmod 0700 "${TOOL_DIR}/oras"
+
+      - name: Stage only the known root, never a tag
+        id: stage
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          digest=$(python3 -I control/.github/scripts/oci-stage.py --archive "${IMAGE_DIR}/image.tar" --root "${ROOT_DIGEST}" --platform "${PLATFORM}" --image "${IMAGE}" --tool "${TOOL_DIR}/oras")
+          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [ "${digest}" = "${ROOT_DIGEST}" ]
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "digest_${PLATFORM//\//_}=${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Remove private handoffs
+        if: always()
+        run: rm -rf -- "${IMAGE_DIR:-}" "${TOOL_DIR:-}"

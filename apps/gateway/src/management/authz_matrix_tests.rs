@@ -10,6 +10,8 @@ use sha2::{Digest, Sha256};
 mod admin_token_tests;
 #[path = "authz_middleware_tests.rs"]
 mod isolated;
+#[path = "key_issuance_contention_tests.rs"]
+mod key_issuance_contention_tests;
 #[path = "provider_cost_auth_tests.rs"]
 mod provider_cost_auth_tests;
 #[path = "authz_matrix_fixtures.rs"]

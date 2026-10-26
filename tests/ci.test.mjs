@@ -51,6 +51,44 @@ function validateGraph(data) {
   ]);
 }
 
+const ociPolicyCommands = [
+  "node --test tests/oci-tool.test.mjs",
+  "python3 -B -m unittest discover -s tests -p 'oci_*test.py' -v",
+];
+function validateOciPolicy(data) {
+  const web = data.jobs.web;
+  required(web);
+  assert.deepEqual(data.permissions, { contents: "read" });
+  assert.equal(web.permissions, undefined);
+  assert.ok(data.jobs.image.needs.includes("web"));
+  for (const command of ociPolicyCommands) {
+    assert.equal(web.steps.filter(s => s.run === command).length, 1, `required CI invocation: ${command}`);
+  }
+}
+
+test("required read-only web gate runs OCI tool and all Python OCI tests", () => validateOciPolicy(loadWorkflow()));
+
+test("OCI CI gate refuses missing, optional, skipped, wrong-pattern and swallowed checks", () => {
+  const original = loadWorkflow();
+  for (const command of ociPolicyCommands) {
+    for (const mutate of [
+      d => { d.jobs.web.steps = d.jobs.web.steps.filter(s => s.run !== command); },
+      d => { d.jobs.web.steps.find(s => s.run === command).if = "false"; },
+      d => { d.jobs.web.steps.find(s => s.run === command)["continue-on-error"] = true; },
+      d => { d.jobs.web.steps.find(s => s.run === command).run += " || true"; },
+      d => { d.jobs.web.steps.find(s => s.run === command).run = command.replace("oci_", "oci_layout_").replace("oci-tool", "other-tool"); },
+      d => { d.jobs.web.if = "github.event_name == 'push'"; },
+      d => { d.jobs.web["continue-on-error"] = true; },
+      d => { d.jobs.web.permissions = { packages: "write" }; },
+      d => { d.jobs.image.needs = d.jobs.image.needs.filter(n => n !== "web"); },
+    ]) {
+      const data = structuredClone(original);
+      mutate(data);
+      assert.throws(() => validateOciPolicy(data));
+    }
+  }
+});
+
 test("CI deduplicates branch pushes, cancels only PRs, and gives every main/tag run its own group", () => {
   const data = loadWorkflow();
   assert.deepEqual(data.on, { push: { branches: ["main"], tags: ["v*"] }, pull_request: null });
@@ -83,14 +121,15 @@ test("workflow validator refuses missing/extra/optional shards and weakened depe
   }
 });
 
-test("special probes retain sequential ordinary/ignored ACL, exact terminal, Docker and backup coverage", () => {
+test("special probes retain sequential ACL, exact contention/terminal, Docker and backup coverage", () => {
   const job = loadWorkflow().jobs["gateway-special"];
   assert.ok(job, "missing special coverage job");
   assert.deepEqual(runs(job), [
     "npm ci",
     "cargo test -p open-model-gateway --all-features --test filestore_s3",
     "cargo test -p open-model-gateway --all-features --test runtime_privileges",
-    "cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored",
+    "cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored --test-threads=1",
+    "cargo test -p open-model-gateway --all-features --lib management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement -- --ignored --exact",
     "cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact",
     "sudo apt-get update && sudo apt-get install -y age",
     "cargo build -p open-model-gateway --all-features --bin open-model-gateway",
@@ -234,7 +273,7 @@ test("Cargo target invocations preserve package identity, exact multiple filters
   assert.deepEqual(validateRun("running 1 test\ntest result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s\n", { entries: [entry("live")], ignored: ["live"], total: 1 }), { passed: 0, ignored: 1, measured: 0 });
 });
 
-function syntheticCargo({ corrupt = "", failAt = -1 } = {}) {
+function syntheticCargo({ corrupt = "", failAt = -1, probe = "", probeMutation = "" } = {}) {
   const meta = fixtures();
   const calls = [];
   const run = async args => {
@@ -245,8 +284,19 @@ function syntheticCargo({ corrupt = "", failAt = -1 } = {}) {
     if (args.includes("--doc")) return "doctests passed\n";
     const name = args.includes("--lib") ? "open_model_gateway" : args[args.indexOf("--test") + 1] ?? "binary";
     const terminal = "providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence";
-    const entries = name === "open_model_gateway" ? Array.from({ length: 12 }, (_, i) => entry(i === 11 ? terminal : `m::test_${i}`)) : [entry("normal"), entry("live")];
-    const ignored = entries.filter(e => e.name === "live" || e.name === terminal);
+    const keyContention = "management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement";
+    const runtimeProbes = ["enterprise_runtime_allowlist_and_rollback_probes", "controlled_lock_stall_recovers_on_runtime_http_path"];
+    let entries = name === "open_model_gateway" ? Array.from({ length: 12 }, (_, i) => entry(i === 11 ? terminal : i === 10 ? keyContention : `m::test_${i}`))
+      : name === "runtime_privileges" ? runtimeProbes.map(name => entry(name)) : [entry("normal"), entry("live")];
+    let ignored = entries.filter(e => e.name === "live" || e.name === terminal || e.name === keyContention || (name === "runtime_privileges" && runtimeProbes.includes(e.name)));
+    if (name === "open_model_gateway" || name === "runtime_privileges") {
+      const mutate = items => items.flatMap(e => e.name !== probe ? [e]
+        : probeMutation === "remove" ? []
+        : probeMutation === "rename" ? [{ ...e, name: `${e.name}_renamed` }]
+        : probeMutation === "benchmark" ? [{ ...e, kind: "benchmark" }] : [e]);
+      entries = mutate(entries);
+      ignored = mutate(ignored).filter(e => probeMutation !== "unignore" || e.name !== probe);
+    }
     if (args.includes("--list")) {
       if (corrupt === "listing") return "garbage\n";
       return listing(args.includes("--ignored") ? ignored : entries, args.includes("pretty"));
@@ -281,6 +331,27 @@ test("orchestrator runs selected lib names once after -- --exact, runs doctests 
   }
   for (const [index, count] of [[-1, 4], [4, 4], [0, 0], [0.5, 4], [0, 1.5], ["0", 4]]) {
     await assert.rejects(() => runShard(index, count, async () => { throw new Error("must not run"); }, () => {}), /shard/i);
+  }
+});
+
+test("orchestrator rejects each missing, renamed, unignored or non-test dedicated probe before executing tests", async () => {
+  const { runShard } = await shards();
+  const probes = [
+    "management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement",
+    "providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence",
+    "enterprise_runtime_allowlist_and_rollback_probes",
+    "controlled_lock_stall_recovers_on_runtime_http_path",
+  ];
+  for (const probe of probes) for (const probeMutation of ["remove", "rename", "unignore", "benchmark"]) {
+    // Generate all listings from the same mutation: pretty counts stay valid
+    // and ignored remains a subset, so only the dedicated-probe guard can refuse.
+    const fake = syntheticCargo({ probe, probeMutation });
+    await assert.rejects(() => runShard(0, 4, fake.run, () => {}), error => {
+      assert.match(error.message, /Dedicated/);
+      assert.ok(error.message.includes(probe), error.message);
+      return true;
+    }, `${probeMutation}: ${probe} must be refused`);
+    assert.ok(!fake.calls.some(c => c.includes("--exact")), `${probeMutation}: ${probe} must fail before test execution`);
   }
 });
 
@@ -326,6 +397,7 @@ process.stdout.write(output);
     const good = invoke("");
     assert.equal(good.status, 0, good.stderr);
     assert.match(good.stdout, /default-ignored=1/);
+    assert.match(good.stdout, /listed=12 default-ignored=2/);
     assert.match(good.stdout, /workspace doctests: owner=shard0/);
     assert.match(good.stderr, /Compiling fixture/);
     for (const mode of ["compile", "metadata", "list", "run", "doc", "zero", "listing", "mismatch", "ignored", "terminal"]) {

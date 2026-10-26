@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { ScheduledReports, ReportRunPage } from "../pages/scheduled-reports";
 import { ActionProvider } from "./ui";
-import { admin, auditor, session, member, personal, testClient } from "../lib/test-fixtures";
+import { admin, auditor, session, team, member, personal, testClient } from "../lib/test-fixtures";
 import { abortRequests } from "../lib/api";
 const id = "11111111-1111-4111-8111-111111111111", me = { ...admin, user: { ...admin.user, id } };
 const base = "/api/v1/platform/report-schedules";
@@ -65,6 +65,30 @@ describe("scheduled report editor and refusals", () => {
     complete(Response.json({ error: { code: "403", message: "Forbidden" } },{ status: 403 }));
     await screen.findByText("Access denied");
     expect(screen.queryByText("Private allocation")).toBeNull();
+    client.clear();
+  });
+  it.each([
+    [admin, undefined, true],
+    [session, { ...team, role: "owner" as const }, false],
+    [auditor, undefined, false],
+  ] as const)("uses platform-write capability for email help while preserving report controls (%j)", async (viewer, workspace, technical) => {
+    const fetch = serve(), client = mount(<ScheduledReports session={viewer} workspace={workspace} />);
+    await screen.findByRole("table", { name: "Report schedules" });
+    if (technical) {
+      expect(screen.getByText(/GATEWAY_PUBLIC_URL/)).toBeTruthy();
+      expect(screen.getByRole("link", { name: "Email settings" }).getAttribute("href")).toBe("/admin/settings/email");
+    } else {
+      expect(screen.getByText(/Email delivery isn't configured yet/)).toBeTruthy();
+      expect(screen.getByText(/Ask a Platform Admin/)).toBeTruthy();
+      expect(screen.queryByText(/GATEWAY_PUBLIC_URL|SMTP/)).toBeNull();
+      expect(screen.queryByRole("link", { name: "Email settings" })).toBeNull();
+    }
+    if (workspace || viewer.capabilities.platform_write) {
+      await userEvent.setup().click(screen.getByRole("button", { name: "Create schedule" }));
+      expect(screen.getByRole("dialog")).toBeTruthy();
+      expect(fetch.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+      await userEvent.setup().click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    } else expect(screen.queryByRole("button", { name: "Create schedule" })).toBeNull();
     client.clear();
   });
   it("Auditor has no write controls, members/foreign personal never fetch report data", async () => {

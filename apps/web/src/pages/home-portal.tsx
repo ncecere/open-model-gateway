@@ -39,11 +39,12 @@ import { Time } from "../components/ui/time/time";
 import s from "./shared.module.css";
 import h from "./home-portal.module.css";
 
-export function HomePortal({ session }: { session: Session }) {
+export function HomePortal({ session, notice }: { session: Session; notice?: ReactNode }) {
   const catalogs = useApi<MeModels>(ME_MODELS);
   // Admin is reached from the sidebar's Workspace | Admin switch (as in Grounded), not a second header button.
   return <Stack gap={6} className={s.page}>
     <PageHeader title={welcomeTitle(session)} description="Your workspaces, models, keys and usage." />
+    {notice}
     <YourWorkspaces session={session} />
     <ModelsYouCanUse session={session} catalogs={catalogs} />
     <YourUsage session={session} />

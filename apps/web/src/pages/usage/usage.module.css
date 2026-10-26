@@ -1,5 +1,31 @@
 /* Usage & costs layout. Semantic tokens only; everything stacks at 390px. */
 
+.views {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.scrollHint {
+  display: none;
+  margin: var(--space-2) 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+  align-items: flex-start;
+  gap: var(--space-2);
+
+  & svg {
+    flex-shrink: 0;
+    width: 1em;
+    height: 1em;
+    margin-top: var(--space-1);
+  }
+
+  @media (max-width: 40rem) {
+    display: flex;
+  }
+}
+
 .custom {
   display: flex;
   flex-wrap: wrap;

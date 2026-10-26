@@ -1,0 +1,20 @@
+/* Consumer-only preview layout; the shared Dialog and DescriptionList stay unchanged. */
+.facts {
+  min-width: 0;
+}
+
+.notes {
+  margin: 0;
+  padding-inline-start: var(--space-4);
+  overflow-wrap: anywhere;
+
+  & li + li {
+    margin-block-start: var(--space-2);
+  }
+}
+
+@media (max-width: 40rem) {
+  .facts[data-layout="grid"] {
+    --description-label-width: 100%;
+  }
+}

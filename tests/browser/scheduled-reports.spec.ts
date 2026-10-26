@@ -17,6 +17,17 @@ async function create(page: Page, route: string, base: string) {
   await page.goto(route);
   await expect(page.getByRole("heading", { name: "Scheduled reports", exact: true })).toBeVisible();
   const before = await (await api(page, "GET", base)).json();
+  if (!before.configuration.smtp_configured || !before.configuration.public_url_configured) {
+    if (base.startsWith("/platform/")) {
+      await expect(page.getByText(/GATEWAY_PUBLIC_URL/)).toBeVisible();
+      await expect(page.getByRole("link", { name: "Email settings" })).toBeVisible();
+    } else {
+      await expect(page.getByText(/Email delivery isn't configured yet/)).toBeVisible();
+      await expect(page.getByText(/Ask a Platform Admin/)).toBeVisible();
+      await expect(page.getByText(/GATEWAY_PUBLIC_URL/)).toHaveCount(0);
+      await expect(page.getByRole("link", { name: "Email settings" })).toHaveCount(0);
+    }
+  }
   await page.getByRole("button", { name: "Create schedule", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("textbox", { name: "Local delivery time" }).fill("00:01");
@@ -72,6 +83,8 @@ test("create → fenced generation → immutable report → CSV, workspace and p
     await expect(auditor.page.getByRole("link", { name: "Download aggregate CSV" })).toBeVisible();
     await auditor.page.goto("/admin/costs?tab=scheduled-reports");
     await expect(auditor.page.getByText("Read-only · Platform Auditor")).toBeVisible();
+    await expect(auditor.page.getByText(/GATEWAY_PUBLIC_URL/)).toHaveCount(0);
+    await expect(auditor.page.getByRole("link", { name: "Email settings" })).toHaveCount(0);
     for (const name of ["Create schedule", "Edit schedule", "Resume", "Pause", "Delete"]) await expect(auditor.page.getByRole("button", { name, exact: true })).toHaveCount(0);
     expect((await api(auditor.page, "PATCH", `/platform/report-schedules/${platform.schedule}`, { state: "paused" })).status()).toBe(403);
     await screenshots(auditor.page, "auditor-list");
@@ -107,10 +120,35 @@ test("create → fenced generation → immutable report → CSV, workspace and p
     await expect(owner.page.getByRole("dialog").getByRole("textbox", { name: "Recipient user IDs" })).toHaveCount(0);
     await owner.page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
     expect((await api(operator.page, "GET", `/workspaces/${personal}/report-schedules`)).status()).toBe(404);
+    await operator.page.setViewportSize({ width: 1440, height: 900 });
+    await operator.page.goto(`/workspaces/${personal}/keys`);
+    await expect(operator.page).toHaveURL(/\/home$/);
+    await expect(operator.page.getByText("Workspace not found or not available", { exact: true })).toBeVisible();
+    await expect(operator.page.getByRole("table", { name: "API keys" })).toHaveCount(0);
+    await operator.page.screenshot({ path: "target/browser-tests/issue359/unavailable-workspace-1440.png", fullPage: true });
+    // A fresh, ordinary Home entry has no unavailable-workspace context.
+    await operator.page.goto("/home");
+    await expect(operator.page.getByText("Your workspaces", { exact: true })).toBeVisible();
+    await expect(operator.page.getByText("Workspace not found or not available", { exact: true })).toHaveCount(0);
     await owner.page.goto(`/workspaces/${ws}/costs?tab=scheduled-reports`);
     // Wait past the initial "Loading schedules…" state so the screenshot shows the created schedule, not a loading placeholder.
     await expect(owner.page.getByRole("table", { name: "Report schedules" }).getByText(scoped.schedule.slice(0, 8))).toBeVisible();
     await screenshots(owner.page, "workspace-list");
+    // The last pill starts off-screen at 390px, but its cue and keyboard path are discoverable.
+    const tabs = owner.page.getByRole("tablist", { name: "Usage & costs views" });
+    await tabs.getByRole("tab", { name: "Overview", exact: true }).click();
+    await expect(owner.page.getByText("Scroll for more views, or use the Left and Right arrow keys.", { exact: true })).toBeVisible();
+    await expect(tabs).toHaveAccessibleDescription("Scroll for more views, or use the Left and Right arrow keys.");
+    await tabs.getByRole("tab", { name: "Overview", exact: true }).focus();
+    await owner.page.keyboard.press("End");
+    const scheduledTab = tabs.getByRole("tab", { name: "Scheduled reports", exact: true });
+    await expect(scheduledTab).toBeFocused();
+    await owner.page.keyboard.press("Enter");
+    await expect(owner.page.getByRole("heading", { name: "Scheduled reports", exact: true })).toBeVisible();
+    await expect(scheduledTab).toBeInViewport({ ratio: 1 });
+    await expectNoHorizontalScroll(owner.page);
+    await expectAccessible(owner.page, "narrow scheduled report tabs");
+    await owner.page.screenshot({ path: "target/browser-tests/issue359/scheduled-tabs-390.png", fullPage: true });
     await owner.page.getByRole("button", { name: "Pause", exact: true }).click();
     await owner.page.getByRole("dialog").getByRole("button", { name: "Pause schedule", exact: true }).click();
     await expect(owner.page.getByRole("dialog")).toHaveCount(0);

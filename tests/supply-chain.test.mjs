@@ -13,12 +13,14 @@
 // workflows and local composite actions. The checks themselves are exercised
 // against adversarial in-memory workflows at the bottom of this file.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { runInNewContext } from "node:vm";
 import { isMap, isScalar, parseDocument, visit } from "yaml";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -29,10 +31,8 @@ const FETCH_SCRIPT = ".github/scripts/fetch-verified.sh";
 // Actions allowed in a job that has any `write` permission, explicit or inherited
 // from the workflow level, from the caller of a reusable workflow, or from the
 // repository default when nothing is declared. Keep this minimal: every entry must
-// be used by a write job (checked below). Each one is GitHub-owned or the
-// registry/build plumbing the image pipeline cannot do without, and none downloads
-// an executable at run time: setup-buildx-action can, so every write job that uses
-// it first asserts the runner's own Buildx and sets no `version` (checked below).
+// be used by a write job (checked below). Only these GitHub-owned actions are
+// permitted: pinning or guarding a third-party action is not a write-token waiver.
 // Tools that only need to read (Trivy, helm, kubeconform, cargo-deny, Node, Rust,
 // the CodeQL bundle, ...) never belong here.
 export const WRITE_JOB_ACTIONS = new Map([
@@ -40,11 +40,6 @@ export const WRITE_JOB_ACTIONS = new Map([
   ["actions/checkout", "GitHub-owned; no network access beyond the repository"],
   // GitHub-owned. The upload job reads the SARIF file the read-only analysis job produced.
   ["actions/download-artifact", "GitHub-owned; hands the SARIF file from the read-only analysis job to the upload job"],
-  // Docker-owned. The three steps that build and push an image to ghcr.io; the
-  // pipeline cannot push without them. login-action only writes the Docker config.
-  ["docker/setup-buildx-action", "Docker-owned; creates the BuildKit builder (pinned image) for build-push and imagetools"],
-  ["docker/login-action", "Docker-owned; logs in to ghcr.io with the job token"],
-  ["docker/build-push-action", "Docker-owned; builds and pushes the image with its SBOM and provenance"],
   // GitHub-owned. Uploading code-scanning results needs `security-events: write`.
   // It sends a SARIF file and downloads no CodeQL bundle (init and analyze, which
   // do, run in a read-only job).
@@ -356,6 +351,50 @@ test("every Dockerfile base image is pinned by digest", () => {
     });
   }
   assert.deepEqual(unpinned, []);
+});
+
+test("the Docker PostgreSQL fixture uses exactly one approved digest-pinned image (#369)", () => {
+  // Read source only: importing this file would run its Docker lifecycle hooks.
+  const text = readLocalFromRepo("tests/container-image.test.mjs");
+  assert.notEqual(text, null, "the Docker runtime contract test must exist");
+  assert.ok(!text.includes("POSTGRES_PASSWORD="), "fixture password must travel in the Docker client environment, never argv/error diagnostics");
+  const refs = text.match(/mirror\.gcr\.io\/library\/postgres[^\s"'`]*/g) ?? [];
+  assert.deepEqual(refs, [
+    "mirror.gcr.io/library/postgres@sha256:858bb5e98eed02eb8cafbcdc007f9a65d1b613972028944a8ec2133ccaf80d27",
+  ], "expected exactly one PostgreSQL fixture reference, using the approved PostgreSQL 17 digest (not a mutable tag)");
+});
+
+test("staging verifier images use the approved literal digest pins in both workflows, Compose defaults and examples (#373)", () => {
+  const pins = [
+    ["STAGING_POSTGRES_IMAGE", "postgres", "mirror.gcr.io/library/postgres@sha256:858bb5e98eed02eb8cafbcdc007f9a65d1b613972028944a8ec2133ccaf80d27"],
+    ["STAGING_CADDY_IMAGE", "ingress", "mirror.gcr.io/library/caddy@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f"],
+  ];
+  const actual = [];
+  const expected = [];
+  // Enumerate the required sites, rather than scanning only references that happen
+  // to exist: deleting a job, field, default or example must not make this pass.
+  for (const [file, job] of [[".github/workflows/image.yml", "verify"], [".github/workflows/ci.yml", "staging-image"]]) {
+    const data = toData(parseStrict(readLocalFromRepo(file), file));
+    for (const [variable, , pin] of pins) {
+      const location = `${file}: jobs.${job}.env.${variable}`;
+      actual.push([location, data.jobs[job].env[variable]]);
+      expected.push([location, pin]);
+    }
+  }
+  const composeFile = "deploy/staging/compose.yaml";
+  const compose = toData(parseStrict(readLocalFromRepo(composeFile), composeFile));
+  const exampleFile = "deploy/staging/staging.env.example";
+  const exampleLines = readLocalFromRepo(exampleFile).split("\n");
+  for (const [variable, service, pin] of pins) {
+    const location = `${composeFile}: services.${service}.image`;
+    actual.push([location, compose.services[service].image]);
+    expected.push([location, `\${${variable}:-${pin}}`]);
+    const prefix = `# ${variable}=`;
+    // Exact singleton equality rejects missing, duplicate, floating or substituted examples.
+    actual.push([`${exampleFile}: ${variable}`, exampleLines.filter(line => line.startsWith(prefix)).map(line => line.slice(prefix.length))]);
+    expected.push([`${exampleFile}: ${variable}`, [pin]]);
+  }
+  assert.deepEqual(actual, expected);
 });
 
 // ---- Rust toolchain pin (#354) ----
@@ -890,6 +929,610 @@ test("every run-time download goes through fetch-verified.sh with a literal URL 
   for (const f of [".github/workflows/image.yml", ".github/workflows/ci.yml", ".github/actions/setup-node/action.yml"]) assert.ok(calls.includes(f), `${f} fetches its tools with the script`);
 });
 
+// #375: static candidate-staging policy, not authenticated artifact verification
+// or a keyless-signing rehearsal. Match the executable step, not YAML comments.
+const COSIGN_INSTALL_NAME = "Install cosign (pinned release, SHA-256 verified)";
+const COSIGN_SIGN_NAME = "Sign (cosign keyless)";
+const COSIGN_URL = "https://github.com/sigstore/cosign/releases/download/v3.1.4/cosign-linux-amd64";
+const COSIGN_SHA256 = "424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa";
+const COSIGN_INSTALL_RUN = [
+  "set -euo pipefail",
+  'mkdir -p "${RUNNER_TEMP}/cosign-bin"',
+  `bash ${FETCH_SCRIPT} ${COSIGN_URL} ${COSIGN_SHA256} "\${RUNNER_TEMP}/cosign-bin/cosign"`,
+  'chmod 0755 "${RUNNER_TEMP}/cosign-bin/cosign"',
+  'echo "${RUNNER_TEMP}/cosign-bin" >> "$GITHUB_PATH"',
+].join("\n");
+const COSIGN_SIGN_RUN = 'cosign sign --yes "${IMAGE}@${DIGEST}"';
+
+function assertCosignPublishPolicy(data) {
+  const steps = stepsOf(data.jobs?.publish);
+  const install = steps.filter(s => s.name === COSIGN_INSTALL_NAME);
+  const sign = steps.filter(s => s.name === COSIGN_SIGN_NAME);
+  assert.equal(install.length, 1, "exactly one actual cosign install step is required");
+  assert.equal(sign.length, 1, "exactly one native cosign signing step is required");
+  for (const step of [...install, ...sign]) {
+    assert.equal(step.if, undefined, "cosign steps must not be skipped");
+    assert.equal(step["continue-on-error"], undefined, "cosign failures must propagate");
+    assert.equal(step.shell, undefined, "retain the runner's failure-propagating shell");
+    assert.equal(step.uses, undefined, "cosign remains a native run step");
+  }
+  // Exact commands rule out comment-only pins, ignored checksum failures, or
+  // chmod/execution before verification. fetch-verified.sh is tested below.
+  assert.equal(install[0].run?.trim(), COSIGN_INSTALL_RUN, "install the exact patched candidate through checksum verification before chmod/PATH");
+  assert.ok(steps.indexOf(sign[0]) > steps.indexOf(install[0]), "verify/install before executing cosign");
+  assert.equal(sign[0].run, COSIGN_SIGN_RUN, "retain native keyless signing of IMAGE@INDEX, not a tag");
+  assert.deepEqual(sign[0].env, { DIGEST: "${{ steps.index.outputs.digest }}" });
+}
+
+test("image publish installs the exact patched cosign candidate before unchanged native index signing (#375)", () => {
+  const file = ".github/workflows/image.yml";
+  assertCosignPublishPolicy(toData(parseStrict(readLocalFromRepo(file), file)));
+});
+
+test("fixtures: cosign candidate policy rejects absent, comment-only, wrong-pin, reordered and optional steps (#375)", () => {
+  const fixture = { jobs: { publish: { steps: [
+    { name: COSIGN_INSTALL_NAME, run: COSIGN_INSTALL_RUN },
+    { name: COSIGN_SIGN_NAME, run: COSIGN_SIGN_RUN, env: { DIGEST: "${{ steps.index.outputs.digest }}" } },
+  ] } } };
+  assertCosignPublishPolicy(fixture);
+  const mutations = [
+    ["missing install", s => s.shift()],
+    ["missing sign", s => s.pop()],
+    ["duplicate install", s => s.unshift({ ...s[0] })],
+    ["comment-only pin", s => { s[0].run = `# ${COSIGN_INSTALL_RUN.replaceAll("\n", "\n# ")}\necho not-installed`; }],
+    ["old version", s => { s[0].run = s[0].run.replace("v3.1.4", "v3.0.6"); }],
+    ["wrong checksum", s => { s[0].run = s[0].run.replace(COSIGN_SHA256, "0".repeat(64)); }],
+    ["chmod before verification", s => { const lines = s[0].run.split("\n"); [lines[2], lines[3]] = [lines[3], lines[2]]; s[0].run = lines.join("\n"); }],
+    ["execution before verification", s => { s[0].run = '"${RUNNER_TEMP}/cosign-bin/cosign" version\n' + s[0].run; }],
+    ["ignored checksum failure", s => { s[0].run = s[0].run.replace(`${COSIGN_SHA256} "\${RUNNER_TEMP}/cosign-bin/cosign"`, `${COSIGN_SHA256} "\${RUNNER_TEMP}/cosign-bin/cosign" || true`); }],
+    ["sign before install", s => s.reverse()],
+    ["optional install", s => { s[0].if = "false"; }],
+    ["ignored install failure", s => { s[0]["continue-on-error"] = true; }],
+    ["optional signing", s => { s[1].if = "false"; }],
+    ["ignored signing failure", s => { s[1]["continue-on-error"] = true; }],
+    ["tag signing", s => { s[1].run = 'cosign sign --yes "${IMAGE}:latest"'; }],
+    ["architecture digest signing", s => { s[1].env.DIGEST = "${{ needs.build.outputs.digest_linux_amd64 }}"; }],
+  ];
+  for (const [name, mutate] of mutations) {
+    const data = structuredClone(fixture);
+    mutate(data.jobs.publish.steps);
+    assert.throws(() => assertCosignPublishPolicy(data), { name: "AssertionError" }, name);
+  }
+});
+
+// Explicit manual acceptance is isolated from every normal publisher path.
+const PROBE_IF = "github.event_name == 'workflow_dispatch' && inputs.acceptance_probe == true";
+const PROBE_META_IF = "(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && !(github.event_name == 'workflow_dispatch' && inputs.acceptance_probe == true)";
+const probeStep = (data, job, name) => {
+  const matches = stepsOf(data.jobs[job]).filter(s => s.name === name);
+  assert.equal(matches.length, 1, `${job}: required singleton step ${name}`);
+  return matches[0];
+};
+const PROBE_GUARD = [
+  "set -euo pipefail",
+  '[[ "${EVENT}" = workflow_dispatch && "${PROBE}" = true ]]',
+  '[[ "${GITHUB_REPOSITORY}" = ncecere/open-model-gateway && "${IMAGE}" = ghcr.io/ncecere/open-model-gateway ]]',
+  '[[ "${REF_TYPE}" = branch && "${GITHUB_REF}" = refs/heads/?* && "${GITHUB_REF}" != refs/heads/main ]]',
+  '[[ "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ && "${GITHUB_WORKFLOW_SHA}" = "${GITHUB_SHA}" ]]',
+].join("\n");
+const PROBE_DIGEST_GUARD = [
+  '[[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ && "${CHILD}" =~ ^sha256:[0-9a-f]{64}$ && "${CHILD}" != "${DIGEST}" ]]',
+].join("\n");
+const PROBE_AUTH = [
+  "set -euo pipefail", "umask 077", "export DOCKER_CONFIG",
+  'DOCKER_CONFIG=$(mktemp -d "${RUNNER_TEMP}/probe-auth.XXXXXXXX")',
+  'echo "DOCKER_CONFIG=${DOCKER_CONFIG}" >> "$GITHUB_ENV"',
+  'printf \'%s\' "${GITHUB_TOKEN}" | docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin',
+].join("\n");
+const PROBE_CLEANUP = [
+  'if [ -n "${DOCKER_CONFIG:-}" ] && [ -d "${DOCKER_CONFIG}" ]; then',
+  '  trap \'rm -rf -- "${DOCKER_CONFIG}"\' EXIT',
+  '  docker logout ghcr.io',
+  'fi',
+].join("\n");
+
+function assertProbePolicy(data) {
+  assert.deepEqual(data.on.workflow_dispatch.inputs, { acceptance_probe: {
+    description: "Sign and verify only this non-main branch's existing dev index (no normal publication)",
+    type: "boolean", required: false, default: false,
+  } });
+  assert.equal(data.on.workflow_call.inputs, undefined, "reusable callers cannot activate the probe");
+  assert.equal(data.jobs.meta.if, PROBE_META_IF);
+  assert.deepEqual(data.env, { IMAGE: "ghcr.io/ncecere/open-model-gateway" });
+  for (const name of ["probe-prepare", "probe-sign", "probe-verify"]) {
+    const job = data.jobs[name];
+    assert.ok(job, `${name} must exist`);
+    assert.equal(job.if, PROBE_IF);
+    assert.equal(job["runs-on"], "ubuntu-24.04");
+    assert.equal(job["timeout-minutes"], 10);
+    assert.equal(job["continue-on-error"], undefined);
+    assert.equal(job.defaults, undefined);
+    assert.equal(job.strategy, undefined);
+    assert.deepEqual(job.permissions, name === "probe-sign"
+      ? { contents: "read", packages: "write", "id-token": "write" }
+      : { contents: "read", packages: "read" });
+    const expectedEnv = { EVENT: "${{ github.event_name }}", PROBE: "${{ inputs.acceptance_probe }}", REF_TYPE: "${{ github.ref_type }}" };
+    if (name !== "probe-prepare") Object.assign(expectedEnv, {
+      DIGEST: "${{ needs.probe-prepare.outputs.digest }}", CHILD: "${{ needs.probe-prepare.outputs.child }}",
+    });
+    assert.deepEqual(job.env, expectedEnv);
+    assert.deepEqual(job.needs, name === "probe-prepare" ? undefined : name === "probe-sign" ? ["probe-prepare"] : ["probe-prepare", "probe-sign"]);
+    const steps = stepsOf(job);
+    assert.equal(steps[0].name, "Refuse anything except this branch's explicit probe");
+    assert.equal(steps[0].run.trim(), name === "probe-prepare" ? PROBE_GUARD : `${PROBE_GUARD}\n${PROBE_DIGEST_GUARD}`);
+    const checkout = steps.filter(s => actionName(s.uses) === "actions/checkout");
+    assert.equal(checkout.length, 1);
+    assert.deepEqual(checkout[0].with, { ref: "${{ github.workflow_sha }}", "persist-credentials": false });
+    assert.equal(steps[1], checkout[0]);
+    for (const step of steps) {
+      assert.equal(step["continue-on-error"], undefined);
+      assert.equal(step.shell, undefined);
+      assert.equal(step.if, step.name === "Remove probe credentials" ? "always()" : undefined);
+      assert.doesNotMatch(step.run ?? "", /\$\{\{/, "no expression interpolation into shell programs");
+    }
+    const auth = probeStep(data, name, "Authenticate privately with native Docker");
+    assert.equal(auth.run.trim(), PROBE_AUTH);
+    assert.deepEqual(auth.env, { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" });
+    assert.equal(probeStep(data, name, "Remove probe credentials").run.trim(), PROBE_CLEANUP);
+    assert.doesNotMatch(executable(job), /imagetools create|docker (?:push|build)\b|gh release|github-release|--recursive|--tag\b|latest-release/);
+    if (name !== "probe-prepare") assert.doesNotMatch(executable(job), /:dev-/, "only the read-only preparation may resolve a dev tag");
+    assert.ok(steps.indexOf(auth) > 1);
+    if (name !== "probe-prepare") {
+      const installer = probeStep(data, name, COSIGN_INSTALL_NAME);
+      assert.equal(installer.run.trim(), COSIGN_INSTALL_RUN);
+      assert.ok(steps.indexOf(installer) < steps.indexOf(auth), "verified installer precedes credentials");
+      assert.doesNotMatch(executable(job), /docker (?:run|pull)\b|npm|cargo|trivy|staging/);
+    }
+  }
+  const prepare = data.jobs["probe-prepare"];
+  assert.deepEqual(prepare.outputs, { digest: "${{ steps.resolve.outputs.digest }}", child: "${{ steps.resolve.outputs.child }}" });
+  const resolve = probeStep(data, "probe-prepare", "Resolve and pull the existing dev index (no retry or rebuild)");
+  assert.equal(resolve.id, "resolve");
+  assert.equal(resolve.env, undefined);
+  assert.match(resolve.run, /tag="\$\{IMAGE\}:dev-\$\{GITHUB_SHA:0:12\}"/);
+  assert.match(resolve.run, /docker buildx imagetools inspect "\$\{tag\}" --format '\{\{json \.Manifest\}\}'/);
+  assert.match(resolve.run, /docker buildx imagetools inspect --raw "\$\{IMAGE\}@\$\{digest\}"/);
+  assert.match(resolve.run, /docker pull --platform linux\/amd64 "\$\{IMAGE\}@\$\{child\}"/);
+  assert.match(resolve.run, /\[ "\$\{child\}" != "\$\{digest\}" \]/);
+  assert.match(resolve.run, /echo "digest=\$\{digest\}" >> "\$GITHUB_OUTPUT"/);
+  assert.match(resolve.run, /echo "child=\$\{child\}" >> "\$GITHUB_OUTPUT"/);
+  const erase = probeStep(data, "probe-prepare", "Remove probe credentials");
+  const version = probeStep(data, "probe-prepare", "Check exact revision, native platform and Cargo version without credentials");
+  assert.ok(prepare.steps.indexOf(erase) < prepare.steps.indexOf(version));
+  assert.match(version.run, /\[ ! -d "\$\{DOCKER_CONFIG\}" \]/);
+  assert.match(version.run, /docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges "\$\{IMAGE\}@\$\{CHILD\}" --version/);
+  assert.equal(version.env.CHILD, "${{ steps.resolve.outputs.child }}");
+  assert.equal(probeStep(data, "probe-sign", "Sign only the prepared index").run.trim(), `set -euo pipefail\n${COSIGN_SIGN_RUN}`);
+  const verify = probeStep(data, "probe-verify", "Verify exact root and expected refusals");
+  assert.match(verify.run, /identity="https:\/\/github.com\/\$\{GITHUB_REPOSITORY\}\/\.github\/workflows\/image.yml@\$\{GITHUB_REF\}"/);
+  assert.match(verify.run, /issuer=https:\/\/token.actions.githubusercontent.com/);
+  assert.match(verify.run, /cosign verify --certificate-identity "\$\{identity\}" --certificate-oidc-issuer "\$\{issuer\}" "\$\{IMAGE\}@\$\{DIGEST\}"/);
+  assert.match(verify.run, /cosign download signature "\$\{IMAGE\}@\$\{DIGEST\}"/);
+  assert.match(verify.run, /cosign verify-blob --bundle \.\/bundle.json/);
+  assert.match(verify.run, /failed to verify signature: provided artifact digest does not match any digest in statement/);
+  assert.doesNotMatch(verify.run, /no signatures found|no matching attestations|--ignore|--insecure|--offline|--new-bundle-format/);
+  assert.match(verify.run, /jq -e --arg digest "\$\{DIGEST\}"/);
+  assert.match(verify.run, /\.critical\.image\["docker-manifest-digest"\] == \$digest/);
+  assert.match(verify.run, /refuse "\$\{DIGEST\}" "\$\{identity\/image.yml\/wrong-workflow.yml\}" "\$\{issuer\}"/);
+  assert.match(verify.run, /refuse "\$\{DIGEST\}" "\$\{identity\}" https:\/\/wrong-issuer.invalid/);
+  assert.match(verify.run, /refuse "\$\{CHILD\}" "\$\{identity\}" "\$\{issuer\}"/);
+  for (const name of ["meta", "build", "import-amd64", "import-arm64", "verify", "publish", "release"]) {
+    assert.doesNotMatch(JSON.stringify(data.jobs[name].needs ?? []), /probe/);
+  }
+}
+
+test("explicit manual cosign acceptance has isolated, failure-propagating parsed workflow boundaries (#375)", () => {
+  assertProbePolicy(publicationData().image);
+});
+
+test("actual parsed meta guard preserves normal main/tag truth table and excludes manual probes (#375)", () => {
+  const data = publicationData().image;
+  assert.equal(data.jobs.meta.if, PROBE_META_IF);
+  for (const event_name of ["push", "workflow_call", "workflow_dispatch"]) {
+    for (const ref of ["refs/heads/main", "refs/heads/issue/375-signing-acceptance", "refs/tags/v0.9.1", "refs/tags/other", "refs/pull/1/merge"]) {
+      for (const acceptance_probe of [false, true, undefined]) {
+        const context = { github: { ref, event_name }, inputs: { acceptance_probe }, startsWith: (s, prefix) => s.startsWith(prefix) };
+        const explicit = event_name === "workflow_dispatch" && acceptance_probe === true;
+        assert.equal(runInNewContext(data.jobs.meta.if, context), (ref === "refs/heads/main" || ref.startsWith("refs/tags/v")) && !explicit);
+        assert.equal(runInNewContext(data.jobs["probe-prepare"].if, context), explicit);
+      }
+    }
+  }
+});
+
+test("probe boundary policy rejects widened inputs, authority, handoffs, optional guards and hidden publication (#375)", () => {
+  const original = publicationData().image;
+  assertProbePolicy(original);
+  const step = (d, job, name) => probeStep(d, job, name);
+  const mutations = [
+    d => { d.on.workflow_dispatch.inputs.acceptance_probe.default = true; },
+    d => { d.on.workflow_dispatch.inputs.root_digest = { type: "string" }; },
+    d => { d.on.workflow_call.inputs = { acceptance_probe: { type: "boolean" } }; },
+    d => { d.jobs.meta.if = "github.ref == 'refs/heads/main'"; },
+    ...["probe-prepare", "probe-sign", "probe-verify"].flatMap(job => [
+      d => { d.jobs[job].if = "always()"; },
+      d => { d.jobs[job]["continue-on-error"] = true; },
+      d => { d.jobs[job].steps[0].if = "false"; },
+      d => { d.jobs[job].steps[0].run += " || true"; },
+      d => { d.jobs[job].steps[1].with.ref = "${{ github.sha }}"; },
+      d => { step(d, job, "Remove probe credentials").if = "success()"; },
+      d => { step(d, job, "Remove probe credentials").run = "docker logout ghcr.io"; },
+      d => { step(d, job, "Authenticate privately with native Docker").run += '\necho "${GITHUB_TOKEN}"'; },
+      d => { d.jobs[job].steps.push({ run: "docker push ghcr.io/ncecere/open-model-gateway:latest-release" }); },
+    ]),
+    d => { d.jobs["probe-prepare"].permissions.packages = "write"; },
+    d => { d.jobs["probe-verify"].permissions["id-token"] = "write"; },
+    d => { d.jobs["probe-sign"].permissions.contents = "write"; },
+    d => { d.jobs["probe-sign"].needs = []; },
+    d => { d.jobs["probe-verify"].needs.pop(); },
+    d => { d.jobs.publish.needs.push("probe-sign"); },
+    d => { d.jobs["probe-sign"].env.DIGEST = "${{ inputs.digest }}"; },
+    d => { d.jobs["probe-prepare"].outputs.digest = "${{ steps.resolve.outputs.child }}"; },
+    ...["probe-sign", "probe-verify"].flatMap(job => [
+      d => { step(d, job, COSIGN_INSTALL_NAME).run = COSIGN_INSTALL_RUN.replace(COSIGN_SHA256, "0".repeat(64)); },
+      d => { step(d, job, COSIGN_INSTALL_NAME).run = 'cosign version\n' + COSIGN_INSTALL_RUN; },
+    ]),
+    d => { step(d, "probe-sign", "Sign only the prepared index").run = COSIGN_SIGN_RUN + " --recursive"; },
+    d => { d.jobs["probe-prepare"].steps.push({ run: 'docker buildx imagetools create --tag "${IMAGE}:dev-${GITHUB_SHA:0:12}" "${IMAGE}@${DIGEST}"' }); },
+  ];
+  for (const mutate of mutations) {
+    const data = structuredClone(original);
+    mutate(data);
+    assert.throws(() => assertProbePolicy(data), { name: "AssertionError" });
+  }
+});
+
+// Native command stand-ins only: never execute Docker, a downloaded tool, or a network client.
+// These fixtures model CLI contracts and source-defined errors, NOT cryptography.
+const PROBE_BUNDLE_MEDIA = "application/vnd.dev.sigstore.bundle.v0.3+json";
+const probeBundle = (marker = "fixture-payload") => ({
+  mediaType: PROBE_BUNDLE_MEDIA, dsseEnvelope: { payload: marker, payloadType: "application/vnd.in-toto+json", signatures: [] },
+  verificationMaterial: { fixtureOnly: true },
+});
+function probeFixture() {
+  const dir = mkdtempSync(join(tmpdir(), "cosign-probe-policy-"));
+  const bin = join(dir, "bin");
+  mkdirSync(bin);
+  const env = {
+    PATH: `${bin}:${process.env.PATH}`, HOME: dir, RUNNER_TEMP: dir,
+    GITHUB_ENV: join(dir, "env"), GITHUB_OUTPUT: join(dir, "output"),
+    EVENT: "workflow_dispatch", PROBE: "true", REF_TYPE: "branch",
+    GITHUB_REF: "refs/heads/issue/375-signing-acceptance", GITHUB_SHA: "a".repeat(40), GITHUB_WORKFLOW_SHA: "a".repeat(40),
+    GITHUB_REPOSITORY: "ncecere/open-model-gateway", IMAGE: "ghcr.io/ncecere/open-model-gateway", GITHUB_ACTOR: "probe-fixture",
+    DIGEST: `sha256:${"b".repeat(64)}`, CHILD: `sha256:${"c".repeat(64)}`,
+    FIXTURE_DIR: dir,
+  };
+  const mock = `#!${process.execPath}
+const fs = require('node:fs');
+const path = require('node:path');
+const e = process.env, a = process.argv.slice(2), command = path.basename(process.argv[1]);
+fs.appendFileSync(path.join(e.FIXTURE_DIR, 'calls'), JSON.stringify([command, ...a]) + '\\n');
+const fail = (message, code = 1) => { console.error(message); process.exit(code); };
+if (command === 'docker') {
+  if (a[0] === 'login') {
+    if (fs.readFileSync(0, 'utf8') !== 'fixture-read-token') fail('missing stdin credential');
+    fs.writeFileSync(path.join(e.DOCKER_CONFIG, 'config.json'), 'fixture-private-auth');
+  } else if (a[0] === 'logout') {
+    if (e.FAIL_LOGOUT) fail('fixture logout failure');
+    fs.rmSync(path.join(e.DOCKER_CONFIG, 'config.json'), { force: true });
+  } else if (a.slice(0, 3).join(' ') === 'buildx imagetools inspect') {
+    if (e.FAIL_RESOLVE) fail('dev tag not ready');
+    console.log(a.includes('--raw') ? fs.readFileSync(path.join(e.FIXTURE_DIR, 'index.json'), 'utf8') : JSON.stringify({ digest: e.DIGEST }));
+  } else if (a[0] === 'pull') {
+    if (e.FAIL_PULL) fail('fixture pull failure');
+  } else if (a.slice(0, 2).join(' ') === 'image inspect') {
+    console.log(e.CONFIG_JSON || JSON.stringify([{ Os: 'linux', Architecture: 'amd64', Config: { Labels: { 'org.opencontainers.image.revision': e.GITHUB_SHA } } }]));
+  } else if (a[0] === 'run') {
+    if (fs.existsSync(e.DOCKER_CONFIG) || e.GITHUB_TOKEN) fail('image sees registry credentials');
+    console.log(e.REPORTED_VERSION || 'open-model-gateway 0.9.0');
+  } else fail('unexpected Docker command');
+} else if (command === 'cosign') {
+  if (a.slice(0, 2).join(' ') === 'download signature') {
+    if (a.length !== 3 || a[2] !== e.IMAGE + '@' + e.DIGEST) fail('download must use the exact root');
+    if (e.DOWNLOAD_ERROR) fail(e.DOWNLOAD_ERROR);
+    process.stdout.write(fs.readFileSync(path.join(e.FIXTURE_DIR, 'download.jsonl')), () => process.exit(0));
+    return;
+  }
+  if (!['verify', 'verify-blob'].includes(a[0])) fail('local signing is forbidden');
+  const artifact = a.at(-1), identity = a[a.indexOf('--certificate-identity') + 1], issuer = a[a.indexOf('--certificate-oidc-issuer') + 1];
+  const local = a[0] === 'verify-blob';
+  if (local) {
+    const cwd = process.cwd(), bundlePath = a[a.indexOf('--bundle') + 1];
+    if (bundlePath !== './bundle.json' || fs.readdirSync(cwd).join() !== 'bundle.json') fail('bundle verification needs a fresh isolated directory');
+    if ((fs.statSync(cwd).mode & 0o777) !== 0o700 || (fs.statSync(bundlePath).mode & 0o777) !== 0o600) fail('bundle data is not private');
+    if (!/^sha256:[0-9a-f]{64}$/.test(artifact) || fs.existsSync(artifact)) fail('expected a digest, not a file');
+    const bundle = fs.readFileSync(bundlePath, 'utf8');
+    fs.appendFileSync(path.join(e.FIXTURE_DIR, 'blob-calls'), JSON.stringify({ cwd, bundle, artifact, identity, issuer }) + '\\n');
+    if (!['fixture-payload', 'fixture-second'].includes(JSON.parse(bundle).dsseEnvelope.payload)) fail('fixture tampered payload or bad digest');
+  }
+  const negative = artifact.endsWith(e.CHILD) || identity.includes('wrong-workflow') || issuer.includes('wrong-issuer');
+  if (negative && e.NEGATIVE_MODE === 'success') { console.log('[]'); process.exit(0); }
+  if (negative && e.NEGATIVE_MODE === 'network') fail('Get https://ghcr.io/v2/: connection reset');
+  if (negative && e.NEGATIVE_MODE === 'mixed') fail('no signatures found\\nGet https://ghcr.io/v2/: connection reset');
+  if (negative) {
+    const actualIdentity = 'https://github.com/' + e.GITHUB_REPOSITORY + '/.github/workflows/image.yml@' + e.GITHUB_REF;
+    let message;
+    if (artifact.endsWith(e.CHILD)) message = e.CHILD_ERROR || (local
+      ? 'failed to verify signature: provided artifact digest does not match any digest in statement' : 'no signatures found');
+    else {
+      const detail = identity.includes('wrong-workflow')
+        ? 'expected SAN value "' + identity + '", got "' + actualIdentity + '"'
+        : 'expected issuer value "' + issuer + '", got "https://token.actions.githubusercontent.com"';
+      const supplied = identity.includes('wrong-workflow') ? e.IDENTITY_ERROR : e.ISSUER_ERROR;
+      message = supplied || (local ? '' : 'no matching attestations: ') + 'failed to verify certificate identity: no matching CertificateIdentity found, last error: ' + detail;
+    }
+    if (e.NEGATIVE_MODE === 'policy-mixed') message += '\\nGet https://ghcr.io/v2/: connection reset';
+    // Observed pinned Cosign stderr has a bare main.go logger; retain dated compatibility.
+    // Stand-ins exercise control flow only, never cryptographic verification.
+    const logger = (e.DATED ? '2026/10/26 12:00:00 ' : '') + 'error during command execution: ';
+    fail((e.ERROR_PREFIX ?? 'Error: ') + message + (e.ERROR_SUFFIX || '') + '\\n' + (e.LOGGER_PREFIX ?? logger) + message);
+  }
+  if (local) {
+    if (e.LOCAL_POSITIVE_ERROR) fail(e.LOCAL_POSITIVE_ERROR);
+    console.error('Verified OK');
+  } else {
+    if (e.ONLINE_ERROR) fail(e.ONLINE_ERROR);
+    console.log(e.PAYLOAD_JSON || JSON.stringify([{ critical: { image: { 'docker-manifest-digest': e.DIGEST } } }]));
+  }
+} else fail('unexpected executable');
+`;
+  for (const name of ["docker", "cosign"]) { writeFileSync(join(bin, name), mock); chmodSync(join(bin, name), 0o755); }
+  const child = { mediaType: "application/vnd.oci.image.manifest.v1+json", digest: env.CHILD, size: 100, platform: { os: "linux", architecture: "amd64" } };
+  const index = { schemaVersion: 2, mediaType: "application/vnd.oci.image.index.v1+json", manifests: [child, {
+    ...child, digest: `sha256:${"d".repeat(64)}`, platform: { os: "unknown", architecture: "unknown" },
+    annotations: { "vnd.docker.reference.type": "attestation-manifest", "vnd.docker.reference.digest": env.CHILD },
+  }] };
+  writeFileSync(join(dir, "index.json"), JSON.stringify(index));
+  writeFileSync(join(dir, "download.jsonl"), JSON.stringify(probeBundle()) + "\n");
+  writeFileSync(env.GITHUB_ENV, ""); writeFileSync(env.GITHUB_OUTPUT, "");
+  const run = (script, overrides = {}, cwd = root) => spawnSync("bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
+    cwd, env: { ...env, ...overrides }, encoding: "utf8", timeout: 10_000,
+  });
+  const calls = () => existsSync(join(dir, "calls")) ? readFileSync(join(dir, "calls"), "utf8").trim().split("\n").filter(Boolean).map(JSON.parse) : [];
+  const authenticate = script => {
+    const result = run(script, { GITHUB_TOKEN: "fixture-read-token" });
+    const match = [...readFileSync(env.GITHUB_ENV, "utf8").matchAll(/^DOCKER_CONFIG=(.+)$/gm)].at(-1);
+    if (match) env.DOCKER_CONFIG = match[1];
+    return result;
+  };
+  return { dir, env, run, calls, authenticate, index, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+test("actual probe branch/digest guards refuse main, tags, invalid SHAs and reusable activation before credentials (#375)", () => {
+  const data = publicationData().image;
+  for (const job of ["probe-prepare", "probe-sign", "probe-verify"]) {
+    const script = probeStep(data, job, "Refuse anything except this branch's explicit probe").run;
+    const f = probeFixture();
+    try {
+      assert.equal(f.run(script).status, 0);
+      for (const bad of [
+        { EVENT: "workflow_call" }, { EVENT: "push" }, { PROBE: "false" }, { PROBE: "" },
+        { GITHUB_REF: "refs/heads/main" }, { REF_TYPE: "tag", GITHUB_REF: "refs/tags/v0.9.0" },
+        { GITHUB_REF: "refs/pull/1/merge" }, { GITHUB_REF: "refs/heads/" }, { REF_TYPE: "other" },
+        { GITHUB_REPOSITORY: "other/repository" }, { IMAGE: "ghcr.io/other/image" },
+        { GITHUB_SHA: "main" }, { GITHUB_SHA: "a".repeat(12) }, { GITHUB_SHA: "A".repeat(40) },
+        { GITHUB_WORKFLOW_SHA: "b".repeat(40) },
+        ...(job === "probe-prepare" ? [] : [{ DIGEST: "latest" }, { CHILD: "sha256:bad" }, { CHILD: f.env.DIGEST }]),
+      ]) assert.notEqual(f.run(script, bad).status, 0, `${job}: ${JSON.stringify(bad)}`);
+      assert.deepEqual(f.calls(), []);
+    } finally { f.cleanup(); }
+  }
+});
+
+test("actual probe preparation selects one bound AMD child and removes credentials before native --version (#375)", () => {
+  const data = publicationData().image;
+  const resolve = probeStep(data, "probe-prepare", "Resolve and pull the existing dev index (no retry or rebuild)").run;
+  const version = probeStep(data, "probe-prepare", "Check exact revision, native platform and Cargo version without credentials").run;
+  const erase = probeStep(data, "probe-prepare", "Remove probe credentials").run;
+  const f = probeFixture();
+  try {
+    assert.equal(f.authenticate(PROBE_AUTH).status, 0);
+    const result = f.run(resolve);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(f.env.GITHUB_OUTPUT, "utf8"), `digest=${f.env.DIGEST}\nchild=${f.env.CHILD}\n`);
+    assert.equal(f.run(erase).status, 0);
+    assert.equal(existsSync(f.env.DOCKER_CONFIG), false);
+    assert.equal(f.run(version).status, 0);
+    for (const CONFIG_JSON of [
+      [], [{ Os: "linux", Architecture: "arm64" }],
+      [{ Os: "linux", Architecture: "amd64", Config: { Labels: { "org.opencontainers.image.revision": "b".repeat(40) } } }],
+    ].map(JSON.stringify)) assert.notEqual(f.run(version, { CONFIG_JSON }).status, 0);
+    assert.notEqual(f.run(version, { REPORTED_VERSION: "open-model-gateway 0.0.0" }).status, 0);
+    for (const mutate of [
+      i => { i.manifests.push(i.manifests[0]); }, i => { i.manifests = [i.manifests[1]]; },
+      i => { i.manifests[0].platform.architecture = "arm64"; }, i => { i.manifests[0].digest = "latest"; },
+      i => { i.manifests[0].digest = f.env.DIGEST; }, i => { i.manifests[1].platform.os = "linux"; },
+      i => { delete i.manifests[1].annotations; }, i => { i.manifests[1].annotations["vnd.docker.reference.digest"] = f.env.DIGEST; },
+      i => { i.mediaType = "application/vnd.oci.image.manifest.v1+json"; }, i => { i.manifests[0].size = "100"; },
+    ]) {
+      const index = structuredClone(f.index); mutate(index);
+      writeFileSync(join(f.dir, "index.json"), JSON.stringify(index));
+      writeFileSync(f.env.GITHUB_OUTPUT, "");
+      assert.notEqual(f.run(resolve).status, 0, JSON.stringify(index));
+      assert.equal(readFileSync(f.env.GITHUB_OUTPUT, "utf8"), "");
+    }
+    for (const name of ["probe-prepare", "probe-sign", "probe-verify"]) {
+      assert.equal(f.authenticate(PROBE_AUTH).status, 0);
+      assert.notEqual(f.run(probeStep(data, name, "Remove probe credentials").run, { FAIL_LOGOUT: "1" }).status, 0);
+      assert.equal(existsSync(f.env.DOCKER_CONFIG), false, "logout failure still deletes private credentials");
+    }
+    assert.ok(f.calls().every(([, ...args]) => !args.join(" ").includes("fixture-read-token")));
+  } finally { f.cleanup(); }
+});
+
+test("actual probe CLI verification checks typed root claims and only specific negative refusal reasons (#375)", () => {
+  const script = probeStep(publicationData().image, "probe-verify", "Verify exact root and expected refusals").run;
+  const f = probeFixture();
+  try {
+    assert.equal(f.run(script).status, 0);
+    const commands = f.calls().filter(c => c[0] === "cosign");
+    assert.deepEqual(commands.map(c => c[1]), ["verify", "download", "verify-blob", "verify-blob", "verify-blob", "verify-blob"]);
+    assert.deepEqual(commands[1], ["cosign", "download", "signature", f.env.IMAGE + "@" + f.env.DIGEST]);
+    for (const PAYLOAD_JSON of [
+      "[]", "{}", "null", "not-json", '[{"critical":{"image":{"docker-manifest-digest":"wrong"}}}]',
+      JSON.stringify([{ critical: { image: { "docker-manifest-digest": f.env.DIGEST } } }, {}]),
+    ]) assert.notEqual(f.run(script, { PAYLOAD_JSON }).status, 0, PAYLOAD_JSON);
+    for (const bad of [
+      { NEGATIVE_MODE: "success" }, { NEGATIVE_MODE: "network" }, { NEGATIVE_MODE: "mixed" }, { NEGATIVE_MODE: "policy-mixed" },
+      { IDENTITY_ERROR: "unauthorized" }, { ISSUER_ERROR: "no signatures found" },
+      { CHILD_ERROR: "manifest unknown: 404 Not Found" }, { CHILD_ERROR: "no matching signatures: certificate identity mismatch" },
+    ]) assert.notEqual(f.run(script, bad).status, 0, JSON.stringify(bad));
+  } finally { f.cleanup(); }
+});
+
+for (const DATED of ["", "1"]) test(`actual probe accepts exact refusal leaves with ${DATED ? "dated" : "observed bare (no date)"} logger (#375)`, () => {
+  const script = probeStep(publicationData().image, "probe-verify", "Verify exact root and expected refusals").run;
+  const f = probeFixture();
+  try {
+    const result = f.run(script, { DATED });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(f.calls().filter(c => c[0] === "cosign").map(c => c[1]),
+      ["verify", "download", "verify-blob", "verify-blob", "verify-blob", "verify-blob"]);
+  } finally { f.cleanup(); }
+});
+
+test("actual probe refuses nested/composite wrappers, unexpected prefixes, CR and extra blank lines (#375)", () => {
+  const script = probeStep(publicationData().image, "probe-verify", "Verify exact root and expected refusals").run;
+  for (const DATED of ["", "1"]) for (const bad of [
+    { ERROR_PREFIX: "Error: Error: " },
+    { ERROR_PREFIX: "Error: error during command execution: " },
+    { ERROR_PREFIX: "Error: 2026/10/26 12:00:00 error during command execution: " },
+    { LOGGER_PREFIX: "error during command execution: Error: " },
+    { LOGGER_PREFIX: "error during command execution: error during command execution: " },
+    { LOGGER_PREFIX: "2026/10/26 12:00:00 error during command execution: Error: " },
+    { ERROR_PREFIX: "unexpected: " }, { LOGGER_PREFIX: "INFO: error during command execution: " },
+    { ERROR_PREFIX: " Error: " }, { ERROR_PREFIX: "\u001b[31mError: " },
+    { ERROR_SUFFIX: "\r" }, { ERROR_SUFFIX: "\n" }, { ERROR_PREFIX: "\nError: " },
+    { NEGATIVE_MODE: "policy-mixed" },
+  ]) {
+    const f = probeFixture();
+    try {
+      assert.notEqual(f.run(script, { DATED, ...bad }).status, 0, JSON.stringify({ DATED, ...bad }));
+    } finally { f.cleanup(); }
+  }
+});
+
+test("collapsed child discovery 'no signatures found' is never artifact-binding proof (#375)", () => {
+  const script = probeStep(publicationData().image, "probe-verify", "Verify exact root and expected refusals").run;
+  const f = probeFixture();
+  try {
+    // GetBundles can swallow a transport error and fall back to this exact text.
+    assert.notEqual(f.run(script, { CHILD_ERROR: "no signatures found" }).status, 0);
+  } finally { f.cleanup(); }
+});
+
+test("download gate refuses empty, legacy, malformed, wrong-media, oversized and excess root bundles (#375)", () => {
+  const script = probeStep(publicationData().image, "probe-verify", "Verify exact root and expected refusals").run;
+  const invalid = [
+    ["empty", ""], ["whitespace", " \n"], ["malformed", "{"], ["null", "null"], ["array", "[]"],
+    ["legacy", JSON.stringify({ Base64Signature: "fixture", Payload: "fixture", Cert: "fixture" })],
+    ["wrong media", JSON.stringify({ ...probeBundle(), mediaType: "application/vnd.dev.sigstore.bundle+json;version=0.3" })],
+    ["old media", JSON.stringify({ ...probeBundle(), mediaType: "application/vnd.dev.sigstore.bundle.v0.2+json" })],
+    ...[undefined, null, [], "fixture"].map(dsseEnvelope => ["not DSSE", JSON.stringify({ ...probeBundle(), dsseEnvelope })]),
+    ["oversized", JSON.stringify(probeBundle("x".repeat(1048576)))],
+    ["aggregate oversized", Array(16).fill(JSON.stringify(probeBundle("x".repeat(66000)))).join("\n")],
+    ["17 bundles", Array(17).fill(JSON.stringify(probeBundle())).join("\n")],
+    ["mixed legacy", JSON.stringify(probeBundle()) + '\n{"Base64Signature":"fixture"}'],
+    ["trailing malformed", JSON.stringify(probeBundle()) + "\n{"],
+  ];
+  for (const [name, download] of invalid) {
+    const f = probeFixture();
+    try {
+      writeFileSync(join(f.dir, "download.jsonl"), download);
+      assert.notEqual(f.run(script).status, 0, name);
+      assert.equal(f.calls().filter(c => c[1] === "verify-blob").length, 0, `${name}: gate before local verification`);
+    } finally { f.cleanup(); }
+  }
+});
+
+test("root bundle download accepts exactly one MiB but rejects even one extra byte (#375)", () => {
+  const script = probeStep(publicationData().image, "probe-verify", "Verify exact root and expected refusals").run;
+  const bundle = JSON.stringify(probeBundle());
+  for (const extra of ["", " ", "\0"]) {
+    const f = probeFixture();
+    try {
+      writeFileSync(join(f.dir, "download.jsonl"), bundle + " ".repeat(1048576 - Buffer.byteLength(bundle)) + extra);
+      const result = f.run(script);
+      if (extra === "") assert.equal(result.status, 0, result.stderr);
+      else {
+        assert.notEqual(result.status, 0, "oversize must fail even when its valid prefix fits exactly");
+        assert.equal(f.calls().filter(c => c[1] === "verify-blob").length, 0);
+      }
+    } finally { f.cleanup(); }
+  }
+});
+
+test("all four local checks reuse each validated root bundle in a fresh private digest-file-free directory (#375)", () => {
+  const script = probeStep(publicationData().image, "probe-verify", "Verify exact root and expected refusals").run;
+  for (const count of [1, 2, 16]) {
+    const f = probeFixture();
+    try {
+      const bundles = Array.from({ length: count }, (_, i) => probeBundle(i % 2 ? "fixture-second" : "fixture-payload"));
+      writeFileSync(join(f.dir, "download.jsonl"), bundles.map(JSON.stringify).join("\n"));
+      // verify-blob tries files before parsing artifact digests. Neither file may win.
+      for (const digest of [f.env.DIGEST, f.env.CHILD]) writeFileSync(join(f.dir, digest), "untrusted pseudo-digest file");
+      writeFileSync(join(f.dir, "config.json"), "fixture credential: must not be copied");
+      const result = f.run(script, {}, f.dir);
+      assert.equal(result.status, 0, result.stderr);
+      const calls = f.calls().filter(c => c[0] === "cosign");
+      assert.equal(calls.filter(c => c[1] === "download").length, 1);
+      assert.equal(calls.filter(c => c[1] === "verify").length, 1);
+      assert.ok(calls.filter(c => c[1] !== "verify-blob").every(c => c.at(-1) === f.env.IMAGE + "@" + f.env.DIGEST));
+      const local = readFileSync(join(f.dir, "blob-calls"), "utf8").trim().split("\n").map(JSON.parse);
+      assert.equal(local.length, 4 * count);
+      assert.equal(new Set(local.map(c => c.cwd)).size, count);
+      const identity = `https://github.com/${f.env.GITHUB_REPOSITORY}/.github/workflows/image.yml@${f.env.GITHUB_REF}`;
+      const issuer = "https://token.actions.githubusercontent.com";
+      for (let i = 0; i < count; i++) {
+        const group = local.slice(i * 4, i * 4 + 4);
+        assert.ok(group.every(c => c.bundle === JSON.stringify(bundles[i]) + "\n" && c.cwd === group[0].cwd));
+        assert.deepEqual(group.map(({ artifact, identity, issuer }) => [artifact, identity, issuer]), [
+          [f.env.DIGEST, identity, issuer], [f.env.DIGEST, identity.replace("image.yml", "wrong-workflow.yml"), issuer],
+          [f.env.DIGEST, identity, "https://wrong-issuer.invalid"], [f.env.CHILD, identity, issuer],
+        ]);
+        assert.equal(existsSync(group[0].cwd), false, "private data cleaned after success");
+      }
+    } finally { f.cleanup(); }
+  }
+});
+
+test("root download and local verification errors never substitute for policy or digest rejection (#375)", () => {
+  const script = probeStep(publicationData().image, "probe-verify", "Verify exact root and expected refusals").run;
+  const digestFailure = "failed to verify signature: provided artifact digest does not match any digest in statement";
+  for (const bad of [
+    { DOWNLOAD_ERROR: "no signatures found" }, { DOWNLOAD_ERROR: "Get https://ghcr.io/v2/: connection reset" },
+    { ONLINE_ERROR: "no signatures found" }, { LOCAL_POSITIVE_ERROR: "no signatures found" },
+    { LOCAL_POSITIVE_ERROR: "TUF: trust root unavailable" },
+    ...["\n", "unauthorized", "no signatures found", "TUF: trust root unavailable", "transparency log unavailable",
+      "failed to verify signature: invalid signature", "provided artifact digest does not match any digest in statement",
+      "no matching attestations: " + digestFailure, digestFailure + "\nconnection reset", digestFailure + "\n",
+    ].map(CHILD_ERROR => ({ CHILD_ERROR })),
+    { IDENTITY_ERROR: "no matching attestations: failed to verify certificate identity: no matching CertificateIdentity found, last error: unrelated" },
+    { NEGATIVE_MODE: "policy-mixed" },
+  ]) {
+    const f = probeFixture();
+    try {
+      assert.notEqual(f.run(script, bad).status, 0, JSON.stringify(bad));
+      assert.equal(readdirSync(f.dir).some(name => name.startsWith("probe-bundles.")), false, "private data cleaned on failure");
+    } finally { f.cleanup(); }
+  }
+});
+
+test("tampered payload or bad digest in a downloaded bundle fails the local positive control (#375)", () => {
+  const script = probeStep(publicationData().image, "probe-verify", "Verify exact root and expected refusals").run;
+  for (const marker of ["fixture-tampered-payload", "fixture-bad-digest"]) {
+    const f = probeFixture();
+    try {
+      writeFileSync(join(f.dir, "download.jsonl"), JSON.stringify(probeBundle(marker)));
+      const result = f.run(script);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /fixture tampered payload or bad digest/);
+      assert.equal(f.calls().filter(c => c[1] === "verify-blob").length, 1, "positive must pass before any negatives");
+      assert.equal(readdirSync(f.dir).some(name => name.startsWith("probe-bundles.")), false);
+    } finally { f.cleanup(); }
+  }
+});
+
 test("taiki-e/install-action installs exact versions with its checksum check on", () => {
   const found = [];
   for (const { file, text } of repoFiles()) {
@@ -926,6 +1569,594 @@ test("vendored advisory coverage supplements the unchanged real-graph scan in it
     assert.equal(steps[index].env?.CI, undefined, "fixture must not bypass its CI-required scanner");
     assert.equal(steps[index].env?.CARGO_DENY, undefined, "same pinned tool on PATH");
   }
+});
+
+// ---- isolated publication graph (#371, #372, #374) ----
+
+const publicationFiles = ["image", "branch-images", "loadtest-image", "oci-import"];
+const publicationData = () => Object.fromEntries(publicationFiles.map(name => {
+  const file = `.github/workflows/${name}.yml`;
+  const text = readLocalFromRepo(file);
+  assert.notEqual(text, null, `${file} is required`);
+  return [name, toData(parseStrict(text, file))];
+}));
+const executable = job => stepsOf(job).map(s => s.run ?? "").join("\n");
+
+// Pin the actual refusal logic, not just the step name or command substrings.
+const VERSION_CHECK_RUN = [
+  'revision=$(docker image inspect --format \'{{index .Config.Labels "org.opencontainers.image.revision"}}\' "${IMAGE}@${DIGEST}")',
+  '[ "${revision}" = "${SOURCE_REVISION}" ] || { echo \'::error::image source revision mismatch\'; exit 1; }',
+  'want=$(sed -n \'s/^version = "\\([^"]*\\)"$/\\1/p\' apps/gateway/Cargo.toml | head -n1)',
+  'got=$(docker run --rm "${IMAGE}@${DIGEST}" --version)',
+  'echo "image reports: ${got}"',
+  'if [ "${got}" != "open-model-gateway ${want}" ]; then',
+  '  echo "::error::the image reports \'${got}\', not \'open-model-gateway ${want}\'"',
+  '  exit 1',
+  'fi',
+  'if [ "${REF_TYPE}" = tag ] && [ "${TAG%%-*}" != "v${want}" ]; then',
+  '  echo "::error::tag ${TAG} does not match Cargo.toml version ${want}"',
+  '  exit 1',
+  'fi',
+].join("\n");
+
+function assertRequiredPublication(job, conditionalSteps = []) {
+  assert.equal(job.if, undefined);
+  assert.equal(job["continue-on-error"], undefined);
+  assert.equal(job.defaults, undefined);
+  for (const step of stepsOf(job)) {
+    assert.equal(step["continue-on-error"], undefined);
+    assert.equal(step.shell, undefined);
+    if (!conditionalSteps.includes(step.name)) assert.equal(step.if, undefined);
+  }
+}
+
+function assertPublicationGraph(flows) {
+  for (const name of publicationFiles.slice(0, 3)) {
+    const data = flows[name];
+    const build = data.jobs.build;
+    assert.deepEqual(build.permissions, { contents: "read" });
+    assert.doesNotMatch(JSON.stringify(build), /secrets\.|packages|docker\/login-action|push=true|push-by-digest/);
+    const action = stepsOf(build).find(s => actionName(s.uses) === "docker/build-push-action");
+    assert.equal(action.with.outputs, "type=oci,dest=${{ runner.temp }}/image.tar,oci-mediatypes=true");
+    assert.equal(action.with.push, undefined);
+    assert.equal(action.with.tags, undefined);
+    assert.equal(action.with.provenance, "mode=max");
+    assert.match(action.with.attests, /^type=sbom,generator=mirror\.gcr\.io\/docker\/buildkit-syft-scanner:stable-1@sha256:[0-9a-f]{64}$/);
+    const upload = stepsOf(build).find(s => actionName(s.uses) === "actions/upload-artifact");
+    assert.equal(upload.with.path, "${{ runner.temp }}/image.tar");
+    assert.equal(upload.with["if-no-files-found"], "error");
+    assert.equal(upload.with.overwrite, undefined);
+    assert.match(executable(build), /\^sha256:\[0-9a-f\]\{64\}\$/);
+    const calls = Object.values(data.jobs).filter(j => j.uses === "./.github/workflows/oci-import.yml");
+    assert.equal(calls.length, name === "image" ? 2 : 1);
+    for (const call of calls) {
+      assert.deepEqual(call.permissions, { contents: "read", packages: "write" });
+      assert.deepEqual(call.needs, ["build"]);
+      assert.equal(call.with.source_revision, name === "image" ? "${{ github.sha }}" : "${{ needs.build.outputs.source_revision }}");
+      assert.match(call.with.artifact_id, /^\$\{\{ needs\.build\.outputs\.artifact_id(?:_linux_(?:amd64|arm64))? \}\}$/);
+      assert.match(call.with.root_digest, /^\$\{\{ needs\.build\.outputs\.digest(?:_linux_(?:amd64|arm64))? \}\}$/);
+      assert.equal(call.with.image_repository, `ghcr.io/ncecere/open-model-gateway${name === "loadtest-image" ? "-loadtest" : ""}`);
+    }
+    for (const [jobName, job] of jobsOf(data).filter(([, j]) => j.steps && hasWrite(j.permissions))) {
+      assert.doesNotMatch(executable(job), /docker (?:build|run|pull)\b|staging\.py|trivy|cargo|npm|oci-layout/);
+      for (const step of stepsOf(job).filter(s => actionName(s.uses) === "actions/checkout")) {
+        assert.equal(step.with.ref, "${{ github.workflow_sha }}", `${name}/${jobName} uses trusted control code`);
+        assert.equal(step.with["persist-credentials"], false);
+      }
+      assert.match(executable(job), /docker login ghcr\.io --username "\$\{GITHUB_ACTOR\}" --password-stdin/);
+      assert.ok(stepsOf(job).some(s => s.if === "always()" && /docker logout ghcr\.io/.test(s.run ?? "")));
+    }
+  }
+  const image = flows.image;
+  for (const name of ["build", "import-amd64", "import-arm64", "verify", "publish"]) {
+    assertRequiredPublication(image.jobs[name], name === "verify" ? ["Stop isolated staging"] : name === "publish" ? ["Job summary", "Remove registry credentials"] : []);
+  }
+  const architectures = [
+    { platform: "linux/amd64", runner: "ubuntu-24.04" },
+    { platform: "linux/arm64", runner: "ubuntu-24.04-arm" },
+  ];
+  assert.deepEqual(image.jobs.build.strategy, { "fail-fast": true, matrix: { include: architectures } });
+  assert.equal(image.jobs.build["runs-on"], "${{ matrix.runner }}");
+  assert.deepEqual(image.jobs.build.outputs, Object.fromEntries(["amd64", "arm64"].flatMap(arch =>
+    ["digest", "artifact_id"].map(key => [`${key}_linux_${arch}`, `\${{ steps.record.outputs.${key}_linux_${arch} }}`]))));
+  assert.deepEqual(image.jobs.build.steps.find(s => s.id === "record").env, {
+    DIGEST: "${{ steps.build.outputs.digest }}", ARTIFACT_ID: "${{ steps.upload.outputs.artifact-id }}",
+  });
+  for (const arch of ["amd64", "arm64"]) {
+    assert.deepEqual(image.jobs[`import-${arch}`].with, {
+      artifact_id: `\${{ needs.build.outputs.artifact_id_linux_${arch} }}`,
+      root_digest: `\${{ needs.build.outputs.digest_linux_${arch} }}`,
+      platform: `linux/${arch}`, image_repository: "ghcr.io/ncecere/open-model-gateway", source_revision: "${{ github.sha }}",
+    });
+  }
+  assert.deepEqual(image.jobs.verify.strategy, { "fail-fast": true, matrix: { include: architectures.map(a => ({
+    ...a, import_job: `import-${a.platform.slice(6)}`, digest_output: `digest_linux_${a.platform.slice(6)}`,
+  })) } });
+  assert.equal(image.jobs.verify["runs-on"], "${{ matrix.runner }}");
+  assert.deepEqual(image.jobs.verify.permissions, { contents: "read", packages: "read" });
+  assert.equal(image.jobs.verify.env.DIGEST, "${{ needs[matrix.import_job].outputs[matrix.digest_output] }}");
+  const versions = image.jobs.verify.steps.filter(s => s.name === "Check the built version");
+  assert.equal(versions.length, 1);
+  assert.deepEqual(versions[0].env, { REF_TYPE: "${{ github.ref_type }}", TAG: "${{ github.ref_name }}", SOURCE_REVISION: "${{ github.sha }}" });
+  assert.equal(versions[0].run.trim(), VERSION_CHECK_RUN);
+  const index = image.jobs.publish.steps.find(s => s.id === "index");
+  assert.deepEqual(index.env, {
+    TAGS: "${{ needs.meta.outputs.tags }}", ANNOTATIONS: "${{ needs.meta.outputs.annotations }}",
+    DIGEST_AMD64: "${{ needs.import-amd64.outputs.digest_linux_amd64 }}", DIGEST_ARM64: "${{ needs.import-arm64.outputs.digest_linux_arm64 }}",
+  });
+  assert.ok(index.run.includes('sources=("${IMAGE}@${DIGEST_AMD64}" "${IMAGE}@${DIGEST_ARM64}")'));
+  assert.ok(index.run.includes('docker buildx imagetools create "${args[@]}" "${sources[@]}"'));
+  assert.deepEqual(image.jobs.verify.needs, ["import-amd64", "import-arm64"]);
+  assert.deepEqual(image.jobs.publish.needs, ["meta", "import-amd64", "import-arm64", "verify"]);
+  assert.equal(image.jobs.meta.if, PROBE_META_IF);
+  assert.match(executable(image.jobs.verify), /restore-check/);
+  assert.match(executable(image.jobs.verify), /tests\/container-image\.test\.mjs/);
+  assert.match(executable(image.jobs.verify), /trivy image/);
+  assertCosignPublishPolicy(image);
+  assert.equal(flows["loadtest-image"].jobs.build.steps.find(s => actionName(s.uses) === "docker/build-push-action").with["build-args"], "CARGO_BUILD_JOBS=4");
+  for (const name of ["branch-images", "loadtest-image"]) {
+    const publish = flows[name].jobs.publish;
+    assert.deepEqual(publish.needs, ["build", "import"]);
+    assert.match(executable(publish), /\^\[0-9a-f\]\{40\}\$/);
+    assert.match(executable(publish), /dev-\$\{SOURCE_REVISION:0:12\}/);
+    assert.doesNotMatch(executable(publish), /latest|cosign|trivy/);
+  }
+  const importer = flows["oci-import"];
+  assert.deepEqual(Object.keys(importer.on.workflow_call.inputs).sort(), ["artifact_id", "image_repository", "platform", "root_digest", "source_revision"]);
+  for (const input of Object.values(importer.on.workflow_call.inputs)) assert.deepEqual(input, { required: true, type: "string" });
+  for (const name of ["tools", "preflight"]) assert.deepEqual(importer.jobs[name].permissions, { contents: "read" });
+  assert.deepEqual(importer.jobs.import.permissions, { contents: "read", packages: "write" });
+  assert.deepEqual(importer.jobs.import.needs, ["tools", "preflight"]);
+  for (const job of Object.values(importer.jobs)) {
+    const checkouts = stepsOf(job).filter(s => actionName(s.uses) === "actions/checkout");
+    assert.equal(checkouts.length, 1);
+    assert.deepEqual(checkouts[0].with, { ref: "${{ github.workflow_sha }}", path: "control", "persist-credentials": false });
+  }
+  for (const job of Object.values(importer.jobs)) {
+    assert.equal(job.if, undefined);
+    assert.equal(job["continue-on-error"], undefined);
+    for (const step of stepsOf(job)) {
+      assert.equal(step["continue-on-error"], undefined);
+      if (!step.name?.startsWith("Remove ")) assert.equal(step.if, undefined);
+    }
+  }
+  const tools = executable(importer.jobs.tools);
+  assert.match(tools, /bash control\/\.github\/scripts\/build-oras\.sh/);
+  assert.match(tools, /binary_sha256/);
+  assert.match(tools, /sha256sum/);
+  const imports = stepsOf(importer.jobs.import);
+  const downloads = imports.filter(s => actionName(s.uses) === "actions/download-artifact");
+  assert.equal(downloads.length, 2);
+  assert.deepEqual(downloads.map(s => s.with["artifact-ids"]).sort(), ["${{ inputs.artifact_id }}", "${{ needs.tools.outputs.artifact_id }}"].sort());
+  for (const step of [...downloads, ...stepsOf(importer.jobs.preflight).filter(s => actionName(s.uses) === "actions/download-artifact")]) {
+    assert.equal(step.with["merge-multiple"], true);
+    for (const key of ["name", "pattern", "run-id", "repository", "github-token"]) assert.equal(step.with[key], undefined);
+  }
+  for (const name of ["preflight", "import"]) {
+    const script = executable(importer.jobs[name]);
+    assert.match(script, /inspect_archive/);
+    assert.match(script, /org\.opencontainers\.image\.revision/);
+    assert.match(script, /\^\[1-9\]\[0-9\]\*\$/);
+    assert.match(script, /ghcr\.io\/ncecere\/open-model-gateway\|ghcr\.io\/ncecere\/open-model-gateway-loadtest/);
+    assert.doesNotMatch(script, /tar -x|GITHUB_PATH|docker|cargo|npm|trivy/);
+  }
+  const stage = imports.find(s => /oci-stage\.py/.test(s.run ?? ""));
+  assert.ok(stage);
+  assert.deepEqual(Object.keys(stage.env).sort(), ["GITHUB_ACTOR", "GITHUB_TOKEN"]);
+  assert.match(stage.run, /--archive .* --root .* --platform .* --image .* --tool /);
+  assert.match(stage.run, /\[ "\$\{digest\}" = "\$\{ROOT_DIGEST\}" \]/);
+  assert.match(executable(importer.jobs.import), /binary_sha256/);
+  assert.match(executable(importer.jobs.import), /sha256sum/);
+}
+
+function assertPublicationTagGuard(image) {
+  assert.deepEqual(image.env, { IMAGE: "ghcr.io/ncecere/open-model-gateway" });
+  const publish = image.jobs.publish;
+  assertRequiredPublication(publish, ["Job summary", "Remove registry credentials"]);
+  assert.equal(publish.env, undefined);
+  const steps = stepsOf(publish);
+  const guards = steps.filter(s => s.name === "Validate publication tags before credentials");
+  assert.equal(guards.length, 1);
+  const guard = guards[0];
+  assert.deepEqual(guard, {
+    name: "Validate publication tags before credentials",
+    env: { TAGS: "${{ needs.meta.outputs.tags }}", GITHUB_REF: "${{ github.ref }}", GITHUB_SHA: "${{ github.sha }}" },
+    run: "python3 -I .github/scripts/publication-tags.py",
+  });
+  const checkout = steps.find(s => actionName(s.uses) === "actions/checkout");
+  assert.deepEqual(checkout.with, { ref: "${{ github.workflow_sha }}", "persist-credentials": false });
+  assert.ok(steps.indexOf(checkout) < steps.indexOf(guard));
+  const credentials = steps.filter(s => /secrets\.|docker login/.test(JSON.stringify(s)));
+  assert.ok(credentials.length > 0);
+  for (const step of credentials) assert.ok(steps.indexOf(guard) < steps.indexOf(step));
+  const index = steps.find(s => s.id === "index");
+  assert.ok(steps.indexOf(guard) < steps.indexOf(index));
+  assert.equal(index.env.TAGS, guard.env.TAGS);
+  assert.equal(index.env.IMAGE, undefined);
+}
+
+// Final publication binds native create metadata, the complete approved child graph,
+// and every mutable alias. Stand-ins below are not native registry acceptance.
+function assertNativeIndexBinding(image) {
+  const run = image.jobs.publish.steps.find(s => s.id === "index").run;
+  assert.match(run, /^set -euo pipefail\n/);
+  assert.match(run, /umask 077/);
+  assert.match(run, /mktemp -d/);
+  assert.match(run, /trap .* EXIT/);
+  assert.match(run, /docker buildx imagetools create "\$\{args\[@\]\}" "\$\{sources\[@\]\}" --metadata-file "\$\{private\}\/metadata\.json"/);
+  assert.match(run, /jq -er '\."containerimage\.descriptor"\.digest'/);
+  assert.doesNotMatch(run, /containerimage\.digest|first=|head -n|json \.Manifest|platforms=|--platform|--append|\|\| true/);
+  for (const [file, digest] of [["amd64", "DIGEST_AMD64"], ["arm64", "DIGEST_ARM64"], ["index", "digest"]]) {
+    assert.ok(run.includes(`docker buildx imagetools inspect --raw "\${IMAGE}@\${${digest}}" > "\${private}/${file}.json"`));
+  }
+  assert.ok(run.includes('python3 -I .github/scripts/oci-index.py "${private}/metadata.json"'));
+  assert.match(run, /while IFS= read -r tag; do[\s\S]*inspect --raw "\$\{tag\}"/);
+  assert.match(run, /sha256sum "\$\{private\}\/tag\.json"/);
+  assert.match(run, /\[ "sha256:\$\{hashed%% \*\}" = "\$\{digest\}" \]/);
+  assert.ok(run.indexOf('oci-index.py') < run.indexOf('sha256sum'));
+  assert.ok(run.indexOf('sha256sum') < run.indexOf('echo "digest=${digest}"'));
+}
+
+test("native final publication binds create descriptor, complete graph and every alias before output (#372)", () => {
+  assertNativeIndexBinding(publicationData().image);
+});
+
+test("final publication policy rejects mutable-root and platform-only regressions (#372)", () => {
+  const original = publicationData().image;
+  for (const [before, after] of [
+    ['set -euo pipefail', 'set -e'],
+    ['--metadata-file', '--other-file'],
+    ['."containerimage.descriptor".digest', '."containerimage.digest"'],
+    ['oci-index.py', 'platform-only.py'],
+    ['"${IMAGE}@${DIGEST_AMD64}" >', '"${IMAGE}:latest-release" >'],
+    ['sha256sum "${private}/tag.json"', 'echo ignored'],
+    ['[ "sha256:${hashed%% *}" = "${digest}" ]', 'true'],
+  ]) {
+    const image = structuredClone(original), step = image.jobs.publish.steps.find(s => s.id === "index");
+    assert.ok(step.run.includes(before), before);
+    step.run = step.run.replace(before, after);
+    assert.throws(() => assertNativeIndexBinding(image), { name: "AssertionError" });
+  }
+});
+
+function nativeIndexFixture() {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "oci-index-policy-"))), bin = join(dir, "bin");
+  mkdirSync(bin);
+  const hash = data => `sha256:${createHash("sha256").update(data).digest("hex")}`;
+  const mediaType = "application/vnd.oci.image.index.v1+json";
+  const parent = arch => {
+    const digest = hash(arch), evidence = hash(arch + "-evidence");
+    return { schemaVersion: 2, mediaType, manifests: [
+      { mediaType: "application/vnd.oci.image.manifest.v1+json", digest, size: 123, platform: { os: "linux", architecture: arch } },
+      { mediaType: "application/vnd.oci.image.manifest.v1+json", digest: evidence, size: 321, platform: { os: "unknown", architecture: "unknown" },
+        annotations: { "vnd.docker.reference.type": "attestation-manifest", "vnd.docker.reference.digest": digest } },
+    ] };
+  };
+  const amd = parent("amd64"), arm = parent("arm64");
+  const index = { schemaVersion: 2, mediaType, manifests: [...amd.manifests, ...arm.manifests] };
+  const raced = structuredClone(index);
+  raced.manifests[0].digest = hash("different-valid-amd64");
+  raced.manifests[1].annotations["vnd.docker.reference.digest"] = raced.manifests[0].digest;
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: dir,
+    IMAGE: "ghcr.io/ncecere/open-model-gateway", FIXTURE_DIR: dir, GITHUB_OUTPUT: join(dir, "output") };
+  for (const [file, value] of Object.entries({ amd, arm, index, raced })) {
+    const raw = JSON.stringify(value);
+    writeFileSync(join(dir, file + ".json"), raw);
+    env[file.toUpperCase() + "_DIGEST"] = hash(raw);
+  }
+  env.DIGEST_AMD64 = env.AMD_DIGEST;
+  env.DIGEST_ARM64 = env.ARM_DIGEST;
+  env.TAGS = `${env.IMAGE}:latest-release\n${env.IMAGE}:v0.9.0\n${env.IMAGE}:v0.9`;
+  env.ANNOTATIONS = "index:org.opencontainers.image.title=fixture title\nindex:fixture=unicode-é";
+  writeFileSync(join(bin, "docker"), `#!${process.execPath}
+const fs = require('node:fs'), path = require('node:path');
+const e = process.env, a = process.argv.slice(2), base = e.FIXTURE_DIR;
+const fail = () => process.exit(9);
+fs.appendFileSync(path.join(base, 'calls'), JSON.stringify(a) + '\\n');
+if (a.slice(0, 3).join(' ') === 'buildx imagetools create') {
+  if (e.FAIL_CREATE) fail();
+  if (a.includes('--metadata-file')) {
+    const file = a[a.indexOf('--metadata-file') + 1];
+    fs.writeFileSync(file, JSON.stringify({ 'containerimage.descriptor': {
+      mediaType: 'application/vnd.oci.image.index.v1+json', digest: e.INDEX_DIGEST,
+      size: fs.statSync(path.join(base, 'index.json')).size }, 'image.name': e.TAGS.split('\\n').join(',') }));
+    fs.writeFileSync(path.join(base, 'private'), JSON.stringify({ file,
+      mode: fs.statSync(path.dirname(file)).mode & 0o777, fileMode: fs.statSync(file).mode & 0o777 }));
+  }
+} else if (a.slice(0, 3).join(' ') === 'buildx imagetools inspect') {
+  const ref = a.find(x => x.startsWith(e.IMAGE)), isTag = !ref.includes('@');
+  if (!a.includes('--raw')) { process.stdout.write(JSON.stringify({ digest: e.RACED_DIGEST })); return; }
+  if (e.FAIL_INSPECT) fail();
+  let file;
+  if (isTag) file = e.RACE && (e.RACE === 'all' || ref.endsWith(':v0.9.0')) ? 'raced' : 'index';
+  else {
+    const d = ref.split('@')[1];
+    file = d === e.AMD_DIGEST ? 'amd' : d === e.ARM_DIGEST ? 'arm' : d === e.INDEX_DIGEST ? 'index' : d === e.RACED_DIGEST ? 'raced' : null;
+  }
+  if (!file) fail();
+  process.stdout.write(fs.readFileSync(path.join(base, file + '.json')));
+} else fail();
+`);
+  chmodSync(join(bin, "docker"), 0o700);
+  return { dir, env, run(changes = {}) {
+    const script = publicationData().image.jobs.publish.steps.find(s => s.id === "index").run;
+    const result = spawnSync("bash", ["-c", script], { cwd: root, env: { ...env, ...changes }, encoding: "utf8", timeout: 10000 });
+    assert.ifError(result.error);
+    const calls = readFileSync(join(dir, "calls"), "utf8").trim().split("\n").map(JSON.parse);
+    if (existsSync(join(dir, "private"))) {
+      const privateData = JSON.parse(readFileSync(join(dir, "private"), "utf8"));
+      assert.equal(privateData.mode, 0o700);
+      assert.equal(privateData.fileMode, 0o600);
+      assert.equal(existsSync(join(privateData.file, "..")), false, "private directory cleaned on every exit");
+    }
+    return { ...result, calls, output: existsSync(env.GITHUB_OUTPUT) ? readFileSync(env.GITHUB_OUTPUT, "utf8") : "" };
+  } };
+}
+
+for (const race of ["all", "second"]) test(`actual native publication fails closed on ${race} alias race without signing output (#372)`, () => {
+  const f = nativeIndexFixture();
+  try {
+    const result = f.run({ RACE: race });
+    assert.notEqual(result.status, 0);
+    assert.equal(result.output, "");
+    assert.ok(result.calls.some(a => a.includes(f.env.IMAGE + "@" + f.env.INDEX_DIGEST)), "candidate comes from create metadata");
+    assert.ok(!result.calls.some(a => a.includes(f.env.IMAGE + "@" + f.env.RACED_DIGEST)), "never select the raced root");
+    assert.ok(result.calls.filter(a => a[2] === "inspect").every(a => a.includes("--raw")));
+  } finally { rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test("actual native publication accepts reordered aliases at the creation digest and preserves exact create inputs (#372)", () => {
+  for (const reverse of [false, true]) {
+    const f = nativeIndexFixture();
+    try {
+      if (reverse) f.env.TAGS = f.env.TAGS.split("\n").reverse().join("\n");
+      const result = f.run();
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.output, `digest=${f.env.INDEX_DIGEST}\n`);
+      const metadata = JSON.parse(readFileSync(join(f.dir, "private"), "utf8")).file;
+      assert.deepEqual(result.calls[0], ["buildx", "imagetools", "create",
+        ...f.env.TAGS.split("\n").flatMap(t => ["--tag", t]),
+        ...f.env.ANNOTATIONS.split("\n").flatMap(a => ["--annotation", a]),
+        `${f.env.IMAGE}@${f.env.DIGEST_AMD64}`, `${f.env.IMAGE}@${f.env.DIGEST_ARM64}`, "--metadata-file", metadata]);
+      assert.deepEqual(result.calls.slice(1).map(a => a.at(-1)), [
+        `${f.env.IMAGE}@${f.env.DIGEST_AMD64}`, `${f.env.IMAGE}@${f.env.DIGEST_ARM64}`,
+        `${f.env.IMAGE}@${f.env.INDEX_DIGEST}`, ...f.env.TAGS.split("\n")]);
+    } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  }
+});
+
+test("actual native publication never emits a signing digest after create or inspect failure (#372)", () => {
+  for (const key of ["FAIL_CREATE", "FAIL_INSPECT"]) {
+    const f = nativeIndexFixture();
+    try {
+      const result = f.run({ [key]: "1" });
+      assert.notEqual(result.status, 0);
+      assert.equal(result.output, "");
+      assert.equal(readdirSync(f.dir).filter(n => n.startsWith("oci-index.")).length, 0);
+    } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  }
+});
+
+test("native image writer guards the exact trusted tag set before credential access", () => assertPublicationTagGuard(publicationData().image));
+
+test("publication tag guard policy refuses missing, optional, bypassed and late guards", () => {
+  const original = publicationData().image;
+  const guard = image => image.jobs.publish.steps.find(s => s.name === "Validate publication tags before credentials");
+  for (const mutate of [
+    i => { i.jobs.publish.steps = i.jobs.publish.steps.filter(s => s !== guard(i)); },
+    i => { guard(i).if = "false"; },
+    i => { guard(i)["continue-on-error"] = true; },
+    i => { guard(i).run = "echo no-check"; },
+    i => { guard(i).run += " || true"; },
+    i => { guard(i).env.GITHUB_REF = "${{ needs.meta.outputs.ref }}"; },
+    i => { guard(i).env.GITHUB_SHA = "${{ needs.meta.outputs.sha }}"; },
+    i => { guard(i).env.TAGS = "${{ github.ref }}"; },
+    i => { const s = guard(i); i.jobs.publish.steps = i.jobs.publish.steps.filter(step => step !== s); i.jobs.publish.steps.push(s); },
+    i => { const s = guard(i); i.jobs.publish.steps = i.jobs.publish.steps.filter(step => step !== s); i.jobs.publish.steps.unshift(s); },
+    i => { i.jobs.publish.steps.unshift({ env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }, run: "echo early-access" }); },
+    i => { i.jobs.publish.steps.find(s => actionName(s.uses) === "actions/checkout").with.ref = "${{ github.sha }}"; },
+    i => { i.env.IMAGE = "ghcr.io/other/image"; },
+    i => { i.jobs.publish.steps.find(s => s.id === "index").env.TAGS = "${{ needs.meta.outputs.other_tags }}"; },
+  ]) {
+    const image = structuredClone(original);
+    mutate(image);
+    assert.throws(() => assertPublicationTagGuard(image), { name: "AssertionError" });
+  }
+});
+
+test("tool handoff names distinguish job-only reruns without replacing immutable artifacts", () => {
+  const upload = publicationData()["oci-import"].jobs.tools.steps.find(s => actionName(s.uses) === "actions/upload-artifact");
+  assert.equal(upload.with.name, "oras-${{ inputs.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ inputs.artifact_id }}-${{ github.run_attempt }}");
+  assert.equal(upload.with.overwrite, undefined);
+  assert.equal(upload.id, "upload");
+  assert.equal(publicationData()["oci-import"].jobs.tools.steps.find(s => s.id === "record").env.ARTIFACT_ID, "${{ steps.upload.outputs.artifact-id }}");
+});
+
+test("all image producers isolate unprivileged builds, verified digest import and native publication", () => assertPublicationGraph(publicationData()));
+
+test("every publication shell snippet parses without executing any build or registry command", () => {
+  for (const [name, data] of Object.entries(publicationData())) {
+    for (const [where, script] of runScripts(data)) {
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-n"], { input: script, encoding: "utf8" });
+      assert.equal(result.status, 0, `${name}: ${where}: ${result.stderr}`);
+    }
+  }
+});
+
+test("fixtures: publication graph refuses widened builders, wrong artifact/control provenance and premature tagging", () => {
+  const original = publicationData();
+  const mutations = [
+    f => { f.image.jobs.build.permissions.packages = "write"; },
+    f => { f["branch-images"].jobs.build.steps.find(s => actionName(s.uses) === "docker/build-push-action").with.provenance = false; },
+    f => { f.image.jobs.publish.needs.pop(); },
+    f => { f["loadtest-image"].jobs.import.with.artifact_id = "${{ inputs.artifact_id }}"; },
+    f => { f["oci-import"].jobs.tools.permissions.packages = "write"; },
+    f => { f["oci-import"].jobs.import.needs.pop(); },
+    f => { f["oci-import"].jobs.preflight.steps.at(-2).if = "false"; },
+    f => { f["oci-import"].jobs.import.steps.find(s => s.id === "stage")["continue-on-error"] = true; },
+    f => { f["oci-import"].jobs.import.steps.find(s => actionName(s.uses) === "actions/checkout").with.ref = "${{ inputs.ref }}"; },
+    f => { f["oci-import"].jobs.import.steps.find(s => actionName(s.uses) === "actions/download-artifact").with.pattern = "*"; },
+    f => { const s = f["oci-import"].jobs.import.steps.filter(s => actionName(s.uses) === "actions/download-artifact"); s[1].with["artifact-ids"] = "${{ inputs.tool_artifact_id }}"; },
+  ];
+  assertPublicationGraph(original);
+  for (const mutate of mutations) {
+    const fixture = structuredClone(original);
+    mutate(fixture);
+    assert.throws(() => assertPublicationGraph(fixture), { name: "AssertionError" });
+  }
+});
+
+const imageVerificationMutants = [
+  ["no-op built-version check", f => { f.image.jobs.verify.steps.find(s => s.name === "Check the built version").run = "echo no-check"; }],
+  ["optional verification job", f => { f.image.jobs.verify["continue-on-error"] = true; }],
+  ["skipped verification and always-publish", f => { f.image.jobs.verify.if = "false"; f.image.jobs.publish.if = "always()"; }],
+  ["both imports use AMD artifacts and digests", f => { Object.assign(f.image.jobs["import-arm64"].with, {
+    artifact_id: "${{ needs.build.outputs.artifact_id_linux_amd64 }}", root_digest: "${{ needs.build.outputs.digest_linux_amd64 }}",
+  }); }],
+  ["ARM verifier uses AMD import", f => { Object.assign(f.image.jobs.verify.strategy.matrix.include[1], { import_job: "import-amd64", digest_output: "digest_linux_amd64" }); }],
+  ["ARM publisher uses AMD digest", f => { f.image.jobs.publish.steps.find(s => s.id === "index").env.DIGEST_ARM64 = "${{ needs.import-amd64.outputs.digest_linux_amd64 }}"; }],
+  ["optional version check", f => { f.image.jobs.verify.steps.find(s => s.name === "Check the built version")["continue-on-error"] = true; }],
+  ["skipped version check", f => { f.image.jobs.verify.steps.find(s => s.name === "Check the built version").if = "false"; }],
+  ["wrong revision comparison", f => { const s = f.image.jobs.verify.steps.find(s => s.name === "Check the built version"); s.run = s.run.replace('[ "${revision}" = "${SOURCE_REVISION}" ]', "true"); }],
+  ["removed binary version comparison", f => { const s = f.image.jobs.verify.steps.find(s => s.name === "Check the built version"); s.run = s.run.replace('[ "${got}" != "open-model-gateway ${want}" ]', "false"); }],
+  ["removed tag version comparison", f => { const s = f.image.jobs.verify.steps.find(s => s.name === "Check the built version"); s.run = s.run.replace('[ "${TAG%%-*}" != "v${want}" ]', "false"); }],
+  ["wrong verifier digest expression", f => { f.image.jobs.verify.env.DIGEST = "${{ needs.import-amd64.outputs.digest_linux_amd64 }}"; }],
+  ["wrong build output binding", f => { f.image.jobs.build.outputs.digest_linux_arm64 = "${{ steps.record.outputs.digest_linux_amd64 }}"; }],
+  ["wrong build matrix architecture", f => { f.image.jobs.build.strategy.matrix.include[1].platform = "linux/amd64"; }],
+  ["optional ARM import", f => { f.image.jobs["import-arm64"].if = "false"; }],
+  ["optional publisher", f => { f.image.jobs.publish["continue-on-error"] = true; }],
+  ["always-run native publication", f => { f.image.jobs.publish.steps.find(s => s.id === "index").if = "always()"; }],
+];
+for (const [name, mutate] of imageVerificationMutants) {
+  test(`publication graph refuses ${name}`, () => {
+    const fixture = publicationData();
+    mutate(fixture);
+    assert.throws(() => assertPublicationGraph(fixture), { name: "AssertionError" });
+  });
+}
+
+// Run the actual workflow shell/Python snippets locally. No registry, build,
+// credentials, stage-utility stand-in or executable transport binary is involved.
+function handoffFixture() {
+  const dir = mkdtempSync(join(tmpdir(), "oci-workflow-"));
+  mkdirSync(join(dir, "image"));
+  mkdirSync(join(dir, "tool"));
+  symlinkSync(root, join(dir, "control"), "dir");
+  const env = {
+    ...process.env, RUNNER_TEMP: dir, GITHUB_ENV: join(dir, "env"),
+    IMAGE_DIR: join(dir, "image"), TOOL_DIR: join(dir, "tool"),
+    ARTIFACT_ID: "123", TOOL_ARTIFACT_ID: "456", ROOT_DIGEST: `sha256:${"a".repeat(64)}`,
+    SOURCE_REVISION: "b".repeat(40), PLATFORM: "linux/amd64", IMAGE: "ghcr.io/ncecere/open-model-gateway",
+  };
+  delete env.GITHUB_TOKEN;
+  delete env.GH_TOKEN;
+  const run = (script, overrides = {}) => spawnSync("bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
+    cwd: dir, env: { ...env, ...overrides }, encoding: "utf8",
+  });
+  return { dir, env, run, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+test("actual importer selector guards reject alternate repos, tags, platforms, revisions and multi/invalid artifact IDs before download", () => {
+  const data = publicationData()["oci-import"];
+  const fixture = handoffFixture();
+  try {
+    for (const name of ["preflight", "import"]) {
+      const script = stepsOf(data.jobs[name]).find(s => s.name === "Refuse invalid handoff selectors before download").run;
+      for (const image of ["ghcr.io/ncecere/open-model-gateway", "ghcr.io/ncecere/open-model-gateway-loadtest"]) {
+        const good = fixture.run(script, { IMAGE: image });
+        assert.equal(good.status, 0, good.stderr);
+      }
+      const bad = [
+        ...["", "0", "01", "-1", "1,2", "1 2", "1\n2", "1e2", "latest"].map(ARTIFACT_ID => ({ ARTIFACT_ID })),
+        ...["ghcr.io/other/open-model-gateway", "ghcr.io/ncecere/open-model-gateway:latest", "ghcr.io/ncecere/open-model-gateway@sha256:x", "ghcr.io/ncecere/open-model-gateway/extra"].map(IMAGE => ({ IMAGE })),
+        { PLATFORM: "linux/arm/v7" }, { PLATFORM: "linux/amd64,linux/arm64" },
+        { ROOT_DIGEST: `sha256:${"A".repeat(64)}` }, { ROOT_DIGEST: "latest" },
+        { SOURCE_REVISION: "main" }, { SOURCE_REVISION: "b".repeat(12) },
+      ];
+      if (name === "import") bad.push({ TOOL_ARTIFACT_ID: "123" }, { TOOL_ARTIFACT_ID: "456,789" }, { TOOL_ARTIFACT_ID: "" });
+      for (const overrides of bad) {
+        writeFileSync(fixture.env.GITHUB_ENV, "");
+        assert.notEqual(fixture.run(script, overrides).status, 0, JSON.stringify(overrides));
+        assert.equal(readFileSync(fixture.env.GITHUB_ENV, "utf8"), "", "refusal precedes artifact directory setup/download");
+      }
+    }
+  } finally { fixture.cleanup(); }
+});
+
+// Reuse the existing bounded synthetic OCI graph builder, not a BuildKit proof.
+function syntheticArchive(fixture, revision = fixture.env.SOURCE_REVISION, arch = "amd64") {
+  const generator = `
+import importlib.util, io, json, sys, tarfile
+spec = importlib.util.spec_from_file_location("fixtures", sys.argv[1])
+fixtures = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(fixtures)
+graph = fixtures.fixture(sys.argv[4], edits={"config": lambda c: dict(c, config={"Labels": {"org.opencontainers.image.revision": sys.argv[3]}})})
+with tarfile.open(sys.argv[2], "w", format=tarfile.USTAR_FORMAT) as archive:
+    for name, data in graph["files"].items():
+        info = tarfile.TarInfo(name)
+        info.size = len(data)
+        archive.addfile(info, io.BytesIO(data))
+print(graph["root"]["digest"])
+`;
+  const result = spawnSync("python3", ["-I", "-", join(root, "tests/oci_layout_test.py"), join(fixture.env.IMAGE_DIR, "image.tar"), revision, arch], { input: generator, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim();
+}
+
+test("actual readonly preflight accepts bound synthetic graphs and refuses extra/hidden/missing/symlink data, wrong roots/platforms/revisions", () => {
+  const script = publicationData()["oci-import"].jobs.preflight.steps.find(s => s.name === "Validate complete OCI graph and source revision without extraction").run;
+  const fixture = handoffFixture();
+  try {
+    for (const arch of ["amd64", "arm64"]) {
+      const digest = syntheticArchive(fixture, fixture.env.SOURCE_REVISION, arch);
+      const good = fixture.run(script, { ROOT_DIGEST: digest, PLATFORM: `linux/${arch}` });
+      assert.equal(good.status, 0, good.stderr);
+    }
+    const digest = syntheticArchive(fixture);
+    const overrides = { ROOT_DIGEST: digest };
+    for (const extra of ["unexpected", ".hidden", "oras"]) {
+      const path = join(fixture.env.IMAGE_DIR, extra);
+      writeFileSync(path, "not OCI content");
+      assert.notEqual(fixture.run(script, overrides).status, 0, extra);
+      rmSync(path);
+    }
+    for (const bad of [{ ROOT_DIGEST: fixture.env.ROOT_DIGEST }, { PLATFORM: "linux/arm64" }, { SOURCE_REVISION: "c".repeat(40) }]) {
+      assert.notEqual(fixture.run(script, { ...overrides, ...bad }).status, 0, JSON.stringify(bad));
+    }
+    const image = join(fixture.env.IMAGE_DIR, "image.tar");
+    rmSync(image);
+    assert.notEqual(fixture.run(script, overrides).status, 0, "missing image");
+    writeFileSync(join(fixture.dir, "outside"), "not an archive");
+    symlinkSync(join(fixture.dir, "outside"), image);
+    assert.notEqual(fixture.run(script, overrides).status, 0, "symlink image");
+  } finally { fixture.cleanup(); }
+});
+
+test("actual writer validation refuses unexpected and tampered transport tools without executing them", () => {
+  const script = publicationData()["oci-import"].jobs.import.steps.find(s => s.name === "Repeat graph and revision checks and verify static tool pin before credentials").run;
+  const fixture = handoffFixture();
+  try {
+    const digest = syntheticArchive(fixture);
+    const tool = join(fixture.env.TOOL_DIR, "oras");
+    const marker = join(fixture.dir, "executed");
+    writeFileSync(tool, `#!/bin/sh\nprintf stolen > '${marker}'\n`);
+    chmodSync(tool, 0o755);
+    const tampered = fixture.run(script, { ROOT_DIGEST: digest });
+    assert.notEqual(tampered.status, 0);
+    assert.match(tampered.stdout + tampered.stderr, /checksum|FAILED/);
+    assert.equal(existsSync(marker), false);
+    for (const extra of [".hidden", "extra"]) {
+      writeFileSync(join(fixture.env.TOOL_DIR, extra), "unexpected");
+      const result = fixture.run(script, { ROOT_DIGEST: digest });
+      assert.notEqual(result.status, 0);
+      assert.doesNotMatch(result.stdout + result.stderr, /checksum|FAILED/, "unexpected entries are refused even before checksum work");
+      rmSync(join(fixture.env.TOOL_DIR, extra));
+    }
+    rmSync(tool);
+    symlinkSync(join(fixture.env.IMAGE_DIR, "image.tar"), tool);
+    assert.notEqual(fixture.run(script, { ROOT_DIGEST: digest }).status, 0);
+    assert.equal(existsSync(marker), false);
+  } finally { fixture.cleanup(); }
 });
 
 // ---- the fetch script ----
@@ -1048,6 +2279,62 @@ const noLocal = () => null;
 const violations = (text, readLocal = noLocal) => allWriteViolations([{ file: ".github/workflows/fixture.yml", text }], readLocal);
 const localFiles = files => path => files[path] ?? null;
 
+test("fixtures: write-job allowlist is exactly the three approved GitHub-owned actions (#374)", () => {
+  assert.deepEqual([...WRITE_JOB_ACTIONS.keys()].sort(), [
+    "actions/checkout", "actions/download-artifact", "github/codeql-action/upload-sarif",
+  ]);
+});
+
+for (const action of ["docker/setup-buildx-action", "docker/login-action", "docker/build-push-action"]) {
+  const step = `      - uses: ${action}@${SHA(1)} # v1\n`;
+  for (const scope of ["contents", "packages", "id-token"]) {
+    test(`fixtures: ${action} is rejected with ${scope}: write despite its SHA pin (#374)`, () => {
+      const text = wf(`permissions: read-all\njobs:\n  writer:\n    permissions: {${scope}: write}\n    runs-on: ubuntu-24.04\n    steps:\n${step}`);
+      assert.equal(violations(text).length, 1);
+    });
+  }
+  test(`fixtures: ${action} is rejected with inherited write-all (#374)`, () => {
+    const text = wf(`permissions: write-all\njobs:\n  writer:\n    runs-on: ubuntu-24.04\n    steps:\n${step}`);
+    assert.equal(violations(text).length, 1);
+  });
+  test(`fixtures: ${action} in a local composite is rejected by a writer (#374)`, () => {
+    const files = { ".github/actions/wrapper/action.yml": `name: wrapper\ndescription: fixture\nruns:\n  using: composite\n  steps:\n    - uses: ${action}@${SHA(1)} # v1\n` };
+    const text = wf("permissions: {packages: write}\njobs:\n  writer:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: ./.github/actions/wrapper");
+    assert.equal(violations(text, localFiles(files)).length, 1);
+  });
+  const caller = wf("permissions: write-all\njobs:\n  call:\n    uses: ./.github/workflows/child.yml");
+  const child = `name: child\non: workflow_call\njobs:\n  build:\n    runs-on: ubuntu-24.04\n    steps:\n${step}`;
+  test(`fixtures: ${action} in a reusable child inheriting a writer is rejected (#374)`, () => {
+    assert.equal(violations(caller, localFiles({ ".github/workflows/child.yml": child })).length, 1);
+  });
+  test(`fixtures: ${action} remains allowed in a read-only job (#374)`, () => {
+    const text = wf(`permissions: read-all\njobs:\n  build:\n    runs-on: ubuntu-24.04\n    steps:\n${step}`);
+    assert.deepEqual(violations(text), []);
+  });
+  test(`fixtures: ${action} remains allowed when a reusable child explicitly downgrades to read-only (#374)`, () => {
+    const downgraded = child.replace("    runs-on:", "    permissions: read-all\n    runs-on:");
+    assert.deepEqual(violations(caller, localFiles({ ".github/workflows/child.yml": downgraded })), []);
+  });
+}
+
+test("fixtures: a valid Buildx guard and image pin do not waive the writer action policy (#374)", () => {
+  const text = wf(`permissions: {packages: write}\njobs:\n  writer:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: docker buildx version\n      - uses: docker/setup-buildx-action@${SHA(1)} # v4\n        with:\n          driver-opts: image=moby/buildkit:v1@sha256:${"c".repeat(64)}\n`);
+  assert.deepEqual(pinViolations(text, ".github/workflows/fixture.yml"), []);
+  assert.deepEqual(buildxViolations(".github/workflows/fixture.yml", text), []);
+  assert.equal(violations(text).length, 1);
+});
+
+for (const [action, scope] of [
+  ["actions/checkout", "contents"],
+  ["actions/download-artifact", "packages"],
+  ["github/codeql-action/upload-sarif", "security-events"],
+]) {
+  test(`fixtures: approved ${action} remains allowed with ${scope}: write (#374)`, () => {
+    const text = wf(`permissions: {${scope}: write}\njobs:\n  writer:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: ${action}@${SHA(1)} # v1`);
+    assert.deepEqual(violations(text), []);
+  });
+}
+
 test("fixtures: write-permission bypasses are caught", () => {
   const evil = "aquasecurity/trivy-action@master";
   // flow-style workflow (the reader this replaced skipped it)
@@ -1097,8 +2384,11 @@ test("fixtures: an action hidden in a local composite or a called workflow is ca
 });
 
 test("fixtures: ordinary workflows pass", () => {
-  const ok = `permissions: {contents: read}\njobs:\n  scan:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: aquasecurity/trivy-action@${SHA(4)} # v1\n  push:\n    permissions: {contents: read, packages: write}\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: actions/checkout@${SHA(5)} # v1\n      - uses: docker/login-action@${SHA(6)} # v1\n  call:\n    permissions: {packages: write}\n    uses: ./.github/workflows/other.yml\n`;
-  assert.equal(violations(wf(ok), localFiles({ ".github/workflows/other.yml": "name: o\non: workflow_call\njobs:\n  a:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo\n" })).length, 0);
+  const ok = `permissions: {contents: read}\njobs:\n  scan:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: aquasecurity/trivy-action@${SHA(4)} # v1\n      - uses: docker/login-action@${SHA(6)} # v1\n  push:\n    permissions: {contents: read, packages: write}\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: actions/checkout@${SHA(5)} # v1\n      - run: echo native-publish\n  call:\n    permissions: {packages: write}\n    uses: ./.github/workflows/other.yml\n`;
+  const readLocal = localFiles({ ".github/workflows/other.yml": "name: o\non: workflow_call\njobs:\n  a:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo\n" });
+  assert.equal(violations(wf(ok), readLocal).length, 0);
+  const legacy = ok.replace("- run: echo native-publish", `- uses: docker/login-action@${SHA(6)} # v1`);
+  assert.equal(violations(wf(legacy), readLocal).length, 1, "the former writer login must now be refused");
 });
 
 test("fixtures: the strict reader rejects what it cannot read safely", () => {

@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { BASE_URL, ISSUER_URL, UPSTREAM_URL } from "./stack.mjs";
 import { MOCK_REPLY } from "./mock-upstream.mjs";
-import { api, chat, expectNoHorizontalScroll, expectTableFits, expectTileChartsAligned, readFixture, saveFixture, signIn, expectNoCspViolations } from "./helpers";
+import { api, chat, expectAccessible, expectNoHorizontalScroll, expectTableFits, expectTileChartsAligned, readFixture, saveFixture, signIn, expectNoCspViolations } from "./helpers";
 
 test.afterEach(expectNoCspViolations);
 
@@ -170,6 +170,48 @@ test("platform admin adds a mock connection and a priced model for Product", asy
   await expect(assign).toBeHidden();
   await expect(page.getByRole("tab", { name: /Models 1/ })).toBeVisible();
   await context.close();
+});
+
+test("deployment preview facts and estimate fit at 390px without changing the review flow", async ({ browser }) => {
+  const { context, page } = await signIn(browser, "operator");
+  try {
+    const deployments = await (await api(page, "GET", "/platform/deployments?limit=200")).json();
+    const deployment = deployments.data.find((d: { model_id: string }) => d.model_id === readFixture().model);
+    expect(deployment, "the journey's mock model has a deployment").toBeTruthy();
+    await page.goto(`/admin/deployments/${deployment.id}`);
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.getByRole("button", { name: "Review changes", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: "Review changes", exact: true });
+      const label = dialog.locator("dt").filter({ hasText: "Serving routes gained / lost" });
+      await expect(label).toBeVisible();
+      await expect(dialog.getByText("Configuration estimate", { exact: true })).toBeVisible();
+      await expect(dialog.getByRole("button", { name: "Continue to confirmation", exact: true })).toBeEnabled();
+      if (width === 390) {
+        // The whole label gets the available row, rather than a fixed 10rem label column.
+        expect(await label.evaluate(node => node.getBoundingClientRect().width)).toBeGreaterThan(220);
+        const facts = dialog.locator("dl");
+        expect(await facts.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
+        const estimate = dialog.getByRole("list", { name: "Configuration estimate warnings" });
+        await expect(estimate).toHaveCount(1);
+        expect(await estimate.evaluate(node => Number.parseFloat(getComputedStyle(node).paddingInlineStart))).toBeLessThanOrEqual(24);
+        const details = dialog.getByRole("region", { name: "Deployment change details" });
+        await details.focus();
+        await expect(details).toBeFocused();
+        const before = await details.evaluate(node => node.parentElement!.scrollTop);
+        await page.keyboard.press("PageDown");
+        await expect.poll(() => details.evaluate(node => node.parentElement!.scrollTop)).toBeGreaterThan(before);
+        await page.keyboard.press("Home");
+        await expect.poll(() => details.evaluate(node => node.parentElement!.scrollTop)).toBe(0);
+      }
+      await expectNoHorizontalScroll(page);
+      await expectAccessible(page, `deployment review ${width}`);
+      await page.screenshot({ path: `target/browser-tests/issue359/deployment-preview-${width}.png`, fullPage: true });
+      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      await expect(dialog).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Review changes", exact: true })).toBeFocused();
+    }
+  } finally { await context.close(); }
 });
 
 test("auditor reads Admin without mutation controls or workspace secrets", async ({ browser }) => {
