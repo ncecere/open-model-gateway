@@ -195,6 +195,14 @@ test("deployment preview facts and estimate fit at 390px without changing the re
         const estimate = dialog.getByRole("list", { name: "Configuration estimate warnings" });
         await expect(estimate).toHaveCount(1);
         expect(await estimate.evaluate(node => Number.parseFloat(getComputedStyle(node).paddingInlineStart))).toBeLessThanOrEqual(24);
+        const details = dialog.getByRole("region", { name: "Deployment change details" });
+        await details.focus();
+        await expect(details).toBeFocused();
+        const before = await details.evaluate(node => node.parentElement!.scrollTop);
+        await page.keyboard.press("PageDown");
+        await expect.poll(() => details.evaluate(node => node.parentElement!.scrollTop)).toBeGreaterThan(before);
+        await page.keyboard.press("Home");
+        await expect.poll(() => details.evaluate(node => node.parentElement!.scrollTop)).toBe(0);
       }
       await expectNoHorizontalScroll(page);
       await expectAccessible(page, `deployment review ${width}`);

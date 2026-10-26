@@ -36,7 +36,10 @@ describe("deployment configuration review", () => {
     expect(screen.getByText("Product")).toBeTruthy();
     expect(screen.getByText(/Configuration estimate, not a reservation/)).toBeTruthy();
     expect(screen.getByText(/Personal workspace effects are omitted/)).toBeTruthy();
+    const details = screen.getByRole("region", { name: "Deployment change details" });
+    expect(details.tabIndex).toBe(0);
     const warnings = screen.getByRole("list", { name: "Configuration estimate warnings" });
+    expect(details.contains(warnings)).toBe(true);
     expect(within(warnings).getAllByRole("listitem").map(item => item.textContent)).toEqual(impact.warnings);
     const facts = screen.getByText("Serving routes gained / lost").closest("dl")!;
     expect([...facts.querySelectorAll("dt")].map(term => term.textContent)).toEqual(["Enabled", "Serving routes gained / lost", "Observed", "Expected revision (estimate only)"]);
