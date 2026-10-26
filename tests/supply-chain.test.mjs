@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { runInNewContext } from "node:vm";
 import { isMap, isScalar, parseDocument, visit } from "yaml";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -998,6 +999,335 @@ test("fixtures: cosign candidate policy rejects absent, comment-only, wrong-pin,
   }
 });
 
+// Explicit manual acceptance is isolated from every normal publisher path.
+const PROBE_IF = "github.event_name == 'workflow_dispatch' && inputs.acceptance_probe == true";
+const PROBE_META_IF = "(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && !(github.event_name == 'workflow_dispatch' && inputs.acceptance_probe == true)";
+const probeStep = (data, job, name) => {
+  const matches = stepsOf(data.jobs[job]).filter(s => s.name === name);
+  assert.equal(matches.length, 1, `${job}: required singleton step ${name}`);
+  return matches[0];
+};
+const PROBE_GUARD = [
+  "set -euo pipefail",
+  '[[ "${EVENT}" = workflow_dispatch && "${PROBE}" = true ]]',
+  '[[ "${GITHUB_REPOSITORY}" = ncecere/open-model-gateway && "${IMAGE}" = ghcr.io/ncecere/open-model-gateway ]]',
+  '[[ "${REF_TYPE}" = branch && "${GITHUB_REF}" = refs/heads/?* && "${GITHUB_REF}" != refs/heads/main ]]',
+  '[[ "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ && "${GITHUB_WORKFLOW_SHA}" = "${GITHUB_SHA}" ]]',
+].join("\n");
+const PROBE_DIGEST_GUARD = [
+  '[[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ && "${CHILD}" =~ ^sha256:[0-9a-f]{64}$ && "${CHILD}" != "${DIGEST}" ]]',
+].join("\n");
+const PROBE_AUTH = [
+  "set -euo pipefail", "umask 077", "export DOCKER_CONFIG",
+  'DOCKER_CONFIG=$(mktemp -d "${RUNNER_TEMP}/probe-auth.XXXXXXXX")',
+  'echo "DOCKER_CONFIG=${DOCKER_CONFIG}" >> "$GITHUB_ENV"',
+  'printf \'%s\' "${GITHUB_TOKEN}" | docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin',
+].join("\n");
+const PROBE_CLEANUP = [
+  'if [ -n "${DOCKER_CONFIG:-}" ] && [ -d "${DOCKER_CONFIG}" ]; then',
+  '  trap \'rm -rf -- "${DOCKER_CONFIG}"\' EXIT',
+  '  docker logout ghcr.io',
+  'fi',
+].join("\n");
+
+function assertProbePolicy(data) {
+  assert.deepEqual(data.on.workflow_dispatch.inputs, { acceptance_probe: {
+    description: "Sign and verify only this non-main branch's existing dev index (no normal publication)",
+    type: "boolean", required: false, default: false,
+  } });
+  assert.equal(data.on.workflow_call.inputs, undefined, "reusable callers cannot activate the probe");
+  assert.equal(data.jobs.meta.if, PROBE_META_IF);
+  assert.deepEqual(data.env, { IMAGE: "ghcr.io/ncecere/open-model-gateway" });
+  for (const name of ["probe-prepare", "probe-sign", "probe-verify"]) {
+    const job = data.jobs[name];
+    assert.ok(job, `${name} must exist`);
+    assert.equal(job.if, PROBE_IF);
+    assert.equal(job["runs-on"], "ubuntu-24.04");
+    assert.equal(job["timeout-minutes"], 10);
+    assert.equal(job["continue-on-error"], undefined);
+    assert.equal(job.defaults, undefined);
+    assert.equal(job.strategy, undefined);
+    assert.deepEqual(job.permissions, name === "probe-sign"
+      ? { contents: "read", packages: "write", "id-token": "write" }
+      : { contents: "read", packages: "read" });
+    const expectedEnv = { EVENT: "${{ github.event_name }}", PROBE: "${{ inputs.acceptance_probe }}", REF_TYPE: "${{ github.ref_type }}" };
+    if (name !== "probe-prepare") Object.assign(expectedEnv, {
+      DIGEST: "${{ needs.probe-prepare.outputs.digest }}", CHILD: "${{ needs.probe-prepare.outputs.child }}",
+    });
+    assert.deepEqual(job.env, expectedEnv);
+    assert.deepEqual(job.needs, name === "probe-prepare" ? undefined : name === "probe-sign" ? ["probe-prepare"] : ["probe-prepare", "probe-sign"]);
+    const steps = stepsOf(job);
+    assert.equal(steps[0].name, "Refuse anything except this branch's explicit probe");
+    assert.equal(steps[0].run.trim(), name === "probe-prepare" ? PROBE_GUARD : `${PROBE_GUARD}\n${PROBE_DIGEST_GUARD}`);
+    const checkout = steps.filter(s => actionName(s.uses) === "actions/checkout");
+    assert.equal(checkout.length, 1);
+    assert.deepEqual(checkout[0].with, { ref: "${{ github.workflow_sha }}", "persist-credentials": false });
+    assert.equal(steps[1], checkout[0]);
+    for (const step of steps) {
+      assert.equal(step["continue-on-error"], undefined);
+      assert.equal(step.shell, undefined);
+      assert.equal(step.if, step.name === "Remove probe credentials" ? "always()" : undefined);
+      assert.doesNotMatch(step.run ?? "", /\$\{\{/, "no expression interpolation into shell programs");
+    }
+    const auth = probeStep(data, name, "Authenticate privately with native Docker");
+    assert.equal(auth.run.trim(), PROBE_AUTH);
+    assert.deepEqual(auth.env, { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" });
+    assert.equal(probeStep(data, name, "Remove probe credentials").run.trim(), PROBE_CLEANUP);
+    assert.doesNotMatch(executable(job), /imagetools create|docker (?:push|build)\b|gh release|github-release|--recursive|--tag\b|latest-release|:dev-/);
+    assert.ok(steps.indexOf(auth) > 1);
+    if (name !== "probe-prepare") {
+      const installer = probeStep(data, name, COSIGN_INSTALL_NAME);
+      assert.equal(installer.run.trim(), COSIGN_INSTALL_RUN);
+      assert.ok(steps.indexOf(installer) < steps.indexOf(auth), "verified installer precedes credentials");
+      assert.doesNotMatch(executable(job), /docker (?:run|pull)\b|npm|cargo|trivy|staging/);
+    }
+  }
+  const prepare = data.jobs["probe-prepare"];
+  assert.deepEqual(prepare.outputs, { digest: "${{ steps.resolve.outputs.digest }}", child: "${{ steps.resolve.outputs.child }}" });
+  const resolve = probeStep(data, "probe-prepare", "Resolve and pull the existing dev index (no retry or rebuild)");
+  assert.equal(resolve.id, "resolve");
+  assert.equal(resolve.env, undefined);
+  assert.match(resolve.run, /tag="\$\{IMAGE\}:dev-\$\{GITHUB_SHA:0:12\}"/);
+  assert.match(resolve.run, /docker buildx imagetools inspect "\$\{tag\}" --format '\{\{json \.Manifest\}\}'/);
+  assert.match(resolve.run, /docker buildx imagetools inspect --raw "\$\{IMAGE\}@\$\{digest\}"/);
+  assert.match(resolve.run, /docker pull --platform linux\/amd64 "\$\{IMAGE\}@\$\{child\}"/);
+  assert.match(resolve.run, /\[ "\$\{child\}" != "\$\{digest\}" \]/);
+  assert.match(resolve.run, /echo "digest=\$\{digest\}" >> "\$GITHUB_OUTPUT"/);
+  assert.match(resolve.run, /echo "child=\$\{child\}" >> "\$GITHUB_OUTPUT"/);
+  const erase = probeStep(data, "probe-prepare", "Remove probe credentials");
+  const version = probeStep(data, "probe-prepare", "Check exact revision, native platform and Cargo version without credentials");
+  assert.ok(prepare.steps.indexOf(erase) < prepare.steps.indexOf(version));
+  assert.match(version.run, /\[ ! -d "\$\{DOCKER_CONFIG\}" \]/);
+  assert.match(version.run, /docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges "\$\{IMAGE\}@\$\{CHILD\}" --version/);
+  assert.equal(version.env.CHILD, "${{ steps.resolve.outputs.child }}");
+  assert.equal(probeStep(data, "probe-sign", "Sign only the prepared index").run.trim(), `set -euo pipefail\n${COSIGN_SIGN_RUN}`);
+  const verify = probeStep(data, "probe-verify", "Verify exact root and expected refusals");
+  assert.match(verify.run, /identity="https:\/\/github.com\/\$\{GITHUB_REPOSITORY\}\/\.github\/workflows\/image.yml@\$\{GITHUB_REF\}"/);
+  assert.match(verify.run, /issuer=https:\/\/token.actions.githubusercontent.com/);
+  assert.match(verify.run, /jq -e --arg digest "\$\{DIGEST\}"/);
+  assert.match(verify.run, /\.critical\.image\["docker-manifest-digest"\] == \$digest/);
+  assert.match(verify.run, /refuse "\$\{DIGEST\}" "\$\{identity\/image.yml\/wrong-workflow.yml\}" "\$\{issuer\}"/);
+  assert.match(verify.run, /refuse "\$\{DIGEST\}" "\$\{identity\}" https:\/\/wrong-issuer.invalid/);
+  assert.match(verify.run, /refuse "\$\{CHILD\}" "\$\{identity\}" "\$\{issuer\}"/);
+  for (const name of ["meta", "build", "import-amd64", "import-arm64", "verify", "publish", "release"]) {
+    assert.doesNotMatch(JSON.stringify(data.jobs[name].needs ?? []), /probe/);
+  }
+}
+
+test("explicit manual cosign acceptance has isolated, failure-propagating parsed workflow boundaries (#375)", () => {
+  assertProbePolicy(publicationData().image);
+});
+
+test("actual parsed meta guard preserves normal main/tag truth table and excludes manual probes (#375)", () => {
+  const data = publicationData().image;
+  assert.equal(data.jobs.meta.if, PROBE_META_IF);
+  for (const event_name of ["push", "workflow_call", "workflow_dispatch"]) {
+    for (const ref of ["refs/heads/main", "refs/heads/issue/375-signing-acceptance", "refs/tags/v0.9.1", "refs/tags/other", "refs/pull/1/merge"]) {
+      for (const acceptance_probe of [false, true, undefined]) {
+        const context = { github: { ref, event_name }, inputs: { acceptance_probe }, startsWith: (s, prefix) => s.startsWith(prefix) };
+        const explicit = event_name === "workflow_dispatch" && acceptance_probe === true;
+        assert.equal(runInNewContext(data.jobs.meta.if, context), (ref === "refs/heads/main" || ref.startsWith("refs/tags/v")) && !explicit);
+        assert.equal(runInNewContext(data.jobs["probe-prepare"].if, context), explicit);
+      }
+    }
+  }
+});
+
+test("probe boundary policy rejects widened inputs, authority, handoffs, optional guards and hidden publication (#375)", () => {
+  const original = publicationData().image;
+  assertProbePolicy(original);
+  const step = (d, job, name) => probeStep(d, job, name);
+  const mutations = [
+    d => { d.on.workflow_dispatch.inputs.acceptance_probe.default = true; },
+    d => { d.on.workflow_dispatch.inputs.root_digest = { type: "string" }; },
+    d => { d.on.workflow_call.inputs = { acceptance_probe: { type: "boolean" } }; },
+    d => { d.jobs.meta.if = "github.ref == 'refs/heads/main'"; },
+    ...["probe-prepare", "probe-sign", "probe-verify"].flatMap(job => [
+      d => { d.jobs[job].if = "always()"; },
+      d => { d.jobs[job]["continue-on-error"] = true; },
+      d => { d.jobs[job].steps[0].if = "false"; },
+      d => { d.jobs[job].steps[0].run += " || true"; },
+      d => { d.jobs[job].steps[1].with.ref = "${{ github.sha }}"; },
+      d => { step(d, job, "Remove probe credentials").if = "success()"; },
+      d => { step(d, job, "Remove probe credentials").run = "docker logout ghcr.io"; },
+      d => { step(d, job, "Authenticate privately with native Docker").run += '\necho "${GITHUB_TOKEN}"'; },
+      d => { d.jobs[job].steps.push({ run: "docker push ghcr.io/ncecere/open-model-gateway:latest-release" }); },
+    ]),
+    d => { d.jobs["probe-prepare"].permissions.packages = "write"; },
+    d => { d.jobs["probe-verify"].permissions["id-token"] = "write"; },
+    d => { d.jobs["probe-sign"].permissions.contents = "write"; },
+    d => { d.jobs["probe-sign"].needs = []; },
+    d => { d.jobs["probe-verify"].needs.pop(); },
+    d => { d.jobs.publish.needs.push("probe-sign"); },
+    d => { d.jobs["probe-sign"].env.DIGEST = "${{ inputs.digest }}"; },
+    d => { d.jobs["probe-prepare"].outputs.digest = "${{ steps.resolve.outputs.child }}"; },
+    ...["probe-sign", "probe-verify"].flatMap(job => [
+      d => { step(d, job, COSIGN_INSTALL_NAME).run = COSIGN_INSTALL_RUN.replace(COSIGN_SHA256, "0".repeat(64)); },
+      d => { step(d, job, COSIGN_INSTALL_NAME).run = 'cosign version\n' + COSIGN_INSTALL_RUN; },
+    ]),
+    d => { step(d, "probe-sign", "Sign only the prepared index").run = COSIGN_SIGN_RUN + " --recursive"; },
+  ];
+  for (const mutate of mutations) {
+    const data = structuredClone(original);
+    mutate(data);
+    assert.throws(() => assertProbePolicy(data), { name: "AssertionError" });
+  }
+});
+
+// Native command stand-ins only: never execute Docker, a downloaded tool, or a network client.
+function probeFixture() {
+  const dir = mkdtempSync(join(tmpdir(), "cosign-probe-policy-"));
+  const bin = join(dir, "bin");
+  mkdirSync(bin);
+  const env = {
+    PATH: `${bin}:${process.env.PATH}`, HOME: dir, RUNNER_TEMP: dir,
+    GITHUB_ENV: join(dir, "env"), GITHUB_OUTPUT: join(dir, "output"),
+    EVENT: "workflow_dispatch", PROBE: "true", REF_TYPE: "branch",
+    GITHUB_REF: "refs/heads/issue/375-signing-acceptance", GITHUB_SHA: "a".repeat(40), GITHUB_WORKFLOW_SHA: "a".repeat(40),
+    GITHUB_REPOSITORY: "ncecere/open-model-gateway", IMAGE: "ghcr.io/ncecere/open-model-gateway", GITHUB_ACTOR: "probe-fixture",
+    DIGEST: `sha256:${"b".repeat(64)}`, CHILD: `sha256:${"c".repeat(64)}`,
+    FIXTURE_DIR: dir,
+  };
+  const mock = `#!${process.execPath}
+const fs = require('node:fs');
+const path = require('node:path');
+const e = process.env, a = process.argv.slice(2), command = path.basename(process.argv[1]);
+fs.appendFileSync(path.join(e.FIXTURE_DIR, 'calls'), JSON.stringify([command, ...a]) + '\\n');
+const fail = (message, code = 1) => { console.error(message); process.exit(code); };
+if (command === 'docker') {
+  if (a[0] === 'login') {
+    if (fs.readFileSync(0, 'utf8') !== 'fixture-read-token') fail('missing stdin credential');
+    fs.writeFileSync(path.join(e.DOCKER_CONFIG, 'config.json'), 'fixture-private-auth');
+  } else if (a[0] === 'logout') {
+    if (e.FAIL_LOGOUT) fail('fixture logout failure');
+    fs.rmSync(path.join(e.DOCKER_CONFIG, 'config.json'), { force: true });
+  } else if (a.slice(0, 3).join(' ') === 'buildx imagetools inspect') {
+    if (e.FAIL_RESOLVE) fail('dev tag not ready');
+    console.log(a.includes('--raw') ? fs.readFileSync(path.join(e.FIXTURE_DIR, 'index.json'), 'utf8') : JSON.stringify({ digest: e.DIGEST }));
+  } else if (a[0] === 'pull') {
+    if (e.FAIL_PULL) fail('fixture pull failure');
+  } else if (a.slice(0, 2).join(' ') === 'image inspect') {
+    console.log(e.CONFIG_JSON || JSON.stringify([{ Os: 'linux', Architecture: 'amd64', Config: { Labels: { 'org.opencontainers.image.revision': e.GITHUB_SHA } } }]));
+  } else if (a[0] === 'run') {
+    if (fs.existsSync(e.DOCKER_CONFIG) || e.GITHUB_TOKEN) fail('image sees registry credentials');
+    console.log(e.REPORTED_VERSION || 'open-model-gateway 0.9.0');
+  } else fail('unexpected Docker command');
+} else if (command === 'cosign') {
+  if (a[0] !== 'verify') fail('local signing is forbidden');
+  const image = a.at(-1), identity = a[a.indexOf('--certificate-identity') + 1], issuer = a[a.indexOf('--certificate-oidc-issuer') + 1];
+  const negative = image.endsWith(e.CHILD) || identity.includes('wrong-workflow') || issuer.includes('wrong-issuer');
+  if (negative && e.NEGATIVE_MODE === 'success') { console.log('[]'); process.exit(0); }
+  if (negative && e.NEGATIVE_MODE === 'network') fail('Get https://ghcr.io/v2/: connection reset');
+  if (negative && e.NEGATIVE_MODE === 'mixed') fail('no signatures found\\nGet https://ghcr.io/v2/: connection reset');
+  if (negative) {
+    if (image.endsWith(e.CHILD)) fail(e.CHILD_ERROR || 'no signatures found');
+    if (identity.includes('wrong-workflow')) fail(e.IDENTITY_ERROR || 'no matching signatures: certificate identity mismatch');
+    fail(e.ISSUER_ERROR || 'no matching signatures: certificate issuer mismatch');
+  }
+  console.log(e.PAYLOAD_JSON || JSON.stringify([{ critical: { image: { 'docker-manifest-digest': e.DIGEST } } }]));
+} else fail('unexpected executable');
+`;
+  for (const name of ["docker", "cosign"]) { writeFileSync(join(bin, name), mock); chmodSync(join(bin, name), 0o755); }
+  const child = { mediaType: "application/vnd.oci.image.manifest.v1+json", digest: env.CHILD, size: 100, platform: { os: "linux", architecture: "amd64" } };
+  const index = { schemaVersion: 2, mediaType: "application/vnd.oci.image.index.v1+json", manifests: [child, {
+    ...child, digest: `sha256:${"d".repeat(64)}`, platform: { os: "unknown", architecture: "unknown" },
+    annotations: { "vnd.docker.reference.type": "attestation-manifest", "vnd.docker.reference.digest": env.CHILD },
+  }] };
+  writeFileSync(join(dir, "index.json"), JSON.stringify(index));
+  writeFileSync(env.GITHUB_ENV, ""); writeFileSync(env.GITHUB_OUTPUT, "");
+  const run = (script, overrides = {}) => spawnSync("bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
+    cwd: root, env: { ...env, ...overrides }, encoding: "utf8", timeout: 10_000,
+  });
+  const calls = () => existsSync(join(dir, "calls")) ? readFileSync(join(dir, "calls"), "utf8").trim().split("\n").filter(Boolean).map(JSON.parse) : [];
+  const authenticate = script => {
+    const result = run(script, { GITHUB_TOKEN: "fixture-read-token" });
+    const match = readFileSync(env.GITHUB_ENV, "utf8").match(/^DOCKER_CONFIG=(.+)$/m);
+    if (match) env.DOCKER_CONFIG = match[1];
+    return result;
+  };
+  return { dir, env, run, calls, authenticate, index, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+test("actual probe branch/digest guards refuse main, tags, invalid SHAs and reusable activation before credentials (#375)", () => {
+  const data = publicationData().image;
+  for (const job of ["probe-prepare", "probe-sign", "probe-verify"]) {
+    const script = probeStep(data, job, "Refuse anything except this branch's explicit probe").run;
+    const f = probeFixture();
+    try {
+      assert.equal(f.run(script).status, 0);
+      for (const bad of [
+        { EVENT: "workflow_call" }, { EVENT: "push" }, { PROBE: "false" }, { PROBE: "" },
+        { GITHUB_REF: "refs/heads/main" }, { REF_TYPE: "tag", GITHUB_REF: "refs/tags/v0.9.0" },
+        { GITHUB_REF: "refs/pull/1/merge" }, { GITHUB_REF: "refs/heads/" }, { REF_TYPE: "other" },
+        { GITHUB_REPOSITORY: "other/repository" }, { IMAGE: "ghcr.io/other/image" },
+        { GITHUB_SHA: "main" }, { GITHUB_SHA: "a".repeat(12) }, { GITHUB_SHA: "A".repeat(40) },
+        { GITHUB_WORKFLOW_SHA: "b".repeat(40) },
+        ...(job === "probe-prepare" ? [] : [{ DIGEST: "latest" }, { CHILD: "sha256:bad" }, { CHILD: f.env.DIGEST }]),
+      ]) assert.notEqual(f.run(script, bad).status, 0, `${job}: ${JSON.stringify(bad)}`);
+      assert.deepEqual(f.calls(), []);
+    } finally { f.cleanup(); }
+  }
+});
+
+test("actual probe preparation selects one bound AMD child and removes credentials before native --version (#375)", () => {
+  const data = publicationData().image;
+  const resolve = probeStep(data, "probe-prepare", "Resolve and pull the existing dev index (no retry or rebuild)").run;
+  const version = probeStep(data, "probe-prepare", "Check exact revision, native platform and Cargo version without credentials").run;
+  const erase = probeStep(data, "probe-prepare", "Remove probe credentials").run;
+  const f = probeFixture();
+  try {
+    assert.equal(f.authenticate(PROBE_AUTH).status, 0);
+    const result = f.run(resolve);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(f.env.GITHUB_OUTPUT, "utf8"), `digest=${f.env.DIGEST}\nchild=${f.env.CHILD}\n`);
+    assert.equal(f.run(erase).status, 0);
+    assert.equal(existsSync(f.env.DOCKER_CONFIG), false);
+    assert.equal(f.run(version).status, 0);
+    for (const CONFIG_JSON of [
+      [], [{ Os: "linux", Architecture: "arm64" }],
+      [{ Os: "linux", Architecture: "amd64", Config: { Labels: { "org.opencontainers.image.revision": "b".repeat(40) } } }],
+    ].map(JSON.stringify)) assert.notEqual(f.run(version, { CONFIG_JSON }).status, 0);
+    assert.notEqual(f.run(version, { REPORTED_VERSION: "open-model-gateway 0.0.0" }).status, 0);
+    for (const mutate of [
+      i => { i.manifests.push(i.manifests[0]); }, i => { i.manifests = [i.manifests[1]]; },
+      i => { i.manifests[0].platform.architecture = "arm64"; }, i => { i.manifests[0].digest = "latest"; },
+      i => { i.manifests[0].digest = f.env.DIGEST; }, i => { i.manifests[1].platform.os = "linux"; },
+      i => { delete i.manifests[1].annotations; }, i => { i.manifests[1].annotations["vnd.docker.reference.digest"] = f.env.DIGEST; },
+      i => { i.mediaType = "application/vnd.oci.image.manifest.v1+json"; }, i => { i.manifests[0].size = "100"; },
+    ]) {
+      const index = structuredClone(f.index); mutate(index);
+      writeFileSync(join(f.dir, "index.json"), JSON.stringify(index));
+      writeFileSync(f.env.GITHUB_OUTPUT, "");
+      assert.notEqual(f.run(resolve).status, 0, JSON.stringify(index));
+      assert.equal(readFileSync(f.env.GITHUB_OUTPUT, "utf8"), "");
+    }
+    for (const name of ["probe-prepare", "probe-sign", "probe-verify"]) {
+      assert.equal(f.authenticate(PROBE_AUTH).status, 0);
+      assert.notEqual(f.run(probeStep(data, name, "Remove probe credentials").run, { FAIL_LOGOUT: "1" }).status, 0);
+      assert.equal(existsSync(f.env.DOCKER_CONFIG), false, "logout failure still deletes private credentials");
+    }
+    assert.ok(f.calls().every(([, ...args]) => !args.join(" ").includes("fixture-read-token")));
+  } finally { f.cleanup(); }
+});
+
+test("actual probe CLI verification checks typed root claims and only specific negative refusal reasons (#375)", () => {
+  const script = probeStep(publicationData().image, "probe-verify", "Verify exact root and expected refusals").run;
+  const f = probeFixture();
+  try {
+    assert.equal(f.run(script).status, 0);
+    assert.equal(f.calls().filter(c => c[0] === "cosign").length, 4);
+    for (const PAYLOAD_JSON of [
+      "[]", "{}", "null", "not-json", '[{"critical":{"image":{"docker-manifest-digest":"wrong"}}}]',
+      JSON.stringify([{ critical: { image: { "docker-manifest-digest": f.env.DIGEST } } }, {}]),
+    ]) assert.notEqual(f.run(script, { PAYLOAD_JSON }).status, 0, PAYLOAD_JSON);
+    for (const bad of [
+      { NEGATIVE_MODE: "success" }, { NEGATIVE_MODE: "network" }, { NEGATIVE_MODE: "mixed" },
+      { IDENTITY_ERROR: "unauthorized" }, { ISSUER_ERROR: "no signatures found" },
+      { CHILD_ERROR: "manifest unknown: 404 Not Found" }, { CHILD_ERROR: "no matching signatures: certificate identity mismatch" },
+    ]) assert.notEqual(f.run(script, bad).status, 0, JSON.stringify(bad));
+  } finally { f.cleanup(); }
+});
+
 test("taiki-e/install-action installs exact versions with its checksum check on", () => {
   const found = [];
   for (const { file, text } of repoFiles()) {
@@ -1153,7 +1483,7 @@ function assertPublicationGraph(flows) {
   assert.ok(index.run.includes('docker buildx imagetools create "${args[@]}" "${sources[@]}"'));
   assert.deepEqual(image.jobs.verify.needs, ["import-amd64", "import-arm64"]);
   assert.deepEqual(image.jobs.publish.needs, ["meta", "import-amd64", "import-arm64", "verify"]);
-  assert.equal(image.jobs.meta.if, "github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')");
+  assert.equal(image.jobs.meta.if, PROBE_META_IF);
   assert.match(executable(image.jobs.verify), /restore-check/);
   assert.match(executable(image.jobs.verify), /tests\/container-image\.test\.mjs/);
   assert.match(executable(image.jobs.verify), /trivy image/);
