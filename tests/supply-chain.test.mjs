@@ -360,9 +360,9 @@ export function runtimeBaseViolations(sources) {
   const out = [];
   if (JSON.stringify(sources.map(s => s.file).sort()) !== JSON.stringify([...RUNTIME_DOCKERFILES].sort())) out.push("expected exactly the production and load-test Dockerfiles");
   for (const { file, text } of sources) {
-    const stages = [...(text ?? "").matchAll(/^\s*FROM\s+(?:--platform=\S+\s+)?(\S+)/gim)].map(m => m[1]);
-    const distroless = stages.filter(ref => ref.startsWith("gcr.io/distroless/"));
-    if (distroless.length !== 1 || distroless[0] !== APPROVED_RUNTIME || stages.at(-1) !== APPROVED_RUNTIME) out.push(`${file}: expected one distroless final FROM using the approved Debian 13 index`);
+    const stages = [...(text ?? "").matchAll(/^\s*FROM\s+(--platform=\S+\s+)?(\S+)/gim)].map(m => ({ platform: m[1], ref: m[2] }));
+    const distroless = stages.filter(stage => stage.ref.startsWith("gcr.io/distroless/"));
+    if (distroless.length !== 1 || distroless[0].platform || distroless[0].ref !== APPROVED_RUNTIME || stages.at(-1)?.ref !== APPROVED_RUNTIME) out.push(`${file}: expected one distroless final FROM using the approved Debian 13 index`);
   }
   return out;
 }
