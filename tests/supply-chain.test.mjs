@@ -1232,6 +1232,7 @@ if (command === 'docker') {
       const supplied = identity.includes('wrong-workflow') ? e.IDENTITY_ERROR : e.ISSUER_ERROR;
       message = supplied || 'no matching attestations: failed to verify certificate identity: no matching CertificateIdentity found, last error: ' + detail;
     }
+    if (e.NEGATIVE_MODE === 'policy-mixed') message += '\\nGet https://ghcr.io/v2/: connection reset';
     // Cosign 3.1.4/Cobra and main.go report the same source error twice.
     fail('Error: ' + message + '\\n2026/10/26 12:00:00 error during command execution: ' + message);
   }
@@ -1332,7 +1333,7 @@ test("actual probe CLI verification checks typed root claims and only specific n
       JSON.stringify([{ critical: { image: { "docker-manifest-digest": f.env.DIGEST } } }, {}]),
     ]) assert.notEqual(f.run(script, { PAYLOAD_JSON }).status, 0, PAYLOAD_JSON);
     for (const bad of [
-      { NEGATIVE_MODE: "success" }, { NEGATIVE_MODE: "network" }, { NEGATIVE_MODE: "mixed" },
+      { NEGATIVE_MODE: "success" }, { NEGATIVE_MODE: "network" }, { NEGATIVE_MODE: "mixed" }, { NEGATIVE_MODE: "policy-mixed" },
       { IDENTITY_ERROR: "unauthorized" }, { ISSUER_ERROR: "no signatures found" },
       { CHILD_ERROR: "manifest unknown: 404 Not Found" }, { CHILD_ERROR: "no matching signatures: certificate identity mismatch" },
     ]) assert.notEqual(f.run(script, bad).status, 0, JSON.stringify(bad));
