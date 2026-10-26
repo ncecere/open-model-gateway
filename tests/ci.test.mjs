@@ -247,9 +247,11 @@ function syntheticCargo({ corrupt = "", failAt = -1, probe = "", probeMutation =
     const name = args.includes("--lib") ? "open_model_gateway" : args[args.indexOf("--test") + 1] ?? "binary";
     const terminal = "providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence";
     const keyContention = "management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement";
-    let entries = name === "open_model_gateway" ? Array.from({ length: 12 }, (_, i) => entry(i === 11 ? terminal : i === 10 ? keyContention : `m::test_${i}`)) : [entry("normal"), entry("live")];
-    let ignored = entries.filter(e => e.name === "live" || e.name === terminal || e.name === keyContention);
-    if (name === "open_model_gateway") {
+    const runtimeProbes = ["enterprise_runtime_allowlist_and_rollback_probes", "controlled_lock_stall_recovers_on_runtime_http_path"];
+    let entries = name === "open_model_gateway" ? Array.from({ length: 12 }, (_, i) => entry(i === 11 ? terminal : i === 10 ? keyContention : `m::test_${i}`))
+      : name === "runtime_privileges" ? runtimeProbes.map(name => entry(name)) : [entry("normal"), entry("live")];
+    let ignored = entries.filter(e => e.name === "live" || e.name === terminal || e.name === keyContention || (name === "runtime_privileges" && runtimeProbes.includes(e.name)));
+    if (name === "open_model_gateway" || name === "runtime_privileges") {
       const mutate = items => items.flatMap(e => e.name !== probe ? [e]
         : probeMutation === "remove" ? []
         : probeMutation === "rename" ? [{ ...e, name: `${e.name}_renamed` }]
@@ -294,11 +296,13 @@ test("orchestrator runs selected lib names once after -- --exact, runs doctests 
   }
 });
 
-test("orchestrator rejects each missing, renamed, unignored or non-test dedicated library probe before executing tests", async () => {
+test("orchestrator rejects each missing, renamed, unignored or non-test dedicated probe before executing tests", async () => {
   const { runShard } = await shards();
   const probes = [
     "management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement",
     "providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence",
+    "enterprise_runtime_allowlist_and_rollback_probes",
+    "controlled_lock_stall_recovers_on_runtime_http_path",
   ];
   for (const probe of probes) for (const probeMutation of ["remove", "rename", "unignore", "benchmark"]) {
     // Generate all listings from the same mutation: pretty counts stay valid

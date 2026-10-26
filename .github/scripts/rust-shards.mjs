@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 export const TERMINAL = "providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence";
 export const KEY_CONTENTION = "management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement";
 const DEDICATED_LIB_PROBES = [TERMINAL, KEY_CONTENTION];
+const DEDICATED_RUNTIME_PROBES = ["enterprise_runtime_allowlist_and_rollback_probes", "controlled_lock_stall_recovers_on_runtime_http_path"];
 const SPECIAL = ["filestore_s3", "runtime_privileges"];
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
@@ -162,6 +163,13 @@ export async function runShard(index, count, run = runCargo, log = console.log) 
     for (const probe of DEDICATED_LIB_PROBES) {
       if (!target.entries.some(e => e.name === probe && e.kind === "test") || !target.ignored.includes(probe)) {
         fail(`Dedicated library test ${probe} must remain present as a test and ignored in ordinary shards`);
+      }
+    }
+  }
+  for (const target of targets.filter(t => t.packageName === "open-model-gateway" && t.kind === "test" && t.name === "runtime_privileges")) {
+    for (const probe of DEDICATED_RUNTIME_PROBES) {
+      if (!target.entries.some(e => e.name === probe && e.kind === "test") || !target.ignored.includes(probe)) {
+        fail(`Dedicated runtime privilege test ${probe} must remain present as a test and ignored in ordinary shards`);
       }
     }
   }
