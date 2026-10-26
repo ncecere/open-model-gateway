@@ -578,6 +578,20 @@ async fn scenario(owner: &PgPool, runtime: &PgPool, keys: bootstrap::Development
             assert!(error.is_cancelled(), "HTTP listener task failed");
         }
     }
+    // This TCP-only fixture does not start serve's maintenance flusher. Persist
+    // its process-global pressure samples to THIS database before the next
+    // serialized SQLx fixture starts; never discard them with a test reset.
+    let flushed = governance::pressure::flush(&store).await.unwrap();
+    assert!(flushed > 0, "blocked admissions must record lock pressure");
+    let persisted: i64 = sqlx::query_scalar("SELECT count(*) FROM admission_lock_waits")
+        .fetch_one(runtime)
+        .await
+        .unwrap();
+    assert_eq!(
+        persisted, flushed as i64,
+        "pressure persisted to this fixture"
+    );
+    assert_eq!(governance::pressure::flush(&store).await.unwrap(), 0);
 }
 
 async fn assert_held(owner: &PgPool, ids: &[Uuid], state: &str) {
