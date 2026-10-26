@@ -135,6 +135,23 @@ class OciLayoutTests(unittest.TestCase):
         self.assertNotIn("opaque uncompressed fixture", repr(report))
         self.assertNotIn("SPDXRef-DOCUMENT", repr(report))
         self.assertEqual(path.read_bytes(), before)  # Includes exact attestation bytes.
+    def test_report_preserves_exact_noncanonical_utf8_root_bytes_for_assembly(self):
+        def noncanonical_root(value):
+            value["annotations"]["fixture.unicode"] = "café"
+            return (" \n" + json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        graph = fixture(edits={"root": noncanonical_root})
+        raw = graph["files"][blob_path(graph["root"])]
+        self.assertNotEqual(raw, encoded(graph["index"]))
+        report = self.inspect(graph)
+        self.assertIn("root_json", report)
+        self.assertIsInstance(report["root_json"], str)
+        self.assertEqual(report["root_json"].encode("utf-8"), raw)
+        self.assertEqual(len(raw), report["root"]["size"])
+        self.assertEqual(digest(raw), report["root"]["digest"])
+        reports = json.loads(json.dumps([report, self.inspect(arch="arm64")]))
+        result = json.loads(self.api.assemble_index(reports, {}))
+        self.assertEqual(result["manifests"], graph["index"]["manifests"] + reports[1]["index"]["manifests"])
+        self.assertEqual(result["annotations"]["fixture.unicode"], "café")
     def test_wrong_root_platform_and_config_architecture_are_refused(self):
         for kwargs in ({"root": digest(b"not the root")}, {"platform": "linux/arm64"}):
             with self.subTest(kwargs=kwargs):
@@ -249,6 +266,72 @@ class OciLayoutTests(unittest.TestCase):
             change(altered)
             with self.assertRaises((ValueError, OSError)):
                 self.api.assemble_index(altered, {})
+    def test_assembly_rejects_consistently_swapped_children_under_unchanged_root(self):
+        reports = self.reports()
+        alternate = self.inspect(fixture(edits={"layer": lambda b: b"X" * len(b)}))
+        self.assertNotEqual(reports[0]["root"]["digest"], alternate["root"]["digest"])
+        for counter in ("blob_count", "total_bytes"):
+            self.assertEqual(reports[0][counter], alternate[counter])
+        original = copy.deepcopy(reports[0])
+        reports[0]["index"] = alternate["index"]
+        self.assertEqual(reports[0]["root"], original["root"])
+        with self.assertRaises(ValueError):
+            self.api.assemble_index(reports, {})
+    def test_assembly_requires_raw_root_json_string(self):
+        reports = self.reports()
+        for value in (None, b"{}", {}, 1):
+            with self.subTest(value=value):
+                altered = copy.deepcopy(reports)
+                altered[0]["root_json"] = value
+                with self.assertRaises(ValueError):
+                    self.api.assemble_index(altered, {})
+        reports[0].pop("root_json", None)
+        with self.assertRaises(ValueError):
+            self.api.assemble_index(reports, {})
+    def test_assembly_checks_raw_root_bytes_not_reserialized_index(self):
+        reports = self.reports()
+        # Same parsed index and byte length, but a different order/whitespace digest.
+        raw = encoded(reports[0]["index"])
+        reordered = json.dumps(dict(reversed(list(reports[0]["index"].items()))), separators=(",", ":")).encode()
+        self.assertEqual(len(raw), len(reordered))
+        self.assertNotEqual(raw, reordered)
+        reports[0]["root_json"] = reordered.decode()
+        reports[0]["root"].update(digest=digest(raw), size=len(raw))
+        with self.assertRaises(ValueError):
+            self.api.assemble_index(reports, {})
+    def test_assembly_rejects_raw_root_descriptor_size_and_digest_mismatches(self):
+        reports = self.reports()
+        for change in ({"size": reports[0]["root"]["size"] + 1}, {"digest": digest(b"wrong root")}):
+            with self.subTest(change=change):
+                altered = copy.deepcopy(reports)
+                altered[0]["root"].update(change)
+                with self.assertRaises(ValueError):
+                    self.api.assemble_index(altered, {})
+    def test_assembly_strictly_parses_digest_verified_raw_root_json(self):
+        reports = self.reports()
+        for raw in (b"{", duplicate_json(reports[0]["index"]),
+                    encoded(reports[0]["index"]).replace(b'"schemaVersion":2', b'"schemaVersion":NaN')):
+            with self.subTest(raw=raw):
+                altered = copy.deepcopy(reports)
+                altered[0]["root_json"] = raw.decode()
+                altered[0]["root"].update(digest=digest(raw), size=len(raw))
+                with self.assertRaises(ValueError):
+                    self.api.assemble_index(altered, {})
+    def test_assembly_rejects_raw_root_annotation_changes_hidden_from_index(self):
+        reports = self.reports()
+        root_index = copy.deepcopy(reports[0]["index"])
+        root_index["annotations"]["fixture.shared"] = "different"
+        raw = encoded(root_index)
+        reports[0]["root_json"] = raw.decode()
+        reports[0]["root"].update(digest=digest(raw), size=len(raw))
+        with self.assertRaises(ValueError):
+            self.api.assemble_index(reports, {})
+    def test_assembly_preserves_aggregate_report_json_and_depth_limits(self):
+        reports = self.reports()
+        for name, limit in (("MAX_JSON_BYTES", len(encoded(reports)) - 1), ("MAX_DEPTH", 1)):
+            with self.subTest(limit=name), mock.patch.object(self.api, name, limit):
+                with self.assertRaises(ValueError):
+                    self.api.assemble_index(reports, {})
     def test_assembly_never_silently_overrides_root_annotations(self):
         reports = self.reports({"root": lambda x: dict(x, annotations={"fixture.shared": "conflict"})})
         with self.assertRaises((ValueError, OSError)):
