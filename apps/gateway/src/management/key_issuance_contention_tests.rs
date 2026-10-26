@@ -575,8 +575,7 @@ async fn key_issuance_contention_measurement(owner: PgPool) {
     let runtime = checked(PgPoolOptions::new().max_connections(10).min_connections(10)
         .acquire_timeout(GUARD)
         .after_connect(|connection, _| Box::pin(async move {
-            sqlx::raw_sql("SET ROLE gateway_runtime; SET statement_timeout='30s'; SET lock_timeout='30s'")
-                .execute(connection).await?;
+            sqlx::Executor::execute(connection, "SET ROLE gateway_runtime; SET statement_timeout='30s'; SET lock_timeout='30s'").await?;
             Ok(())
         })).connect_with(options).await);
     let role: String = checked(
@@ -594,9 +593,7 @@ async fn key_issuance_contention_measurement(owner: PgPool) {
             .acquire_timeout(GUARD)
             .after_connect(|connection, _| {
                 Box::pin(async move {
-                    sqlx::raw_sql("SET statement_timeout='30s'")
-                        .execute(connection)
-                        .await?;
+                    sqlx::Executor::execute(connection, "SET statement_timeout='30s'").await?;
                     Ok(())
                 })
             })
