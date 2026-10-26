@@ -13,6 +13,7 @@
 // workflows and local composite actions. The checks themselves are exercised
 // against adversarial in-memory workflows at the bottom of this file.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1739,6 +1740,168 @@ function assertPublicationTagGuard(image) {
   assert.equal(index.env.TAGS, guard.env.TAGS);
   assert.equal(index.env.IMAGE, undefined);
 }
+
+// Final publication binds native create metadata, the complete approved child graph,
+// and every mutable alias. Stand-ins below are not native registry acceptance.
+function assertNativeIndexBinding(image) {
+  const run = image.jobs.publish.steps.find(s => s.id === "index").run;
+  assert.match(run, /^set -euo pipefail\n/);
+  assert.match(run, /umask 077/);
+  assert.match(run, /mktemp -d/);
+  assert.match(run, /trap .* EXIT/);
+  assert.match(run, /docker buildx imagetools create "\$\{args\[@\]\}" "\$\{sources\[@\]\}" --metadata-file "\$\{private\}\/metadata\.json"/);
+  assert.match(run, /jq -er '\."containerimage\.descriptor"\.digest'/);
+  assert.doesNotMatch(run, /containerimage\.digest|first=|head -n|json \.Manifest|platforms=|--platform|--append|\|\| true/);
+  for (const [file, digest] of [["amd64", "DIGEST_AMD64"], ["arm64", "DIGEST_ARM64"], ["index", "digest"]]) {
+    assert.ok(run.includes(`docker buildx imagetools inspect --raw "\${IMAGE}@\${${digest}}" > "\${private}/${file}.json"`));
+  }
+  assert.ok(run.includes('python3 -I .github/scripts/oci-index.py "${private}/metadata.json"'));
+  assert.match(run, /while IFS= read -r tag; do[\s\S]*inspect --raw "\$\{tag\}"/);
+  assert.match(run, /sha256sum "\$\{private\}\/tag\.json"/);
+  assert.match(run, /\[ "sha256:\$\{hashed%% \*\}" = "\$\{digest\}" \]/);
+  assert.ok(run.indexOf('oci-index.py') < run.indexOf('sha256sum'));
+  assert.ok(run.indexOf('sha256sum') < run.indexOf('echo "digest=${digest}"'));
+}
+
+test("native final publication binds create descriptor, complete graph and every alias before output (#372)", () => {
+  assertNativeIndexBinding(publicationData().image);
+});
+
+test("final publication policy rejects mutable-root and platform-only regressions (#372)", () => {
+  const original = publicationData().image;
+  for (const [before, after] of [
+    ['set -euo pipefail', 'set -e'],
+    ['--metadata-file', '--other-file'],
+    ['."containerimage.descriptor".digest', '."containerimage.digest"'],
+    ['oci-index.py', 'platform-only.py'],
+    ['"${IMAGE}@${DIGEST_AMD64}" >', '"${IMAGE}:latest-release" >'],
+    ['sha256sum "${private}/tag.json"', 'echo ignored'],
+    ['[ "sha256:${hashed%% *}" = "${digest}" ]', 'true'],
+  ]) {
+    const image = structuredClone(original), step = image.jobs.publish.steps.find(s => s.id === "index");
+    assert.ok(step.run.includes(before), before);
+    step.run = step.run.replace(before, after);
+    assert.throws(() => assertNativeIndexBinding(image), { name: "AssertionError" });
+  }
+});
+
+function nativeIndexFixture() {
+  const dir = mkdtempSync(join(tmpdir(), "oci-index-policy-")), bin = join(dir, "bin");
+  mkdirSync(bin);
+  const hash = data => `sha256:${createHash("sha256").update(data).digest("hex")}`;
+  const mediaType = "application/vnd.oci.image.index.v1+json";
+  const parent = arch => {
+    const digest = hash(arch), evidence = hash(arch + "-evidence");
+    return { schemaVersion: 2, mediaType, manifests: [
+      { mediaType: "application/vnd.oci.image.manifest.v1+json", digest, size: 123, platform: { os: "linux", architecture: arch } },
+      { mediaType: "application/vnd.oci.image.manifest.v1+json", digest: evidence, size: 321, platform: { os: "unknown", architecture: "unknown" },
+        annotations: { "vnd.docker.reference.type": "attestation-manifest", "vnd.docker.reference.digest": digest } },
+    ] };
+  };
+  const amd = parent("amd64"), arm = parent("arm64");
+  const index = { schemaVersion: 2, mediaType, manifests: [...amd.manifests, ...arm.manifests] };
+  const raced = structuredClone(index);
+  raced.manifests[0].digest = hash("different-valid-amd64");
+  raced.manifests[1].annotations["vnd.docker.reference.digest"] = raced.manifests[0].digest;
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: dir,
+    IMAGE: "ghcr.io/ncecere/open-model-gateway", FIXTURE_DIR: dir, GITHUB_OUTPUT: join(dir, "output") };
+  for (const [file, value] of Object.entries({ amd, arm, index, raced })) {
+    const raw = JSON.stringify(value);
+    writeFileSync(join(dir, file + ".json"), raw);
+    env[file.toUpperCase() + "_DIGEST"] = hash(raw);
+  }
+  env.DIGEST_AMD64 = env.AMD_DIGEST;
+  env.DIGEST_ARM64 = env.ARM_DIGEST;
+  env.TAGS = `${env.IMAGE}:latest-release\n${env.IMAGE}:0.9.0`;
+  env.ANNOTATIONS = "index:org.opencontainers.image.title=fixture title\nindex:fixture=unicode-é";
+  writeFileSync(join(bin, "docker"), `#!${process.execPath}
+const fs = require('node:fs'), path = require('node:path');
+const e = process.env, a = process.argv.slice(2), base = e.FIXTURE_DIR;
+const fail = () => process.exit(9);
+fs.appendFileSync(path.join(base, 'calls'), JSON.stringify(a) + '\\n');
+if (a.slice(0, 3).join(' ') === 'buildx imagetools create') {
+  if (e.FAIL_CREATE) fail();
+  if (a.includes('--metadata-file')) {
+    const file = a[a.indexOf('--metadata-file') + 1];
+    fs.writeFileSync(file, JSON.stringify({ 'containerimage.descriptor': {
+      mediaType: 'application/vnd.oci.image.index.v1+json', digest: e.INDEX_DIGEST,
+      size: fs.statSync(path.join(base, 'index.json')).size }, 'image.name': e.TAGS.split('\\n').join(',') }));
+    fs.writeFileSync(path.join(base, 'private'), JSON.stringify({ file,
+      mode: fs.statSync(path.dirname(file)).mode & 0o777, fileMode: fs.statSync(file).mode & 0o777 }));
+  }
+} else if (a.slice(0, 3).join(' ') === 'buildx imagetools inspect') {
+  const ref = a.find(x => x.startsWith(e.IMAGE)), isTag = !ref.includes('@');
+  if (!a.includes('--raw')) { process.stdout.write(JSON.stringify({ digest: e.RACED_DIGEST })); return; }
+  if (e.FAIL_INSPECT) fail();
+  let file;
+  if (isTag) file = e.RACE && (e.RACE === 'all' || ref.endsWith(':0.9.0')) ? 'raced' : 'index';
+  else {
+    const d = ref.split('@')[1];
+    file = d === e.AMD_DIGEST ? 'amd' : d === e.ARM_DIGEST ? 'arm' : d === e.INDEX_DIGEST ? 'index' : d === e.RACED_DIGEST ? 'raced' : null;
+  }
+  if (!file) fail();
+  process.stdout.write(fs.readFileSync(path.join(base, file + '.json')));
+} else fail();
+`);
+  chmodSync(join(bin, "docker"), 0o700);
+  return { dir, env, run(changes = {}) {
+    const script = publicationData().image.jobs.publish.steps.find(s => s.id === "index").run;
+    const result = spawnSync("bash", ["-c", script], { cwd: root, env: { ...env, ...changes }, encoding: "utf8", timeout: 10000 });
+    assert.ifError(result.error);
+    const calls = readFileSync(join(dir, "calls"), "utf8").trim().split("\n").map(JSON.parse);
+    if (existsSync(join(dir, "private"))) {
+      const privateData = JSON.parse(readFileSync(join(dir, "private"), "utf8"));
+      assert.equal(privateData.mode, 0o700);
+      assert.equal(privateData.fileMode, 0o600);
+      assert.equal(existsSync(join(privateData.file, "..")), false, "private directory cleaned on every exit");
+    }
+    return { ...result, calls, output: existsSync(env.GITHUB_OUTPUT) ? readFileSync(env.GITHUB_OUTPUT, "utf8") : "" };
+  } };
+}
+
+for (const race of ["all", "second"]) test(`actual native publication fails closed on ${race} alias race without signing output (#372)`, () => {
+  const f = nativeIndexFixture();
+  try {
+    const result = f.run({ RACE: race });
+    assert.notEqual(result.status, 0);
+    assert.equal(result.output, "");
+    assert.ok(result.calls.some(a => a.includes(f.env.IMAGE + "@" + f.env.INDEX_DIGEST)), "candidate comes from create metadata");
+    assert.ok(!result.calls.some(a => a.includes(f.env.IMAGE + "@" + f.env.RACED_DIGEST)), "never select the raced root");
+    assert.ok(result.calls.filter(a => a[2] === "inspect").every(a => a.includes("--raw")));
+  } finally { rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test("actual native publication accepts reordered aliases at the creation digest and preserves exact create inputs (#372)", () => {
+  for (const reverse of [false, true]) {
+    const f = nativeIndexFixture();
+    try {
+      if (reverse) f.env.TAGS = f.env.TAGS.split("\n").reverse().join("\n");
+      const result = f.run();
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.output, `digest=${f.env.INDEX_DIGEST}\n`);
+      const metadata = JSON.parse(readFileSync(join(f.dir, "private"), "utf8")).file;
+      assert.deepEqual(result.calls[0], ["buildx", "imagetools", "create",
+        ...f.env.TAGS.split("\n").flatMap(t => ["--tag", t]),
+        ...f.env.ANNOTATIONS.split("\n").flatMap(a => ["--annotation", a]),
+        `${f.env.IMAGE}@${f.env.DIGEST_AMD64}`, `${f.env.IMAGE}@${f.env.DIGEST_ARM64}`, "--metadata-file", metadata]);
+      assert.deepEqual(result.calls.slice(1).map(a => a.at(-1)), [
+        `${f.env.IMAGE}@${f.env.DIGEST_AMD64}`, `${f.env.IMAGE}@${f.env.DIGEST_ARM64}`,
+        `${f.env.IMAGE}@${f.env.INDEX_DIGEST}`, ...f.env.TAGS.split("\n")]);
+    } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  }
+});
+
+test("actual native publication never emits a signing digest after create or inspect failure (#372)", () => {
+  for (const key of ["FAIL_CREATE", "FAIL_INSPECT"]) {
+    const f = nativeIndexFixture();
+    try {
+      const result = f.run({ [key]: "1" });
+      assert.notEqual(result.status, 0);
+      assert.equal(result.output, "");
+      assert.equal(readdirSync(f.dir).filter(n => n.startsWith("oci-index.")).length, 0);
+    } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  }
+});
 
 test("native image writer guards the exact trusted tag set before credential access", () => assertPublicationTagGuard(publicationData().image));
 
