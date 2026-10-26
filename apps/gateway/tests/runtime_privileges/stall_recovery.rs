@@ -368,6 +368,7 @@ async fn scenario(owner: &PgPool, runtime: &PgPool, keys: bootstrap::Development
         .no_proxy()
         .http1_only()
         .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
         .pool_max_idle_per_host(0)
         .timeout(GUARD)
         .build()
@@ -541,7 +542,9 @@ async fn scenario(owner: &PgPool, runtime: &PgPool, keys: bootstrap::Development
         .await
         .unwrap();
         assert_eq!(inflight, 0);
-        assert_accounting(owner, mock.calls.load(Ordering::SeqCst) as i64).await;
+        let dispatches = mock.calls.load(Ordering::SeqCst);
+        assert_eq!(dispatches, 3 + BURST + 1 + 6, "no implicit request replay");
+        assert_accounting(owner, dispatches as i64).await;
         let totals = governance::totals::verify(&store).await.unwrap();
         assert!(
             totals.consistent(),
