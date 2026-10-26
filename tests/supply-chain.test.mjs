@@ -1251,6 +1251,7 @@ function probeFixture() {
     GITHUB_REPOSITORY: "ncecere/open-model-gateway", IMAGE: "ghcr.io/ncecere/open-model-gateway", GITHUB_ACTOR: "probe-fixture",
     DIGEST: `sha256:${"b".repeat(64)}`, CHILD: `sha256:${"c".repeat(64)}`,
     FIXTURE_DIR: dir,
+    REPORTED_VERSION: `open-model-gateway ${readFileSync(join(root, "apps/gateway/Cargo.toml"), "utf8").match(/^version = "([^"]+)"$/m)[1]}`,
   };
   const mock = `#!${process.execPath}
 const fs = require('node:fs');
@@ -1274,7 +1275,7 @@ if (command === 'docker') {
     console.log(e.CONFIG_JSON || JSON.stringify([{ Os: 'linux', Architecture: 'amd64', Config: { Labels: { 'org.opencontainers.image.revision': e.GITHUB_SHA } } }]));
   } else if (a[0] === 'run') {
     if (fs.existsSync(e.DOCKER_CONFIG) || e.GITHUB_TOKEN) fail('image sees registry credentials');
-    console.log(e.REPORTED_VERSION || 'open-model-gateway 0.9.0');
+    console.log(e.REPORTED_VERSION ?? '');
   } else fail('unexpected Docker command');
 } else if (command === 'cosign') {
   if (a.slice(0, 2).join(' ') === 'download signature') {
@@ -1367,6 +1368,27 @@ test("actual probe branch/digest guards refuse main, tags, invalid SHAs and reus
       assert.deepEqual(f.calls(), []);
     } finally { f.cleanup(); }
   }
+});
+
+test("actual probe version fixtures follow Cargo and retain exact-version refusals across releases (#379)", () => {
+  const data = publicationData().image;
+  const script = probeStep(data, "probe-prepare", "Check exact revision, native platform and Cargo version without credentials").run;
+  const f = probeFixture();
+  try {
+    const packageVersion = readFileSync(join(root, "apps/gateway/Cargo.toml"), "utf8").match(/^version = "([^"]+)"$/m)[1];
+    assert.equal(f.env.REPORTED_VERSION, `open-model-gateway ${packageVersion}`);
+    assert.equal(f.authenticate(PROBE_AUTH).status, 0);
+    assert.equal(f.run(probeStep(data, "probe-prepare", "Remove probe credentials").run).status, 0);
+    const cwd = join(f.dir, "version-root");
+    mkdirSync(join(cwd, "apps/gateway"), { recursive: true });
+    for (const version of ["0.9.0", "0.9.1", "2.0.0-rc.1"]) {
+      writeFileSync(join(cwd, "apps/gateway/Cargo.toml"), `[package]\nversion = "${version}"\n`);
+      assert.equal(f.run(script, { REPORTED_VERSION: `open-model-gateway ${version}` }, cwd).status, 0);
+      for (const REPORTED_VERSION of ["open-model-gateway 0.0.0", ""]) {
+        assert.notEqual(f.run(script, { REPORTED_VERSION }, cwd).status, 0);
+      }
+    }
+  } finally { f.cleanup(); }
 });
 
 test("actual probe preparation selects one bound AMD child and removes credentials before native --version (#375)", () => {
