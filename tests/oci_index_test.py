@@ -19,7 +19,7 @@ class OciIndexTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.base = Path(self.tmp.name)
+        self.base = Path(self.tmp.name).resolve()
         spec = importlib.util.spec_from_file_location("oci_index_fixture", SCRIPT)
         self.api = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.api)

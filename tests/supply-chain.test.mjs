@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1786,7 +1786,7 @@ test("final publication policy rejects mutable-root and platform-only regression
 });
 
 function nativeIndexFixture() {
-  const dir = mkdtempSync(join(tmpdir(), "oci-index-policy-")), bin = join(dir, "bin");
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "oci-index-policy-"))), bin = join(dir, "bin");
   mkdirSync(bin);
   const hash = data => `sha256:${createHash("sha256").update(data).digest("hex")}`;
   const mediaType = "application/vnd.oci.image.index.v1+json";
@@ -1812,7 +1812,7 @@ function nativeIndexFixture() {
   }
   env.DIGEST_AMD64 = env.AMD_DIGEST;
   env.DIGEST_ARM64 = env.ARM_DIGEST;
-  env.TAGS = `${env.IMAGE}:latest-release\n${env.IMAGE}:0.9.0`;
+  env.TAGS = `${env.IMAGE}:latest-release\n${env.IMAGE}:v0.9.0\n${env.IMAGE}:v0.9`;
   env.ANNOTATIONS = "index:org.opencontainers.image.title=fixture title\nindex:fixture=unicode-é";
   writeFileSync(join(bin, "docker"), `#!${process.execPath}
 const fs = require('node:fs'), path = require('node:path');
@@ -1834,7 +1834,7 @@ if (a.slice(0, 3).join(' ') === 'buildx imagetools create') {
   if (!a.includes('--raw')) { process.stdout.write(JSON.stringify({ digest: e.RACED_DIGEST })); return; }
   if (e.FAIL_INSPECT) fail();
   let file;
-  if (isTag) file = e.RACE && (e.RACE === 'all' || ref.endsWith(':0.9.0')) ? 'raced' : 'index';
+  if (isTag) file = e.RACE && (e.RACE === 'all' || ref.endsWith(':v0.9.0')) ? 'raced' : 'index';
   else {
     const d = ref.split('@')[1];
     file = d === e.AMD_DIGEST ? 'amd' : d === e.ARM_DIGEST ? 'arm' : d === e.INDEX_DIGEST ? 'index' : d === e.RACED_DIGEST ? 'raced' : null;

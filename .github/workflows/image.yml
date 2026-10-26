@@ -658,6 +658,10 @@ jobs:
           DIGEST_AMD64: ${{ needs.import-amd64.outputs.digest_linux_amd64 }}
           DIGEST_ARM64: ${{ needs.import-arm64.outputs.digest_linux_arm64 }}
         run: |
+          set -euo pipefail
+          umask 077
+          private=$(mktemp -d "${RUNNER_TEMP}/oci-index.XXXXXXXX")
+          trap 'rm -rf -- "${private}"' EXIT
           for d in "${DIGEST_AMD64}" "${DIGEST_ARM64}"; do
             [[ "${d}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::expected 2 tested digests (amd64, arm64); got '${DIGEST_AMD64}' and '${DIGEST_ARM64}'"; exit 1; }
           done
@@ -665,16 +669,26 @@ jobs:
           while IFS= read -r tag; do [ -n "${tag}" ] && args+=(--tag "${tag}"); done <<<"${TAGS}"
           while IFS= read -r note; do [ -n "${note}" ] && args+=(--annotation "${note}"); done <<<"${ANNOTATIONS}"
           sources=("${IMAGE}@${DIGEST_AMD64}" "${IMAGE}@${DIGEST_ARM64}")
-          docker buildx imagetools create "${args[@]}" "${sources[@]}"
-          first=$(head -n1 <<<"${TAGS}")
-          digest=$(docker buildx imagetools inspect "${first}" --format '{{json .Manifest}}' | jq -r .digest)
-          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no index digest for ${first}"; exit 1; }
-          platforms=$(docker buildx imagetools inspect --raw "${IMAGE}@${digest}" \
-            | jq -r '[.manifests[] | select(.platform != null and .platform.os != "unknown") | .platform.os + "/" + .platform.architecture] | sort | join(",")')
-          if [ "${platforms}" != "linux/amd64,linux/arm64" ]; then
-            echo "::error::index ${digest} has platforms '${platforms}'"
-            exit 1
-          fi
+          docker buildx imagetools create "${args[@]}" "${sources[@]}" --metadata-file "${private}/metadata.json"
+          # Buildx writes this descriptor only after successful pushes. Never
+          # resolve a mutable tag to select the root that will be signed.
+          digest=$(jq -er '."containerimage.descriptor".digest' "${private}/metadata.json")
+          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::invalid creation digest"; exit 1; }
+          docker buildx imagetools inspect --raw "${IMAGE}@${DIGEST_AMD64}" > "${private}/amd64.json"
+          docker buildx imagetools inspect --raw "${IMAGE}@${DIGEST_ARM64}" > "${private}/arm64.json"
+          docker buildx imagetools inspect --raw "${IMAGE}@${digest}" > "${private}/index.json"
+          python3 -I .github/scripts/oci-index.py "${private}/metadata.json" \
+            "${private}/amd64.json" "${DIGEST_AMD64}" \
+            "${private}/arm64.json" "${DIGEST_ARM64}" \
+            "${private}/index.json" "${digest}"
+          # Native --raw preserves exact bytes, without adding a newline. An
+          # alias race fails closed; it can never change the candidate digest.
+          while IFS= read -r tag; do
+            [ -n "${tag}" ] || continue
+            docker buildx imagetools inspect --raw "${tag}" > "${private}/tag.json"
+            hashed=$(sha256sum "${private}/tag.json")
+            [ "sha256:${hashed%% *}" = "${digest}" ] || { echo "::error::publication tag changed"; exit 1; }
+          done <<<"${TAGS}"
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 
       # cosign v3.1.4 candidate: its published amd64 SPDX SBOM binds this binary
