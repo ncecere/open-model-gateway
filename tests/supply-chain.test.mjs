@@ -890,6 +890,77 @@ test("every run-time download goes through fetch-verified.sh with a literal URL 
   for (const f of [".github/workflows/image.yml", ".github/workflows/ci.yml", ".github/actions/setup-node/action.yml"]) assert.ok(calls.includes(f), `${f} fetches its tools with the script`);
 });
 
+// #375: static candidate-staging policy, not authenticated artifact verification
+// or a keyless-signing rehearsal. Match the executable step, not YAML comments.
+const COSIGN_INSTALL_NAME = "Install cosign (pinned release, SHA-256 verified)";
+const COSIGN_SIGN_NAME = "Sign (cosign keyless)";
+const COSIGN_URL = "https://github.com/sigstore/cosign/releases/download/v3.1.4/cosign-linux-amd64";
+const COSIGN_SHA256 = "424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa";
+const COSIGN_INSTALL_RUN = [
+  "set -euo pipefail",
+  'mkdir -p "${RUNNER_TEMP}/cosign-bin"',
+  `bash ${FETCH_SCRIPT} ${COSIGN_URL} ${COSIGN_SHA256} "\${RUNNER_TEMP}/cosign-bin/cosign"`,
+  'chmod 0755 "${RUNNER_TEMP}/cosign-bin/cosign"',
+  'echo "${RUNNER_TEMP}/cosign-bin" >> "$GITHUB_PATH"',
+].join("\n");
+const COSIGN_SIGN_RUN = 'cosign sign --yes "${IMAGE}@${DIGEST}"';
+
+function assertCosignPublishPolicy(data) {
+  const steps = stepsOf(data.jobs?.publish);
+  const install = steps.filter(s => s.name === COSIGN_INSTALL_NAME);
+  const sign = steps.filter(s => s.name === COSIGN_SIGN_NAME);
+  assert.equal(install.length, 1, "exactly one actual cosign install step is required");
+  assert.equal(sign.length, 1, "exactly one native cosign signing step is required");
+  for (const step of [...install, ...sign]) {
+    assert.equal(step.if, undefined, "cosign steps must not be skipped");
+    assert.equal(step["continue-on-error"], undefined, "cosign failures must propagate");
+    assert.equal(step.shell, undefined, "retain the runner's failure-propagating shell");
+    assert.equal(step.uses, undefined, "cosign remains a native run step");
+  }
+  // Exact commands rule out comment-only pins, ignored checksum failures, or
+  // chmod/execution before verification. fetch-verified.sh is tested below.
+  assert.equal(install[0].run?.trim(), COSIGN_INSTALL_RUN, "install the exact patched candidate through checksum verification before chmod/PATH");
+  assert.ok(steps.indexOf(sign[0]) > steps.indexOf(install[0]), "verify/install before executing cosign");
+  assert.equal(sign[0].run, COSIGN_SIGN_RUN, "retain native keyless signing of IMAGE@INDEX, not a tag");
+  assert.deepEqual(sign[0].env, { DIGEST: "${{ steps.index.outputs.digest }}" });
+}
+
+test("image publish installs the exact patched cosign candidate before unchanged native index signing (#375)", () => {
+  const file = ".github/workflows/image.yml";
+  assertCosignPublishPolicy(toData(parseStrict(readLocalFromRepo(file), file)));
+});
+
+test("fixtures: cosign candidate policy rejects absent, comment-only, wrong-pin, reordered and optional steps (#375)", () => {
+  const fixture = { jobs: { publish: { steps: [
+    { name: COSIGN_INSTALL_NAME, run: COSIGN_INSTALL_RUN },
+    { name: COSIGN_SIGN_NAME, run: COSIGN_SIGN_RUN, env: { DIGEST: "${{ steps.index.outputs.digest }}" } },
+  ] } } };
+  assertCosignPublishPolicy(fixture);
+  const mutations = [
+    ["missing install", s => s.shift()],
+    ["missing sign", s => s.pop()],
+    ["duplicate install", s => s.unshift({ ...s[0] })],
+    ["comment-only pin", s => { s[0].run = `# ${COSIGN_INSTALL_RUN.replaceAll("\n", "\n# ")}\necho not-installed`; }],
+    ["old version", s => { s[0].run = s[0].run.replace("v3.1.4", "v3.0.6"); }],
+    ["wrong checksum", s => { s[0].run = s[0].run.replace(COSIGN_SHA256, "0".repeat(64)); }],
+    ["chmod before verification", s => { const lines = s[0].run.split("\n"); [lines[2], lines[3]] = [lines[3], lines[2]]; s[0].run = lines.join("\n"); }],
+    ["execution before verification", s => { s[0].run = '"${RUNNER_TEMP}/cosign-bin/cosign" version\n' + s[0].run; }],
+    ["ignored checksum failure", s => { s[0].run = s[0].run.replace(`${COSIGN_SHA256} "\${RUNNER_TEMP}/cosign-bin/cosign"`, `${COSIGN_SHA256} "\${RUNNER_TEMP}/cosign-bin/cosign" || true`); }],
+    ["sign before install", s => s.reverse()],
+    ["optional install", s => { s[0].if = "false"; }],
+    ["ignored install failure", s => { s[0]["continue-on-error"] = true; }],
+    ["optional signing", s => { s[1].if = "false"; }],
+    ["ignored signing failure", s => { s[1]["continue-on-error"] = true; }],
+    ["tag signing", s => { s[1].run = 'cosign sign --yes "${IMAGE}:latest"'; }],
+    ["architecture digest signing", s => { s[1].env.DIGEST = "${{ needs.build.outputs.digest_linux_amd64 }}"; }],
+  ];
+  for (const [name, mutate] of mutations) {
+    const data = structuredClone(fixture);
+    mutate(data.jobs.publish.steps);
+    assert.throws(() => assertCosignPublishPolicy(data), { name: "AssertionError" }, name);
+  }
+});
+
 test("taiki-e/install-action installs exact versions with its checksum check on", () => {
   const found = [];
   for (const { file, text } of repoFiles()) {
