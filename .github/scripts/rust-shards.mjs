@@ -5,6 +5,8 @@ import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const TERMINAL = "providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence";
+export const KEY_CONTENTION = "management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement";
+const DEDICATED_LIB_PROBES = [TERMINAL, KEY_CONTENTION];
 const SPECIAL = ["filestore_s3", "runtime_privileges"];
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
@@ -155,8 +157,13 @@ export async function runShard(index, count, run = runCargo, log = console.log) 
     if (ignored.some(e => !target.entries.some(t => t.name === e.name && t.kind === e.kind))) fail("Ignored listing is not a subset of complete inventory");
     target.ignored = ignored.map(e => e.name);
     log(`inventory ${target.key}: listed=${target.entries.length} default-ignored=${target.ignored.length}`);
-    if (target.packageName === "open-model-gateway" && target.kind === "lib"
-        && (!target.entries.some(e => e.name === TERMINAL) || !target.ignored.includes(TERMINAL))) fail("Dedicated terminal test must remain present and ignored in ordinary shards");
+  }
+  for (const target of targets.filter(t => t.packageName === "open-model-gateway" && t.kind === "lib")) {
+    for (const probe of DEDICATED_LIB_PROBES) {
+      if (!target.entries.some(e => e.name === probe && e.kind === "test") || !target.ignored.includes(probe)) {
+        fail(`Dedicated library test ${probe} must remain present as a test and ignored in ordinary shards`);
+      }
+    }
   }
   const plan = planShards(targets, count);
   for (const target of plan.special) log(`special-owned ${target.key}: listed=${target.total}`);
