@@ -13,6 +13,7 @@
 use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
+    time::Instant,
 };
 
 use axum::{
@@ -22,6 +23,7 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
+use serde::Serialize;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use tower::ServiceExt;
@@ -42,6 +44,7 @@ use crate::{
         secrets::{Secret, SecretResolver},
     },
     store::Store,
+    telemetry,
 };
 
 // --------------------------------------------------------------- mocks ----
@@ -170,6 +173,7 @@ struct World {
     keys: DevelopmentKeys,
     approved: Upstream,
     attacker: Upstream,
+    diagnostics: Arc<Mutex<Vec<FailureDiagnostic>>>,
 }
 impl World {
     async fn close(self) {
@@ -528,6 +532,7 @@ async fn world(provided: PgPool) -> World {
         keys,
         approved,
         attacker,
+        diagnostics: Arc::default(),
     }
 }
 
@@ -543,6 +548,80 @@ fn json_request(key: &str, path: &str, headers: &[(String, String)], body: &Valu
         builder = builder.header(name.as_str(), value.as_str());
     }
     builder.body(Body::from(body.to_string())).unwrap()
+}
+
+#[derive(Serialize)]
+struct PhaseTiming {
+    name: &'static str,
+    duration_ns: u64,
+}
+
+#[derive(Serialize)]
+struct FailureDiagnostic {
+    elapsed_ns: u64,
+    phases: Option<Vec<PhaseTiming>>,
+    status: u16,
+    accounting_unavailable: bool,
+    approved_hits: usize,
+    attacker_hits: Option<usize>,
+}
+
+/// Project only fixed names and durations into diagnostic output. Span's native
+/// serializer still constructs its full wire value, including IDs and attributes;
+/// that value is transient memory only, never retained or emitted as a diagnostic.
+fn project_phases(spans: &[telemetry::Span]) -> Option<Vec<PhaseTiming>> {
+    if spans.is_empty() {
+        return None;
+    }
+    spans
+        .iter()
+        .map(|span| {
+            let value = serde_json::to_value(span).ok()?;
+            let name = telemetry::SpanName::ALL
+                .iter()
+                .map(|name| name.as_str())
+                .find(|name| Some(*name) == value["name"].as_str())?;
+            let start = value["startTimeUnixNano"].as_str()?.parse::<u64>().ok()?;
+            let end = value["endTimeUnixNano"].as_str()?.parse::<u64>().ok()?;
+            Some(PhaseTiming {
+                name,
+                duration_ns: end.checked_sub(start)?,
+            })
+        })
+        .collect()
+}
+
+struct Observed {
+    status: StatusCode,
+    text: String,
+    elapsed_ns: u64,
+    phases: Option<Vec<PhaseTiming>>,
+}
+
+async fn send_observed(app: &Router, request: Request) -> Observed {
+    let started = Instant::now();
+    let buffer = Arc::new(Mutex::new(telemetry::PhaseBuffer::new(
+        [1; 16],
+        [1; 8],
+        telemetry::now_unix_nanos(),
+    )));
+    // Engine::new has no recorder: its None phase groups await directly, leaving
+    // this outer task-local capture intact. No exporter or eligibility is used.
+    // Capture starts before HTTP auth/catalog: the first duration includes that
+    // lead-in. These are completed boundaries, not precise phase-queue SLOs;
+    // elapsed time or the last boundary cannot identify a timeout's cause.
+    let (status, text) = telemetry::with_phases(buffer.clone(), send(app, request)).await;
+    let elapsed_ns = started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+    let phases = Arc::try_unwrap(buffer)
+        .ok()
+        .and_then(|mutex| mutex.into_inner().ok())
+        .and_then(|buffer| project_phases(&buffer.take().0));
+    Observed {
+        status,
+        text,
+        elapsed_ns,
+        phases,
+    }
 }
 
 async fn send(app: &Router, request: Request) -> (StatusCode, String) {
@@ -640,9 +719,45 @@ async fn expect(
     control: &Control,
     compare: Compare,
 ) {
-    let (status, text) = send(&w.app, request).await;
+    let Observed {
+        status,
+        text,
+        elapsed_ns,
+        phases,
+    } = send_observed(&w.app, request).await;
     let hits = w.approved.take();
     let got = (status.as_u16(), reason(&text));
+    let mismatch = match want {
+        Rejected(code, why) => got != (code, why.to_owned()),
+        Forwarded => got != (control.status, control.reason.clone()),
+    };
+    if mismatch {
+        let attacker_hits = w.attacker.hits.lock().ok().map(|hits| hits.len());
+        let mut diagnostic = FailureDiagnostic {
+            elapsed_ns,
+            phases,
+            status: status.as_u16(),
+            accounting_unavailable: got.1 == "accounting_unavailable",
+            approved_hits: hits.len(),
+            attacker_hits,
+        };
+        let mut entries = w.diagnostics.lock().ok();
+        if entries.is_none() || attacker_hits.is_none() {
+            diagnostic.phases = None;
+        }
+        let rendered = serde_json::to_string(&diagnostic).ok().or_else(|| {
+            diagnostic.phases = None;
+            serde_json::to_string(&diagnostic).ok()
+        });
+        if let Some(entries) = entries.as_mut() {
+            entries.push(diagnostic);
+        }
+        drop(entries);
+        if let Some(rendered) = rendered {
+            use std::io::Write;
+            let _ = writeln!(std::io::stderr().lock(), "{rendered}");
+        }
+    }
     match want {
         Rejected(code, why) => {
             assert_eq!(got, (code, why.to_owned()), "{label} {case}");
@@ -1247,6 +1362,196 @@ async fn steering_control_rejects_accounting_unavailable_after_a_real_upstream_h
         assert!(
             panic_message == Some(expected.as_str()),
             "{label}: control must fail specifically at the server-error baseline guard"
+        );
+    }
+}
+
+/// Diagnostics project completed spans, never their correlation or usage metadata.
+#[test]
+fn steering_phase_projection_keeps_only_fixed_names_and_durations() {
+    use crate::telemetry::{Attribute, Span, SpanName};
+
+    let canary_id = Uuid::from_bytes(*b"NoSensitiveCanar");
+    let mut span = Span::reserved(
+        SpanName::AdmissionConnect,
+        *canary_id.as_bytes(),
+        [2; 8],
+        Some([3; 8]),
+        1_000,
+        1_042,
+    )
+    .unwrap();
+    assert!(span.attribute(Attribute::RequestId(canary_id)));
+    assert!(span.attribute(Attribute::InputTokens(987654321)));
+    let raw = serde_json::to_value(&span).unwrap();
+    assert!(raw.to_string().contains(&canary_id.to_string()));
+    assert!(raw.to_string().contains("987654321"));
+
+    let projected = project_phases(&[span]).expect("a completed phase is available");
+    assert_eq!(
+        serde_json::to_value(projected).unwrap(),
+        json!([{"name":"admission.connect","duration_ns":42}]),
+        "no IDs, timestamps, attributes, tokens or other span metadata may survive"
+    );
+}
+
+#[test]
+fn steering_phase_projection_reports_missing_capture_as_unavailable() {
+    assert!(project_phases(&[]).is_none());
+}
+
+/// An injected accounting error must still fail the original strict comparison,
+/// but only after a secret-safe diagnostic has captured the real hop's phases.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn steering_expect_records_diagnostics_before_rejecting_injected_503(pool: PgPool) {
+    use axum::middleware::{Next, from_fn};
+    use futures_util::FutureExt;
+    use std::{panic::AssertUnwindSafe, time::Instant};
+
+    let mut w = world(pool).await;
+    let t = targets()
+        .into_iter()
+        .find(|t| t.label == "rerank/sglang")
+        .expect("the original failing matrix target exists");
+    let body = (t.body)(t.model);
+    let clean = control(
+        &w,
+        t.label,
+        json_request(&w.keys.personal_key.token, t.path, &t.base(), &body),
+    )
+    .await;
+    assert_eq!(
+        (clean.status, clean.reason.as_str()),
+        (400, "upstream_rejected")
+    );
+    assert!(w.diagnostics.lock().unwrap().is_empty());
+
+    let observed = Arc::new(Mutex::new(None));
+    let observation = observed.clone();
+    let approved_hits = w.approved.hits.clone();
+    let attacker_hits = w.attacker.hits.clone();
+    let unwrapped = w.app.clone();
+    w.app = unwrapped
+        .clone()
+        .layer(from_fn(move |request: Request, next: Next| {
+            let observation = observation.clone();
+            let approved_hits = approved_hits.clone();
+            let attacker_hits = attacker_hits.clone();
+            async move {
+                // No fabricated upstream hit: finish and snapshot the actual dispatch.
+                let response = next.run(request).await;
+                let status = response.status();
+                let bytes = to_bytes(response.into_body(), 16 << 20).await.unwrap();
+                *observation.lock().unwrap() = Some((
+                    status,
+                    String::from_utf8_lossy(&bytes).into_owned(),
+                    approved_hits.lock().unwrap().clone(),
+                    attacker_hits.lock().unwrap().clone(),
+                ));
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    [("x-diagnostic-canary", "NoSensitiveCanary")],
+                    axum::Json(json!({"error":{
+                        "message":"NoSensitiveCanary",
+                        "type":"accounting_unavailable",
+                        "code":"accounting_unavailable",
+                        "param":"NoSensitiveCanary"
+                    }})),
+                )
+                    .into_response()
+            }
+        }));
+    let headers = [
+        t.base(),
+        vec![("openai-beta".into(), "NoSensitiveCanary".into())],
+    ]
+    .concat();
+    let case = "openai-beta NoSensitiveCanary";
+    let started = Instant::now();
+    let outcome = AssertUnwindSafe(expect(
+        &w,
+        t.label,
+        case,
+        json_request(&w.keys.personal_key.token, t.path, &headers, &body),
+        Forwarded,
+        &clean,
+        Compare::Equal,
+    ))
+    .catch_unwind()
+    .await;
+    let elapsed_ns = started.elapsed().as_nanos();
+    w.app = unwrapped;
+
+    // Outside catch_unwind: the route and exact wire request must remain valid.
+    let (status, text, hits, attacker) = observed.lock().unwrap().take().expect("middleware ran");
+    assert_eq!(
+        (status.as_u16(), reason(&text)),
+        (400, clean.reason.clone())
+    );
+    assert_eq!(hits.len(), 1, "exactly one approved upstream hop");
+    assert_clean(t.label, case, &hits[0], &clean.hit, &w);
+    assert_eq!(hits[0].body, clean.hit.body, "the body is unchanged");
+    assert!(attacker.is_empty(), "no pre-assertion attacker hop");
+    assert_no_attacker(&w, t.label, case);
+    let diagnostics = serde_json::to_value(&*w.diagnostics.lock().unwrap()).unwrap();
+    w.close().await;
+
+    let panic_message = outcome.as_ref().err().and_then(|payload| {
+        payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+    });
+    let panic_message = panic_message.expect("the injected 503 must not pass as forwarded");
+    assert!(panic_message.contains(&format!(
+        "{} {case}: response differs from the control's",
+        t.label
+    )));
+    assert!(panic_message.contains("(503, \"accounting_unavailable\")"));
+    assert!(panic_message.contains("(400, \"upstream_rejected\")"));
+
+    let entries = diagnostics.as_array().expect("per-world entries");
+    assert_eq!(entries.len(), 1, "record before unwinding");
+    let diagnostic = &entries[0];
+    let duration = diagnostic["elapsed_ns"]
+        .as_u64()
+        .expect("monotonic elapsed time");
+    assert!(u128::from(duration) <= elapsed_ns);
+    let phases = diagnostic["phases"]
+        .as_array()
+        .expect("real phase capture, not unavailable");
+    for name in ["admission.commit", "settlement.commit"] {
+        assert!(
+            phases.iter().any(|phase| phase["name"] == name),
+            "missing {name}"
+        );
+    }
+    for phase in phases {
+        assert_eq!(phase.as_object().unwrap().len(), 2);
+        assert!(phase["duration_ns"].as_u64().is_some());
+    }
+    assert_eq!(
+        diagnostic,
+        &json!({
+            "elapsed_ns":duration,
+            "phases":phases,
+            "status":503,
+            "accounting_unavailable":true,
+            "approved_hits":1,
+            "attacker_hits":0
+        })
+    );
+    let rendered = diagnostics.to_string();
+    for forbidden in [
+        "NoSensitiveCanary",
+        "server-secret-",
+        "upstream_rejected",
+        "traceId",
+        "attributes",
+    ] {
+        assert!(
+            !rendered.contains(forbidden),
+            "diagnostic leaked forbidden metadata"
         );
     }
 }
