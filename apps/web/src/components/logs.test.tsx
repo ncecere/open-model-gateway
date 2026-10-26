@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { DashboardNavigationProvider } from "./navigation-link";
@@ -24,6 +24,37 @@ const generation: GenerationRow = { execution_id: "e1e1e1e1-0000-0000-0000-00000
 const sessionRow: SessionRow = { session_id: "conv 7/a", workspace: { id: "team", name: "Product", kind: "team" }, requests: "3", attempts: "4", failed_requests: "1", in_progress_requests: "0", input_tokens: "30", output_tokens: "9", cost_microusd: null, known_cost_microusd: "20", held_microusd: "5", unresolved_requests: "1", first_at: "2026-10-08T09:00:00Z", last_at: "2026-10-08T10:00:00Z", models: ["company/smart"], model_count: 1, last_model: "company/smart", app: "Agent", keys: 1 };
 
 describe("Logs page", () => {
+  it.each([
+    { tab: undefined, endpoint: "requests", data: row, context: "Open request 1a2b3c4d, company/smart", href: "/workspaces/team/requests/1a2b3c4d-0000-0000-0000-000000000001" },
+    { tab: "generations", endpoint: "generations", data: generation, context: "Open request 1a2b3c4d (attempt 2), company/smart", href: "/workspaces/team/requests/1a2b3c4d-0000-0000-0000-000000000001" },
+    { tab: "sessions", endpoint: "sessions", data: sessionRow, context: "Open session conv 7/a", href: "/workspaces/team/session?session_id=conv+7%2Fa" },
+  ] as const)("includes the full visible compact timestamp in the $endpoint row link's accessible name (#365)", ({ tab, endpoint, data, context, href }) => {
+    // Same-year compact dates omit the year, so the full date is NOT a substitute for the visible label.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-10T12:00:00Z"));
+    const container = document.createElement("div");
+    document.body.append(container);
+    try {
+      const html = markup(nav({ page: "requests", ws: "team", tab }, <LogsPage scope={{ kind: "workspace", workspace: team }} />), [[`${ws}/${endpoint}?limit=50`, { data: [data], next_cursor: null }]]);
+      container.innerHTML = html;
+      const link = container.querySelector("tbody a")!;
+      const time = link.querySelector("time")!;
+      const compact = time.textContent!;
+      const full = time.getAttribute("title")!;
+      expect(compact).toMatch(/^Oct 8, \d{1,2}:\d{2} [AP]M$/);
+      expect(full).toContain("Oct 8, 2026,");
+      expect(full).not.toContain(compact);
+      expect(time.getAttribute("datetime")).toBe(row.started_at);
+      expect(link.getAttribute("href")).toBe(href);
+      expect(link.getAttribute("aria-label")).toContain(context);
+      expect(link.getAttribute("aria-label")?.startsWith(context)).toBe(true);
+      expect(link.getAttribute("aria-label")).toContain(`started ${full}`);
+      expect(within(container).getByRole("link", { name: name => name.includes(compact) })).toBe(link);
+    } finally {
+      container.remove();
+      vi.useRealTimers();
+    }
+  });
   it("shows tiles for the filters, pill tabs and OpenRouter-like request columns with telemetry", () => {
     const search: DashboardSearch = { page: "requests", ws: "team", finish_reason: "length", streamed: "true" };
     const html = markup(nav(search, <LogsPage scope={{ kind: "workspace", workspace: team }} />), [[`${ws}/logs/metrics?finish_reason=length&streamed=true`, metrics], [`${ws}/requests?finish_reason=length&streamed=true&limit=50`, { data: [row], next_cursor: null }]]);

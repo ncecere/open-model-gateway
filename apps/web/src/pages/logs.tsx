@@ -57,7 +57,7 @@ export const requestPageSearch = (ws: string, id: string, filters: RequestFilter
 /** The started time as the row's link: compact on one line, the full date and time (with zone) in the tooltip. */
 function RowLink({ at, search, label }: { at: string; search: DashboardSearch; label: string }) {
   const when = compactDateTime(at);
-  return <ResourceLink className={rq.rowLink} search={search} aria-label={`${label}, started ${when.full}`}><time dateTime={at} title={when.full}>{when.text}</time></ResourceLink>;
+  return <ResourceLink className={rq.rowLink} search={search} aria-label={`${label}, ${when.text}, started ${when.full}`}><time dateTime={at} title={when.full}>{when.text}</time></ResourceLink>;
 }
 /** Known cost; an unknown cost shows what's on hold under it (a floor, not the price). */
 function CostCell({ cost, held }: { cost: string | null; held: string | null }) {

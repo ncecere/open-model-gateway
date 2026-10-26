@@ -264,9 +264,9 @@ describe("D-11 revoked key access", () => {
 });
 
 describe("Polish", () => {
-  it("names type tabs 'All, 14' (no stray space or comma)", () => {
+  it("names type tabs 'All 14' to match the visible label and count", () => {
     render(<TypeTabs label="Model type" value="all" onChange={() => {}} items={[{ value: "all", label: "All", count: 14 }, { value: "audio", label: "Audio", count: null }]} />);
-    expect(screen.getByRole("tab", { name: "All, 14" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "All 14" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Audio" })).toBeTruthy();
   });
   it("filter toolbar on a phone: a real 'Filters (n)' toggle with the active count, open on demand", async () => {

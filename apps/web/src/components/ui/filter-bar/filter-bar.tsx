@@ -53,7 +53,7 @@ import styles from "./filter-bar.module.css";
  * chip too ("Search: wifi"), and "Clear all" clears it with the facets.
  *
  * Accessibility: the bar is a group named "Filters". Each facet is labelled
- * by its visible label; counts are read after the option ("Failed, 3").
+ * by its visible label; counts are read after the option ("Failed 3").
  * Active filters are a list of buttons named "Remove filter Status: Failed";
  * after removing one, focus moves to the next chip, then "Clear all", then
  * the first control. Filtering results are announced by the table/list.
@@ -398,10 +398,15 @@ export function FilterBar<T>({
                   {facet.options.map((o) => {
                     const count = facetCounts?.[o.value];
                     return (
-                      <ToggleGroupItem key={o.value} value={o.value} aria-label={count === undefined ? undefined : `${o.label}, ${count.toLocaleString()}`}>
+                      <ToggleGroupItem key={o.value} value={o.value}>
                         {o.icon}
                         {o.label}
-                        {count !== undefined && <span className={styles.count}>{count.toLocaleString()}</span>}
+                        {count !== undefined && (
+                          <>
+                            {" "}
+                            <span className={styles.count}>{count.toLocaleString()}</span>
+                          </>
+                        )}
                       </ToggleGroupItem>
                     );
                   })}

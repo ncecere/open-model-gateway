@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "registry": "../../../../typescript/bitop-ui",
+  "registry": "../../../../typescript/bitop-ui-a11y",
   "items": {
     "alert": {
       "files": {
@@ -82,7 +82,7 @@
     "command-palette": {
       "files": {
         "src/components/ui/command-palette/command-palette.module.css": "aa8b3d9c37c7d96d4b4ccacf0f0a2a67f21c271729a8b2c1e5138a8e4c93a5c9",
-        "src/components/ui/command-palette/command-palette.tsx": "f64c2330866caa0d92870e15afd54dd59b3982a0d864a693ab14c89671299f1b"
+        "src/components/ui/command-palette/command-palette.tsx": "19a9ebcaf72752fa9fa23dcdc81d9b8c47ba9a95a05878a227670d7c4a2d563f"
       }
     },
     "copy-button": {
@@ -151,7 +151,7 @@
     "filter-bar": {
       "files": {
         "src/components/ui/filter-bar/filter-bar.module.css": "007a26e2415ea105d63957168ea94a639e2a6fc00dd4cdedb7686f5951e9fee5",
-        "src/components/ui/filter-bar/filter-bar.tsx": "8ba63fde43fe5b1dea6452d566aef06901640fcbbb89f13a203723af8cec5584"
+        "src/components/ui/filter-bar/filter-bar.tsx": "726fe431defd9f573a01743ff8e262fd06b73c3229257eea5e23f620f4d0b4e5"
       }
     },
     "input": {
@@ -277,7 +277,7 @@
     "tabs": {
       "files": {
         "src/components/ui/tabs/tabs.module.css": "8752755fbdd42ad0584616adbf85c31c12a44674d61afb5bac49a5bb57d4bca6",
-        "src/components/ui/tabs/tabs.tsx": "bfbec4bfb11bd894d90fb702e1ad99c7daa9eb0428568539dfa5d08a061b1b5e"
+        "src/components/ui/tabs/tabs.tsx": "4eda8f55cba77674eeb5bfc4c2ec2aafa18a4199ea237d301f6adf1033d264c9"
       }
     },
     "text-link": {

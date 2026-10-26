@@ -51,6 +51,8 @@ CSS modules, neutral-theme tokens, Base UI behavior, comments, and client direct
 
 There are **no local patches**. The earlier copy-and-own patch that added an optional `className` to the command-palette popup (so gateway CSS can use the higher-contrast muted-text token for search group labels and hints) is now upstream in bitop-ui (`CommandPalette` `className`). If the gateway needs a change to a vendored file, make it in bitop-ui with docs and tests, then `update`; don't edit the copy here (the lock test fails, and `update` would skip the file).
 
+[Bitop UI PR #3](https://github.com/ncecere/bitop-ui/pull/3) aligns tab counts, filter toggles, and the command-palette close control's accessible names with their visible labels. These primitives were refreshed through the supported CLI from the read-only `../../../../typescript/bitop-ui-a11y` checkout (the source recorded in the lock), not patched locally. Gateway TypeTabs inherits its name from visible content, including locale-formatted counts; future refreshes should also use the CLI.
+
 Selected items: app-shell, breadcrumbs, table, card, button, page-header, stat-card, input, field, badge, empty-state, command-palette, tabs, checkbox. Recursive items include core, theme-neutral, avatar, layout, menu, tooltip, spinner, and kbd. The lock tracks 46 component/support files; the license notice is kept alongside them. Existing gateway metric tiles remain unlinked. `sparkline`, `meter` and `copy-button` were added later with `bitop add` for the shared UI kit in `src/components/templates/` (see its README). Runtime package dependencies are `@base-ui/react`, `lucide-react`, and `@fontsource-variable/inter`, alongside the existing React stack.
 
 ## Integration boundaries

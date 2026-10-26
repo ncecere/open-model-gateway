@@ -191,7 +191,7 @@ export function CommandPalette({
               <div className={styles.inputRow}>
                 <Search aria-hidden className={styles.searchIcon} />
                 <Autocomplete.Input className={styles.input} placeholder={placeholder} aria-label={label} aria-describedby={hintId} />
-                <BaseDialog.Close className={styles.esc} aria-label="Close command palette">
+                <BaseDialog.Close className={styles.esc} aria-label="Esc — Close command palette">
                   Esc
                 </BaseDialog.Close>
               </div>
