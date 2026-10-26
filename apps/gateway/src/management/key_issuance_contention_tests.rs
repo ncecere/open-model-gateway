@@ -538,9 +538,10 @@ async fn contracts(owner: &PgPool, http: &Http) {
 #[sqlx::test(migrations = "./enterprise_migrations")]
 #[ignore = "dedicated PostgreSQL runtime-role contention measurement"]
 async fn key_issuance_contention_measurement(owner: PgPool) {
-    // The supplied sqlx pool owns a fresh test database. Shared role and
-    // maintenance ACL changes require the same dedicated-cluster lock as the
-    // runtime_privileges suite. Hold its connection until all pools are closed.
+    // The supplied sqlx pool owns a fresh test database. This session lock is
+    // database-scoped, not cluster-wide. Sequential commands on a dedicated
+    // cluster isolate shared role/maintenance ACL changes; never run another
+    // probe there concurrently. Hold this session until all pools are closed.
     let mut lock = checked(owner.acquire().await);
     checked(
         sqlx::raw_sql("SET statement_timeout='30s'; SET lock_timeout='30s'")
