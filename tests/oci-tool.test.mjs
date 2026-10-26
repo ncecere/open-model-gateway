@@ -10,11 +10,20 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 const helper = fileURLToPath(new URL("../.github/scripts/build-oras.sh", import.meta.url));
+const pinFile = fileURLToPath(new URL("../.github/tools/oras.json", import.meta.url));
 const commit = "9b1fc815f6b7fba743f08b9b5c5846639cc11d3c";
 const sdkURL = "https://go.dev/dl/go1.26.10.linux-amd64.tar.gz";
 const sdkSHA = "ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5";
 const manifests = { "go.mod": "module oras.land/oras\n\ngo 1.26.0\n", "go.sum": "example.invalid/dependency v1.0.0 h1:fixture\n" };
 const ldflags = `-w -s -buildid= -X oras.land/oras/internal/version.Version=1.3.6 -X oras.land/oras/internal/version.GitCommit=${commit} -X oras.land/oras/internal/version.BuildMetadata= -X oras.land/oras/internal/version.GitTreeState=clean`;
+
+test("ORAS consumer pin matches the independently reproduced patched source build", () => {
+  assert.deepEqual(JSON.parse(readFileSync(pinFile, "utf8")), {
+    version: "1.3.6",
+    source_commit: commit,
+    binary_sha256: "8d91fece0a018891f3490452531329020b0a1c6794c303236a3c1c7cb49a066f",
+  });
+});
 
 function harness(t, scenario = "ok") {
   const dir = mkdtempSync(join(tmpdir(), "omg-oras-test-"));
