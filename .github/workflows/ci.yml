@@ -112,7 +112,7 @@ jobs:
       - name: Ordinary runtime privilege tests on disposable PostgreSQL
         run: cargo test -p open-model-gateway --all-features --test runtime_privileges
       - name: Verify enterprise runtime ACLs on disposable PostgreSQL
-        run: cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored
+        run: cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored --test-threads=1
       - name: Measure key issuance contention on dedicated runtime-role PostgreSQL
         # Changes maintenance ACLs; serialize after runtime_privileges, not an ignored sweep.
         env:

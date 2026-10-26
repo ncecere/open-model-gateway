@@ -3,8 +3,16 @@
 #![allow(clippy::disallowed_methods)]
 //! Explicitly opt in only on the dedicated disposable PostgreSQL test cluster.
 use sqlx::PgPool;
+#[path = "runtime_privileges/stall_recovery.rs"]
+mod stall_recovery;
 #[path = "runtime_privileges/temp.rs"]
 mod temp;
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+#[ignore = "dedicated disposable PostgreSQL role/ACL probe"]
+async fn controlled_lock_stall_recovers_on_runtime_http_path(pool: PgPool) {
+    stall_recovery::run(pool).await;
+}
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
 #[ignore = "role/maintenance ACL probe: run only on a disposable test PostgreSQL cluster"]
