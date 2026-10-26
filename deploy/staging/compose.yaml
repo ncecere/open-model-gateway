@@ -15,11 +15,11 @@ x-gateway: &gateway
   mem_limit: 1g
   stop_grace_period: ${GATEWAY_STOP_GRACE_PERIOD:-150s}
 
-# STAGING_POSTGRES_IMAGE / STAGING_CADDY_IMAGE override the Docker Hub
-# defaults; CI sets mirror.gcr.io/library/... (same image digests).
+# Defaults use approved mirror.gcr.io digest pins, also used by CI.
+# STAGING_POSTGRES_IMAGE / STAGING_CADDY_IMAGE allow digest-pinned overrides.
 services:
   postgres:
-    image: ${STAGING_POSTGRES_IMAGE:-postgres:17-bookworm}
+    image: ${STAGING_POSTGRES_IMAGE:-mirror.gcr.io/library/postgres@sha256:858bb5e98eed02eb8cafbcdc007f9a65d1b613972028944a8ec2133ccaf80d27}
     restart: unless-stopped
     environment:
       POSTGRES_USER: gateway_bootstrap
@@ -98,7 +98,7 @@ services:
     logging: *logging
 
   ingress:
-    image: ${STAGING_CADDY_IMAGE:-caddy:2-alpine}
+    image: ${STAGING_CADDY_IMAGE:-mirror.gcr.io/library/caddy@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f}
     restart: unless-stopped
     read_only: true
     tmpfs: ['/tmp:rw,noexec,nosuid,size=16m']
