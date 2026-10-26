@@ -29,10 +29,8 @@ const FETCH_SCRIPT = ".github/scripts/fetch-verified.sh";
 // Actions allowed in a job that has any `write` permission, explicit or inherited
 // from the workflow level, from the caller of a reusable workflow, or from the
 // repository default when nothing is declared. Keep this minimal: every entry must
-// be used by a write job (checked below). Each one is GitHub-owned or the
-// registry/build plumbing the image pipeline cannot do without, and none downloads
-// an executable at run time: setup-buildx-action can, so every write job that uses
-// it first asserts the runner's own Buildx and sets no `version` (checked below).
+// be used by a write job (checked below). Only these GitHub-owned actions are
+// permitted: pinning or guarding a third-party action is not a write-token waiver.
 // Tools that only need to read (Trivy, helm, kubeconform, cargo-deny, Node, Rust,
 // the CodeQL bundle, ...) never belong here.
 export const WRITE_JOB_ACTIONS = new Map([
@@ -40,11 +38,6 @@ export const WRITE_JOB_ACTIONS = new Map([
   ["actions/checkout", "GitHub-owned; no network access beyond the repository"],
   // GitHub-owned. The upload job reads the SARIF file the read-only analysis job produced.
   ["actions/download-artifact", "GitHub-owned; hands the SARIF file from the read-only analysis job to the upload job"],
-  // Docker-owned. The three steps that build and push an image to ghcr.io; the
-  // pipeline cannot push without them. login-action only writes the Docker config.
-  ["docker/setup-buildx-action", "Docker-owned; creates the BuildKit builder (pinned image) for build-push and imagetools"],
-  ["docker/login-action", "Docker-owned; logs in to ghcr.io with the job token"],
-  ["docker/build-push-action", "Docker-owned; builds and pushes the image with its SBOM and provenance"],
   // GitHub-owned. Uploading code-scanning results needs `security-events: write`.
   // It sends a SARIF file and downloads no CodeQL bundle (init and analyze, which
   // do, run in a read-only job).
