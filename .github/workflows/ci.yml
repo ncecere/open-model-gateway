@@ -158,6 +158,8 @@ jobs:
       - run: npm run test:sdk-bases
       - run: npm run test:demo
       - run: npm run test:supply-chain
+      - run: node --test tests/oci-tool.test.mjs
+      - run: python3 -B -m unittest discover -s tests -p 'oci_*test.py' -v
       - run: npm run test:ci
       - run: npm run test:conflict-markers
       - name: Install age (test:staging includes the encrypted backup tests)

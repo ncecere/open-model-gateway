@@ -51,6 +51,44 @@ function validateGraph(data) {
   ]);
 }
 
+const ociPolicyCommands = [
+  "node --test tests/oci-tool.test.mjs",
+  "python3 -B -m unittest discover -s tests -p 'oci_*test.py' -v",
+];
+function validateOciPolicy(data) {
+  const web = data.jobs.web;
+  required(web);
+  assert.deepEqual(data.permissions, { contents: "read" });
+  assert.equal(web.permissions, undefined);
+  assert.ok(data.jobs.image.needs.includes("web"));
+  for (const command of ociPolicyCommands) {
+    assert.equal(web.steps.filter(s => s.run === command).length, 1, `required CI invocation: ${command}`);
+  }
+}
+
+test("required read-only web gate runs OCI tool and all Python OCI tests", () => validateOciPolicy(loadWorkflow()));
+
+test("OCI CI gate refuses missing, optional, skipped, wrong-pattern and swallowed checks", () => {
+  const original = loadWorkflow();
+  for (const command of ociPolicyCommands) {
+    for (const mutate of [
+      d => { d.jobs.web.steps = d.jobs.web.steps.filter(s => s.run !== command); },
+      d => { d.jobs.web.steps.find(s => s.run === command).if = "false"; },
+      d => { d.jobs.web.steps.find(s => s.run === command)["continue-on-error"] = true; },
+      d => { d.jobs.web.steps.find(s => s.run === command).run += " || true"; },
+      d => { d.jobs.web.steps.find(s => s.run === command).run = command.replace("oci_", "oci_layout_").replace("oci-tool", "other-tool"); },
+      d => { d.jobs.web.if = "github.event_name == 'push'"; },
+      d => { d.jobs.web["continue-on-error"] = true; },
+      d => { d.jobs.web.permissions = { packages: "write" }; },
+      d => { d.jobs.image.needs = d.jobs.image.needs.filter(n => n !== "web"); },
+    ]) {
+      const data = structuredClone(original);
+      mutate(data);
+      assert.throws(() => validateOciPolicy(data));
+    }
+  }
+});
+
 test("CI deduplicates branch pushes, cancels only PRs, and gives every main/tag run its own group", () => {
   const data = loadWorkflow();
   assert.deepEqual(data.on, { push: { branches: ["main"], tags: ["v*"] }, pull_request: null });
