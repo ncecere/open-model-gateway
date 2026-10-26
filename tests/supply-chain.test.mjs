@@ -1047,6 +1047,34 @@ const publicationData = () => Object.fromEntries(publicationFiles.map(name => {
 }));
 const executable = job => stepsOf(job).map(s => s.run ?? "").join("\n");
 
+// Pin the actual refusal logic, not just the step name or command substrings.
+const VERSION_CHECK_RUN = [
+  'revision=$(docker image inspect --format \'{{index .Config.Labels "org.opencontainers.image.revision"}}\' "${IMAGE}@${DIGEST}")',
+  '[ "${revision}" = "${SOURCE_REVISION}" ] || { echo \'::error::image source revision mismatch\'; exit 1; }',
+  'want=$(sed -n \'s/^version = "\\([^"]*\\)"$/\\1/p\' apps/gateway/Cargo.toml | head -n1)',
+  'got=$(docker run --rm "${IMAGE}@${DIGEST}" --version)',
+  'echo "image reports: ${got}"',
+  'if [ "${got}" != "open-model-gateway ${want}" ]; then',
+  '  echo "::error::the image reports \'${got}\', not \'open-model-gateway ${want}\'"',
+  '  exit 1',
+  'fi',
+  'if [ "${REF_TYPE}" = tag ] && [ "${TAG%%-*}" != "v${want}" ]; then',
+  '  echo "::error::tag ${TAG} does not match Cargo.toml version ${want}"',
+  '  exit 1',
+  'fi',
+].join("\n");
+
+function assertRequiredPublication(job, conditionalSteps = []) {
+  assert.equal(job.if, undefined);
+  assert.equal(job["continue-on-error"], undefined);
+  assert.equal(job.defaults, undefined);
+  for (const step of stepsOf(job)) {
+    assert.equal(step["continue-on-error"], undefined);
+    assert.equal(step.shell, undefined);
+    if (!conditionalSteps.includes(step.name)) assert.equal(step.if, undefined);
+  }
+}
+
 function assertPublicationGraph(flows) {
   for (const name of publicationFiles.slice(0, 3)) {
     const data = flows[name];
@@ -1085,6 +1113,44 @@ function assertPublicationGraph(flows) {
     }
   }
   const image = flows.image;
+  for (const name of ["build", "import-amd64", "import-arm64", "verify", "publish"]) {
+    assertRequiredPublication(image.jobs[name], name === "verify" ? ["Stop isolated staging"] : name === "publish" ? ["Job summary", "Remove registry credentials"] : []);
+  }
+  const architectures = [
+    { platform: "linux/amd64", runner: "ubuntu-24.04" },
+    { platform: "linux/arm64", runner: "ubuntu-24.04-arm" },
+  ];
+  assert.deepEqual(image.jobs.build.strategy, { "fail-fast": true, matrix: { include: architectures } });
+  assert.equal(image.jobs.build["runs-on"], "${{ matrix.runner }}");
+  assert.deepEqual(image.jobs.build.outputs, Object.fromEntries(["amd64", "arm64"].flatMap(arch =>
+    ["digest", "artifact_id"].map(key => [`${key}_linux_${arch}`, `\${{ steps.record.outputs.${key}_linux_${arch} }}`]))));
+  assert.deepEqual(image.jobs.build.steps.find(s => s.id === "record").env, {
+    DIGEST: "${{ steps.build.outputs.digest }}", ARTIFACT_ID: "${{ steps.upload.outputs.artifact-id }}",
+  });
+  for (const arch of ["amd64", "arm64"]) {
+    assert.deepEqual(image.jobs[`import-${arch}`].with, {
+      artifact_id: `\${{ needs.build.outputs.artifact_id_linux_${arch} }}`,
+      root_digest: `\${{ needs.build.outputs.digest_linux_${arch} }}`,
+      platform: `linux/${arch}`, image_repository: "ghcr.io/ncecere/open-model-gateway", source_revision: "${{ github.sha }}",
+    });
+  }
+  assert.deepEqual(image.jobs.verify.strategy, { "fail-fast": true, matrix: { include: architectures.map(a => ({
+    ...a, import_job: `import-${a.platform.slice(6)}`, digest_output: `digest_linux_${a.platform.slice(6)}`,
+  })) } });
+  assert.equal(image.jobs.verify["runs-on"], "${{ matrix.runner }}");
+  assert.deepEqual(image.jobs.verify.permissions, { contents: "read", packages: "read" });
+  assert.equal(image.jobs.verify.env.DIGEST, "${{ needs[matrix.import_job].outputs[matrix.digest_output] }}");
+  const versions = image.jobs.verify.steps.filter(s => s.name === "Check the built version");
+  assert.equal(versions.length, 1);
+  assert.deepEqual(versions[0].env, { REF_TYPE: "${{ github.ref_type }}", TAG: "${{ github.ref_name }}", SOURCE_REVISION: "${{ github.sha }}" });
+  assert.equal(versions[0].run.trim(), VERSION_CHECK_RUN);
+  const index = image.jobs.publish.steps.find(s => s.id === "index");
+  assert.deepEqual(index.env, {
+    TAGS: "${{ needs.meta.outputs.tags }}", ANNOTATIONS: "${{ needs.meta.outputs.annotations }}",
+    DIGEST_AMD64: "${{ needs.import-amd64.outputs.digest_linux_amd64 }}", DIGEST_ARM64: "${{ needs.import-arm64.outputs.digest_linux_arm64 }}",
+  });
+  assert.ok(index.run.includes('sources=("${IMAGE}@${DIGEST_AMD64}" "${IMAGE}@${DIGEST_ARM64}")'));
+  assert.ok(index.run.includes('docker buildx imagetools create "${args[@]}" "${sources[@]}"'));
   assert.deepEqual(image.jobs.verify.needs, ["import-amd64", "import-arm64"]);
   assert.deepEqual(image.jobs.publish.needs, ["meta", "import-amd64", "import-arm64", "verify"]);
   assert.equal(image.jobs.meta.if, "github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')");
@@ -1189,6 +1255,35 @@ test("fixtures: publication graph refuses widened builders, wrong artifact/contr
     assert.throws(() => assertPublicationGraph(fixture), { name: "AssertionError" });
   }
 });
+
+const imageVerificationMutants = [
+  ["no-op built-version check", f => { f.image.jobs.verify.steps.find(s => s.name === "Check the built version").run = "echo no-check"; }],
+  ["optional verification job", f => { f.image.jobs.verify["continue-on-error"] = true; }],
+  ["skipped verification and always-publish", f => { f.image.jobs.verify.if = "false"; f.image.jobs.publish.if = "always()"; }],
+  ["both imports use AMD artifacts and digests", f => { Object.assign(f.image.jobs["import-arm64"].with, {
+    artifact_id: "${{ needs.build.outputs.artifact_id_linux_amd64 }}", root_digest: "${{ needs.build.outputs.digest_linux_amd64 }}",
+  }); }],
+  ["ARM verifier uses AMD import", f => { Object.assign(f.image.jobs.verify.strategy.matrix.include[1], { import_job: "import-amd64", digest_output: "digest_linux_amd64" }); }],
+  ["ARM publisher uses AMD digest", f => { f.image.jobs.publish.steps.find(s => s.id === "index").env.DIGEST_ARM64 = "${{ needs.import-amd64.outputs.digest_linux_amd64 }}"; }],
+  ["optional version check", f => { f.image.jobs.verify.steps.find(s => s.name === "Check the built version")["continue-on-error"] = true; }],
+  ["skipped version check", f => { f.image.jobs.verify.steps.find(s => s.name === "Check the built version").if = "false"; }],
+  ["wrong revision comparison", f => { const s = f.image.jobs.verify.steps.find(s => s.name === "Check the built version"); s.run = s.run.replace('[ "${revision}" = "${SOURCE_REVISION}" ]', "true"); }],
+  ["removed binary version comparison", f => { const s = f.image.jobs.verify.steps.find(s => s.name === "Check the built version"); s.run = s.run.replace('[ "${got}" != "open-model-gateway ${want}" ]', "false"); }],
+  ["removed tag version comparison", f => { const s = f.image.jobs.verify.steps.find(s => s.name === "Check the built version"); s.run = s.run.replace('[ "${TAG%%-*}" != "v${want}" ]', "false"); }],
+  ["wrong verifier digest expression", f => { f.image.jobs.verify.env.DIGEST = "${{ needs.import-amd64.outputs.digest_linux_amd64 }}"; }],
+  ["wrong build output binding", f => { f.image.jobs.build.outputs.digest_linux_arm64 = "${{ steps.record.outputs.digest_linux_amd64 }}"; }],
+  ["wrong build matrix architecture", f => { f.image.jobs.build.strategy.matrix.include[1].platform = "linux/amd64"; }],
+  ["optional ARM import", f => { f.image.jobs["import-arm64"].if = "false"; }],
+  ["optional publisher", f => { f.image.jobs.publish["continue-on-error"] = true; }],
+  ["always-run native publication", f => { f.image.jobs.publish.steps.find(s => s.id === "index").if = "always()"; }],
+];
+for (const [name, mutate] of imageVerificationMutants) {
+  test(`publication graph refuses ${name}`, () => {
+    const fixture = publicationData();
+    mutate(fixture);
+    assert.throws(() => assertPublicationGraph(fixture), { name: "AssertionError" });
+  });
+}
 
 // Run the actual workflow shell/Python snippets locally. No registry, build,
 // credentials, stage-utility stand-in or executable transport binary is involved.
