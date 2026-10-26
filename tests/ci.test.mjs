@@ -90,7 +90,7 @@ test("special probes retain sequential ordinary/ignored ACL, exact terminal, Doc
     "npm ci",
     "cargo test -p open-model-gateway --all-features --test filestore_s3",
     "cargo test -p open-model-gateway --all-features --test runtime_privileges",
-    "cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored",
+    "cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored --test-threads=1",
     "cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact",
     "sudo apt-get update && sudo apt-get install -y age",
     "cargo build -p open-model-gateway --all-features --bin open-model-gateway",

@@ -254,8 +254,10 @@ async fn first_delta(response: &mut reqwest::Response) {
 }
 
 pub async fn run(pool: PgPool) {
-    // This second sqlx::test owns a fresh database and independently takes the
-    // old probe's session lock before touching the cluster-wide role/ACLs.
+    // This sqlx::test owns a fresh database; this session lock is database-scoped
+    // only and cannot serialize cluster-wide role/ACL changes across fixtures.
+    // Run the whole ignored runtime_privileges target serially on its own cluster,
+    // including SQLx fixture creation and cleanup (--ignored --test-threads=1).
     // Never return this locked session to a pool, including on panic.
     let mut role_lock = pool.acquire().await.unwrap();
     role_lock.close_on_drop();

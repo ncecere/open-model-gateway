@@ -112,7 +112,7 @@ jobs:
       - name: Ordinary runtime privilege tests on disposable PostgreSQL
         run: cargo test -p open-model-gateway --all-features --test runtime_privileges
       - name: Verify enterprise runtime ACLs on disposable PostgreSQL
-        run: cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored
+        run: cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored --test-threads=1
       - name: Verify Anthropic terminal SDK and accounting contract on disposable PostgreSQL
         # Changes maintenance-database ACLs: run sequentially, never as a generic ignored-test sweep.
         run: cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact
