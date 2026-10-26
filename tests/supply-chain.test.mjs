@@ -1148,6 +1148,14 @@ function assertPublicationGraph(flows) {
   assert.match(executable(importer.jobs.import), /sha256sum/);
 }
 
+test("tool handoff names distinguish job-only reruns without replacing immutable artifacts", () => {
+  const upload = publicationData()["oci-import"].jobs.tools.steps.find(s => actionName(s.uses) === "actions/upload-artifact");
+  assert.equal(upload.with.name, "oras-${{ inputs.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ inputs.artifact_id }}-${{ github.run_attempt }}");
+  assert.equal(upload.with.overwrite, undefined);
+  assert.equal(upload.id, "upload");
+  assert.equal(publicationData()["oci-import"].jobs.tools.steps.find(s => s.id === "record").env.ARTIFACT_ID, "${{ steps.upload.outputs.artifact-id }}");
+});
+
 test("all image producers isolate unprivileged builds, verified digest import and native publication", () => assertPublicationGraph(publicationData()));
 
 test("every publication shell snippet parses without executing any build or registry command", () => {
