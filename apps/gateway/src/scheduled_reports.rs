@@ -72,6 +72,26 @@ impl Outcome {
 pub(crate) const SELECT_ELIGIBLE: &str = "SELECT i.id FROM unnest($1::uuid[]) WITH ORDINALITY i(id,n) LEFT JOIN LATERAL (SELECT schedule_id,expires_at FROM report_generation_claims WHERE schedule_id=i.id OFFSET 0) c ON true WHERE c.schedule_id IS NULL OR c.expires_at<=$2 ORDER BY c.expires_at NULLS FIRST,i.n LIMIT $3";
 const PER_TICK: i64 = 8;
 const DEADLINE: Duration = Duration::from_secs(10);
+/// Scheduling decisions only; leases, claim expiry and retention use database time.
+#[derive(Clone, Copy)]
+enum SchedulingClock {
+    Database,
+    #[cfg(all(test, feature = "integration-tests"))]
+    Fixed(DateTime<Utc>),
+}
+impl SchedulingClock {
+    async fn now(self, tx: &mut Transaction<'_, Postgres>) -> Result<DateTime<Utc>, sqlx::Error> {
+        match self {
+            Self::Database => {
+                sqlx::query_scalar("SELECT clock_timestamp()")
+                    .fetch_one(&mut **tx)
+                    .await
+            }
+            #[cfg(all(test, feature = "integration-tests"))]
+            Self::Fixed(now) => Ok(now),
+        }
+    }
+}
 #[derive(Clone, sqlx::FromRow)]
 struct Schedule {
     id: Uuid,
@@ -148,11 +168,16 @@ pub(crate) async fn initialize(
     tx: &mut Transaction<'_, Postgres>,
     id: Uuid,
 ) -> Result<(), sqlx::Error> {
+    initialize_with_clock(tx, id, SchedulingClock::Database).await
+}
+async fn initialize_with_clock(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+    clock: SchedulingClock,
+) -> Result<(), sqlx::Error> {
     let s:Option<Schedule>=sqlx::query_as(&format!("SELECT {COLUMNS} FROM report_schedules WHERE id=$1 AND deleted_at IS NULL AND next_run_at IS NULL FOR UPDATE")).bind(id).fetch_optional(&mut **tx).await?;
     if let Some(s) = s {
-        let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
-            .fetch_one(&mut **tx)
-            .await?;
+        let now = clock.now(tx).await?;
         let o = s.calendar()?.next_after(now, s.last_period_end)?;
         sqlx::query("UPDATE report_schedules SET next_run_at=$2,next_period_end=$3 WHERE id=$1")
             .bind(id)
@@ -168,6 +193,23 @@ pub(crate) async fn claim(
     fence: &Fence,
     id: Uuid,
 ) -> Result<Option<Claim>, sqlx::Error> {
+    claim_with_clock(store, fence, id, SchedulingClock::Database).await
+}
+#[cfg(all(test, feature = "integration-tests"))]
+pub(super) async fn claim_at(
+    store: &Store,
+    fence: &Fence,
+    id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<Option<Claim>, sqlx::Error> {
+    claim_with_clock(store, fence, id, SchedulingClock::Fixed(now)).await
+}
+async fn claim_with_clock(
+    store: &Store,
+    fence: &Fence,
+    id: Uuid,
+    clock: SchedulingClock,
+) -> Result<Option<Claim>, sqlx::Error> {
     let mut tx = begin_dispatch(&store.pool).await?;
     fence.check(&mut tx).await?;
     let Some(before)=sqlx::query_as::<_,Schedule>(&format!("SELECT {COLUMNS} FROM report_schedules WHERE id=$1 AND state='active' AND deleted_at IS NULL")).bind(id).fetch_optional(&mut *tx).await? else {return Ok(None)};
@@ -181,13 +223,11 @@ pub(crate) async fn claim(
         return Ok(None);
     }
     if s.next_run_at.is_none() || s.next_period_end.is_none() {
-        initialize(&mut tx, id).await?;
+        initialize_with_clock(&mut tx, id, clock).await?;
         tx.commit().await?;
         return Ok(None);
     }
-    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
-        .fetch_one(&mut *tx)
-        .await?;
+    let now = clock.now(&mut tx).await?;
     if s.next_run_at.is_some_and(|due| due > now) {
         return Ok(None);
     }
@@ -286,12 +326,20 @@ pub(crate) async fn complete(
 /// Index range scan first, bounded point-lookups/fairness second. The frontier
 /// is advisory and rotates even across live claims or failed reports. No lock
 /// or transaction is held across generation, and failover may reset the scan.
-async fn select_tick(store: &Store, fence: &Fence) -> Result<(Vec<Uuid>, Vec<Uuid>), sqlx::Error> {
+async fn select_tick_with_clock(
+    store: &Store,
+    fence: &Fence,
+    clock: SchedulingClock,
+) -> Result<(Vec<Uuid>, Vec<Uuid>), sqlx::Error> {
     let mut tx = begin_dispatch(&store.pool).await?;
     fence.check(&mut tx).await?;
-    let cutoff: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
-        .fetch_one(&mut *tx)
-        .await?;
+    let cutoff = clock.now(&mut tx).await?;
+    // Claim eligibility is an expiry check, not a scheduling decision.
+    let expiry_cutoff = match clock {
+        SchedulingClock::Database => cutoff,
+        #[cfg(all(test, feature = "integration-tests"))]
+        SchedulingClock::Fixed(_) => SchedulingClock::Database.now(&mut tx).await?,
+    };
     let pending=sqlx::query_scalar("SELECT id FROM report_schedules WHERE state='paused' AND deleted_at IS NULL AND next_run_at IS NULL ORDER BY id LIMIT $1").bind(PER_TICK).fetch_all(&mut *tx).await?;
     let frontier = *store
         .report_dispatch
@@ -318,7 +366,7 @@ async fn select_tick(store: &Store, fence: &Fence) -> Result<(Vec<Uuid>, Vec<Uui
     let candidate_ids = candidates.iter().map(|(_, id)| *id).collect::<Vec<_>>();
     let ids = sqlx::query_scalar(SELECT_ELIGIBLE)
         .bind(&candidate_ids)
-        .bind(cutoff)
+        .bind(expiry_cutoff)
         .bind(PER_TICK)
         .fetch_all(&mut *tx)
         .await?;
@@ -374,21 +422,41 @@ pub(crate) async fn failed(
 }
 /// One bounded tick; no unfenced operator mode can publish occurrences.
 pub async fn tick(store: &Store, fence: &Fence) -> Result<usize, sqlx::Error> {
+    tick_with_clock(store, fence, SchedulingClock::Database).await
+}
+#[cfg(all(test, feature = "integration-tests"))]
+pub(super) async fn tick_at(
+    store: &Store,
+    fence: &Fence,
+    now: DateTime<Utc>,
+) -> Result<usize, sqlx::Error> {
+    tick_with_clock(store, fence, SchedulingClock::Fixed(now)).await
+}
+async fn tick_with_clock(
+    store: &Store,
+    fence: &Fence,
+    clock: SchedulingClock,
+) -> Result<usize, sqlx::Error> {
     if fence.lease != Lease::ReportScheduler {
         return Err(sqlx::Error::Protocol("wrong report lease".into()));
     }
-    let (pending, ids) = select_tick(store, fence).await?;
+    let (pending, ids) = select_tick_with_clock(store, fence, clock).await?;
     for id in pending {
         let mut tx = begin_dispatch(&store.pool).await?;
         fence.check(&mut tx).await?;
-        initialize(&mut tx, id).await?;
+        initialize_with_clock(&mut tx, id, clock).await?;
         tx.commit().await?;
     }
     let mut generated = 0;
     for id in ids {
         let mut attempted: Option<Claim> = None;
         let result = tokio::time::timeout(DEADLINE, async {
-            let Some(c) = claim(store, fence, id).await? else {
+            let claimed = match clock {
+                SchedulingClock::Database => claim(store, fence, id).await?,
+                #[cfg(all(test, feature = "integration-tests"))]
+                SchedulingClock::Fixed(_) => claim_with_clock(store, fence, id, clock).await?,
+            };
+            let Some(c) = claimed else {
                 return Ok(false);
             };
             attempted = Some(c.clone());

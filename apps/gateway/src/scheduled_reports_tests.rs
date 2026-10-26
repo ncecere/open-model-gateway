@@ -59,12 +59,22 @@ mod db {
     use super::*;
     use crate::{
         leases::{Fence, Lease, Leases},
-        scheduled_reports::{claim, complete, snapshot, tick},
+        scheduled_reports::{self, Claim, complete, snapshot},
         store::Store,
     };
     use serde_json::Value;
     use sqlx::PgPool;
     use uuid::Uuid;
+    fn scheduling_now() -> DateTime<Utc> {
+        // RED: Monday's latest complete period is not due until 00:01 UTC.
+        at("2026-10-26T00:00:30Z")
+    }
+    async fn claim(store: &Store, fence: &Fence, id: Uuid) -> Result<Option<Claim>, sqlx::Error> {
+        scheduled_reports::claim_at(store, fence, id, scheduling_now()).await
+    }
+    async fn tick(store: &Store, fence: &Fence) -> Result<usize, sqlx::Error> {
+        scheduled_reports::tick_at(store, fence, scheduling_now()).await
+    }
     async fn setup(pool: &PgPool) -> (Store, Fence, Uuid, Uuid) {
         let user = Uuid::new_v4();
         sqlx::query("INSERT INTO users(id,email) VALUES($1,'report-generator@example.test')")
@@ -94,7 +104,7 @@ mod db {
         let store = Store::new(pool.clone());
         tick(&store, &fence).await.unwrap(); // initialize, never replay on creation
         assert_eq!(count(pool).await, 0);
-        sqlx::query("UPDATE report_schedules SET next_period_end=date_trunc('week',clock_timestamp(),'UTC')-interval '28 days',next_run_at=date_trunc('week',clock_timestamp(),'UTC')-interval '28 days'+interval '1 minute' WHERE id=$1").bind(id).execute(pool).await.unwrap();
+        sqlx::query("UPDATE report_schedules SET next_period_end=date_trunc('week',$2::timestamptz,'UTC')-interval '28 days',next_run_at=date_trunc('week',$2::timestamptz,'UTC')-interval '28 days'+interval '1 minute' WHERE id=$1").bind(id).bind(scheduling_now()).execute(pool).await.unwrap();
         (store, fence, id, user)
     }
     async fn count(pool: &PgPool) -> i64 {
@@ -153,7 +163,7 @@ mod db {
             .unwrap();
         assert!(!complete(&s, &f, &c, &body).await.unwrap());
         assert_eq!(count(&pool).await, 0);
-        sqlx::query("UPDATE report_schedules SET next_period_end=date_trunc('week',clock_timestamp(),'UTC')-interval '7 days',next_run_at=clock_timestamp()-interval '1 day' WHERE id=$1").bind(id).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE report_schedules SET next_period_end=date_trunc('week',$2::timestamptz,'UTC')-interval '7 days',next_run_at=$2::timestamptz-interval '1 day' WHERE id=$1").bind(id).bind(scheduling_now()).execute(&pool).await.unwrap();
         sqlx::query("UPDATE report_generation_claims SET expires_at=clock_timestamp()-interval '1 second' WHERE schedule_id=$1").bind(id).execute(&pool).await.unwrap();
         let c = claim(&s, &f, id).await.unwrap().unwrap();
         let body = snapshot(&s, &c).await.unwrap();
@@ -292,7 +302,7 @@ mod db {
             }
             let id:Uuid=sqlx::query_scalar("INSERT INTO report_schedules(scope_kind,workspace_id,created_by,cadence,timezone,delivery_time,state) VALUES($1,$2,$3,'weekly','UTC','00:01','active') RETURNING id")
                 .bind(if kind=="personal" {"personal"} else {"workspace"}).bind(ws).bind(user).fetch_one(&pool).await.unwrap();
-            sqlx::query("UPDATE report_schedules SET next_period_end=date_trunc('week',clock_timestamp(),'UTC')-interval '7 days',next_run_at=clock_timestamp()-interval '1 day' WHERE id=$1").bind(id).execute(&pool).await.unwrap();
+            sqlx::query("UPDATE report_schedules SET next_period_end=date_trunc('week',$2::timestamptz,'UTC')-interval '7 days',next_run_at=$2::timestamptz-interval '1 day' WHERE id=$1").bind(id).bind(scheduling_now()).execute(&pool).await.unwrap();
             let c = claim(&s, &f, id).await.unwrap().unwrap();
             let body = snapshot(&s, &c).await.unwrap();
             if kind == "team" {
