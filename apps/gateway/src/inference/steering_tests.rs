@@ -1251,6 +1251,196 @@ async fn steering_control_rejects_accounting_unavailable_after_a_real_upstream_h
     }
 }
 
+/// Diagnostics project completed spans, never their correlation or usage metadata.
+#[test]
+fn steering_phase_projection_keeps_only_fixed_names_and_durations() {
+    use crate::telemetry::{Attribute, Span, SpanName};
+
+    let canary_id = Uuid::from_bytes(*b"NoSensitiveCanar");
+    let mut span = Span::reserved(
+        SpanName::AdmissionConnect,
+        *canary_id.as_bytes(),
+        [2; 8],
+        Some([3; 8]),
+        1_000,
+        1_042,
+    )
+    .unwrap();
+    assert!(span.attribute(Attribute::RequestId(canary_id)));
+    assert!(span.attribute(Attribute::InputTokens(987654321)));
+    let raw = serde_json::to_value(&span).unwrap();
+    assert!(raw.to_string().contains(&canary_id.to_string()));
+    assert!(raw.to_string().contains("987654321"));
+
+    let projected = project_phases(&[span]).expect("a completed phase is available");
+    assert_eq!(
+        serde_json::to_value(projected).unwrap(),
+        json!([{"name":"admission.connect","duration_ns":42}]),
+        "no IDs, timestamps, attributes, tokens or other span metadata may survive"
+    );
+}
+
+#[test]
+fn steering_phase_projection_reports_missing_capture_as_unavailable() {
+    assert!(project_phases(&[]).is_none());
+}
+
+/// An injected accounting error must still fail the original strict comparison,
+/// but only after a secret-safe diagnostic has captured the real hop's phases.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn steering_expect_records_diagnostics_before_rejecting_injected_503(pool: PgPool) {
+    use axum::middleware::{Next, from_fn};
+    use futures_util::FutureExt;
+    use std::{panic::AssertUnwindSafe, time::Instant};
+
+    let mut w = world(pool).await;
+    let t = targets()
+        .into_iter()
+        .find(|t| t.label == "rerank/sglang")
+        .expect("the original failing matrix target exists");
+    let body = (t.body)(t.model);
+    let clean = control(
+        &w,
+        t.label,
+        json_request(&w.keys.personal_key.token, t.path, &t.base(), &body),
+    )
+    .await;
+    assert_eq!(
+        (clean.status, clean.reason.as_str()),
+        (400, "upstream_rejected")
+    );
+    assert!(w.diagnostics.lock().unwrap().is_empty());
+
+    let observed = Arc::new(Mutex::new(None));
+    let observation = observed.clone();
+    let approved_hits = w.approved.hits.clone();
+    let attacker_hits = w.attacker.hits.clone();
+    let unwrapped = w.app.clone();
+    w.app = unwrapped
+        .clone()
+        .layer(from_fn(move |request: Request, next: Next| {
+            let observation = observation.clone();
+            let approved_hits = approved_hits.clone();
+            let attacker_hits = attacker_hits.clone();
+            async move {
+                // No fabricated upstream hit: finish and snapshot the actual dispatch.
+                let response = next.run(request).await;
+                let status = response.status();
+                let bytes = to_bytes(response.into_body(), 16 << 20).await.unwrap();
+                *observation.lock().unwrap() = Some((
+                    status,
+                    String::from_utf8_lossy(&bytes).into_owned(),
+                    approved_hits.lock().unwrap().clone(),
+                    attacker_hits.lock().unwrap().clone(),
+                ));
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    [("x-diagnostic-canary", "NoSensitiveCanary")],
+                    axum::Json(json!({"error":{
+                        "message":"NoSensitiveCanary",
+                        "type":"accounting_unavailable",
+                        "code":"accounting_unavailable",
+                        "param":"NoSensitiveCanary"
+                    }})),
+                )
+                    .into_response()
+            }
+        }));
+    let headers = [
+        t.base(),
+        vec![("openai-beta".into(), "NoSensitiveCanary".into())],
+    ]
+    .concat();
+    let case = "openai-beta NoSensitiveCanary";
+    let started = Instant::now();
+    let outcome = AssertUnwindSafe(expect(
+        &w,
+        t.label,
+        case,
+        json_request(&w.keys.personal_key.token, t.path, &headers, &body),
+        Forwarded,
+        &clean,
+        Compare::Equal,
+    ))
+    .catch_unwind()
+    .await;
+    let elapsed_ns = started.elapsed().as_nanos();
+    w.app = unwrapped;
+
+    // Outside catch_unwind: the route and exact wire request must remain valid.
+    let (status, text, hits, attacker) = observed.lock().unwrap().take().expect("middleware ran");
+    assert_eq!(
+        (status.as_u16(), reason(&text)),
+        (400, clean.reason.clone())
+    );
+    assert_eq!(hits.len(), 1, "exactly one approved upstream hop");
+    assert_clean(t.label, case, &hits[0], &clean.hit, &w);
+    assert_eq!(hits[0].body, clean.hit.body, "the body is unchanged");
+    assert!(attacker.is_empty(), "no pre-assertion attacker hop");
+    assert_no_attacker(&w, t.label, case);
+    let diagnostics = serde_json::to_value(&*w.diagnostics.lock().unwrap()).unwrap();
+    w.close().await;
+
+    let panic_message = outcome.as_ref().err().and_then(|payload| {
+        payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+    });
+    let panic_message = panic_message.expect("the injected 503 must not pass as forwarded");
+    assert!(panic_message.contains(&format!(
+        "{} {case}: response differs from the control's",
+        t.label
+    )));
+    assert!(panic_message.contains("(503, \"accounting_unavailable\")"));
+    assert!(panic_message.contains("(400, \"upstream_rejected\")"));
+
+    let entries = diagnostics.as_array().expect("per-world entries");
+    assert_eq!(entries.len(), 1, "record before unwinding");
+    let diagnostic = &entries[0];
+    let duration = diagnostic["elapsed_ns"]
+        .as_u64()
+        .expect("monotonic elapsed time");
+    assert!(u128::from(duration) <= elapsed_ns);
+    let phases = diagnostic["phases"]
+        .as_array()
+        .expect("real phase capture, not unavailable");
+    for name in ["admission.commit", "settlement.commit"] {
+        assert!(
+            phases.iter().any(|phase| phase["name"] == name),
+            "missing {name}"
+        );
+    }
+    for phase in phases {
+        assert_eq!(phase.as_object().unwrap().len(), 2);
+        assert!(phase["duration_ns"].as_u64().is_some());
+    }
+    assert_eq!(
+        diagnostic,
+        &json!({
+            "elapsed_ns":duration,
+            "phases":phases,
+            "status":503,
+            "accounting_unavailable":true,
+            "approved_hits":1,
+            "attacker_hits":0
+        })
+    );
+    let rendered = diagnostics.to_string();
+    for forbidden in [
+        "NoSensitiveCanary",
+        "server-secret-",
+        "upstream_rejected",
+        "traceId",
+        "attributes",
+    ] {
+        assert!(
+            !rendered.contains(forbidden),
+            "diagnostic leaked forbidden metadata"
+        );
+    }
+}
+
 /// Reviewed native fields may carry attacker strings as data, never destinations.
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn anthropic_fidelity_data_cannot_steer_transport(pool: PgPool) {
