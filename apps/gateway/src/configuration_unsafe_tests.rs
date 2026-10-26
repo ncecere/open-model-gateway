@@ -98,7 +98,7 @@ impl<'ast> Visit<'ast> for Inventory {
         self.function = previous;
     }
     fn visit_signature(&mut self, node: &'ast syn::Signature) {
-        if node.unsafety.is_some() {
+        if matches!(node.safety, syn::Safety::Unsafe(_)) {
             self.record("unsafe_fn");
         }
         visit::visit_signature(self, node);
@@ -134,11 +134,11 @@ impl<'ast> Visit<'ast> for Inventory {
         }
         visit::visit_item_foreign_mod(self, node);
     }
-    fn visit_type_bare_fn(&mut self, node: &'ast syn::TypeBareFn) {
+    fn visit_type_fn_ptr(&mut self, node: &'ast syn::TypeFnPtr) {
         if node.unsafety.is_some() {
             self.record("unsafe_fn_type");
         }
-        visit::visit_type_bare_fn(self, node);
+        visit::visit_type_fn_ptr(self, node);
     }
     fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
         self.attribute(&node.meta);
@@ -204,4 +204,136 @@ fn inventory_counts_new_methods_signatures_attributes_and_macro_unsafe() {
             Some(if kind == "allow_unsafe" { &2 } else { &1 })
         );
     }
+}
+
+#[test]
+fn inventory_distinguishes_unsafe_safe_and_default_signatures() {
+    let source = r#"
+        unsafe fn free() {}
+        fn safe_free() {}
+        struct Example;
+        impl Example {
+            unsafe fn method() {}
+            fn safe_method() {}
+        }
+        trait ExampleTrait {
+            unsafe fn trait_method();
+            fn safe_trait_method();
+        }
+        unsafe extern "C" {
+            unsafe fn foreign();
+            safe fn safe_foreign();
+            fn default_foreign();
+        }
+    "#;
+    let mut inventory = Inventory {
+        file: "signatures.rs".into(),
+        function: "<module>".into(),
+        sites: Sites::new(),
+    };
+    inventory.visit_file(&syn::parse_file(source).unwrap());
+    let expected = [
+        ("free", "unsafe_fn"),
+        ("method", "unsafe_fn"),
+        ("trait_method", "unsafe_fn"),
+        ("foreign", "unsafe_fn"),
+        ("<module>", "unsafe_extern"),
+    ]
+    .into_iter()
+    .map(|(function, kind)| (("signatures.rs".into(), function.into(), kind), 1))
+    .collect();
+    assert_eq!(inventory.sites, expected);
+}
+
+#[test]
+fn inventory_counts_unsafe_function_pointer_aliases_and_nested_pointers() {
+    for (source, count) in [
+        ("type Callback = unsafe fn();", 1),
+        (
+            "type Callback = fn(unsafe fn()) -> unsafe extern \"C\" fn();",
+            2,
+        ),
+        ("type Callback = fn(extern \"C\" fn()) -> fn();", 0),
+    ] {
+        let mut inventory = Inventory {
+            file: "pointers.rs".into(),
+            function: "<module>".into(),
+            sites: Sites::new(),
+        };
+        inventory.visit_file(&syn::parse_file(source).unwrap());
+        let mut expected = Sites::new();
+        if count > 0 {
+            expected.insert(
+                ("pointers.rs".into(), "<module>".into(), "unsafe_fn_type"),
+                count,
+            );
+        }
+        assert_eq!(inventory.sites, expected, "{source}");
+    }
+}
+
+#[test]
+fn inventory_counts_unsafe_traits_impls_and_extern_blocks() {
+    let source = r#"
+        struct Example;
+        unsafe trait Unchecked {}
+        unsafe impl Unchecked for Example {}
+        unsafe extern "C" {}
+        trait Checked {}
+        impl Checked for Example {}
+        extern "C" {}
+    "#;
+    let mut inventory = Inventory {
+        file: "items.rs".into(),
+        function: "<module>".into(),
+        sites: Sites::new(),
+    };
+    inventory.visit_file(&syn::parse_file(source).unwrap());
+    let expected = ["unsafe_trait", "unsafe_impl", "unsafe_extern"]
+        .into_iter()
+        .map(|kind| (("items.rs".into(), "<module>".into(), kind), 1))
+        .collect();
+    assert_eq!(inventory.sites, expected);
+}
+
+#[test]
+fn inventory_preserves_macro_traversal_and_nested_test_skipping() {
+    let source = r#"
+        fn outer() {
+            unsafe fn nested() {}
+            emit!({ #[allow(unsafe_code)] unsafe {} });
+            #[cfg(test)] unsafe fn ignored() { emit!(unsafe {}); }
+        }
+        mod production {
+            #[cfg(test)] mod tests {
+                mod nested {
+                    unsafe fn ignored() {}
+                    type Callback = unsafe fn();
+                    emit!(#[allow(unsafe_code)] unsafe {});
+                }
+            }
+        }
+        struct Example;
+        impl Example { #[cfg(test)] unsafe fn ignored_method() {} }
+        trait ExampleTrait { #[cfg(test)] unsafe fn ignored_trait_method(); }
+        extern "C" { #[cfg(test)] unsafe fn ignored_foreign(); }
+        #[cfg(test)] unsafe trait IgnoredTrait {}
+        #[cfg(test)] unsafe impl IgnoredTrait for Example {}
+        #[cfg(test)] unsafe extern "C" { unsafe fn ignored_block(); }
+    "#;
+    let mut inventory = Inventory {
+        file: "nested.rs".into(),
+        function: "<module>".into(),
+        sites: Sites::new(),
+    };
+    inventory.visit_file(&syn::parse_file(source).unwrap());
+    let expected = [
+        ("nested", "unsafe_fn"),
+        ("outer", "allow_unsafe"),
+        ("outer", "unsafe_macro"),
+    ]
+    .into_iter()
+    .map(|(function, kind)| (("nested.rs".into(), function.into(), kind), 1))
+    .collect();
+    assert_eq!(inventory.sites, expected);
 }
