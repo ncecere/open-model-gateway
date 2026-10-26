@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { DeploymentReviewButton } from "./deployment-preview";
@@ -36,6 +36,14 @@ describe("deployment configuration review", () => {
     expect(screen.getByText("Product")).toBeTruthy();
     expect(screen.getByText(/Configuration estimate, not a reservation/)).toBeTruthy();
     expect(screen.getByText(/Personal workspace effects are omitted/)).toBeTruthy();
+    const details = screen.getByRole("region", { name: "Deployment change details" });
+    expect(details.tabIndex).toBe(0);
+    const warnings = screen.getByRole("list", { name: "Configuration estimate warnings" });
+    expect(details.contains(warnings)).toBe(true);
+    expect(within(warnings).getAllByRole("listitem").map(item => item.textContent)).toEqual(impact.warnings);
+    const facts = screen.getByText("Serving routes gained / lost").closest("dl")!;
+    expect([...facts.querySelectorAll("dt")].map(term => term.textContent)).toEqual(["Enabled", "Serving routes gained / lost", "Observed", "Expected revision (estimate only)"]);
+    expect(facts.querySelector("code")?.textContent).toBe("catalog:12");
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch.mock.calls[0][0]).toBe("/api/v1/platform/deployments/deployment/configuration/preview");
     expect(fetch.mock.calls[0][1]).toMatchObject({ method: "POST", body: JSON.stringify({ enabled: false }), headers: { "X-CSRF-Token": "test" } });

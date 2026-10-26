@@ -12,6 +12,7 @@ describe("scheduled report pages", () => {
     expect(html).toContain("Next occurrence"); expect(html).toContain("UTC"); expect(html).toContain("Recent runs");
     expect(html).toContain("1 sent"); expect(html).toContain("1 failed"); expect(html).toContain('href="/admin/settings/email"');
     expect(html).toContain("Create schedule"); expect(html).toContain("Resume"); expect(html).toContain("Delete");
+    expect(html).toContain("GATEWAY_PUBLIC_URL");
     // Delivery status is a human StatusBadge, and recipients pluralize; no raw status code.
     expect(html).toContain("Partially delivered"); expect(html).toContain("2 recipients"); expect(html).not.toContain(">partial<");
   });
@@ -21,6 +22,20 @@ describe("scheduled report pages", () => {
     expect(html).toContain("Read-only");
     expect(markup(<ScheduledReports session={session} workspace={member} />)).toContain("Access not available");
     expect(markup(<ScheduledReports session={session} workspace={team} />, [["/api/v1/workspaces/team/report-schedules?limit=100", { data: [], configuration: { smtp_configured: true, public_url_configured: true } }]])).toContain("Create schedule");
+  });
+  it("keeps configuration details and the settings link exclusive to platform writers", () => {
+    const unavailable = { data: [], configuration: { smtp_configured: false, public_url_configured: false } };
+    for (const viewer of [session, auditor]) {
+      const workspace = viewer === session ? { ...team, role: "owner" as const } : undefined;
+      const html = markup(<ScheduledReports session={viewer} workspace={workspace} />, [[workspace ? "/api/v1/workspaces/team/report-schedules?limit=100" : `${base}?limit=100`, unavailable]]);
+      expect(html).toContain("Email delivery isn&#x27;t configured yet");
+      expect(html).toContain("Ask a Platform Admin");
+      expect(html).not.toContain("GATEWAY_PUBLIC_URL");
+      expect(html).not.toContain("SMTP");
+      expect(html).not.toContain('href="/admin/settings/email"');
+    }
+    const denied = markup(<ScheduledReports session={session} workspace={member} />, [["/api/v1/workspaces/team/report-schedules?limit=100", unavailable]]);
+    expect(denied).toContain("Access not available"); expect(denied).not.toContain("Email delivery");
   });
   it("renders immutable exact totals, unavailable values, truncation and authenticated CSV link", () => {
     const html = markup(<ReportRunPage session={admin} schedule="schedule" run="run" />, [[`${base}/schedule/runs/run`, run]]);

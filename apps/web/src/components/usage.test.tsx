@@ -220,6 +220,23 @@ function serve(me: object, handler: (path: string) => unknown) {
 }
 
 describe("Usage & costs routing", () => {
+  it("associates the narrow scroll hint with the tablist and keeps Scheduled reports keyboard reachable", async () => {
+    serve(session, p => p.includes("/usage/overview?") ? overview(null) : p.includes("/usage/explore?") ? explore : p.includes("/report-schedules?") ? { data: [], configuration: { smtp_configured: false, public_url_configured: false } } : undefined);
+    const { router, client } = await mount("/workspaces/team/costs");
+    const tabs = await screen.findByRole("tablist", { name: "Usage & costs views" });
+    const hintId = tabs.getAttribute("aria-describedby");
+    expect(hintId).toBeTruthy();
+    expect(document.getElementById(hintId!)?.textContent).toContain("Scroll for more views, or use the Left and Right arrow keys.");
+    const overviewTab = within(tabs).getByRole("tab", { name: /^Overview$/ });
+    overviewTab.focus();
+    const user = userEvent.setup();
+    await user.keyboard("{End}");
+    await waitFor(() => expect(document.activeElement?.textContent).toBe("Scheduled reports"));
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(router.state.location.search.tab).toBe("scheduled-reports"));
+    await screen.findByRole("heading", { name: /^Scheduled reports$/ });
+    client.clear();
+  });
   it("opens a tile's routed chart page with a per-model Min/Max/Avg/Total table and goes back", async () => {
     const user = userEvent.setup(), fetch = serve(session, p => p.includes("/usage/explore?") ? explore : p.includes("/usage/overview?") ? overview(null) : undefined);
     const { router, client } = await mount("/workspaces/team/costs?tab=chart&metric=spend&range=7d");
