@@ -3,6 +3,9 @@
 Only per-platform OCI indexes with one runnable and bound SPDX/SLSA evidence
 are supported. TAR extensions (including PAX), root manifests and no-attestation
 roots fail closed. Layer bodies stay opaque; nothing is extracted or executed.
+Internal digest binding does not authenticate producers or approve roots: trusted
+Preflight artifact-ID selection and verified-root allowlisting remain mandatory
+external requirements.
 """
 import hashlib
 import json
@@ -221,7 +224,7 @@ def inspect_archive(path, expected_root_digest, expected_platform):
         files = _read_tar(stream, before.st_size)
         visited, json_bytes = set(), 0
 
-        def load(name, descriptor=None):
+        def load(name, descriptor=None, raw=False):
             nonlocal json_bytes
             _require(name in files, "missing graph content")
             offset, size, hashed = files[name]
@@ -235,15 +238,15 @@ def inspect_archive(path, expected_root_digest, expected_platform):
             _require(len(data) == size and "sha256:" + hashlib.sha256(data).hexdigest() == hashed,
                      "archive changed during inspection")
             visited.add(name)
-            return _json(data)
+            return data if raw else _json(data)
 
-        def resolve(descriptor, media, parse=True, allow_reference=False):
+        def resolve(descriptor, media, parse=True, allow_reference=False, raw=False):
             _descriptor(descriptor, media, allow_reference=allow_reference)
             name = "blobs/sha256/" + descriptor["digest"][7:]
             _require(name in files and files[name][1:] == (descriptor["size"], descriptor["digest"]),
                      "missing or mismatched blob")
             visited.add(name)
-            return load(name, descriptor) if parse else None
+            return load(name, descriptor, raw=raw) if parse else None
 
         layout = load("oci-layout")
         _require(layout == {"imageLayoutVersion": "1.0.0"}, "unsupported layout")
@@ -255,7 +258,8 @@ def inspect_archive(path, expected_root_digest, expected_platform):
         _descriptor(root, {INDEX})
         _require(root["digest"] == expected_root_digest and "platform" not in root,
                  "wrong root")
-        index = resolve(root, {INDEX})
+        root_data = resolve(root, {INDEX}, raw=True)
+        index = _json(root_data)
         runnable, attestations = _children(index, expected_platform)
         predicates = set()
         for child in [runnable, *attestations]:
@@ -296,18 +300,18 @@ def inspect_archive(path, expected_root_digest, expected_platform):
         _require((before.st_size, before.st_mtime_ns, before.st_ctime_ns) ==
                  (after.st_size, after.st_mtime_ns, after.st_ctime_ns), "archive changed")
         blobs = [v for k, v in files.items() if BLOB.fullmatch(k)]
-        return dict(root=root, index=index, platform=expected_platform,
+        return dict(root=root, root_json=root_data.decode("utf-8"), index=index, platform=expected_platform,
                     blob_count=len(blobs), total_bytes=sum(v[1] for v in blobs))
 
 
 def assemble_index(reports, annotations):
-    """Recheck report metadata/bindings, not authentication or discarded blob bodies."""
+    """Bind metadata to exact root bytes, not authenticate roots or discarded bodies."""
     _require(type(reports) is list and len(reports) == 2, "two reports required")
     # Bound JSON shape/depth, then inspect original types (no key coercion).
     _encoded(reports)
     merged, children, platforms, digests, roots = {}, [], set(), set(), set()
     for report in reports:
-        _fields(report, ("root", "index", "platform", "blob_count", "total_bytes"))
+        _fields(report, ("root", "root_json", "index", "platform", "blob_count", "total_bytes"))
         _require(type(report["blob_count"]) is int and 0 < report["blob_count"] <= MAX_MEMBERS
                  and type(report["total_bytes"]) is int and 0 < report["total_bytes"] <= MAX_TOTAL_BYTES,
                  "invalid report counters")
@@ -315,14 +319,21 @@ def assemble_index(reports, annotations):
         _require("platform" not in report["root"] and report["root"]["digest"] not in roots,
                  "unexpected or duplicate root")
         roots.add(report["root"]["digest"])
-        _children(report["index"], report["platform"])
+        _require(type(report["root_json"]) is str, "invalid raw root JSON")
+        root_data = report["root_json"].encode("utf-8")
+        _require(len(root_data) == report["root"]["size"]
+                 and "sha256:" + hashlib.sha256(root_data).hexdigest() == report["root"]["digest"],
+                 "root content mismatch")
+        index = _json(root_data)
+        _require(report["index"] == index, "report index/root mismatch")
+        _children(index, report["platform"])
         _require(report["platform"] not in platforms, "duplicate platform")
         platforms.add(report["platform"])
-        for child in report["index"]["manifests"]:
+        for child in index["manifests"]:
             _require(child["digest"] not in digests, "colliding descriptors")
             digests.add(child["digest"])
             children.append(child)
-        for key, value in report["index"].get("annotations", {}).items():
+        for key, value in index.get("annotations", {}).items():
             _require(key not in merged or merged[key] == value, "root annotation conflict")
             merged[key] = value
     _require(not roots & digests, "root/child descriptor collision")
