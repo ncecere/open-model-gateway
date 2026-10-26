@@ -358,6 +358,16 @@ test("every Dockerfile base image is pinned by digest", () => {
   assert.deepEqual(unpinned, []);
 });
 
+test("the Docker PostgreSQL fixture uses exactly one approved digest-pinned image (#369)", () => {
+  // Read source only: importing this file would run its Docker lifecycle hooks.
+  const text = readLocalFromRepo("tests/container-image.test.mjs");
+  assert.notEqual(text, null, "the Docker runtime contract test must exist");
+  const refs = text.match(/mirror\.gcr\.io\/library\/postgres[^\s"'`]*/g) ?? [];
+  assert.deepEqual(refs, [
+    "mirror.gcr.io/library/postgres@sha256:858bb5e98eed02eb8cafbcdc007f9a65d1b613972028944a8ec2133ccaf80d27",
+  ], "expected exactly one PostgreSQL fixture reference, using the approved PostgreSQL 17 digest (not a mutable tag)");
+});
+
 // ---- Rust toolchain pin (#354) ----
 //
 // rust-toolchain.toml, every Rust build stage in every Dockerfile, and every
