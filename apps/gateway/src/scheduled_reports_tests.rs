@@ -1,4 +1,4 @@
-//! #102B RED contract: run with a real disposable PostgreSQL database.
+//! Scheduled-report contracts: run database tests with disposable PostgreSQL.
 use crate::scheduled_reports::calendar::Calendar;
 use chrono::{DateTime, Utc};
 fn at(s: &str) -> DateTime<Utc> {
@@ -66,8 +66,8 @@ mod db {
     use sqlx::PgPool;
     use uuid::Uuid;
     fn scheduling_now() -> DateTime<Utc> {
-        // RED: Monday's latest complete period is not due until 00:01 UTC.
-        at("2026-10-26T00:00:30Z")
+        // Generation fixtures require the latest complete period's delivery to be due.
+        at("2026-10-27T12:00:00Z")
     }
     async fn claim(store: &Store, fence: &Fence, id: Uuid) -> Result<Option<Claim>, sqlx::Error> {
         scheduled_reports::claim_at(store, fence, id, scheduling_now()).await
@@ -104,14 +104,177 @@ mod db {
         let store = Store::new(pool.clone());
         tick(&store, &fence).await.unwrap(); // initialize, never replay on creation
         assert_eq!(count(pool).await, 0);
+        assert_eq!(
+            cursor(pool, id).await,
+            (
+                Some(at("2026-11-02T00:01:00Z")),
+                Some(at("2026-11-02T00:00:00Z")),
+                None,
+            ),
+            "initialization schedules the next occurrence without replay"
+        );
         sqlx::query("UPDATE report_schedules SET next_period_end=date_trunc('week',$2::timestamptz,'UTC')-interval '28 days',next_run_at=date_trunc('week',$2::timestamptz,'UTC')-interval '28 days'+interval '1 minute' WHERE id=$1").bind(id).bind(scheduling_now()).execute(pool).await.unwrap();
         (store, fence, id, user)
+    }
+    async fn cursor(
+        pool: &PgPool,
+        id: Uuid,
+    ) -> (
+        Option<DateTime<Utc>>,
+        Option<DateTime<Utc>>,
+        Option<DateTime<Utc>>,
+    ) {
+        sqlx::query_as(
+            "SELECT next_run_at,next_period_end,last_period_end FROM report_schedules WHERE id=$1",
+        )
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
     }
     async fn count(pool: &PgPool) -> i64 {
         sqlx::query_scalar("SELECT count(*) FROM report_runs")
             .fetch_one(pool)
             .await
             .unwrap()
+    }
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn scheduled_reports_delivery_boundary_defers_then_catches_up_once(pool: PgPool) {
+        let (s, f, id, _) = setup(&pool).await;
+        let before = at("2026-10-26T00:00:30Z");
+        let due = at("2026-10-26T00:01:00Z");
+        let original_end = Some(at("2026-09-28T00:00:00Z"));
+        assert_eq!(cursor(&pool, id).await.1, original_end);
+        assert!(
+            scheduled_reports::claim_at(&s, &f, id, before)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(scheduled_reports::tick_at(&s, &f, before).await.unwrap(), 0);
+        assert_eq!(count(&pool).await, 0);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM report_generation_claims")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            cursor(&pool, id).await,
+            (Some(due), original_end, None),
+            "deferral must preserve the original period cursor for skipped counting"
+        );
+
+        let (a, b) = tokio::join!(
+            scheduled_reports::tick_at(&s, &f, due),
+            scheduled_reports::tick_at(&s, &f, due)
+        );
+        assert_eq!(a.unwrap() + b.unwrap(), 1);
+        assert_eq!(count(&pool).await, 1);
+        let occurrence: (DateTime<Utc>, DateTime<Utc>, i64) = sqlx::query_as(
+            "SELECT period_start,period_end,skipped_intervals FROM report_runs WHERE schedule_id=$1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            occurrence,
+            (at("2026-10-19T00:00:00Z"), at("2026-10-26T00:00:00Z"), 4)
+        );
+        let completed_cursor = (
+            Some(at("2026-11-02T00:01:00Z")),
+            Some(at("2026-11-02T00:00:00Z")),
+            Some(at("2026-10-26T00:00:00Z")),
+        );
+        assert_eq!(cursor(&pool, id).await, completed_cursor);
+        assert!(
+            scheduled_reports::claim_at(&s, &f, id, due)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(scheduled_reports::tick_at(&s, &f, due).await.unwrap(), 0);
+        let (a, b) = tokio::join!(
+            scheduled_reports::tick_at(&s, &f, due),
+            scheduled_reports::tick_at(&s, &f, due)
+        );
+        assert_eq!((a.unwrap(), b.unwrap()), (0, 0));
+        assert_eq!(count(&pool).await, 1);
+        assert_eq!(cursor(&pool, id).await, completed_cursor);
+    }
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn scheduled_reports_frozen_scheduling_preserves_claim_expiry_and_lease_fences(
+        pool: PgPool,
+    ) {
+        let (s, f, id, _) = setup(&pool).await;
+        let _claim = claim(&s, &f, id).await.unwrap().unwrap();
+        let (token, expires, live): (Uuid, DateTime<Utc>, bool) = sqlx::query_as(
+            "SELECT token,expires_at,expires_at>clock_timestamp() AND expires_at<=clock_timestamp()+interval '30 seconds' FROM report_generation_claims WHERE schedule_id=$1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(live, "claim TTL is anchored to real database time");
+        let advanced = expires.max(scheduling_now()) + chrono::TimeDelta::days(14);
+        assert!(advanced > expires);
+        assert!(
+            scheduled_reports::claim_at(&s, &f, id, advanced)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            scheduled_reports::tick_at(&s, &f, advanced).await.unwrap(),
+            0
+        );
+        let unchanged: (Uuid, DateTime<Utc>) = sqlx::query_as(
+            "SELECT token,expires_at FROM report_generation_claims WHERE schedule_id=$1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            unchanged,
+            (token, expires),
+            "scheduling cannot steal a live claim"
+        );
+        assert_eq!(count(&pool).await, 0);
+
+        // Expire ownership using database time, not the frozen scheduling instant.
+        sqlx::query("UPDATE report_generation_claims SET expires_at=clock_timestamp()-interval '1 second' WHERE schedule_id=$1")
+            .bind(id).execute(&pool).await.unwrap();
+        let _replacement = scheduled_reports::claim_at(&s, &f, id, advanced)
+            .await
+            .unwrap()
+            .unwrap();
+        let replacement_token: Uuid =
+            sqlx::query_scalar("SELECT token FROM report_generation_claims WHERE schedule_id=$1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_ne!(replacement_token, token);
+        sqlx::query("SELECT omg_lease_release('report_scheduler',$1,$2)")
+            .bind(f.holder)
+            .bind(f.epoch)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let error = match scheduled_reports::claim_at(&s, &f, id, advanced).await {
+            Err(error) => error,
+            Ok(_) => panic!("frozen scheduling must not bypass a released lease"),
+        };
+        assert!(crate::leases::is_fenced(&error));
+        assert!(crate::leases::is_fenced(
+            &scheduled_reports::tick_at(&s, &f, advanced)
+                .await
+                .unwrap_err()
+        ));
+        assert_eq!(count(&pool).await, 0);
     }
     #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn scheduled_reports_generation_two_replicas_idempotent_catchup_lineage(pool: PgPool) {
@@ -163,6 +326,18 @@ mod db {
             .unwrap();
         assert!(!complete(&s, &f, &c, &body).await.unwrap());
         assert_eq!(count(&pool).await, 0);
+        assert_eq!(cursor(&pool, id).await, (None, None, None));
+        assert!(claim(&s, &f, id).await.unwrap().is_none());
+        assert_eq!(count(&pool).await, 0);
+        assert_eq!(
+            cursor(&pool, id).await,
+            (
+                Some(at("2026-11-02T00:02:00Z")),
+                Some(at("2026-11-02T00:00:00Z")),
+                None,
+            ),
+            "revision reset initializes at the same scheduling instant without replay"
+        );
         sqlx::query("UPDATE report_schedules SET next_period_end=date_trunc('week',$2::timestamptz,'UTC')-interval '7 days',next_run_at=$2::timestamptz-interval '1 day' WHERE id=$1").bind(id).bind(scheduling_now()).execute(&pool).await.unwrap();
         sqlx::query("UPDATE report_generation_claims SET expires_at=clock_timestamp()-interval '1 second' WHERE schedule_id=$1").bind(id).execute(&pool).await.unwrap();
         let c = claim(&s, &f, id).await.unwrap().unwrap();
