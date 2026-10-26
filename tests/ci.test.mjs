@@ -235,7 +235,7 @@ test("Cargo target invocations preserve package identity, exact multiple filters
   assert.deepEqual(validateRun("running 1 test\ntest result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s\n", { entries: [entry("live")], ignored: ["live"], total: 1 }), { passed: 0, ignored: 1, measured: 0 });
 });
 
-function syntheticCargo({ corrupt = "", failAt = -1 } = {}) {
+function syntheticCargo({ corrupt = "", failAt = -1, probe = "", probeMutation = "" } = {}) {
   const meta = fixtures();
   const calls = [];
   const run = async args => {
@@ -246,8 +246,17 @@ function syntheticCargo({ corrupt = "", failAt = -1 } = {}) {
     if (args.includes("--doc")) return "doctests passed\n";
     const name = args.includes("--lib") ? "open_model_gateway" : args[args.indexOf("--test") + 1] ?? "binary";
     const terminal = "providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence";
-    const entries = name === "open_model_gateway" ? Array.from({ length: 12 }, (_, i) => entry(i === 11 ? terminal : `m::test_${i}`)) : [entry("normal"), entry("live")];
-    const ignored = entries.filter(e => e.name === "live" || e.name === terminal);
+    const keyContention = "management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement";
+    let entries = name === "open_model_gateway" ? Array.from({ length: 12 }, (_, i) => entry(i === 11 ? terminal : i === 10 ? keyContention : `m::test_${i}`)) : [entry("normal"), entry("live")];
+    let ignored = entries.filter(e => e.name === "live" || e.name === terminal || e.name === keyContention);
+    if (name === "open_model_gateway") {
+      const mutate = items => items.flatMap(e => e.name !== probe ? [e]
+        : probeMutation === "remove" ? []
+        : probeMutation === "rename" ? [{ ...e, name: `${e.name}_renamed` }]
+        : probeMutation === "benchmark" ? [{ ...e, kind: "benchmark" }] : [e]);
+      entries = mutate(entries);
+      ignored = mutate(ignored).filter(e => probeMutation !== "unignore" || e.name !== probe);
+    }
     if (args.includes("--list")) {
       if (corrupt === "listing") return "garbage\n";
       return listing(args.includes("--ignored") ? ignored : entries, args.includes("pretty"));
@@ -282,6 +291,25 @@ test("orchestrator runs selected lib names once after -- --exact, runs doctests 
   }
   for (const [index, count] of [[-1, 4], [4, 4], [0, 0], [0.5, 4], [0, 1.5], ["0", 4]]) {
     await assert.rejects(() => runShard(index, count, async () => { throw new Error("must not run"); }, () => {}), /shard/i);
+  }
+});
+
+test("orchestrator rejects each missing, renamed, unignored or non-test dedicated library probe before executing tests", async () => {
+  const { runShard } = await shards();
+  const probes = [
+    "management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement",
+    "providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence",
+  ];
+  for (const probe of probes) for (const probeMutation of ["remove", "rename", "unignore", "benchmark"]) {
+    // Generate all listings from the same mutation: pretty counts stay valid
+    // and ignored remains a subset, so only the dedicated-probe guard can refuse.
+    const fake = syntheticCargo({ probe, probeMutation });
+    await assert.rejects(() => runShard(0, 4, fake.run, () => {}), error => {
+      assert.match(error.message, /Dedicated/);
+      assert.ok(error.message.includes(probe), error.message);
+      return true;
+    }, `${probeMutation}: ${probe} must be refused`);
+    assert.ok(!fake.calls.some(c => c.includes("--exact")), `${probeMutation}: ${probe} must fail before test execution`);
   }
 });
 
@@ -327,6 +355,7 @@ process.stdout.write(output);
     const good = invoke("");
     assert.equal(good.status, 0, good.stderr);
     assert.match(good.stdout, /default-ignored=1/);
+    assert.match(good.stdout, /listed=12 default-ignored=2/);
     assert.match(good.stdout, /workspace doctests: owner=shard0/);
     assert.match(good.stderr, /Compiling fixture/);
     for (const mode of ["compile", "metadata", "list", "run", "doc", "zero", "listing", "mismatch", "ignored", "terminal"]) {
