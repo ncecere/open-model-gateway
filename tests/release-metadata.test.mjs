@@ -16,6 +16,7 @@ test("gateway and browser manifests agree with the release target", () => {
   assert.equal(cargoVersion, target);
   assert.equal(json("package.json").version, target);
   assert.equal(json("apps/web/package.json").version, target);
+  assert.equal(json("docs/openapi/management.openapi.json").info.version, target);
 });
 
 test("Cargo and npm lockfiles retain the release package versions", () => {
