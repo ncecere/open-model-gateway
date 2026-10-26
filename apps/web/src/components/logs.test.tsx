@@ -47,6 +47,7 @@ describe("Logs page", () => {
       expect(time.getAttribute("datetime")).toBe(row.started_at);
       expect(link.getAttribute("href")).toBe(href);
       expect(link.getAttribute("aria-label")).toContain(context);
+      expect(link.getAttribute("aria-label")?.startsWith(context)).toBe(true);
       expect(link.getAttribute("aria-label")).toContain(`started ${full}`);
       expect(within(container).getByRole("link", { name: name => name.includes(compact) })).toBe(link);
     } finally {

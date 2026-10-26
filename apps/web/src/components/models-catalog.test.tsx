@@ -55,10 +55,10 @@ describe("Admin Models catalog", () => {
   });
   it("shows type tabs with counts, sort, list cards with exact prices and the Add model action", () => {
     const html = page({ page: "models" });
-    for (const tab of ["All", "Text", "Embeddings", "Images"]) expect(html).toContain(`>${tab}<`);
+    for (const tab of ["All", "Text", "Embeddings", "Images"]) expect(html).toContain(`>${tab} <span`);
     // Types with no models at all are hidden (All and the selected type stay).
-    for (const tab of ["Speech to text", "Text to speech", "Rerank", "System One"]) expect(html).not.toContain(`>${tab}<`);
-    expect(page({ page: "models", type: "rerank" })).toContain(">Rerank<");
+    for (const tab of ["Speech to text", "Text to speech", "Rerank", "System One"]) expect(html).not.toContain(`>${tab} <span`);
+    expect(page({ page: "models", type: "rerank" })).toContain(">Rerank <span");
     expect(html).toContain('aria-label="Model type"'); expect(html).toContain("Input price: low to high");
     // One toolbar row: Sort and View carry no visible labels of their own; the count sits after the tabs.
     expect(html).toContain('aria-label="Sort by"'); expect(html).not.toMatch(/>Sort<|>View</); expect(html).toMatch(/aria-label="List"[^>]*title="List"/);

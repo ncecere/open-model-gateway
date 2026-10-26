@@ -96,7 +96,7 @@ describe("Grounded-style people pages", () => {
     const path = `/api/v1/platform/workspaces/${wid}`, html = markup(<WorkspaceDetail session={admin} id={wid} onTabChange={noop} />, [[path, product], [`${path}/catalogs`, { mode: "inherit", catalog_ids: [], effective_catalog_ids: ["c1", "c2"] }]]), visible = text(html);
     for (const label of ["Team", "Members", "Research", "Available catalogs", "Uses team defaults", "Your membership"]) expect(visible).toContain(label);
     expect(html).toContain('aria-label="More actions"');
-    expect(html).toMatch(/Members<span[^>]*>3<\/span>/);
+    expect(html).toMatch(/Members <span[^>]*>3<\/span>/);
     expect(visible).not.toContain("3 members"); // the stat card and tab count say it once
     // Catalogs and Models are one "Model access" tab (catalogs still counted in the stat card).
     expect(html).toContain(">Models<");
