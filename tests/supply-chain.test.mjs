@@ -1251,6 +1251,7 @@ function probeFixture() {
     GITHUB_REPOSITORY: "ncecere/open-model-gateway", IMAGE: "ghcr.io/ncecere/open-model-gateway", GITHUB_ACTOR: "probe-fixture",
     DIGEST: `sha256:${"b".repeat(64)}`, CHILD: `sha256:${"c".repeat(64)}`,
     FIXTURE_DIR: dir,
+    REPORTED_VERSION: `open-model-gateway ${readFileSync(join(root, "apps/gateway/Cargo.toml"), "utf8").match(/^version = "([^"]+)"$/m)[1]}`,
   };
   const mock = `#!${process.execPath}
 const fs = require('node:fs');
@@ -1274,7 +1275,7 @@ if (command === 'docker') {
     console.log(e.CONFIG_JSON || JSON.stringify([{ Os: 'linux', Architecture: 'amd64', Config: { Labels: { 'org.opencontainers.image.revision': e.GITHUB_SHA } } }]));
   } else if (a[0] === 'run') {
     if (fs.existsSync(e.DOCKER_CONFIG) || e.GITHUB_TOKEN) fail('image sees registry credentials');
-    console.log(e.REPORTED_VERSION || 'open-model-gateway 0.9.0');
+    console.log(e.REPORTED_VERSION ?? '');
   } else fail('unexpected Docker command');
 } else if (command === 'cosign') {
   if (a.slice(0, 2).join(' ') === 'download signature') {
