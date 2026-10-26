@@ -368,6 +368,14 @@ jobs:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
 
+      # Metadata is untrusted data; only this server-controlled ref may set tags.
+      - name: Validate publication tags before credentials
+        env:
+          TAGS: ${{ needs.meta.outputs.tags }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: python3 -I .github/scripts/publication-tags.py
+
       - name: Require the runner's own Buildx
         run: docker buildx version
 

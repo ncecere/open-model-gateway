@@ -1214,6 +1214,59 @@ function assertPublicationGraph(flows) {
   assert.match(executable(importer.jobs.import), /sha256sum/);
 }
 
+function assertPublicationTagGuard(image) {
+  assert.deepEqual(image.env, { IMAGE: "ghcr.io/ncecere/open-model-gateway" });
+  const publish = image.jobs.publish;
+  assertRequiredPublication(publish, ["Job summary", "Remove registry credentials"]);
+  assert.equal(publish.env, undefined);
+  const steps = stepsOf(publish);
+  const guards = steps.filter(s => s.name === "Validate publication tags before credentials");
+  assert.equal(guards.length, 1);
+  const guard = guards[0];
+  assert.deepEqual(guard, {
+    name: "Validate publication tags before credentials",
+    env: { TAGS: "${{ needs.meta.outputs.tags }}", GITHUB_REF: "${{ github.ref }}", GITHUB_SHA: "${{ github.sha }}" },
+    run: "python3 -I .github/scripts/publication-tags.py",
+  });
+  const checkout = steps.find(s => actionName(s.uses) === "actions/checkout");
+  assert.deepEqual(checkout.with, { ref: "${{ github.workflow_sha }}", "persist-credentials": false });
+  assert.ok(steps.indexOf(checkout) < steps.indexOf(guard));
+  const credentials = steps.filter(s => /secrets\.|docker login/.test(JSON.stringify(s)));
+  assert.ok(credentials.length > 0);
+  for (const step of credentials) assert.ok(steps.indexOf(guard) < steps.indexOf(step));
+  const index = steps.find(s => s.id === "index");
+  assert.ok(steps.indexOf(guard) < steps.indexOf(index));
+  assert.equal(index.env.TAGS, guard.env.TAGS);
+  assert.equal(index.env.IMAGE, undefined);
+}
+
+test("native image writer guards the exact trusted tag set before credential access", () => assertPublicationTagGuard(publicationData().image));
+
+test("publication tag guard policy refuses missing, optional, bypassed and late guards", () => {
+  const original = publicationData().image;
+  const guard = image => image.jobs.publish.steps.find(s => s.name === "Validate publication tags before credentials");
+  for (const mutate of [
+    i => { i.jobs.publish.steps = i.jobs.publish.steps.filter(s => s !== guard(i)); },
+    i => { guard(i).if = "false"; },
+    i => { guard(i)["continue-on-error"] = true; },
+    i => { guard(i).run = "echo no-check"; },
+    i => { guard(i).run += " || true"; },
+    i => { guard(i).env.GITHUB_REF = "${{ needs.meta.outputs.ref }}"; },
+    i => { guard(i).env.GITHUB_SHA = "${{ needs.meta.outputs.sha }}"; },
+    i => { guard(i).env.TAGS = "${{ github.ref }}"; },
+    i => { const s = guard(i); i.jobs.publish.steps = i.jobs.publish.steps.filter(step => step !== s); i.jobs.publish.steps.push(s); },
+    i => { const s = guard(i); i.jobs.publish.steps = i.jobs.publish.steps.filter(step => step !== s); i.jobs.publish.steps.unshift(s); },
+    i => { i.jobs.publish.steps.unshift({ env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }, run: "echo early-access" }); },
+    i => { i.jobs.publish.steps.find(s => actionName(s.uses) === "actions/checkout").with.ref = "${{ github.sha }}"; },
+    i => { i.env.IMAGE = "ghcr.io/other/image"; },
+    i => { i.jobs.publish.steps.find(s => s.id === "index").env.TAGS = "${{ needs.meta.outputs.other_tags }}"; },
+  ]) {
+    const image = structuredClone(original);
+    mutate(image);
+    assert.throws(() => assertPublicationTagGuard(image), { name: "AssertionError" });
+  }
+});
+
 test("tool handoff names distinguish job-only reruns without replacing immutable artifacts", () => {
   const upload = publicationData()["oci-import"].jobs.tools.steps.find(s => actionName(s.uses) === "actions/upload-artifact");
   assert.equal(upload.with.name, "oras-${{ inputs.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ inputs.artifact_id }}-${{ github.run_attempt }}");
