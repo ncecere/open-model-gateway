@@ -2,7 +2,15 @@ name: CI
 
 on:
   push:
+    branches: [main]
+    tags: ['v*']
   pull_request:
+
+# Only superseded PR work is cancelled. Unique main/tag groups also prevent
+# GitHub from replacing a pending release run in the same concurrency group.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -19,7 +27,54 @@ permissions:
 # written in the workflow (.github/actions/setup-node, the helm job).
 
 jobs:
-  gateway:
+  gateway-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # 1.99.1, matches rust-toolchain.toml
+        with:
+          toolchain: "1.99.1"
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  gateway-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    services:
+      postgres:
+        image: mirror.gcr.io/library/postgres:17-alpine
+        env:
+          POSTGRES_USER: gateway
+          POSTGRES_PASSWORD: gateway
+          POSTGRES_DB: gateway
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gateway -d gateway"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://gateway:gateway@localhost:5432/gateway
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # 1.99.1, matches rust-toolchain.toml
+        with:
+          toolchain: "1.99.1"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: ./.github/actions/setup-node
+      - run: npm ci
+      # Split the large gateway library by exact names; other test targets stay
+      # whole. The script reconciles Cargo's metadata/artifacts and test counts.
+      # Docker/ACL probes belong exclusively to gateway-special; docs to shard 0.
+      - run: node .github/scripts/rust-shards.mjs --shard ${{ matrix.shard }} --count 4
+
+  gateway-special:
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -48,16 +103,14 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: ./.github/actions/setup-node
       - run: npm ci
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      # The MinIO/RustFS file store tests run in their own step below.
-      - run: cargo test --workspace --all-features -- --skip minio_compatibility --skip rustfs_compatibility
       - name: S3-compatible file store against MinIO and RustFS containers
         # Images are pinned by digest in tests/filestore_s3.rs; random loopback ports;
         # containers are removed by the test. Missing Docker fails instead of skipping.
         env:
           FILESTORE_REQUIRE_DOCKER: "1"
         run: cargo test -p open-model-gateway --all-features --test filestore_s3
+      - name: Ordinary runtime privilege tests on disposable PostgreSQL
+        run: cargo test -p open-model-gateway --all-features --test runtime_privileges
       - name: Verify enterprise runtime ACLs on disposable PostgreSQL
         run: cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored
       - name: Verify Anthropic terminal SDK and accounting contract on disposable PostgreSQL
@@ -65,14 +118,29 @@ jobs:
         run: cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact
       - name: Install age for the encrypted backup tests
         run: sudo apt-get update && sudo apt-get install -y age
+      - name: Build the gateway binary for the backup lineage check
+        run: cargo build -p open-model-gateway --all-features --bin open-model-gateway
       - name: Backup/restore drill on the disposable service database
         # PostgreSQL 17 client tools run inside the service container; the
-        # lineage check uses the gateway binary built by the tests above.
+        # lineage check uses the explicitly built gateway binary above.
         env:
           BACKUP_TEST_DATABASE_URL: postgres://gateway:gateway@127.0.0.1:5432/gateway
           BACKUP_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
           BACKUP_TEST_GATEWAY_BINARY: target/debug/open-model-gateway
         run: python3 tests/backup.test.py
+
+  # Stable protected-branch check name. The matrix needs result covers every leg;
+  # skipped, cancelled, missing or additional dependencies must not turn green.
+  gateway:
+    runs-on: ubuntu-latest
+    needs: [gateway-lint, gateway-tests, gateway-special]
+    if: always()
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-node
+      - run: node .github/scripts/gateway-result.mjs
+        env:
+          GATEWAY_NEEDS: ${{ toJSON(needs) }}
 
   web:
     runs-on: ubuntu-latest
@@ -85,6 +153,7 @@ jobs:
       - run: npm run test:sdk-bases
       - run: npm run test:demo
       - run: npm run test:supply-chain
+      - run: npm run test:ci
       - run: npm run test:conflict-markers
       - name: Install age (test:staging includes the encrypted backup tests)
         run: sudo apt-get update && sudo apt-get install -y age
@@ -223,14 +292,13 @@ jobs:
             target/browser-tests/gateway.log
           retention-days: 7
 
-  # The isolated staging rehearsal on a locally built image, for pull requests
-  # and branches. On main and v* tags the image job runs the same rehearsal on
+  # The independent, read-only staging rehearsal builds/verifies its own image
+  # for pull requests. On main and v* tags image runs the same rehearsal on
   # the exact digests it publishes, so this job is skipped there.
   staging-image:
     if: github.event_name != 'push' || (github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     timeout-minutes: 35
-    needs: [gateway, web]
     env:
       # Staging's PostgreSQL and Caddy from mirror.gcr.io (same digests as
       # Docker Hub); deploy/staging/compose.yaml defaults to Docker Hub.
