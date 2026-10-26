@@ -18,7 +18,7 @@ beforeEach(() => {
   Object.defineProperty(window, "matchMedia", { configurable: true, value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }) });
 });
 afterEach(() => { cleanup(); abortRequests(); for (const client of clients.splice(0)) client.clear(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
-async function mount(href: string, me: Session = session) {
+async function mount(href: string, me: Session = session, persistedNotice = false) {
   const fetch = vi.fn(async (input: string) => {
     if (input === "/api/v1/me") return Response.json(me);
     if (input === "/api/v1/me/notifications/summary") return Response.json({ unread: 0 });
@@ -26,7 +26,9 @@ async function mount(href: string, me: Session = session) {
   });
   vi.stubGlobal("fetch", fetch);
   const client = testClient(); clients.push(client);
-  const router = createRouter({ routeTree: dashboardRouteTree, history: createMemoryHistory({ initialEntries: [href] }) });
+  const history = createMemoryHistory({ initialEntries: [href] });
+  if (persistedNotice) history.replace(href, { workspaceUnavailable: true });
+  const router = createRouter({ routeTree: dashboardRouteTree, history });
   await router.load(); render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>);
   return { router, fetch };
 }
@@ -48,6 +50,11 @@ describe("unavailable workspace bookmarks", () => {
     // Following a valid Home link removes the contextual notice without granting anything new.
     await userEvent.setup().click(screen.getByRole("link", { name: "Product: API keys" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/workspaces/team/keys"));
+    expect(screen.queryByText(notice)).toBeNull();
+  });
+  it("does not replay a previous document's redirect notice from persisted history state", async () => {
+    await mount("/home", session, true);
+    await screen.findByText("Your workspaces");
     expect(screen.queryByText(notice)).toBeNull();
   });
   it("retains valid workspace access and does not invent a notice on ordinary Home", async () => {
