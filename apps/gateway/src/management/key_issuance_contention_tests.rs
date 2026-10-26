@@ -20,6 +20,7 @@ const APP: &str = "omg_key_issuance_measurement";
 
 // Never include transport/database errors, SQL text, response bodies, cookies,
 // CSRF values or issued tokens in panic diagnostics (including on refusal).
+#[track_caller]
 fn checked<T, E>(result: Result<T, E>) -> T {
     match result {
         Ok(value) => value,
