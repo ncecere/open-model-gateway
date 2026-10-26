@@ -1048,6 +1048,62 @@ const noLocal = () => null;
 const violations = (text, readLocal = noLocal) => allWriteViolations([{ file: ".github/workflows/fixture.yml", text }], readLocal);
 const localFiles = files => path => files[path] ?? null;
 
+test("fixtures: write-job allowlist is exactly the three approved GitHub-owned actions (#374)", () => {
+  assert.deepEqual([...WRITE_JOB_ACTIONS.keys()].sort(), [
+    "actions/checkout", "actions/download-artifact", "github/codeql-action/upload-sarif",
+  ]);
+});
+
+for (const action of ["docker/setup-buildx-action", "docker/login-action", "docker/build-push-action"]) {
+  const step = `      - uses: ${action}@${SHA(1)} # v1\n`;
+  for (const scope of ["contents", "packages", "id-token"]) {
+    test(`fixtures: ${action} is rejected with ${scope}: write despite its SHA pin (#374)`, () => {
+      const text = wf(`permissions: read-all\njobs:\n  writer:\n    permissions: {${scope}: write}\n    runs-on: ubuntu-24.04\n    steps:\n${step}`);
+      assert.equal(violations(text).length, 1);
+    });
+  }
+  test(`fixtures: ${action} is rejected with inherited write-all (#374)`, () => {
+    const text = wf(`permissions: write-all\njobs:\n  writer:\n    runs-on: ubuntu-24.04\n    steps:\n${step}`);
+    assert.equal(violations(text).length, 1);
+  });
+  test(`fixtures: ${action} in a local composite is rejected by a writer (#374)`, () => {
+    const files = { ".github/actions/wrapper/action.yml": `name: wrapper\ndescription: fixture\nruns:\n  using: composite\n  steps:\n    - uses: ${action}@${SHA(1)} # v1\n` };
+    const text = wf("permissions: {packages: write}\njobs:\n  writer:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: ./.github/actions/wrapper");
+    assert.equal(violations(text, localFiles(files)).length, 1);
+  });
+  const caller = wf("permissions: write-all\njobs:\n  call:\n    uses: ./.github/workflows/child.yml");
+  const child = `name: child\non: workflow_call\njobs:\n  build:\n    runs-on: ubuntu-24.04\n    steps:\n${step}`;
+  test(`fixtures: ${action} in a reusable child inheriting a writer is rejected (#374)`, () => {
+    assert.equal(violations(caller, localFiles({ ".github/workflows/child.yml": child })).length, 1);
+  });
+  test(`fixtures: ${action} remains allowed in a read-only job (#374)`, () => {
+    const text = wf(`permissions: read-all\njobs:\n  build:\n    runs-on: ubuntu-24.04\n    steps:\n${step}`);
+    assert.deepEqual(violations(text), []);
+  });
+  test(`fixtures: ${action} remains allowed when a reusable child explicitly downgrades to read-only (#374)`, () => {
+    const downgraded = child.replace("    runs-on:", "    permissions: read-all\n    runs-on:");
+    assert.deepEqual(violations(caller, localFiles({ ".github/workflows/child.yml": downgraded })), []);
+  });
+}
+
+test("fixtures: a valid Buildx guard and image pin do not waive the writer action policy (#374)", () => {
+  const text = wf(`permissions: {packages: write}\njobs:\n  writer:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: docker buildx version\n      - uses: docker/setup-buildx-action@${SHA(1)} # v4\n        with:\n          driver-opts: image=moby/buildkit:v1@sha256:${"c".repeat(64)}\n`);
+  assert.deepEqual(pinViolations(text, ".github/workflows/fixture.yml"), []);
+  assert.deepEqual(buildxViolations(".github/workflows/fixture.yml", text), []);
+  assert.equal(violations(text).length, 1);
+});
+
+for (const [action, scope] of [
+  ["actions/checkout", "contents"],
+  ["actions/download-artifact", "packages"],
+  ["github/codeql-action/upload-sarif", "security-events"],
+]) {
+  test(`fixtures: approved ${action} remains allowed with ${scope}: write (#374)`, () => {
+    const text = wf(`permissions: {${scope}: write}\njobs:\n  writer:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: ${action}@${SHA(1)} # v1`);
+    assert.deepEqual(violations(text), []);
+  });
+}
+
 test("fixtures: write-permission bypasses are caught", () => {
   const evil = "aquasecurity/trivy-action@master";
   // flow-style workflow (the reader this replaced skipped it)
