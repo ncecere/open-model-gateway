@@ -1146,8 +1146,11 @@ test("fixtures: an action hidden in a local composite or a called workflow is ca
 });
 
 test("fixtures: ordinary workflows pass", () => {
-  const ok = `permissions: {contents: read}\njobs:\n  scan:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: aquasecurity/trivy-action@${SHA(4)} # v1\n  push:\n    permissions: {contents: read, packages: write}\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: actions/checkout@${SHA(5)} # v1\n      - uses: docker/login-action@${SHA(6)} # v1\n  call:\n    permissions: {packages: write}\n    uses: ./.github/workflows/other.yml\n`;
-  assert.equal(violations(wf(ok), localFiles({ ".github/workflows/other.yml": "name: o\non: workflow_call\njobs:\n  a:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo\n" })).length, 0);
+  const ok = `permissions: {contents: read}\njobs:\n  scan:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: aquasecurity/trivy-action@${SHA(4)} # v1\n      - uses: docker/login-action@${SHA(6)} # v1\n  push:\n    permissions: {contents: read, packages: write}\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: actions/checkout@${SHA(5)} # v1\n      - run: echo native-publish\n  call:\n    permissions: {packages: write}\n    uses: ./.github/workflows/other.yml\n`;
+  const readLocal = localFiles({ ".github/workflows/other.yml": "name: o\non: workflow_call\njobs:\n  a:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo\n" });
+  assert.equal(violations(wf(ok), readLocal).length, 0);
+  const legacy = ok.replace("- run: echo native-publish", `- uses: docker/login-action@${SHA(6)} # v1`);
+  assert.equal(violations(wf(legacy), readLocal).length, 1, "the former writer login must now be refused");
 });
 
 test("fixtures: the strict reader rejects what it cannot read safely", () => {
