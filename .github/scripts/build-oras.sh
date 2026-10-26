@@ -17,7 +17,22 @@ output="$output_dir/$(basename -- "$1")"
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/build-oras.XXXXXXXX")
-trap 'rm -rf -- "$work"' EXIT
+cleanup() {
+  local result=$?
+  trap - EXIT
+  # Go makes downloaded module directories read-only. Change only directory
+  # permissions inside this owned cache; never follow symlinks or touch sources.
+  if [ -d "$work/mod" ] && ! find -P "$work/mod" -type d -exec chmod u+w {} +; then
+    echo 'build-oras: could not prepare private module cache for cleanup' >&2
+    [ "$result" -ne 0 ] || result=1
+  fi
+  if ! rm -rf -- "$work"; then
+    echo 'build-oras: could not remove private build directory' >&2
+    [ "$result" -ne 0 ] || result=1
+  fi
+  exit "$result"
+}
+trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 # Absolute paths are required for the SDK and every private Go cache. Preserve
 # the logical TMPDIR prefix (for example, /var rather than /private/var on macOS).
