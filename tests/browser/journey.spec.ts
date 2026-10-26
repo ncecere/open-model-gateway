@@ -198,6 +198,7 @@ test("deployment preview facts and estimate fit at 390px without changing the re
       }
       await expectNoHorizontalScroll(page);
       await expectAccessible(page, `deployment review ${width}`);
+      await page.screenshot({ path: `target/browser-tests/issue359/deployment-preview-${width}.png`, fullPage: true });
       await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
       await expect(dialog).toHaveCount(0);
       await expect(page.getByRole("button", { name: "Review changes", exact: true })).toBeFocused();

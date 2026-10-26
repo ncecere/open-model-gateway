@@ -120,10 +120,12 @@ test("create → fenced generation → immutable report → CSV, workspace and p
     await expect(owner.page.getByRole("dialog").getByRole("textbox", { name: "Recipient user IDs" })).toHaveCount(0);
     await owner.page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
     expect((await api(operator.page, "GET", `/workspaces/${personal}/report-schedules`)).status()).toBe(404);
+    await operator.page.setViewportSize({ width: 1440, height: 900 });
     await operator.page.goto(`/workspaces/${personal}/keys`);
     await expect(operator.page).toHaveURL(/\/home$/);
     await expect(operator.page.getByText("Workspace not found or not available", { exact: true })).toBeVisible();
     await expect(operator.page.getByRole("table", { name: "API keys" })).toHaveCount(0);
+    await operator.page.screenshot({ path: "target/browser-tests/issue359/unavailable-workspace-1440.png", fullPage: true });
     // A fresh, ordinary Home entry has no unavailable-workspace context.
     await operator.page.goto("/home");
     await expect(operator.page.getByText("Your workspaces", { exact: true })).toBeVisible();
@@ -146,6 +148,7 @@ test("create → fenced generation → immutable report → CSV, workspace and p
     await expect(scheduledTab).toBeInViewport({ ratio: 1 });
     await expectNoHorizontalScroll(owner.page);
     await expectAccessible(owner.page, "narrow scheduled report tabs");
+    await owner.page.screenshot({ path: "target/browser-tests/issue359/scheduled-tabs-390.png", fullPage: true });
     await owner.page.getByRole("button", { name: "Pause", exact: true }).click();
     await owner.page.getByRole("dialog").getByRole("button", { name: "Pause schedule", exact: true }).click();
     await expect(owner.page.getByRole("dialog")).toHaveCount(0);

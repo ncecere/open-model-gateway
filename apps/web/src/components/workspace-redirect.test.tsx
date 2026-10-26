@@ -12,6 +12,7 @@ const notice = "Workspace not found or not available";
 const clients: ReturnType<typeof testClient>[] = [];
 beforeEach(() => {
   localStorage.clear(); sessionStorage.clear();
+  vi.stubGlobal("scrollTo", vi.fn()); // JSDOM lacks the router's native scrolling API; browsers exercise it below.
   Object.defineProperty(Element.prototype, "getAnimations", { configurable: true, value: () => [] });
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   Object.defineProperty(window, "matchMedia", { configurable: true, value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }) });
