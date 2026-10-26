@@ -362,6 +362,7 @@ test("the Docker PostgreSQL fixture uses exactly one approved digest-pinned imag
   // Read source only: importing this file would run its Docker lifecycle hooks.
   const text = readLocalFromRepo("tests/container-image.test.mjs");
   assert.notEqual(text, null, "the Docker runtime contract test must exist");
+  assert.ok(!text.includes("POSTGRES_PASSWORD="), "fixture password must travel in the Docker client environment, never argv/error diagnostics");
   const refs = text.match(/mirror\.gcr\.io\/library\/postgres[^\s"'`]*/g) ?? [];
   assert.deepEqual(refs, [
     "mirror.gcr.io/library/postgres@sha256:858bb5e98eed02eb8cafbcdc007f9a65d1b613972028944a8ec2133ccaf80d27",
