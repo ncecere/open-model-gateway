@@ -24,6 +24,9 @@ REF = "vnd.docker.reference.digest"
 KIND = "vnd.docker.reference.type"
 SPDX = "https://spdx.dev/Document"
 PROVENANCE = "https://slsa.dev/provenance/v0.2"
+NATIVE_PROVENANCE = "https://slsa.dev/provenance/v1"
+ARTIFACT = "application/vnd.docker.attestation.manifest.v1+json"
+EMPTY = "application/vnd.oci.empty.v1+json"
 
 def encoded(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
@@ -38,7 +41,7 @@ def duplicate_json(value):
 def blob_path(desc):
     return "blobs/sha256/" + desc["digest"].split(":")[1]
 
-def fixture(arch="amd64", edits=None):
+def fixture(arch="amd64", edits=None, native=False):
     """Rehash ancestors after semantic edits; no approved artifact/hash stand-ins."""
     edits, blobs, descriptors = edits or {}, {}, {}
     def put(name, value, media):
@@ -58,17 +61,29 @@ def fixture(arch="amd64", edits=None):
         ("spdx", SPDX, dict(spdxVersion="SPDX-2.3", dataLicense="CC0-1.0",
          SPDXID="SPDXRef-DOCUMENT", name="fixture", documentNamespace="https://example.invalid/spdx/fixture",
          creationInfo=dict(created="2026-01-01T00:00:00Z", creators=["Tool: fixture"]), packages=[])),
-        ("provenance", PROVENANCE, dict(builder=dict(id="https://example.invalid/builder"),
+        ("provenance", NATIVE_PROVENANCE if native else PROVENANCE, dict(builder=dict(id="https://example.invalid/builder"),
          buildType="https://example.invalid/build", invocation={}, metadata={}, materials=[])),
     ]:
-        statement = dict(_type="https://in-toto.io/Statement/v0.1", predicateType=predicate_type,
-                         subject=[dict(name="fixture", digest=dict(sha256=runnable["digest"][7:]))], predicate=predicate)
+        if native and name == "provenance":
+            predicate = dict(buildDefinition=dict(buildType="https://example.invalid/build",
+                             externalParameters={}, internalParameters={}, resolvedDependencies=[]),
+                             runDetails=dict(builder=dict(id="https://example.invalid/builder"), metadata={}))
+        statement = dict(_type="https://in-toto.io/Statement/v1" if native else "https://in-toto.io/Statement/v0.1",
+                         predicateType=predicate_type,
+                         subject=[] if native else [dict(name="fixture", digest=dict(sha256=runnable["digest"][7:]))],
+                         predicate=predicate)
         desc = put(name, statement, INTOTO)
         desc["annotations"] = {"in-toto.io/predicate-type": predicate_type}
         statements.append(desc)
-    att_config = put("att_config", dict(os="unknown", architecture="unknown", rootfs=dict(type="layers", diff_ids=[])), CONFIG)
-    attestation = put("attestation", dict(schemaVersion=2, mediaType=MANIFEST,
-                      config=att_config, layers=statements), MANIFEST)
+    if native:
+        att_config = put("att_config", {}, EMPTY)
+        att_config["data"] = "e30="
+    else:
+        att_config = put("att_config", dict(os="unknown", architecture="unknown", rootfs=dict(type="layers", diff_ids=[])), CONFIG)
+    attestation_value = dict(schemaVersion=2, mediaType=MANIFEST, config=att_config, layers=statements)
+    if native:
+        attestation_value.update(artifactType=ARTIFACT, subject=copy.deepcopy(runnable))
+    attestation = put("attestation", attestation_value, MANIFEST)
     runnable.update(platform=dict(os="linux", architecture=arch), annotations={"fixture.role": "runnable"})
     attestation.update(platform=dict(os="unknown", architecture="unknown"),
                        annotations={KIND: "attestation-manifest", REF: runnable["digest"], "fixture.role": "evidence"})
@@ -152,6 +167,199 @@ class OciLayoutTests(unittest.TestCase):
         result = json.loads(self.api.assemble_index(reports, {}))
         self.assertEqual(result["manifests"], graph["index"]["manifests"] + reports[1]["index"]["manifests"])
         self.assertEqual(result["annotations"]["fixture.unicode"], "café")
+    def test_native_empty_subject_reports_preserve_raw_blobs_roots_and_assembly(self):
+        reports, graphs = [], []
+        def noncanonical(value):
+            return (" \n" + json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode()
+        for arch in ("amd64", "arm64"):
+            graph = fixture(arch, {"root": noncanonical}, native=True)
+            path = self.archive(graph)
+            before = path.read_bytes()
+            report = self.api.inspect_archive(path, graph["root"]["digest"], "linux/" + arch)
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(report["root"], graph["root"])
+            self.assertEqual(report["index"], graph["index"])
+            self.assertEqual(report["root_json"].encode(), graph["files"][blob_path(graph["root"])])
+            self.assertEqual(report["platform"], "linux/" + arch)
+            blobs = {k: v for k, v in graph["files"].items() if k.startswith("blobs/")}
+            self.assertEqual(report["blob_count"], len(blobs))
+            self.assertEqual(report["total_bytes"], sum(map(len, blobs.values())))
+            self.assertNotIn("SPDXRef-DOCUMENT", repr(report))
+            self.assertNotIn("opaque uncompressed fixture", repr(report))
+            reports.append(report)
+            graphs.append(graph)
+        original = copy.deepcopy(reports)
+        assembled = json.loads(self.api.assemble_index(reports, {"fixture.native": "retained"}))
+        self.assertEqual(assembled["manifests"], graphs[0]["index"]["manifests"] + graphs[1]["index"]["manifests"])
+        self.assertEqual(assembled["annotations"], {"fixture.shared": "retained", "fixture.native": "retained"})
+        self.assertEqual(reports, original)
+
+    def test_native_named_exports_preserve_one_bound_statement_subject(self):
+        for arch in ("amd64", "arm64"):
+            bound = fixture(arch, native=True)["descriptors"]["runnable"]["digest"][7:]
+            subject = [dict(name="pkg:docker/fixture@sha256:" + bound, digest={"sha256": bound})]
+            edits = {name: lambda x: dict(x, subject=subject) for name in ("spdx", "provenance")}
+            graph = fixture(arch, edits, native=True)
+            path = self.archive(graph)
+            before = path.read_bytes()
+            report = self.api.inspect_archive(path, graph["root"]["digest"], "linux/" + arch)
+            self.assertEqual(path.read_bytes(), before)
+            for name in ("spdx", "provenance"):
+                raw = graph["files"][blob_path(graph["descriptors"][name])]
+                self.assertEqual(json.loads(raw)["subject"], subject)
+            self.assertEqual(report["index"], graph["index"])
+
+    def test_native_artifact_type_and_subject_are_both_required_and_exact(self):
+        for field in ("artifactType", "subject"):
+            with self.subTest(missing=field):
+                self.rejected(fixture(edits={"attestation": lambda x: {k: v for k, v in x.items() if k != field}}, native=True))
+        for value in (None, "", "application/vnd.oci.image.manifest.v1+json", ARTIFACT.upper(), [], {}):
+            with self.subTest(artifactType=value):
+                self.rejected(fixture(edits={"attestation": lambda x: dict(x, artifactType=value)}, native=True))
+        # Without both keys the empty config / v1 statements must not become legacy.
+        self.rejected(fixture(edits={"attestation": lambda x: {k: v for k, v in x.items() if k not in ("artifactType", "subject")}}, native=True))
+
+    def test_native_manifest_subject_requires_exact_typed_runnable_descriptor(self):
+        changes = [dict(digest=digest(b"wrong")), dict(mediaType=INDEX), dict(size=0),
+                   dict(size=True), dict(size=False), dict(digest=None), dict(mediaType=None)]
+        changes += [{field: value} for field, value in (
+            ("urls", ["https://example.invalid/subject"]), ("data", "e30="),
+            ("platform", {"os": "linux", "architecture": "amd64"}),
+            ("annotations", {}), ("alias", "runnable"))]
+        for change in changes:
+            with self.subTest(change=change):
+                self.rejected(fixture(edits={"attestation": lambda x: dict(x, subject=dict(x["subject"], **change))}, native=True))
+        self.rejected(fixture(edits={"attestation": lambda x: dict(x, subject=dict(x["subject"], size=float(x["subject"]["size"])))}, native=True))
+        for field in ("mediaType", "digest", "size"):
+            with self.subTest(missing=field):
+                self.rejected(fixture(edits={"attestation": lambda x: dict(x, subject={k: v for k, v in x["subject"].items() if k != field})}, native=True))
+        for value in (None, [], "runnable"):
+            with self.subTest(subject=value):
+                self.rejected(fixture(edits={"attestation": lambda x: dict(x, subject=value)}, native=True))
+
+    def test_native_empty_statement_subject_still_requires_docker_index_binding(self):
+        changes = [dict(platform={"os": "linux", "architecture": "unknown"}),
+                   dict(annotations={KIND: "attestation-manifest", REF: digest(b"wrong")}),
+                   dict(annotations={KIND: "attestation-manifest"}),
+                   dict(annotations={REF: "unused"}),
+                   dict(annotations={KIND: "wrong", REF: "unused"})]
+        for change in changes:
+            with self.subTest(change=change):
+                self.rejected(fixture(edits={"root": lambda x: dict(x, manifests=[x["manifests"][0], dict(x["manifests"][1], **change)])}, native=True))
+
+    def test_native_empty_config_requires_exact_shape_inline_data_and_types(self):
+        changes = [dict(mediaType=CONFIG), dict(digest=digest(b"wrong")), dict(size=1),
+                   dict(size=2.0), dict(size=True), dict(data=""), dict(data="e30"),
+                   dict(data="e30=\n"), dict(data="W10="), dict(data={}), dict(data=None),
+                   dict(urls=["https://example.invalid/config"]), dict(platform={}), dict(annotations={})]
+        for change in changes:
+            with self.subTest(change=change):
+                self.rejected(fixture(edits={"attestation": lambda x: dict(x, config=dict(x["config"], **change))}, native=True))
+        for field in ("mediaType", "digest", "size", "data"):
+            with self.subTest(missing=field):
+                self.rejected(fixture(edits={"attestation": lambda x: dict(x, config={k: v for k, v in x["config"].items() if k != field})}, native=True))
+
+    def test_native_empty_config_requires_stored_exact_empty_json_blob(self):
+        for raw in (b"[]", b"{ }", b"{}\n", b'{"os":"unknown"}', b"null", b"{"):
+            with self.subTest(raw=raw):
+                self.rejected(fixture(edits={"att_config": lambda x: raw}, native=True))
+        for corrupt in (False, True):
+            graph = fixture(native=True)
+            key = blob_path(graph["descriptors"]["att_config"])
+            if corrupt:
+                graph["files"][key] = b"[]"
+            else:
+                del graph["files"][key]
+            with self.subTest(corrupt=corrupt):
+                self.rejected(graph)
+
+    def test_native_profile_is_never_allowed_on_runnable_manifest(self):
+        self.rejected(fixture(edits={"runnable": lambda x: dict(x, artifactType=ARTIFACT,
+                      subject=dict(mediaType=MANIFEST, digest=digest(b"wrong"), size=0))}, native=True))
+        self.rejected(fixture(edits={"runnable": lambda x: dict(x, config=dict(x["config"], data="e30="))}, native=True))
+
+    def test_native_attestation_layers_must_be_nonempty_and_local(self):
+        for value in ([], None, {}, "layers"):
+            with self.subTest(layers=value):
+                self.rejected(fixture(edits={"attestation": lambda x: dict(x, layers=value)}, native=True))
+        for change in (dict(urls=["https://example.invalid/statement"]), dict(data="e30="), dict(mediaType=LAYER)):
+            with self.subTest(change=change):
+                self.rejected(fixture(edits={"attestation": lambda x: dict(x, layers=[dict(d, **change) for d in x["layers"]])}, native=True))
+
+    def test_native_statement_uri_predicate_object_and_annotation_are_strict(self):
+        changes = [dict(_type="https://in-toto.io/Statement/v0.1"), dict(_type="https://in-toto.io/Statement/v2"),
+                   dict(predicateType="https://example.invalid/predicate"), dict(predicateType=PROVENANCE),
+                   dict(predicate=None), dict(predicate=[]), dict(predicate="opaque"), dict(extra="unsupported")]
+        for name in ("spdx", "provenance"):
+            for change in changes:
+                with self.subTest(name=name, change=change):
+                    self.rejected(fixture(edits={name: lambda x: dict(x, **change)}, native=True))
+        for annotation in ({}, {"in-toto.io/predicate-type": PROVENANCE}, {"in-toto.io/predicate-type": SPDX}):
+            with self.subTest(annotation=annotation):
+                self.rejected(fixture(edits={"attestation": lambda x: dict(x, layers=[x["layers"][0], dict(x["layers"][1], annotations=annotation)])}, native=True))
+        # Self-consistent layer annotation cannot authorize the legacy SLSA URI.
+        self.rejected(fixture(edits={"provenance": lambda x: dict(x, predicateType=PROVENANCE),
+                      "attestation": lambda x: dict(x, layers=[x["layers"][0], dict(x["layers"][1],
+                      annotations={"in-toto.io/predicate-type": PROVENANCE})])}, native=True))
+
+    def test_native_nonempty_statement_subject_is_never_ignored(self):
+        bound = fixture(native=True)["descriptors"]["runnable"]["digest"][7:]
+        valid = dict(name="fixture", digest={"sha256": bound})
+        invalid = [None, {}, "subject", [dict(valid, name=1)], [dict(valid, digest={"sha256": "0" * 64})],
+                   [dict(valid, digest={"sha256": bound, "sha512": "other"})],
+                   [dict(valid, urls=["https://example.invalid/subject"])], [valid, valid],
+                   [{"digest": valid["digest"]}], [{"name": "fixture"}]]
+        for name in ("spdx", "provenance"):
+            for subjects in invalid:
+                with self.subTest(name=name, subject=subjects):
+                    self.rejected(fixture(edits={name: lambda x: dict(x, subject=subjects)}, native=True))
+
+    def test_legacy_statements_still_require_one_nonempty_subject_and_legacy_uris(self):
+        for name in ("spdx", "provenance"):
+            for change in (dict(subject=[]), dict(_type="https://in-toto.io/Statement/v1"),
+                           dict(predicateType=NATIVE_PROVENANCE)):
+                with self.subTest(name=name, change=change):
+                    self.rejected(fixture(edits={name: lambda x: dict(x, **change)}))
+        self.rejected(fixture(edits={"provenance": lambda x: dict(x, predicateType=NATIVE_PROVENANCE),
+                      "attestation": lambda x: dict(x, layers=[x["layers"][0], dict(x["layers"][1],
+                      annotations={"in-toto.io/predicate-type": NATIVE_PROVENANCE})])}))
+
+    def test_native_profile_requires_both_spdx_and_v1_provenance(self):
+        # Remove each statement and its blob so no-orphan checking cannot mask missing evidence.
+        for position, name in ((0, "spdx"), (1, "provenance")):
+            graph = fixture(edits={"attestation": lambda x: dict(x, layers=[x["layers"][1 - position]])}, native=True)
+            del graph["files"][blob_path(graph["descriptors"][name])]
+            with self.subTest(missing=name):
+                self.rejected(graph)
+
+    def test_mixed_native_and_legacy_attestations_in_one_index_are_refused(self):
+        legacy = fixture()
+        graph = fixture(edits={"root": lambda x: dict(x, manifests=x["manifests"] + [legacy["index"]["manifests"][1]])}, native=True)
+        for name in ("spdx", "provenance", "att_config", "attestation"):
+            path = blob_path(legacy["descriptors"][name])
+            graph["files"][path] = legacy["files"][path]
+        self.rejected(graph)
+
+    def test_native_missing_corrupt_descendants_and_orphans_are_refused(self):
+        for name in ("layer", "config", "runnable", "spdx", "provenance", "attestation", "root"):
+            for corrupt in (False, True):
+                graph = fixture(native=True)
+                key = blob_path(graph["descriptors"][name])
+                if corrupt:
+                    graph["files"][key] = b"!" * len(graph["files"][key])
+                else:
+                    del graph["files"][key]
+                with self.subTest(name=name, corrupt=corrupt):
+                    self.rejected(graph)
+        graph = fixture(native=True)
+        graph["files"]["blobs/sha256/" + hashlib.sha256(b"orphan").hexdigest()] = b"orphan"
+        self.rejected(graph)
+
+    def test_native_member_byte_json_and_depth_limits_are_enforced(self):
+        for name in ("MAX_MEMBERS", "MAX_TOTAL_BYTES", "MAX_JSON_BYTES", "MAX_DEPTH"):
+            with self.subTest(limit=name), mock.patch.object(self.api, name, 1):
+                self.rejected(fixture(native=True))
+
     def test_wrong_root_platform_and_config_architecture_are_refused(self):
         for kwargs in ({"root": digest(b"not the root")}, {"platform": "linux/arm64"}):
             with self.subTest(kwargs=kwargs):
