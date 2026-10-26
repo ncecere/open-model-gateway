@@ -50,8 +50,7 @@ function list(items: TypeTabItem[], label: string, narrow: boolean) {
   return (
     <TabsList variant="pills" overflow={narrow ? "scroll" : "wrap"} aria-label={label}>
       {items.map(item => (
-        // The accessible name is "Chat, 30" (not "Chat30" or "Chat , 30" from the separate count badge).
-        <Tab key={item.value} value={item.value} icon={item.icon} disabled={item.disabled} count={known(item.count) ? item.count : undefined} aria-label={known(item.count) ? `${item.label}, ${item.count.toLocaleString("en-US")}` : undefined}>
+        <Tab key={item.value} value={item.value} icon={item.icon} disabled={item.disabled} count={known(item.count) ? item.count : undefined}>
           {item.label}
         </Tab>
       ))}

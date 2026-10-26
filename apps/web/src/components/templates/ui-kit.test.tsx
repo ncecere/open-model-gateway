@@ -530,12 +530,22 @@ describe("FilterToolbar", () => {
 });
 
 describe("TypeTabs", () => {
+  it.each([
+    { label: "All", count: 1234567, name: `All ${(1234567).toLocaleString()}` },
+    { label: "Embeddings", count: 0, name: "Embeddings 0" },
+    { label: "Audio", count: null, name: "Audio" },
+  ])("names $label from its visible label and count ($count)", ({ label, count, name }) => {
+    render(<TypeTabs label="Model type" value="type" onChange={() => {}} items={[{ value: "type", label, count }]} />);
+    const tab = screen.getByRole("tab", { name });
+    expect(tab.textContent).toBe(name);
+  });
+
   it("renders Bitop pill tabs with counts; unknown counts show no number", async () => {
     const onChange = vi.fn();
     const { container } = render(<TypeTabs label="Model type" value="all" onChange={onChange} items={[{ value: "all", label: "All", count: 42 }, { value: "embeddings", label: "Embeddings", count: 0 }, { value: "audio", label: "Audio", count: null }]}><p>Panel body</p></TypeTabs>);
     expect(screen.getByRole("tablist", { name: "Model type" }).getAttribute("data-variant")).toBe("pills");
-    expect(screen.getByRole("tab", { name: /^All,\s?42$/ }).getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByRole("tab", { name: /^Embeddings,\s?0$/ })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "All 42" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: "Embeddings 0" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Audio" })).toBeTruthy();
     expect(screen.getByRole("tabpanel").textContent).toBe("Panel body");
     await userEvent.click(screen.getByRole("tab", { name: "Audio" }));
