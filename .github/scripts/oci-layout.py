@@ -26,6 +26,9 @@ REF = "vnd.docker.reference.digest"
 KIND = "vnd.docker.reference.type"
 SPDX = "https://spdx.dev/Document"
 SLSA = "https://slsa.dev/provenance/v0.2"
+SLSA_V1 = "https://slsa.dev/provenance/v1"
+ARTIFACT = "application/vnd.docker.attestation.manifest.v1+json"
+EMPTY = "application/vnd.oci.empty.v1+json"
 LAYERS = {"application/vnd.oci.image.layer.v1.tar" + suffix
           for suffix in ("", "+gzip", "+zstd")}
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -261,40 +264,71 @@ def inspect_archive(path, expected_root_digest, expected_platform):
         root_data = resolve(root, {INDEX}, raw=True)
         index = _json(root_data)
         runnable, attestations = _children(index, expected_platform)
-        predicates = set()
+        predicates, attestation_native = set(), None
         for child in [runnable, *attestations]:
             manifest = resolve(child, {MANIFEST}, allow_reference=child is not runnable)
-            _document(manifest, MANIFEST, ("config", "layers"))
-            config = resolve(manifest["config"], {CONFIG})
-            platform = child["platform"]
-            _require(type(config) is dict and config.get("os") == platform["os"]
-                     and config.get("architecture") == platform["architecture"], "config platform mismatch")
-            layers, rootfs = manifest["layers"], config.get("rootfs")
-            _require(type(layers) is list and type(rootfs) is dict and rootfs.get("type") == "layers"
-                     and type(rootfs.get("diff_ids")) is list, "invalid image structure")
-            _require(all(type(d) is str and DIGEST.fullmatch(d) for d in rootfs["diff_ids"]),
-                     "invalid diff IDs")
+            native = (child is not runnable and type(manifest) is dict
+                      and ("artifactType" in manifest or "subject" in manifest))
+            _document(manifest, MANIFEST, ("config", "layers", "artifactType", "subject")
+                      if native else ("config", "layers"))
+            layers = manifest["layers"]
+            if native:
+                _require(manifest["artifactType"] == ARTIFACT, "unsupported attestation artifact type")
+                subject = manifest["subject"]
+                _fields(subject, ("mediaType", "digest", "size"))
+                _descriptor(subject, {MANIFEST})
+                _require(all(subject[k] == runnable[k] for k in ("mediaType", "digest", "size")),
+                         "unbound artifact subject")
+                config = manifest["config"]
+                _fields(config, ("mediaType", "digest", "size", "data"))
+                _require(type(config["size"]) is int and config == dict(
+                    mediaType=EMPTY, digest="sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+                    size=2, data="e30="), "unsupported empty config")
+                # Inline data is allowed only for this exact profile, never generic descriptors.
+                stored = resolve({k: config[k] for k in ("mediaType", "digest", "size")}, {EMPTY}, raw=True)
+                _require(stored == b"{}", "invalid stored empty config")
+                _require(type(layers) is list and layers, "invalid attestation structure")
+            else:
+                config = resolve(manifest["config"], {CONFIG})
+                platform = child["platform"]
+                _require(type(config) is dict and config.get("os") == platform["os"]
+                         and config.get("architecture") == platform["architecture"], "config platform mismatch")
+                rootfs = config.get("rootfs")
+                _require(type(layers) is list and type(rootfs) is dict and rootfs.get("type") == "layers"
+                         and type(rootfs.get("diff_ids")) is list, "invalid image structure")
+                _require(all(type(d) is str and DIGEST.fullmatch(d) for d in rootfs["diff_ids"]),
+                         "invalid diff IDs")
+                if child is not runnable:
+                    _require(layers and not rootfs["diff_ids"], "invalid attestation structure")
             if child is runnable:
                 _require(len(layers) == len(rootfs["diff_ids"]), "layer count mismatch")
                 for layer in layers:
                     resolve(layer, LAYERS, parse=False)
             else:
-                _require(layers and not rootfs["diff_ids"], "invalid attestation structure")
+                _require(attestation_native is None or attestation_native == native,
+                         "mixed attestation profiles")
+                attestation_native = native
+                slsa = SLSA_V1 if native else SLSA
                 for layer in layers:
                     statement = resolve(layer, {INTOTO})
                     _fields(statement, ("_type", "predicateType", "subject", "predicate"))
                     predicate = statement["predicateType"]
-                    _require(statement["_type"] == "https://in-toto.io/Statement/v0.1"
-                             and predicate in (SPDX, SLSA) and type(statement["predicate"]) is dict
+                    _require(statement["_type"] == ("https://in-toto.io/Statement/v1" if native
+                                                  else "https://in-toto.io/Statement/v0.1")
+                             and predicate in (SPDX, slsa) and type(statement["predicate"]) is dict
                              and layer.get("annotations", {}).get("in-toto.io/predicate-type") == predicate,
                              "unsupported predicate or annotation mismatch")
                     subjects = statement["subject"]
-                    _require(type(subjects) is list and len(subjects) == 1, "ambiguous subject")
-                    _fields(subjects[0], ("name", "digest"))
-                    _require(type(subjects[0]["name"]) is str and subjects[0]["digest"] ==
-                             {"sha256": runnable["digest"][7:]}, "unbound statement")
+                    # Unnamed native exports have no in-toto subjects. Both OCI and Docker
+                    # descriptor bindings have already been verified; named exports still bind.
+                    _require(type(subjects) is list and (len(subjects) == 1 or (native and not subjects)),
+                             "ambiguous subject")
+                    if subjects:
+                        _fields(subjects[0], ("name", "digest"))
+                        _require(type(subjects[0]["name"]) is str and subjects[0]["digest"] ==
+                                 {"sha256": runnable["digest"][7:]}, "unbound statement")
                     predicates.add(predicate)
-        _require(predicates == {SPDX, SLSA}, "missing SPDX/SLSA evidence")
+        _require(predicates == {SPDX, SLSA_V1 if attestation_native else SLSA}, "missing SPDX/SLSA evidence")
         _require(visited == files.keys(), "unreferenced archive content")
         after = os.fstat(stream.fileno())
         _require((before.st_size, before.st_mtime_ns, before.st_ctime_ns) ==
