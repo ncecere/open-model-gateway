@@ -78,7 +78,7 @@ export function AuthRequired({ error, refresh, denied = false, branding }: { err
   </div></main>;
 }
 function PermissionNotice({ title = "Access not available", description = "You can't open this page here. Try another workspace or reload your access." }: { title?: string; description?: string }) { return <Stack gap={6} className={s.page}><Heading title={title} description={description} /></Stack>; }
-export function DashboardContent({ session, search, workspace, navigate }: { session: Session; search: DashboardSearch; workspace?: Workspace; navigate: (next: DashboardSearch) => void }) {
+export function DashboardContent({ session, search, workspace, navigate, workspaceUnavailable = false }: { session: Session; search: DashboardSearch; workspace?: Workspace; navigate: (next: DashboardSearch) => void; workspaceUnavailable?: boolean }) {
   const changeTab = (tab: string) => navigate({ ...search, tab: tab === "overview" ? undefined : tab, q: undefined, offset: undefined }), props = { session, id: search.record ?? "", tab: search.tab, onTabChange: changeTab };
   if (!canView(search.page ?? "overview", session, workspace)) return <PermissionNotice />;
   switch (search.page) {
@@ -122,7 +122,7 @@ export function DashboardContent({ session, search, workspace, navigate }: { ses
     case "platform-model-compare": return <ModelComparePage scope={{ kind: "platform" }} ids={parseCompareIds(search.ids)} />;
     case "routing": return <Routing session={session} />;
     case "pricing": return <Pricing session={session} />;
-    case "home": return <HomePortal session={session} />;
+    case "home": return <HomePortal session={session} notice={workspaceUnavailable && <Alert title="Workspace not found or not available">Choose another workspace from Home.</Alert>} />;
     case "profile": return <Profile session={session} />;
     case "accept-invitation": return <AcceptInvitation email={session.user.email} />;
     default: if (!workspace) return <PermissionNotice title="Select an accessible workspace" />;
@@ -148,6 +148,9 @@ export function DashboardContent({ session, search, workspace, navigate }: { ses
     default: return <PermissionNotice title="Page not found" />;
   }
 }
+declare module "@tanstack/history" {
+  interface HistoryState { workspaceUnavailable?: boolean }
+}
 type AccessState = { navigation: string | undefined; phase: "ready" | "checking" | "denied" | "ended"; automaticUsed: boolean };
 const nonSession = (query: { queryKey: readonly unknown[] }) => query.queryKey[0] !== "session";
 export function Home() {
@@ -161,11 +164,13 @@ export function Home() {
   const signedOut = ended || session.isError;
   const branding = useQuery({ queryKey: ["auth-config"], queryFn: ({ signal }) => api<AuthConfig>(`${API}/auth/config`, { signal }), retry: false, staleTime: 300_000, enabled: signedOut });
   const authorization = session.data ? JSON.stringify(session.data) : undefined, identity = useRef<string | undefined>(undefined);
-  const navigate = (next: DashboardSearch, replace = false) => { const target = new URL(dashboardHref(next), window.location.origin); void routerNavigate({ to: target.pathname as "/", search: Object.fromEntries(target.searchParams), replace }); };
+  // Redirect context is a boolean on this history entry, never a workspace identifier or authority.
+  const navigate = (next: DashboardSearch, replace = false, workspaceUnavailable = false) => { const target = new URL(dashboardHref(next), window.location.origin); void routerNavigate({ to: target.pathname as "/", search: Object.fromEntries(target.searchParams), replace, state: workspaceUnavailable ? { workspaceUnavailable: true } : {} }); };
   const query = new URLSearchParams(); for (const [key, value] of Object.entries(location.search)) if (value !== undefined) query.set(key, String(value));
   const parsed = parseDashboardLocation(`${location.pathname}${query.size ? `?${query}` : ""}`);
   const search: DashboardSearch = session.data ? resolveDashboardSearch(parsed ?? { page: "overview" }, session.data) : { page: "overview" };
   const workspace = session.data?.workspaces.find(w => w.id === search.ws);
+  const unavailableWorkspace = !!session.data && !!search.ws && (!workspace || !inWorkspacePortal(session.data, workspace));
   useLayoutEffect(() => {
     if (access.current.navigation === navigation) return;
     const previous = access.current;
@@ -239,9 +244,8 @@ export function Home() {
     if (!parsed || location.pathname === "/") { navigate(landingSearch(current, selection), true); return; }
     if (new URL(dashboardHref(search), window.location.origin).pathname !== location.pathname) { navigate(search, true); return; }
     // The Workspace portal follows membership: platform staff manage other teams and projects from Admin.
-    if (search.ws && !current.workspaces.some(w => w.id === search.ws && inWorkspacePortal(current, w))) { navigate(restore, true); return; }
+    if (unavailableWorkspace) { navigate(restore, true, true); return; }
     if (isAdminPage(search.page ?? "overview") && !current.capabilities.platform_read) { navigate(restore, true); return; }
-    if (search.ws && workspace?.disabled_at) { navigate(restore, true); return; }
     rememberPortal(window.localStorage, current, search); rememberWorkspace(window.localStorage, current, search);
   }, [session.data, location.pathname, location.search]);
   useEffect(() => { const heading = document.querySelector<HTMLElement>("#main h1"); if (heading) { heading.tabIndex = -1; heading.focus({ preventScroll: true }); } }, [location.pathname]);
@@ -257,5 +261,5 @@ export function Home() {
   const current = session.data;
   // The complete live authorization snapshot keys all content and dialogs. Revocation remounts the
   // scope, aborts transport, and drops query entries before another identity can inspect them.
-  return <ApiScopeProvider session={current}><DashboardNavigationProvider search={search} navigate={navigate}><CrumbProvider><ActionProvider key={`${authorization}:${location.pathname}:${accessPhase === "denied" ? "denied" : "ready"}`}><DashboardShell session={current} search={search} workspace={workspace} accessDenied={accessPhase === "denied"} navigate={navigate} logout={() => void logout()} refresh={() => window.dispatchEvent(new Event("omg:access-refresh"))}>{accessPhase === "denied" ? <PermissionNotice /> : <DashboardContent key={`${location.pathname}:${workspace?.id ?? "platform"}`} session={current} search={search} workspace={workspace} navigate={navigate} />}</DashboardShell><AlertDialog open={confirmLogout} onOpenChange={setConfirmLogout} title="Sign out without saving?" description="Unsaved changes and one-time credentials will be cleared. In-flight requests will be aborted." confirmLabel="Sign out" cancelLabel="Keep editing" onConfirm={() => void logout(true)} /></ActionProvider></CrumbProvider></DashboardNavigationProvider></ApiScopeProvider>;
+  return <ApiScopeProvider session={current}><DashboardNavigationProvider search={search} navigate={navigate}><CrumbProvider><ActionProvider key={`${authorization}:${location.pathname}:${accessPhase === "denied" ? "denied" : "ready"}`}><DashboardShell session={current} search={search} workspace={unavailableWorkspace ? undefined : workspace} accessDenied={accessPhase === "denied"} navigate={navigate} logout={() => void logout()} refresh={() => window.dispatchEvent(new Event("omg:access-refresh"))}>{accessPhase === "denied" || unavailableWorkspace ? <PermissionNotice /> : <DashboardContent key={`${location.pathname}:${workspace?.id ?? "platform"}`} session={current} search={search} workspace={workspace} navigate={navigate} workspaceUnavailable={location.state.workspaceUnavailable === true} />}</DashboardShell><AlertDialog open={confirmLogout} onOpenChange={setConfirmLogout} title="Sign out without saving?" description="Unsaved changes and one-time credentials will be cleared. In-flight requests will be aborted." confirmLabel="Sign out" cancelLabel="Keep editing" onConfirm={() => void logout(true)} /></ActionProvider></CrumbProvider></DashboardNavigationProvider></ApiScopeProvider>;
 }

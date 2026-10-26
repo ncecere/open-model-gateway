@@ -7,6 +7,7 @@ import { DescriptionList } from "./ui/description-list/description-list";
 import { Alert } from "./ui/alert/alert";
 import { ActionMenu } from "./templates/action-menu";
 import { HeaderActions } from "./templates/header-actions";
+import s from "./deployment-preview.module.css";
 
 type Record = { id: string; enabled: boolean };
 export function DeploymentReviewButton({ record, name }: { record: Record; name: string }) {
@@ -54,15 +55,15 @@ export function DeploymentReviewDialog({ record, name, retire = false, returnFoc
     {q.isError && <ErrorNotice error={q.error} retry={() => void q.refetch()} />}
     {mismatch && <ErrorNotice error={new Error("The gateway returned a different deployment. Confirmation is unavailable.")} />}
     {preview && <Stack gap={4}>
-      <DescriptionList items={[
+      <DescriptionList className={s.facts} items={[ 
         { label: "Enabled", value: preview.diff.length ? preview.diff.map(d => `${d.before ? "Enabled" : "Disabled"} → ${d.after ? "Enabled" : "Disabled"}`).join(", ") : "No configuration change" },
         { label: "Serving routes gained / lost", value: `${preview.serving_routes_gained.length} / ${preview.serving_routes_lost.length}` },
         { label: "Observed", value: <DateTime value={preview.observed_at} /> },
         { label: "Expected revision (estimate only)", value: <code>{preview.expected_revision}</code> },
       ]} />
-      {preview.models_losing_last_serving_route.length > 0 && <Alert tone="warning" title="Last serving route lost"><ul>{preview.models_losing_last_serving_route.map(m => <li key={m.id}>{m.public_name}</li>)}</ul></Alert>}
-      <section aria-label="Affected workspaces"><p>{preview.affected_workspaces.total} active shared workspaces with model selections affected.</p>{preview.affected_workspaces.truncated && <p>Showing the first {preview.affected_workspaces.limit}; more authorized workspaces are affected.</p>}<ul>{preview.affected_workspaces.data.map(w => <li key={w.id}>{w.name}</li>)}</ul></section>
-      <Alert tone="info" title="Configuration estimate"><ul>{preview.warnings.map(w => <li key={w}>{w}</li>)}</ul></Alert>
+      {preview.models_losing_last_serving_route.length > 0 && <Alert tone="warning" title="Last serving route lost"><ul className={s.notes}>{preview.models_losing_last_serving_route.map(m => <li key={m.id}>{m.public_name}</li>)}</ul></Alert>}
+      <section aria-label="Affected workspaces"><p>{preview.affected_workspaces.total} active shared workspaces with model selections affected.</p>{preview.affected_workspaces.truncated && <p>Showing the first {preview.affected_workspaces.limit}; more authorized workspaces are affected.</p>}<ul className={s.notes}>{preview.affected_workspaces.data.map(w => <li key={w.id}>{w.name}</li>)}</ul></section>
+      <Alert tone="info" title="Configuration estimate"><ul className={s.notes} aria-label="Configuration estimate warnings">{preview.warnings.map(w => <li key={w}>{w}</li>)}</ul></Alert>
     </Stack>}
   </Dialog>;
 }

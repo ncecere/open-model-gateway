@@ -9,6 +9,8 @@
  * offers member breakdowns to ordinary members or in Personal, and Admin sees
  * personal workspaces as totals only (no keys or request records are fetched).
  */
+import { useId } from "react";
+import { ArrowLeftRight } from "lucide-react";
 import { ScheduledReports } from "../scheduled-reports";
 import { canReadReports } from "../../lib/scheduled-reports";
 import type { Session, Workspace } from "../../lib/api";
@@ -37,7 +39,7 @@ export function Costs({ session, workspace }: { session: Session; workspace: Wor
 export function PlatformCosts({ session }: { session: Session }) { return <UsageCosts session={session} />; }
 
 export function UsageCosts({ session, workspace }: { session: Session; workspace?: Workspace }) {
-  const nav = useUsageSearch(workspace), ctx = usageContext(workspace), tab = tabOf(nav.search.tab);
+  const nav = useUsageSearch(workspace), ctx = usageContext(workspace), tab = tabOf(nav.search.tab), scrollHintId = useId();
   let period: UsagePeriod | undefined, invalid: Error | undefined;
   try { period = usagePeriod(nav.search); } catch (error) { invalid = error as Error; }
   const workspaceFilter = workspace ? undefined : nav.search.workspace_id;
@@ -72,7 +74,10 @@ export function UsageCosts({ session, workspace }: { session: Session; workspace
     {header("Usage & costs")}
     <Tabs value={tab} onValueChange={v => nav.navigate({ tab: v === "overview" ? undefined : String(v), metric: undefined })}>
       <Stack gap={6}>
-      <TabsList variant="pills" overflow="scroll" aria-label="Usage & costs views"><Tab value="overview">Overview</Tab><Tab value="explore">Explore</Tab><Tab value="records">{workspace ? "Cost records" : "By workspace"}</Tab><Tab value="holds">Holds</Tab>{canReadReports(session, workspace) && <Tab value="scheduled-reports">Scheduled reports</Tab>}</TabsList>
+      <div className={u.views}>
+        <TabsList variant="pills" overflow="scroll" aria-label="Usage & costs views" aria-describedby={scrollHintId}><Tab value="overview">Overview</Tab><Tab value="explore">Explore</Tab><Tab value="records">{workspace ? "Cost records" : "By workspace"}</Tab><Tab value="holds">Holds</Tab>{canReadReports(session, workspace) && <Tab value="scheduled-reports">Scheduled reports</Tab>}</TabsList>
+        <p id={scrollHintId} className={u.scrollHint}><ArrowLeftRight aria-hidden />Scroll for more views, or use the Left and Right arrow keys.</p>
+      </div>
       {!timeless && filters}
       {tab === "scheduled-reports" && <TabsPanel value="scheduled-reports"><SectionHeadings><ScheduledReports session={session} workspace={workspace} /></SectionHeadings></TabsPanel>}
       <TabsPanel value="holds"><HoldsTab session={session} workspace={workspace} /></TabsPanel>
