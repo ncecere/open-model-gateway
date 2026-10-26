@@ -83,7 +83,7 @@ test("workflow validator refuses missing/extra/optional shards and weakened depe
   }
 });
 
-test("special probes retain sequential ordinary/ignored ACL, exact terminal, Docker and backup coverage", () => {
+test("special probes retain sequential ACL, exact contention/terminal, Docker and backup coverage", () => {
   const job = loadWorkflow().jobs["gateway-special"];
   assert.ok(job, "missing special coverage job");
   assert.deepEqual(runs(job), [
@@ -91,6 +91,7 @@ test("special probes retain sequential ordinary/ignored ACL, exact terminal, Doc
     "cargo test -p open-model-gateway --all-features --test filestore_s3",
     "cargo test -p open-model-gateway --all-features --test runtime_privileges",
     "cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored",
+    "cargo test -p open-model-gateway --all-features --lib management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement -- --ignored --exact",
     "cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact",
     "sudo apt-get update && sudo apt-get install -y age",
     "cargo build -p open-model-gateway --all-features --bin open-model-gateway",

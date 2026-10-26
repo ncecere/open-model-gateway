@@ -113,6 +113,11 @@ jobs:
         run: cargo test -p open-model-gateway --all-features --test runtime_privileges
       - name: Verify enterprise runtime ACLs on disposable PostgreSQL
         run: cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored
+      - name: Measure key issuance contention on dedicated runtime-role PostgreSQL
+        # Changes maintenance ACLs; serialize after runtime_privileges, not an ignored sweep.
+        env:
+          RUST_TEST_NOCAPTURE: "1"
+        run: cargo test -p open-model-gateway --all-features --lib management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement -- --ignored --exact
       - name: Verify Anthropic terminal SDK and accounting contract on disposable PostgreSQL
         # Changes maintenance-database ACLs: run sequentially, never as a generic ignored-test sweep.
         run: cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact
