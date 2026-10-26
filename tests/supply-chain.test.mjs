@@ -1105,6 +1105,11 @@ function assertProbePolicy(data) {
   const verify = probeStep(data, "probe-verify", "Verify exact root and expected refusals");
   assert.match(verify.run, /identity="https:\/\/github.com\/\$\{GITHUB_REPOSITORY\}\/\.github\/workflows\/image.yml@\$\{GITHUB_REF\}"/);
   assert.match(verify.run, /issuer=https:\/\/token.actions.githubusercontent.com/);
+  assert.match(verify.run, /cosign verify --certificate-identity "\$\{identity\}" --certificate-oidc-issuer "\$\{issuer\}" "\$\{IMAGE\}@\$\{DIGEST\}"/);
+  assert.match(verify.run, /cosign download signature "\$\{IMAGE\}@\$\{DIGEST\}"/);
+  assert.match(verify.run, /cosign verify-blob --bundle \.\/bundle.json/);
+  assert.match(verify.run, /failed to verify signature: provided artifact digest does not match any digest in statement/);
+  assert.doesNotMatch(verify.run, /no signatures found|no matching attestations|--ignore|--insecure|--offline|--new-bundle-format/);
   assert.match(verify.run, /jq -e --arg digest "\$\{DIGEST\}"/);
   assert.match(verify.run, /\.critical\.image\["docker-manifest-digest"\] == \$digest/);
   assert.match(verify.run, /refuse "\$\{DIGEST\}" "\$\{identity\/image.yml\/wrong-workflow.yml\}" "\$\{issuer\}"/);
@@ -1177,6 +1182,12 @@ test("probe boundary policy rejects widened inputs, authority, handoffs, optiona
 });
 
 // Native command stand-ins only: never execute Docker, a downloaded tool, or a network client.
+// These fixtures model CLI contracts and source-defined errors, NOT cryptography.
+const PROBE_BUNDLE_MEDIA = "application/vnd.dev.sigstore.bundle.v0.3+json";
+const probeBundle = (marker = "fixture-payload") => ({
+  mediaType: PROBE_BUNDLE_MEDIA, dsseEnvelope: { payload: marker, payloadType: "application/vnd.in-toto+json", signatures: [] },
+  verificationMaterial: { fixtureOnly: true },
+});
 function probeFixture() {
   const dir = mkdtempSync(join(tmpdir(), "cosign-probe-policy-"));
   const bin = join(dir, "bin");
@@ -1215,28 +1226,51 @@ if (command === 'docker') {
     console.log(e.REPORTED_VERSION || 'open-model-gateway 0.9.0');
   } else fail('unexpected Docker command');
 } else if (command === 'cosign') {
-  if (a[0] !== 'verify') fail('local signing is forbidden');
-  const image = a.at(-1), identity = a[a.indexOf('--certificate-identity') + 1], issuer = a[a.indexOf('--certificate-oidc-issuer') + 1];
-  const negative = image.endsWith(e.CHILD) || identity.includes('wrong-workflow') || issuer.includes('wrong-issuer');
+  if (a.slice(0, 2).join(' ') === 'download signature') {
+    if (a.length !== 3 || a[2] !== e.IMAGE + '@' + e.DIGEST) fail('download must use the exact root');
+    if (e.DOWNLOAD_ERROR) fail(e.DOWNLOAD_ERROR);
+    process.stdout.write(fs.readFileSync(path.join(e.FIXTURE_DIR, 'download.jsonl')), () => process.exit(0));
+    return;
+  }
+  if (!['verify', 'verify-blob'].includes(a[0])) fail('local signing is forbidden');
+  const artifact = a.at(-1), identity = a[a.indexOf('--certificate-identity') + 1], issuer = a[a.indexOf('--certificate-oidc-issuer') + 1];
+  const local = a[0] === 'verify-blob';
+  if (local) {
+    const cwd = process.cwd(), bundlePath = a[a.indexOf('--bundle') + 1];
+    if (bundlePath !== './bundle.json' || fs.readdirSync(cwd).join() !== 'bundle.json') fail('bundle verification needs a fresh isolated directory');
+    if ((fs.statSync(cwd).mode & 0o777) !== 0o700 || (fs.statSync(bundlePath).mode & 0o777) !== 0o600) fail('bundle data is not private');
+    if (!/^sha256:[0-9a-f]{64}$/.test(artifact) || fs.existsSync(artifact)) fail('expected a digest, not a file');
+    const bundle = fs.readFileSync(bundlePath, 'utf8');
+    fs.appendFileSync(path.join(e.FIXTURE_DIR, 'blob-calls'), JSON.stringify({ cwd, bundle, artifact, identity, issuer }) + '\\n');
+    if (!['fixture-payload', 'fixture-second'].includes(JSON.parse(bundle).dsseEnvelope.payload)) fail('fixture tampered payload or bad digest');
+  }
+  const negative = artifact.endsWith(e.CHILD) || identity.includes('wrong-workflow') || issuer.includes('wrong-issuer');
   if (negative && e.NEGATIVE_MODE === 'success') { console.log('[]'); process.exit(0); }
   if (negative && e.NEGATIVE_MODE === 'network') fail('Get https://ghcr.io/v2/: connection reset');
   if (negative && e.NEGATIVE_MODE === 'mixed') fail('no signatures found\\nGet https://ghcr.io/v2/: connection reset');
   if (negative) {
     const actualIdentity = 'https://github.com/' + e.GITHUB_REPOSITORY + '/.github/workflows/image.yml@' + e.GITHUB_REF;
     let message;
-    if (image.endsWith(e.CHILD)) message = e.CHILD_ERROR || 'no signatures found';
+    if (artifact.endsWith(e.CHILD)) message = e.CHILD_ERROR || (local
+      ? 'failed to verify signature: provided artifact digest does not match any digest in statement' : 'no signatures found');
     else {
       const detail = identity.includes('wrong-workflow')
         ? 'expected SAN value "' + identity + '", got "' + actualIdentity + '"'
         : 'expected issuer value "' + issuer + '", got "https://token.actions.githubusercontent.com"';
       const supplied = identity.includes('wrong-workflow') ? e.IDENTITY_ERROR : e.ISSUER_ERROR;
-      message = supplied || 'no matching attestations: failed to verify certificate identity: no matching CertificateIdentity found, last error: ' + detail;
+      message = supplied || (local ? '' : 'no matching attestations: ') + 'failed to verify certificate identity: no matching CertificateIdentity found, last error: ' + detail;
     }
     if (e.NEGATIVE_MODE === 'policy-mixed') message += '\\nGet https://ghcr.io/v2/: connection reset';
     // Cosign 3.1.4/Cobra and main.go report the same source error twice.
     fail('Error: ' + message + '\\n2026/10/26 12:00:00 error during command execution: ' + message);
   }
-  console.log(e.PAYLOAD_JSON || JSON.stringify([{ critical: { image: { 'docker-manifest-digest': e.DIGEST } } }]));
+  if (local) {
+    if (e.LOCAL_POSITIVE_ERROR) fail(e.LOCAL_POSITIVE_ERROR);
+    console.error('Verified OK');
+  } else {
+    if (e.ONLINE_ERROR) fail(e.ONLINE_ERROR);
+    console.log(e.PAYLOAD_JSON || JSON.stringify([{ critical: { image: { 'docker-manifest-digest': e.DIGEST } } }]));
+  }
 } else fail('unexpected executable');
 `;
   for (const name of ["docker", "cosign"]) { writeFileSync(join(bin, name), mock); chmodSync(join(bin, name), 0o755); }
@@ -1246,9 +1280,10 @@ if (command === 'docker') {
     annotations: { "vnd.docker.reference.type": "attestation-manifest", "vnd.docker.reference.digest": env.CHILD },
   }] };
   writeFileSync(join(dir, "index.json"), JSON.stringify(index));
+  writeFileSync(join(dir, "download.jsonl"), JSON.stringify(probeBundle()) + "\n");
   writeFileSync(env.GITHUB_ENV, ""); writeFileSync(env.GITHUB_OUTPUT, "");
-  const run = (script, overrides = {}) => spawnSync("bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
-    cwd: root, env: { ...env, ...overrides }, encoding: "utf8", timeout: 10_000,
+  const run = (script, overrides = {}, cwd = root) => spawnSync("bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
+    cwd, env: { ...env, ...overrides }, encoding: "utf8", timeout: 10_000,
   });
   const calls = () => existsSync(join(dir, "calls")) ? readFileSync(join(dir, "calls"), "utf8").trim().split("\n").filter(Boolean).map(JSON.parse) : [];
   const authenticate = script => {
@@ -1327,7 +1362,9 @@ test("actual probe CLI verification checks typed root claims and only specific n
   const f = probeFixture();
   try {
     assert.equal(f.run(script).status, 0);
-    assert.equal(f.calls().filter(c => c[0] === "cosign").length, 4);
+    const commands = f.calls().filter(c => c[0] === "cosign");
+    assert.deepEqual(commands.map(c => c[1]), ["verify", "download", "verify-blob", "verify-blob", "verify-blob", "verify-blob"]);
+    assert.deepEqual(commands[1], ["cosign", "download", "signature", f.env.IMAGE + "@" + f.env.DIGEST]);
     for (const PAYLOAD_JSON of [
       "[]", "{}", "null", "not-json", '[{"critical":{"image":{"docker-manifest-digest":"wrong"}}}]',
       JSON.stringify([{ critical: { image: { "docker-manifest-digest": f.env.DIGEST } } }, {}]),
@@ -1338,6 +1375,127 @@ test("actual probe CLI verification checks typed root claims and only specific n
       { CHILD_ERROR: "manifest unknown: 404 Not Found" }, { CHILD_ERROR: "no matching signatures: certificate identity mismatch" },
     ]) assert.notEqual(f.run(script, bad).status, 0, JSON.stringify(bad));
   } finally { f.cleanup(); }
+});
+
+test("collapsed child discovery 'no signatures found' is never artifact-binding proof (#375)", () => {
+  const script = probeStep(publicationData().image, "probe-verify", "Verify exact root and expected refusals").run;
+  const f = probeFixture();
+  try {
+    // GetBundles can swallow a transport error and fall back to this exact text.
+    assert.notEqual(f.run(script, { CHILD_ERROR: "no signatures found" }).status, 0);
+  } finally { f.cleanup(); }
+});
+
+test("download gate refuses empty, legacy, malformed, wrong-media, oversized and excess root bundles (#375)", () => {
+  const script = probeStep(publicationData().image, "probe-verify", "Verify exact root and expected refusals").run;
+  const invalid = [
+    ["empty", ""], ["whitespace", " \n"], ["malformed", "{"], ["null", "null"], ["array", "[]"],
+    ["legacy", JSON.stringify({ Base64Signature: "fixture", Payload: "fixture", Cert: "fixture" })],
+    ["wrong media", JSON.stringify({ ...probeBundle(), mediaType: "application/vnd.dev.sigstore.bundle+json;version=0.3" })],
+    ["old media", JSON.stringify({ ...probeBundle(), mediaType: "application/vnd.dev.sigstore.bundle.v0.2+json" })],
+    ...[undefined, null, [], "fixture"].map(dsseEnvelope => ["not DSSE", JSON.stringify({ ...probeBundle(), dsseEnvelope })]),
+    ["oversized", JSON.stringify(probeBundle("x".repeat(1048576)))],
+    ["aggregate oversized", Array(16).fill(JSON.stringify(probeBundle("x".repeat(66000)))).join("\n")],
+    ["17 bundles", Array(17).fill(JSON.stringify(probeBundle())).join("\n")],
+    ["mixed legacy", JSON.stringify(probeBundle()) + '\n{"Base64Signature":"fixture"}'],
+    ["trailing malformed", JSON.stringify(probeBundle()) + "\n{"],
+  ];
+  for (const [name, download] of invalid) {
+    const f = probeFixture();
+    try {
+      writeFileSync(join(f.dir, "download.jsonl"), download);
+      assert.notEqual(f.run(script).status, 0, name);
+      assert.equal(f.calls().filter(c => c[1] === "verify-blob").length, 0, `${name}: gate before local verification`);
+    } finally { f.cleanup(); }
+  }
+});
+
+test("root bundle download accepts exactly one MiB but rejects even one extra byte (#375)", () => {
+  const script = probeStep(publicationData().image, "probe-verify", "Verify exact root and expected refusals").run;
+  const bundle = JSON.stringify(probeBundle());
+  for (const extra of ["", " ", "\0"]) {
+    const f = probeFixture();
+    try {
+      writeFileSync(join(f.dir, "download.jsonl"), bundle + " ".repeat(1048576 - Buffer.byteLength(bundle)) + extra);
+      const result = f.run(script);
+      if (extra === "") assert.equal(result.status, 0, result.stderr);
+      else {
+        assert.notEqual(result.status, 0, "oversize must fail even when its valid prefix fits exactly");
+        assert.equal(f.calls().filter(c => c[1] === "verify-blob").length, 0);
+      }
+    } finally { f.cleanup(); }
+  }
+});
+
+test("all four local checks reuse each validated root bundle in a fresh private digest-file-free directory (#375)", () => {
+  const script = probeStep(publicationData().image, "probe-verify", "Verify exact root and expected refusals").run;
+  for (const count of [1, 2, 16]) {
+    const f = probeFixture();
+    try {
+      const bundles = Array.from({ length: count }, (_, i) => probeBundle(i % 2 ? "fixture-second" : "fixture-payload"));
+      writeFileSync(join(f.dir, "download.jsonl"), bundles.map(JSON.stringify).join("\n"));
+      // verify-blob tries files before parsing artifact digests. Neither file may win.
+      for (const digest of [f.env.DIGEST, f.env.CHILD]) writeFileSync(join(f.dir, digest), "untrusted pseudo-digest file");
+      writeFileSync(join(f.dir, "config.json"), "fixture credential: must not be copied");
+      const result = f.run(script, {}, f.dir);
+      assert.equal(result.status, 0, result.stderr);
+      const calls = f.calls().filter(c => c[0] === "cosign");
+      assert.equal(calls.filter(c => c[1] === "download").length, 1);
+      assert.equal(calls.filter(c => c[1] === "verify").length, 1);
+      assert.ok(calls.filter(c => c[1] !== "verify-blob").every(c => c.at(-1) === f.env.IMAGE + "@" + f.env.DIGEST));
+      const local = readFileSync(join(f.dir, "blob-calls"), "utf8").trim().split("\n").map(JSON.parse);
+      assert.equal(local.length, 4 * count);
+      assert.equal(new Set(local.map(c => c.cwd)).size, count);
+      const identity = `https://github.com/${f.env.GITHUB_REPOSITORY}/.github/workflows/image.yml@${f.env.GITHUB_REF}`;
+      const issuer = "https://token.actions.githubusercontent.com";
+      for (let i = 0; i < count; i++) {
+        const group = local.slice(i * 4, i * 4 + 4);
+        assert.ok(group.every(c => c.bundle === JSON.stringify(bundles[i]) + "\n" && c.cwd === group[0].cwd));
+        assert.deepEqual(group.map(({ artifact, identity, issuer }) => [artifact, identity, issuer]), [
+          [f.env.DIGEST, identity, issuer], [f.env.DIGEST, identity.replace("image.yml", "wrong-workflow.yml"), issuer],
+          [f.env.DIGEST, identity, "https://wrong-issuer.invalid"], [f.env.CHILD, identity, issuer],
+        ]);
+        assert.equal(existsSync(group[0].cwd), false, "private data cleaned after success");
+      }
+    } finally { f.cleanup(); }
+  }
+});
+
+test("root download and local verification errors never substitute for policy or digest rejection (#375)", () => {
+  const script = probeStep(publicationData().image, "probe-verify", "Verify exact root and expected refusals").run;
+  const digestFailure = "failed to verify signature: provided artifact digest does not match any digest in statement";
+  for (const bad of [
+    { DOWNLOAD_ERROR: "no signatures found" }, { DOWNLOAD_ERROR: "Get https://ghcr.io/v2/: connection reset" },
+    { ONLINE_ERROR: "no signatures found" }, { LOCAL_POSITIVE_ERROR: "no signatures found" },
+    { LOCAL_POSITIVE_ERROR: "TUF: trust root unavailable" },
+    ...["\n", "unauthorized", "no signatures found", "TUF: trust root unavailable", "transparency log unavailable",
+      "failed to verify signature: invalid signature", "provided artifact digest does not match any digest in statement",
+      "no matching attestations: " + digestFailure, digestFailure + "\nconnection reset", digestFailure + "\n",
+    ].map(CHILD_ERROR => ({ CHILD_ERROR })),
+    { IDENTITY_ERROR: "no matching attestations: failed to verify certificate identity: no matching CertificateIdentity found, last error: unrelated" },
+    { NEGATIVE_MODE: "policy-mixed" },
+  ]) {
+    const f = probeFixture();
+    try {
+      assert.notEqual(f.run(script, bad).status, 0, JSON.stringify(bad));
+      assert.equal(readdirSync(f.dir).some(name => name.startsWith("probe-bundles.")), false, "private data cleaned on failure");
+    } finally { f.cleanup(); }
+  }
+});
+
+test("tampered payload or bad digest in a downloaded bundle fails the local positive control (#375)", () => {
+  const script = probeStep(publicationData().image, "probe-verify", "Verify exact root and expected refusals").run;
+  for (const marker of ["fixture-tampered-payload", "fixture-bad-digest"]) {
+    const f = probeFixture();
+    try {
+      writeFileSync(join(f.dir, "download.jsonl"), JSON.stringify(probeBundle(marker)));
+      const result = f.run(script);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /fixture tampered payload or bad digest/);
+      assert.equal(f.calls().filter(c => c[1] === "verify-blob").length, 1, "positive must pass before any negatives");
+      assert.equal(readdirSync(f.dir).some(name => name.startsWith("probe-bundles.")), false);
+    } finally { f.cleanup(); }
+  }
 });
 
 test("taiki-e/install-action installs exact versions with its checksum check on", () => {
