@@ -358,6 +358,39 @@ test("every Dockerfile base image is pinned by digest", () => {
   assert.deepEqual(unpinned, []);
 });
 
+test("staging verifier images use the approved literal digest pins in both workflows, Compose defaults and examples (#373)", () => {
+  const pins = [
+    ["STAGING_POSTGRES_IMAGE", "postgres", "mirror.gcr.io/library/postgres@sha256:858bb5e98eed02eb8cafbcdc007f9a65d1b613972028944a8ec2133ccaf80d27"],
+    ["STAGING_CADDY_IMAGE", "ingress", "mirror.gcr.io/library/caddy@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f"],
+  ];
+  const actual = [];
+  const expected = [];
+  // Enumerate the required sites, rather than scanning only references that happen
+  // to exist: deleting a job, field, default or example must not make this pass.
+  for (const [file, job] of [[".github/workflows/image.yml", "verify"], [".github/workflows/ci.yml", "staging-image"]]) {
+    const data = toData(parseStrict(readLocalFromRepo(file), file));
+    for (const [variable, , pin] of pins) {
+      const location = `${file}: jobs.${job}.env.${variable}`;
+      actual.push([location, data.jobs[job].env[variable]]);
+      expected.push([location, pin]);
+    }
+  }
+  const composeFile = "deploy/staging/compose.yaml";
+  const compose = toData(parseStrict(readLocalFromRepo(composeFile), composeFile));
+  const exampleFile = "deploy/staging/staging.env.example";
+  const exampleLines = readLocalFromRepo(exampleFile).split("\n");
+  for (const [variable, service, pin] of pins) {
+    const location = `${composeFile}: services.${service}.image`;
+    actual.push([location, compose.services[service].image]);
+    expected.push([location, `\${${variable}:-${pin}}`]);
+    const prefix = `# ${variable}=`;
+    // Exact singleton equality rejects missing, duplicate, floating or substituted examples.
+    actual.push([`${exampleFile}: ${variable}`, exampleLines.filter(line => line.startsWith(prefix)).map(line => line.slice(prefix.length))]);
+    expected.push([`${exampleFile}: ${variable}`, [pin]]);
+  }
+  assert.deepEqual(actual, expected);
+});
+
 // ---- Rust toolchain pin (#354) ----
 //
 // rust-toolchain.toml, every Rust build stage in every Dockerfile, and every

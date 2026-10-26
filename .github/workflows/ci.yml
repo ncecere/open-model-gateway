@@ -300,10 +300,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
-      # Staging's PostgreSQL and Caddy from mirror.gcr.io (same digests as
-      # Docker Hub); deploy/staging/compose.yaml defaults to Docker Hub.
-      STAGING_POSTGRES_IMAGE: mirror.gcr.io/library/postgres:17-bookworm
-      STAGING_CADDY_IMAGE: mirror.gcr.io/library/caddy:2-alpine
+      # Approved staging rehearsal digest pins; same mirror defaults as Compose.
+      STAGING_POSTGRES_IMAGE: mirror.gcr.io/library/postgres@sha256:858bb5e98eed02eb8cafbcdc007f9a65d1b613972028944a8ec2133ccaf80d27
+      STAGING_CADDY_IMAGE: mirror.gcr.io/library/caddy@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
