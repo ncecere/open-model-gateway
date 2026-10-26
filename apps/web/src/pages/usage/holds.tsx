@@ -85,7 +85,7 @@ export function HoldsTab({ session, workspace }: { session: Session; workspace?:
     { id: "reason", header: "Reason", cell: r => <span className={u.holdCell}>{reasonText(r.unresolved_reason)}</span> },
     { id: "model", header: "Model", cell: r => <>{r.public_model}<span className={s.secondary}>{r.provider} · {workloadLabels[r.workload_kind as keyof typeof workloadLabels] ?? r.workload_kind}</span></> },
     ...(workspace ? [] : [{ id: "workspace", header: "Workspace", cell: (r: HoldRow) => <>{r.workspace.name}<span className={s.secondary}>{kindLabel(r.workspace.kind)}</span></> }]),
-    { id: "request", header: "Request", cell: r => { const link = holdRequestLink(session, r, workspace); return link ? <ResourceLink search={link} aria-label={`Request ${r.root_request_id.slice(0, 8)}`}>{shortId(r.root_request_id)}</ResourceLink> : <CopyId value={r.root_request_id} label="request ID" />; } },
+    { id: "request", header: "Request", cell: r => { const link = holdRequestLink(session, r, workspace); return link ? <ResourceLink search={link} aria-label={`Request ${shortId(r.root_request_id)}`}>{shortId(r.root_request_id)}</ResourceLink> : <CopyId value={r.root_request_id} label="request ID" />; } },
   ];
   const showReconcile = view.rows.some(r => canReconcileHold(session, r));
   const settled = !q.isPending && !q.error;

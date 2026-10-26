@@ -76,6 +76,21 @@ describe("Usage & costs › Holds tab", () => {
     client.clear();
   });
 
+  it("names the request link's accessible name with the exact same visible shortened ID (axe label-content-name-mismatch)", async () => {
+    // A heterogeneous UUID whose head and tail differ, so truncation is unambiguous and a half-fixed label can't hide behind repeated digits.
+    const REALISTIC_ROOT = "a1b2c3d4-e5f6-4789-9abc-def012345678";
+    serve(session, p => p.startsWith("/api/v1/workspaces/team/holds") ? page({ data: [row({ root_request_id: REALISTIC_ROOT })] }) : undefined);
+    const { client } = await mount("/workspaces/team/costs?tab=holds");
+    const table = await loadedTable();
+    const link = within(table).getByRole("link", { name: /Request a1b2c3d4/ });
+    const visibleText = link.textContent ?? "";
+    expect(visibleText).toBe("a1b2c3d4…5678"); // first 8 + ellipsis + last 4, per shortId
+    const accessibleName = link.getAttribute("aria-label") ?? "";
+    // The accessible name must carry the exact same visible text (including the truncation tail), not just the head.
+    expect(accessibleName).toContain(visibleText);
+    client.clear();
+  });
+
   it("tells a member they see only their own holds and a personal owner that these are theirs", async () => {
     serve(asMember, p => p.startsWith("/api/v1/workspaces/team/holds") ? page() : undefined);
     const first = await mount("/workspaces/team/costs?tab=holds");
