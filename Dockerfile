@@ -12,7 +12,8 @@ RUN npm run build:web
 
 # All locked dependency manifests currently require Rust <= 1.88. This pinned
 # compiler also supports edition 2024; do not use the manifest MSRV blindly when
-# updating Cargo.lock. Build and runtime share Debian's glibc baseline.
+# updating Cargo.lock. Bookworm sets the build's glibc baseline; compatibility
+# with the supported Debian 13 runtime must pass native build/runtime gates.
 FROM mirror.gcr.io/library/rust:1.99.1-bookworm@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8 AS build
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
@@ -29,11 +30,11 @@ RUN cargo build --locked --release --jobs "$CARGO_BUILD_JOBS" -p open-model-gate
 # Distroless: no shell, package manager, curl or perl. The binary links glibc
 # and libgcc_s (Rust unwinding), so `cc` (not `base`/`static`); it ships
 # ca-certificates, which the AWS SDK's rustls-native-certs reads. Pinned by
-# multi-arch index digest (cc-debian12:nonroot); refresh it deliberately with
-#   docker buildx imagetools inspect gcr.io/distroless/cc-debian12:nonroot
+# multi-arch index digest (cc-debian13:nonroot); refresh it deliberately with
+#   docker buildx imagetools inspect gcr.io/distroless/cc-debian13:nonroot
 # The binary itself does what the former shell entrypoint did: umask 077,
 # `*_FILE` secret import, and never migrating or bootstrapping implicitly.
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS runtime
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:3ee00291cf386ec52a552e6a858d555debd74776eb4bfa53fa3df2cd6677515e AS runtime
 WORKDIR /app
 COPY --from=build --chmod=0555 /build/target/release/open-model-gateway /usr/local/bin/open-model-gateway
 COPY --from=web /build/apps/web/dist/ /app/web/

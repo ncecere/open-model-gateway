@@ -19,7 +19,7 @@ RUN --mount=type=cache,id=omg-loadtest-registry,target=/usr/local/cargo/registry
  && mkdir -p /out \
  && cp target/release/open-model-gateway target/release/mock-upstream target/release/loadgen /out/
 
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:3ee00291cf386ec52a552e6a858d555debd74776eb4bfa53fa3df2cd6677515e
 COPY --from=build --chmod=0555 /out/ /usr/local/bin/
 ENV GATEWAY_ENV=production \
     GATEWAY_LISTEN=0.0.0.0:8080 \
