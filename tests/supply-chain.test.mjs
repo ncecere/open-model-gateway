@@ -1262,8 +1262,10 @@ if (command === 'docker') {
       message = supplied || (local ? '' : 'no matching attestations: ') + 'failed to verify certificate identity: no matching CertificateIdentity found, last error: ' + detail;
     }
     if (e.NEGATIVE_MODE === 'policy-mixed') message += '\\nGet https://ghcr.io/v2/: connection reset';
-    // Cosign 3.1.4/Cobra and main.go report the same source error twice.
-    fail('Error: ' + message + '\\n2026/10/26 12:00:00 error during command execution: ' + message);
+    // Observed pinned Cosign stderr has a bare main.go logger; retain dated compatibility.
+    // Stand-ins exercise control flow only, never cryptographic verification.
+    const logger = (e.DATED ? '2026/10/26 12:00:00 ' : '') + 'error during command execution: ';
+    fail((e.ERROR_PREFIX ?? 'Error: ') + message + (e.ERROR_SUFFIX || '') + '\\n' + (e.LOGGER_PREFIX ?? logger) + message);
   }
   if (local) {
     if (e.LOCAL_POSITIVE_ERROR) fail(e.LOCAL_POSITIVE_ERROR);
@@ -1376,6 +1378,38 @@ test("actual probe CLI verification checks typed root claims and only specific n
       { CHILD_ERROR: "manifest unknown: 404 Not Found" }, { CHILD_ERROR: "no matching signatures: certificate identity mismatch" },
     ]) assert.notEqual(f.run(script, bad).status, 0, JSON.stringify(bad));
   } finally { f.cleanup(); }
+});
+
+for (const DATED of ["", "1"]) test(`actual probe accepts exact refusal leaves with ${DATED ? "dated" : "observed bare (no date)"} logger (#375)`, () => {
+  const script = probeStep(publicationData().image, "probe-verify", "Verify exact root and expected refusals").run;
+  const f = probeFixture();
+  try {
+    const result = f.run(script, { DATED });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(f.calls().filter(c => c[0] === "cosign").map(c => c[1]),
+      ["verify", "download", "verify-blob", "verify-blob", "verify-blob", "verify-blob"]);
+  } finally { f.cleanup(); }
+});
+
+test("actual probe refuses nested/composite wrappers, unexpected prefixes, CR and extra blank lines (#375)", () => {
+  const script = probeStep(publicationData().image, "probe-verify", "Verify exact root and expected refusals").run;
+  for (const DATED of ["", "1"]) for (const bad of [
+    { ERROR_PREFIX: "Error: Error: " },
+    { ERROR_PREFIX: "Error: error during command execution: " },
+    { ERROR_PREFIX: "Error: 2026/10/26 12:00:00 error during command execution: " },
+    { LOGGER_PREFIX: "error during command execution: Error: " },
+    { LOGGER_PREFIX: "error during command execution: error during command execution: " },
+    { LOGGER_PREFIX: "2026/10/26 12:00:00 error during command execution: Error: " },
+    { ERROR_PREFIX: "unexpected: " }, { LOGGER_PREFIX: "INFO: error during command execution: " },
+    { ERROR_PREFIX: " Error: " }, { ERROR_PREFIX: "\u001b[31mError: " },
+    { ERROR_SUFFIX: "\r" }, { ERROR_SUFFIX: "\n" }, { ERROR_PREFIX: "\nError: " },
+    { NEGATIVE_MODE: "policy-mixed" },
+  ]) {
+    const f = probeFixture();
+    try {
+      assert.notEqual(f.run(script, { DATED, ...bad }).status, 0, JSON.stringify({ DATED, ...bad }));
+    } finally { f.cleanup(); }
+  }
 });
 
 test("collapsed child discovery 'no signatures found' is never artifact-binding proof (#375)", () => {
