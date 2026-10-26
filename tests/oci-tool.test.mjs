@@ -18,7 +18,17 @@ const ldflags = `-w -s -buildid= -X oras.land/oras/internal/version.Version=1.3.
 
 function harness(t, scenario = "ok") {
   const dir = mkdtempSync(join(tmpdir(), "omg-oras-test-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  t.after(() => {
+    // Only this owned fixture tree; Dirents exclude symlinks from recursion/chmod.
+    const restore = root => {
+      chmodSync(root, 0o700);
+      for (const entry of readdirSync(root, { withFileTypes: true })) {
+        if (entry.isDirectory()) restore(join(root, entry.name));
+      }
+    };
+    restore(dir);
+    rmSync(dir, { recursive: true, force: true });
+  });
   const bin = join(dir, "bin"), scratch = join(dir, "tmp"), output = join(dir, "oras output");
   for (const p of [bin, scratch, join(dir, "ambient-home"), join(dir, "image-cache")]) mkdirSync(p);
   // Deliberately fail (never skip) until the separately authorized implementation exists.
@@ -69,7 +79,14 @@ if (name === 'fetch-verified.sh') {
   } else if (!['remote', 'fetch', 'checkout', 'switch', 'config'].includes(cmd)) die('unexpected git command');
 } else if (name === 'go' && process.argv[1].includes('/go/bin/go')) {
   if (args[0] !== 'build') die('only go build is allowed');
-  if (scenario === 'compiler-failure') die('fake compilation failed');
+  if (scenario.startsWith('readonly-cache')) {
+    const module = p.join(process.env.GOMODCACHE, 'module'), nested = p.join(module, 'nested');
+    fs.mkdirSync(nested, { recursive: true });
+    fs.writeFileSync(p.join(nested, 'dependency.go'), 'FAKE MODULE DATA');
+    fs.chmodSync(nested, 0o555);
+    fs.chmodSync(module, 0o555);
+  }
+  if (scenario === 'compiler-failure' || scenario === 'readonly-cache-compiler-failure') die('fake compilation failed');
   const i = args.indexOf('-o');
   if (i < 0) die('missing build output');
   fs.writeFileSync(args[i + 1], 'DATA\\n');
@@ -84,7 +101,7 @@ if (name === 'fetch-verified.sh') {
   executable(join(dir, "fetch-verified.sh"), `#!/bin/bash\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(join(bin, "fetch-verified.sh"))} "$@"\n`);
   for (const name of ["git", "tar", "go", "rm", "DATA", "curl", "wget", "gh", "make", "gcc", "cc"]) executable(join(bin, name), fake);
   // Filesystem/shell primitives only: no inherited PATH or executable lookup fallback.
-  for (const name of ["bash", "env", "mkdir", "mktemp", "dirname", "basename", "chmod", "cp", "mv", "cat", "rmdir", "readlink", "pwd", "cut", "sed", "grep", "tr"]) {
+  for (const name of ["bash", "env", "mkdir", "mktemp", "dirname", "basename", "chmod", "cp", "mv", "cat", "rmdir", "readlink", "pwd", "cut", "sed", "grep", "tr", "find"]) {
     const native = ["/bin", "/usr/bin"].map(p => join(p, name)).find(existsSync);
     assert.ok(native, `missing filesystem primitive ${name}`);
     symlinkSync(native, join(bin, name));
@@ -108,7 +125,9 @@ if (name === 'fetch-verified.sh') {
     });
     assert.equal(result.error, undefined, String(result.error));
     const events = existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse) : [];
-    assert.deepEqual(readdirSync(scratch), [], "helper must clean temporary SDK/source/home/caches on every exit");
+    if (scenario.startsWith("readonly-cache")) t.diagnostic(JSON.stringify({ scenario, status: result.status,
+      output: existsSync(output) ? readFileSync(output, "utf8") : null }));
+    assert.deepEqual(readdirSync(scratch), [], `helper must clean temporary SDK/source/home/caches on every exit; status=${result.status}\n${result.stderr}`);
     assert.deepEqual(retained(), before, "only OUTPUT_FILE may be added outside the temporary directory");
     for (const e of events) {
       assert.ok(["fetch-verified.sh", "git", "tar", "go", "rm"].includes(e.name), `forbidden subprocess: ${e.name}`);
@@ -165,6 +184,20 @@ for (const scenario of ["fetch-failure", "wrong-commit", "compiler-failure"]) te
   assert.equal(r.builds.length, scenario === "compiler-failure" ? 1 : 0);
   assert.equal(existsSync(h.output), false, "no output on failure");
   assert.ok(r.events.some(e => scenario === "wrong-commit" ? e.name === "git" && e.args.includes("rev-parse") : e.name === (scenario === "fetch-failure" ? "fetch-verified.sh" : "go")), "exercise the intended failure boundary");
+});
+
+test("readonly module cache is fully removed after success without changing emitted DATA", t => {
+  assert.notEqual(process.getuid?.(), 0, "readonly-cache regression requires a nonroot process");
+  success(harness(t, "readonly-cache"));
+});
+
+test("readonly module cache is fully removed after compiler failure without masking exit 71", t => {
+  assert.notEqual(process.getuid?.(), 0, "readonly-cache regression requires a nonroot process");
+  const h = harness(t, "readonly-cache-compiler-failure"), r = h.run();
+  assert.equal(r.status, 71, r.stderr);
+  assert.equal(r.builds.length, 1, "exercise the compiler failure boundary");
+  assert.match(r.stderr, /fake compilation failed/);
+  assert.equal(existsSync(h.output), false, "no output on compiler failure");
 });
 
 for (const kind of ["existing", "symlink", "dangling-symlink"]) test(`refuses ${kind} output without overwriting or compiling`, t => {
