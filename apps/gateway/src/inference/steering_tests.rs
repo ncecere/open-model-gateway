@@ -566,166 +566,28 @@ struct FailureDiagnostic {
     attacker_hits: Option<usize>,
 }
 
-/// Read only the three whitelisted wire fields; never serialize IDs or attributes
-/// into an intermediate value. Names must resolve back to the fixed enum.
+/// Project only fixed names and durations into diagnostic output. Span's native
+/// serializer still constructs its full wire value, including IDs and attributes;
+/// that value is transient memory only, never retained or emitted as a diagnostic.
 fn project_phases(spans: &[telemetry::Span]) -> Option<Vec<PhaseTiming>> {
-    use serde::ser::{Error, Impossible, SerializeMap, Serializer};
-
-    #[derive(Default)]
-    struct Projection {
-        name: Option<&'static str>,
-        start: Option<u64>,
-        end: Option<u64>,
-    }
-    impl SerializeMap for Projection {
-        type Ok = PhaseTiming;
-        type Error = serde_json::Error;
-
-        fn serialize_key<T: ?Sized + Serialize>(&mut self, _: &T) -> Result<(), Self::Error> {
-            Err(Self::Error::custom("phase projection requires entries"))
-        }
-        fn serialize_value<T: ?Sized + Serialize>(&mut self, _: &T) -> Result<(), Self::Error> {
-            Err(Self::Error::custom("phase projection requires entries"))
-        }
-        fn serialize_entry<K: ?Sized + Serialize, V: ?Sized + Serialize>(
-            &mut self,
-            key: &K,
-            value: &V,
-        ) -> Result<(), Self::Error> {
-            let key = serde_json::to_value(key)?;
-            match key.as_str() {
-                Some("name") => {
-                    let value = serde_json::to_value(value)?;
-                    self.name = telemetry::SpanName::ALL
-                        .iter()
-                        .map(|name| name.as_str())
-                        .find(|name| Some(*name) == value.as_str());
-                }
-                Some("startTimeUnixNano" | "endTimeUnixNano") => {
-                    let value = serde_json::to_value(value)?;
-                    let nanos = value.as_str().and_then(|n| n.parse::<u64>().ok());
-                    if key == "startTimeUnixNano" {
-                        self.start = nanos;
-                    } else {
-                        self.end = nanos;
-                    }
-                }
-                _ => {} // Do not visit the value of any non-whitelisted field.
-            }
-            Ok(())
-        }
-        fn end(self) -> Result<Self::Ok, Self::Error> {
-            let unavailable = || Self::Error::custom("phase projection unavailable");
-            Ok(PhaseTiming {
-                name: self.name.ok_or_else(unavailable)?,
-                duration_ns: self
-                    .end
-                    .zip(self.start)
-                    .and_then(|(end, start)| end.checked_sub(start))
-                    .ok_or_else(unavailable)?,
-            })
-        }
-    }
-
-    // Span's wire shape is a map. Reject every other shape rather than falling
-    // back to serializing a whole span (including its sensitive metadata).
-    macro_rules! reject_shapes {
-        ($($method:ident($($arg:ident: $ty:ty),*));* $(;)?) => {
-            $(fn $method(self, $(_: $ty),*) -> Result<Self::Ok, Self::Error> {
-                Err(Self::Error::custom("phase projection requires a map"))
-            })*
-        };
-    }
-    impl Serializer for Projection {
-        type Ok = PhaseTiming;
-        type Error = serde_json::Error;
-        type SerializeSeq = Impossible<Self::Ok, Self::Error>;
-        type SerializeTuple = Impossible<Self::Ok, Self::Error>;
-        type SerializeTupleStruct = Impossible<Self::Ok, Self::Error>;
-        type SerializeTupleVariant = Impossible<Self::Ok, Self::Error>;
-        type SerializeMap = Self;
-        type SerializeStruct = Impossible<Self::Ok, Self::Error>;
-        type SerializeStructVariant = Impossible<Self::Ok, Self::Error>;
-
-        fn serialize_map(self, _: Option<usize>) -> Result<Self, Self::Error> {
-            Ok(self)
-        }
-        reject_shapes! {
-            serialize_bool(v: bool);
-            serialize_i8(v: i8); serialize_i16(v: i16); serialize_i32(v: i32);
-            serialize_i64(v: i64); serialize_i128(v: i128);
-            serialize_u8(v: u8); serialize_u16(v: u16); serialize_u32(v: u32);
-            serialize_u64(v: u64); serialize_u128(v: u128);
-            serialize_f32(v: f32); serialize_f64(v: f64);
-            serialize_char(v: char); serialize_str(v: &str); serialize_bytes(v: &[u8]);
-            serialize_none(); serialize_unit(); serialize_unit_struct(name: &'static str);
-            serialize_unit_variant(name: &'static str, index: u32, variant: &'static str);
-        }
-        fn serialize_some<T: ?Sized + Serialize>(self, _: &T) -> Result<Self::Ok, Self::Error> {
-            Err(Self::Error::custom("phase projection requires a map"))
-        }
-        fn serialize_newtype_struct<T: ?Sized + Serialize>(
-            self,
-            _: &'static str,
-            _: &T,
-        ) -> Result<Self::Ok, Self::Error> {
-            Err(Self::Error::custom("phase projection requires a map"))
-        }
-        fn serialize_newtype_variant<T: ?Sized + Serialize>(
-            self,
-            _: &'static str,
-            _: u32,
-            _: &'static str,
-            _: &T,
-        ) -> Result<Self::Ok, Self::Error> {
-            Err(Self::Error::custom("phase projection requires a map"))
-        }
-        fn serialize_seq(self, _: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
-            Err(Self::Error::custom("phase projection requires a map"))
-        }
-        fn serialize_tuple(self, _: usize) -> Result<Self::SerializeTuple, Self::Error> {
-            Err(Self::Error::custom("phase projection requires a map"))
-        }
-        fn serialize_tuple_struct(
-            self,
-            _: &'static str,
-            _: usize,
-        ) -> Result<Self::SerializeTupleStruct, Self::Error> {
-            Err(Self::Error::custom("phase projection requires a map"))
-        }
-        fn serialize_tuple_variant(
-            self,
-            _: &'static str,
-            _: u32,
-            _: &'static str,
-            _: usize,
-        ) -> Result<Self::SerializeTupleVariant, Self::Error> {
-            Err(Self::Error::custom("phase projection requires a map"))
-        }
-        fn serialize_struct(
-            self,
-            _: &'static str,
-            _: usize,
-        ) -> Result<Self::SerializeStruct, Self::Error> {
-            Err(Self::Error::custom("phase projection requires a map"))
-        }
-        fn serialize_struct_variant(
-            self,
-            _: &'static str,
-            _: u32,
-            _: &'static str,
-            _: usize,
-        ) -> Result<Self::SerializeStructVariant, Self::Error> {
-            Err(Self::Error::custom("phase projection requires a map"))
-        }
-    }
-
     if spans.is_empty() {
         return None;
     }
     spans
         .iter()
-        .map(|span| span.serialize(Projection::default()).ok())
+        .map(|span| {
+            let value = serde_json::to_value(span).ok()?;
+            let name = telemetry::SpanName::ALL
+                .iter()
+                .map(|name| name.as_str())
+                .find(|name| Some(*name) == value["name"].as_str())?;
+            let start = value["startTimeUnixNano"].as_str()?.parse::<u64>().ok()?;
+            let end = value["endTimeUnixNano"].as_str()?.parse::<u64>().ok()?;
+            Some(PhaseTiming {
+                name,
+                duration_ns: end.checked_sub(start)?,
+            })
+        })
         .collect()
 }
 
@@ -748,13 +610,7 @@ async fn send_observed(app: &Router, request: Request) -> Observed {
     // Capture starts before HTTP auth/catalog: the first duration includes that
     // lead-in. These are completed boundaries, not precise phase-queue SLOs;
     // elapsed time or the last boundary cannot identify a timeout's cause.
-    let (status, text) = telemetry::with_phases(buffer.clone(), async {
-        let response = app.clone().oneshot(request).await.unwrap();
-        let status = response.status();
-        let bytes = to_bytes(response.into_body(), 16 << 20).await.unwrap();
-        (status, String::from_utf8_lossy(&bytes).into_owned())
-    })
-    .await;
+    let (status, text) = telemetry::with_phases(buffer.clone(), send(app, request)).await;
     let elapsed_ns = started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
     let phases = Arc::try_unwrap(buffer)
         .ok()
@@ -769,8 +625,10 @@ async fn send_observed(app: &Router, request: Request) -> Observed {
 }
 
 async fn send(app: &Router, request: Request) -> (StatusCode, String) {
-    let observed = send_observed(app, request).await;
-    (observed.status, observed.text)
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 16 << 20).await.unwrap();
+    (status, String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// `error.code`, else `error.type`, of a gateway error body ("" otherwise).
