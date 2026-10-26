@@ -67,7 +67,12 @@ export function Tab({ className, icon, count, children, ...props }: TabProps) {
     <BaseTabs.Tab {...props} className={cx(styles.tab, className)}>
       {icon}
       {children}
-      {count !== undefined && <span className={styles.count}>{count}</span>}
+      {count !== undefined && (
+        <>
+          {" "}
+          <span className={styles.count}>{count.toLocaleString()}</span>
+        </>
+      )}
     </BaseTabs.Tab>
   );
 }
@@ -117,7 +122,12 @@ export function NavTab({ className, current, icon, count, render, ref, children,
         <>
           {icon}
           {children}
-          {count !== undefined && <span className={styles.count}>{count}</span>}
+          {count !== undefined && (
+            <>
+              {" "}
+              <span className={styles.count}>{count.toLocaleString()}</span>
+            </>
+          )}
         </>
       ),
     },
