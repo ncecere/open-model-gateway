@@ -385,6 +385,9 @@ test("fixtures: runtime policy rejects independent pin regressions and incomplet
     ["missing runtime", "FROM scratch\n"],
     ["duplicate runtime", `FROM ${APPROVED_RUNTIME}\nFROM ${APPROVED_RUNTIME}\n`],
     ["runtime not final", `FROM ${APPROVED_RUNTIME}\nFROM scratch\n`],
+    ...["linux/amd64", "linux/arm64", "$BUILDPLATFORM", "$TARGETPLATFORM"].map(platform => [
+      `runtime platform override ${platform}`, `FROM --platform=${platform} ${APPROVED_RUNTIME}\n`,
+    ]),
   ];
   for (const file of RUNTIME_DOCKERFILES) {
     for (const [label, text] of mutants) {
