@@ -172,12 +172,36 @@ async fn check_incidents(pool: &PgPool, store: &Store, personal: bool, scim: boo
     sqlx::raw_sql(&format!(
         "CREATE FUNCTION issue_382_refuse_incident_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
          BEGIN RAISE EXCEPTION 'verifier attempted to mutate an existing incident' USING ERRCODE='P0382'; END $$;
+         REVOKE ALL ON FUNCTION issue_382_refuse_incident_mutation() FROM PUBLIC,gateway_runtime;
          CREATE TRIGGER aaa_issue_382_incident_guard BEFORE UPDATE OR DELETE ON alert_events
          FOR EACH ROW WHEN (OLD.id IN ({ids})) EXECUTE FUNCTION issue_382_refuse_incident_mutation();"
     ))
     .execute(pool)
     .await
     .unwrap();
+
+    assert!(
+        !sqlx::query_scalar::<_, bool>("SELECT has_function_privilege('gateway_runtime','issue_382_refuse_incident_mutation()','EXECUTE')")
+            .fetch_one(pool).await.unwrap(),
+        "test trigger must not widen the executable-function allowlist"
+    );
+    for id in &seeded {
+        for statement in [
+            "UPDATE alert_events SET resolved_at=resolved_at WHERE id=$1",
+            "DELETE FROM alert_events WHERE id=$1",
+        ] {
+            let error = sqlx::query(statement)
+                .bind(id)
+                .execute(pool)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.as_database_error().unwrap().code().as_deref(),
+                Some("P0382"),
+                "the guard must detect even temporary/no-op incident mutation"
+            );
+        }
+    }
 
     let before = snapshot(pool).await;
     assert_open_identities(pool, &open).await;
