@@ -18,6 +18,8 @@
 //! (`disallowed-methods`) outside this sanctioned call site.
 use sqlx::{PgPool, Postgres, Transaction};
 
+#[cfg(test)]
+pub(crate) mod diagnostics;
 #[cfg(all(test, feature = "integration-tests"))]
 mod tests;
 
@@ -41,27 +43,37 @@ async fn start(
     setup: Option<&'static str>,
 ) -> sqlx::Result<Transaction<'static, Postgres>> {
     let pool = pool.clone();
-    let task = tokio::spawn(async move {
+    let start = async move {
         #[allow(clippy::disallowed_methods)] // the one sanctioned call site
-        let mut tx = pool
-            .begin_with("BEGIN ISOLATION LEVEL READ COMMITTED")
-            .await?;
+        let begin = pool.begin_with("BEGIN ISOLATION LEVEL READ COMMITTED");
+        #[cfg(test)]
+        let begin = diagnostics::sql(diagnostics::Stage::PoolAcquireAndBegin, begin);
+        let mut tx = begin.await?;
         if let Some(sql) = setup {
-            sqlx::Executor::execute(&mut *tx, sql).await?;
+            let setup = sqlx::Executor::execute(&mut *tx, sql);
+            #[cfg(test)]
+            let setup = diagnostics::sql(diagnostics::Stage::Setup, setup);
+            setup.await?;
         }
         // Test builds audit the scoped lock order (migration 0027): every
         // gateway transaction that changes an authority scope must take its
         // exclusive lock up front, in canonical order.
         #[cfg(any(test, feature = "integration-tests"))]
         if std::env::var("GATEWAY_SCOPE_LOCK_AUDIT").as_deref() != Ok("off") {
-            sqlx::Executor::execute(
+            let audit = sqlx::Executor::execute(
                 &mut *tx,
                 "SELECT set_config('omg.scope_lock_audit','on',true)",
-            )
-            .await?;
+            );
+            #[cfg(test)]
+            let audit = diagnostics::sql(diagnostics::Stage::ScopeAudit, audit);
+            audit.await?;
         }
         Ok(tx)
-    });
+    };
+    #[cfg(test)]
+    let start = diagnostics::inherit(start);
+    // Preserve the uncancellable owner task: no database await moves into the caller.
+    let task = tokio::spawn(start);
     match task.await {
         Ok(result) => result,
         Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),

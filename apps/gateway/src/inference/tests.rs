@@ -15,6 +15,7 @@ struct MemoryRepository {
     deployments: Mutex<Vec<Deployment>>,
     starts: AtomicUsize,
     finishes: Mutex<Vec<ExecutionFinish>>,
+    finish_calls: AtomicUsize,
     finished: tokio::sync::Notify,
     fail_start: AtomicBool,
     fail_finish: AtomicBool,
@@ -60,6 +61,7 @@ impl InferenceRepository for MemoryRepository {
         Ok(())
     }
     async fn finish(&self, record: &ExecutionFinish) -> Result<(), InferenceError> {
+        self.finish_calls.fetch_add(1, Ordering::SeqCst);
         if self.fail_finish.load(Ordering::SeqCst) {
             return Err(InferenceError::Storage);
         }
@@ -804,6 +806,106 @@ async fn timed_out_finalization_counts_as_held() {
         Err(InferenceError::Storage)
     ));
     assert!(METRICS.settlement_count(Settlement::Held) > before);
+}
+
+/// Streaming guards retain their explicitly opted-in recorder after the ambient scope ends.
+#[tokio::test]
+async fn diagnostic_explicit_settlement_failure_is_request_owned_after_scope_ends() {
+    use crate::db::diagnostics::{self, Handle, Outcome as DiagnosticOutcome, Stage};
+    let capture = Handle::new();
+    let (engine, repository, adapter) = fixture(Mode::Stream, EngineLimits::default());
+    repository.fail_finish.store(true, Ordering::SeqCst);
+    let output = diagnostics::scope(
+        capture.clone(),
+        engine.execute(principal(), request(true), Uuid::new_v4()),
+    )
+    .await
+    .unwrap();
+    assert!(diagnostics::current().is_none());
+    let ProviderOutput::Stream(output) = output else {
+        panic!("expected stream")
+    };
+    let events: Vec<_> = output.collect().await;
+    assert!(matches!(events.last(), Some(Err(InferenceError::Storage))));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Ok(ChatEvent::Done)))
+    );
+    assert_eq!(adapter.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(repository.finish_calls.load(Ordering::SeqCst), 1);
+    let snapshot = capture.snapshot();
+    assert!(!snapshot.unavailable);
+    assert_eq!((snapshot.pending, snapshot.dropped), (0, 0));
+    assert_eq!(snapshot.events.len(), 1);
+    let event = &snapshot.events[0];
+    assert_eq!(event.stage, Stage::ExplicitSettlement);
+    assert_eq!(event.outcome, DiagnosticOutcome::Error);
+    assert!(
+        event.sqlstate.is_none(),
+        "repository Storage is not a native SQLSTATE"
+    );
+}
+
+#[tokio::test]
+async fn diagnostic_settlement_timeout_is_not_cancellation_or_a_drop_retry() {
+    use crate::db::diagnostics::{self, Handle, Outcome as DiagnosticOutcome, Stage};
+    let capture = Handle::new();
+    let (engine, repository, adapter) = fixture(Mode::Complete, EngineLimits::default());
+    repository.hang_finish.store(true, Ordering::SeqCst);
+    let result = diagnostics::scope(
+        capture.clone(),
+        engine.execute(principal(), request(false), Uuid::new_v4()),
+    )
+    .await;
+    assert!(matches!(result, Err(InferenceError::Storage)));
+    assert_eq!(adapter.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(repository.finish_calls.load(Ordering::SeqCst), 1);
+    assert!(repository.finishes.lock().unwrap().is_empty());
+    let snapshot = capture.snapshot();
+    assert!(!snapshot.unavailable);
+    assert_eq!((snapshot.pending, snapshot.dropped), (0, 0));
+    assert_eq!(
+        snapshot.events.len(),
+        1,
+        "no detached Drop retry after explicit timeout"
+    );
+    assert_eq!(snapshot.events[0].stage, Stage::ExplicitSettlement);
+    assert_eq!(snapshot.events[0].outcome, DiagnosticOutcome::Timeout);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn diagnostic_drop_settlement_registers_before_spawn_and_outlives_scope() {
+    use crate::db::diagnostics::{self, Handle, Outcome as DiagnosticOutcome, Stage};
+    let capture = Handle::new();
+    let (engine, repository, _) = fixture(Mode::Pending, EngineLimits::default());
+    let output = diagnostics::scope(
+        capture.clone(),
+        engine.execute(principal(), request(true), Uuid::new_v4()),
+    )
+    .await
+    .unwrap();
+    assert!(diagnostics::current().is_none());
+    let notified = repository.finished.notified();
+    drop(output);
+    let queued = capture.snapshot();
+    // Single-thread runtime: the spawned accounting task cannot run before this assertion.
+    assert!(
+        queued.pending > 0,
+        "register detached work before it can be polled"
+    );
+    timeout(Duration::from_secs(1), notified).await.unwrap();
+    let snapshot = capture.snapshot();
+    assert!(!snapshot.unavailable);
+    assert_eq!((snapshot.pending, snapshot.dropped), (0, 0));
+    assert_eq!(snapshot.events.len(), 1);
+    assert_eq!(snapshot.events[0].stage, Stage::CancellationSettlement);
+    assert_eq!(snapshot.events[0].outcome, DiagnosticOutcome::Success);
+    assert_eq!(repository.finish_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        repository.finishes.lock().unwrap()[0].outcome,
+        Outcome::Cancelled
+    );
 }
 
 #[test]

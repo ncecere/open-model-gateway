@@ -20,6 +20,8 @@ use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 type Tx<'a> = Transaction<'a, Postgres>;
 fn storage(error: sqlx::Error) -> InferenceError {
+    #[cfg(test)]
+    crate::db::diagnostics::observe_sqlx(crate::db::diagnostics::Stage::GovernanceStorage, &error);
     // A deadlock victim may be re-run (`locks::retry_deadlocks`).
     locks::note(&error);
     InferenceError::Storage
@@ -2058,6 +2060,8 @@ pub(crate) async fn set_test_budget(
         sqlx::query("INSERT INTO policy_budgets(layer,kind,workspace_id,governance_key_id,period,amount_microusd) VALUES($1,$2,$3,$4,$5,$6)").bind(layer).bind(kind).bind(workspace).bind(key).bind(period).bind(amount).execute(pool).await.unwrap();
     }
 }
+#[cfg(test)]
+mod diagnostic_tests;
 #[cfg(all(test, feature = "integration-tests"))]
 mod image_tests;
 #[cfg(all(test, feature = "integration-tests"))]

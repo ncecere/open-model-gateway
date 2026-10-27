@@ -560,6 +560,7 @@ struct PhaseTiming {
 struct FailureDiagnostic {
     elapsed_ns: u64,
     phases: Option<Vec<PhaseTiming>>,
+    database: Option<crate::db::diagnostics::Snapshot>,
     status: u16,
     accounting_unavailable: bool,
     approved_hits: usize,
@@ -596,6 +597,7 @@ struct Observed {
     text: String,
     elapsed_ns: u64,
     phases: Option<Vec<PhaseTiming>>,
+    database: crate::db::diagnostics::Snapshot,
 }
 
 async fn send_observed(app: &Router, request: Request) -> Observed {
@@ -610,7 +612,13 @@ async fn send_observed(app: &Router, request: Request) -> Observed {
     // Capture starts before HTTP auth/catalog: the first duration includes that
     // lead-in. These are completed boundaries, not precise phase-queue SLOs;
     // elapsed time or the last boundary cannot identify a timeout's cause.
-    let (status, text) = telemetry::with_phases(buffer.clone(), send(app, request)).await;
+    let database = crate::db::diagnostics::Handle::new();
+    let (status, text) = crate::db::diagnostics::scope(
+        database.clone(),
+        telemetry::with_phases(buffer.clone(), send(app, request)),
+    )
+    .await;
+    let database = database.snapshot();
     let elapsed_ns = started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
     let phases = Arc::try_unwrap(buffer)
         .ok()
@@ -621,6 +629,7 @@ async fn send_observed(app: &Router, request: Request) -> Observed {
         text,
         elapsed_ns,
         phases,
+        database,
     }
 }
 
@@ -724,6 +733,7 @@ async fn expect(
         text,
         elapsed_ns,
         phases,
+        database,
     } = send_observed(&w.app, request).await;
     let hits = w.approved.take();
     let got = (status.as_u16(), reason(&text));
@@ -736,6 +746,7 @@ async fn expect(
         let mut diagnostic = FailureDiagnostic {
             elapsed_ns,
             phases,
+            database: Some(database),
             status: status.as_u16(),
             accounting_unavailable: got.1 == "accounting_unavailable",
             approved_hits: hits.len(),
@@ -744,9 +755,11 @@ async fn expect(
         let mut entries = w.diagnostics.lock().ok();
         if entries.is_none() || attacker_hits.is_none() {
             diagnostic.phases = None;
+            diagnostic.database = None;
         }
         let rendered = serde_json::to_string(&diagnostic).ok().or_else(|| {
             diagnostic.phases = None;
+            diagnostic.database = None;
             serde_json::to_string(&diagnostic).ok()
         });
         if let Some(entries) = entries.as_mut() {
@@ -1517,6 +1530,24 @@ async fn steering_expect_records_diagnostics_before_rejecting_injected_503(pool:
         .as_u64()
         .expect("monotonic elapsed time");
     assert!(u128::from(duration) <= elapsed_ns);
+    let database = diagnostic["database"]
+        .as_object()
+        .expect("request-owned native database evidence must survive detached transaction starts");
+    assert_eq!(database["pending"], 0);
+    assert_eq!(database["dropped"], 0);
+    assert_eq!(database["unavailable"], false);
+    let events = database["events"]
+        .as_array()
+        .expect("bounded native events");
+    assert!(
+        events.iter().any(
+            |event| event["stage"] == "pool_acquire_and_begin" && event["outcome"] == "success"
+        )
+    );
+    assert!(
+        events.iter().all(|event| event["sqlstate"].is_null()),
+        "a fabricated HTTP 503 must not fabricate a native SQL failure"
+    );
     let phases = diagnostic["phases"]
         .as_array()
         .expect("real phase capture, not unavailable");
@@ -1535,6 +1566,7 @@ async fn steering_expect_records_diagnostics_before_rejecting_injected_503(pool:
         &json!({
             "elapsed_ns":duration,
             "phases":phases,
+            "database":database,
             "status":503,
             "accounting_unavailable":true,
             "approved_hits":1,
