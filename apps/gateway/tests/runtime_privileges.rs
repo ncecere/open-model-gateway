@@ -3,10 +3,30 @@
 #![allow(clippy::disallowed_methods)]
 //! Explicitly opt in only on the dedicated disposable PostgreSQL test cluster.
 use sqlx::PgPool;
+#[path = "runtime_privileges/fixture_isolation.rs"]
+mod fixture_isolation;
 #[path = "runtime_privileges/stall_recovery.rs"]
 mod stall_recovery;
 #[path = "runtime_privileges/temp.rs"]
 mod temp;
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+#[ignore = "dedicated disposable PostgreSQL role/ACL probe; run serially"]
+async fn populated_verifier_personal(pool: PgPool) {
+    fixture_isolation::run(pool, true, false).await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+#[ignore = "dedicated disposable PostgreSQL role/ACL probe; run serially"]
+async fn populated_verifier_scim(pool: PgPool) {
+    fixture_isolation::run(pool, false, true).await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+#[ignore = "dedicated disposable PostgreSQL role/ACL probe; run serially"]
+async fn populated_verifier_both(pool: PgPool) {
+    fixture_isolation::run(pool, true, true).await;
+}
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
 #[ignore = "dedicated disposable PostgreSQL role/ACL probe"]
