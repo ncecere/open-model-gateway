@@ -1,0 +1,73 @@
+# PREPARATION ONLY (#60): no apply, routing or live acceptance is implied.
+# Use release omg-scim60 and --namespace dev-omg; see docs/live-acceptance.md.
+fullnameOverride: omg-scim60
+replicaCount: 0
+hpa:
+  enabled: false
+pdb:
+  enabled: false
+service:
+  type: ClusterIP
+ingress:
+  enabled: false
+
+image:
+  repository: ghcr.io/ncecere/open-model-gateway
+  # Unsigned/unscanned amd64 branch image, not release qualification.
+  tag: dev-731ca715e202
+  digest: sha256:31d34b3bcde748148fa96b252c9d73b6964b5e224a7269aaecdf636342c3dc4a
+
+gateway:
+  env:
+    GATEWAY_ENV: production
+    GATEWAY_LISTEN: "0.0.0.0:8080"
+    # Proposed origin only: DNS, TLS and routing are not registered/approved.
+    GATEWAY_PUBLIC_URL: "https://omg-scim60.bitop.dev"
+    GATEWAY_OIDC_GROUPS_CLAIM: groups
+    GATEWAY_SCIM_TOKEN_ENV: OMG_SCIM60_TOKEN
+  extraEnv:
+    - name: OMG_SCIM60_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: omg-scim60-scim
+          key: OMG_SCIM60_TOKEN
+
+secrets:
+  oidc:
+    enabled: true
+    # Dedicated ordinary Authentik app issuer/client; no demo issuer.
+    existingSecret: omg-scim60-oidc
+
+# Set true explicitly for the reviewed fresh initial install at zero replicas;
+# leave false for activation and subsequent migration-free upgrades.
+migrations:
+  run: false
+  backoffLimit: 0
+
+cnpg:
+  cluster:
+    enabled: true
+    instances: 1
+    # Plain PG18 from the qualified clean homelab postgres-18 catalog.
+    image: ghcr.io/cloudnative-pg/postgresql:18-minimal-trixie@sha256:37ade18dbdddba430858c72725aceeec66f33fa5333e82ea1df4942f6c1c83a3
+    storageClass: local-dev
+    storageSize: 5Gi
+    walStorageSize: 1Gi
+    minSyncReplicas: 0
+    maxSyncReplicas: 0
+    database: omg_scim60
+    roles:
+      migrator:
+        name: gateway_migrator
+        existingSecret: omg-scim60-migrator-role
+      runtime:
+        name: gateway_runtime
+        existingSecret: omg-scim60-runtime-role
+    postgresql:
+      parameters:
+        max_wal_size: 512MB
+  pooler:
+    enabled: true
+    instances: 1
+    # No image override exists in this chart. Verify the operator-selected
+    # published image digest before any startup/admission; otherwise STOP.

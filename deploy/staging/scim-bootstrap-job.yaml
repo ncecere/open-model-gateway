@@ -1,0 +1,85 @@
+# PREPARATION ONLY (#60). Apply manually only AFTER migrations, runtime grants
+# and the matching official privilege verifier pass on the fresh selected DB.
+# This is not a chart hook and is never invoked by serve.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: omg-scim60-bootstrap
+  namespace: dev-omg
+  labels:
+    app.kubernetes.io/name: open-model-gateway
+    app.kubernetes.io/instance: omg-scim60
+    app.kubernetes.io/component: migrate
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: open-model-gateway
+        app.kubernetes.io/instance: omg-scim60
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: wait-for-schema
+          image: ghcr.io/ncecere/open-model-gateway@sha256:31d34b3bcde748148fa96b252c9d73b6964b5e224a7269aaecdf636342c3dc4a
+          imagePullPolicy: IfNotPresent
+          args: ["wait-for-database", "--schema", "--timeout-seconds", "600"]
+          env:
+            - name: OMG_DB_MIGRATOR_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: omg-scim60-migrator-role
+                  key: username
+            - name: OMG_DB_MIGRATOR_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: omg-scim60-migrator-role
+                  key: password
+            - name: DATABASE_URL
+              value: "postgres://$(OMG_DB_MIGRATOR_USERNAME):$(OMG_DB_MIGRATOR_PASSWORD)@omg-scim60-db-rw:5432/omg_scim60"
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: "1", memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+      containers:
+        - name: provision-bootstrap-admin
+          image: ghcr.io/ncecere/open-model-gateway@sha256:31d34b3bcde748148fa96b252c9d73b6964b5e224a7269aaecdf636342c3dc4a
+          imagePullPolicy: IfNotPresent
+          args: ["provision-user", "--email", "omg-scim60-bootstrap@bitop.invalid", "--platform-admin"]
+          env:
+            - name: OMG_DB_MIGRATOR_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: omg-scim60-migrator-role
+                  key: username
+            - name: OMG_DB_MIGRATOR_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: omg-scim60-migrator-role
+                  key: password
+            - name: DATABASE_URL
+              value: "postgres://$(OMG_DB_MIGRATOR_USERNAME):$(OMG_DB_MIGRATOR_PASSWORD)@omg-scim60-db-rw:5432/omg_scim60"
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: "1", memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]

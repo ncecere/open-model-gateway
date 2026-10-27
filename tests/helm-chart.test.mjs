@@ -455,3 +455,142 @@ test("an extraEgress rule for the OTLP collector port renders in the egress Netw
   assert.match(egress, /cidr: 10\.50\.0\.10\/32/);
   assert.match(egress, /port: 4318/);
 });
+
+const scim60Values = join(root, "deploy/staging/scim-values.yaml");
+const scim60Bootstrap = join(root, "deploy/staging/scim-bootstrap-job.yaml");
+const scim60Image = "ghcr.io/ncecere/open-model-gateway@sha256:31d34b3bcde748148fa96b252c9d73b6964b5e224a7269aaecdf636342c3dc4a";
+const scim60Postgres = "ghcr.io/cloudnative-pg/postgresql:18-minimal-trixie@sha256:37ade18dbdddba430858c72725aceeec66f33fa5333e82ea1df4942f6c1c83a3";
+const scim60Args = ["--namespace", "dev-omg", "-f", scim60Values];
+
+function scim60Template(extraArgs = []) {
+  const result = spawnSync("helm", ["template", "omg-scim60", chart, ...scim60Args, ...extraArgs], { encoding: "utf8", timeout: 30_000 });
+  assert.equal(result.status, 0, `SCIM #60 helm template failed:\n${result.stderr}`);
+  return result.stdout;
+}
+
+function assertScim60NoLiteralCredentials(raw) {
+  assert.doesNotMatch(raw, /postgres(?:ql)?:\/\/(?!\$\()/, "database URLs must use dependent env substitution");
+  assert.doesNotMatch(raw, /^\s*(?:password|clientSecret|token|stringData):/mi);
+  assert.doesNotMatch(raw, /bootstrap-demo|bootstrap-dev|18084|localhost|127\.0\.0\.1/);
+}
+
+function assertScim60RoleRefs(raw, prefix, secret, count) {
+  for (const [suffix, key] of [["USERNAME", "username"], ["PASSWORD", "password"]]) {
+    const entries = [...raw.matchAll(new RegExp(`- name: ${prefix}_${suffix}\\s+valueFrom:\\s+secretKeyRef:\\s+name: ${secret}\\s+key: ${key}(?=\\s|$)`, "g"))];
+    assert.equal(entries.length, count, `${prefix}_${suffix} must reference only ${secret}/${key}`);
+  }
+}
+
+test("SCIM #60 preparation stays stopped, private and fresh-init-only", () => {
+  const raw = readFileSync(scim60Values, "utf8");
+  const rendered = scim60Template();
+  const [deployment] = docsOfKind(rendered, "Deployment");
+  assert.match(deployment, /^  name: omg-scim60$/m);
+  assert.match(deployment, /^  namespace: dev-omg$/m);
+  assert.match(deployment, /^  replicas: 0$/m);
+  for (const kind of ["HorizontalPodAutoscaler", "PodDisruptionBudget", "Ingress", "Job", "Secret"]) {
+    assert.equal(docsOfKind(rendered, kind).length, 0, `no ${kind} before explicit activation`);
+  }
+  const [service] = docsOfKind(rendered, "Service");
+  assert.match(service, /^  type: ClusterIP$/m);
+  assert.doesNotMatch(rendered, /NodePort|LoadBalancer|nodePort:|hostPort:|hostNetwork: true/);
+  assert.doesNotMatch(raw, /namespace:|extraEgress:|poolerImage:/, "namespace is a Helm argument; no added egress or invented Pooler pin");
+  assertScim60NoLiteralCredentials(raw);
+  assertScim60NoLiteralCredentials(rendered);
+  assert.deepEqual([...deployment.matchAll(/^\s+image: (.+)$/gm)].map(m => m[1]), [scim60Image, scim60Image]);
+  assert.match(raw, /^  tag: dev-731ca715e202$/m);
+  const [cluster] = docsOfKind(rendered, "Cluster");
+  assert.match(cluster, /^  name: omg-scim60-db$/m);
+  assert.match(cluster, /^  instances: 1$/m);
+  assert.ok(cluster.includes(`imageName: ${scim60Postgres}`));
+  assert.match(cluster, /^  minSyncReplicas: 0$/m);
+  assert.match(cluster, /^  maxSyncReplicas: 0$/m);
+  assert.match(cluster, /storage:\s+storageClass: local-dev\s+size: 5Gi/);
+  assert.match(cluster, /walStorage:\s+storageClass: local-dev\s+size: 1Gi/);
+  assert.match(cluster, /max_wal_size: "512MB"/);
+  assert.match(cluster, /database: "omg_scim60"\s+owner: "gateway_migrator"\s+(?:#[^\n]*\n\s+)*secret:\s+name: omg-scim60-migrator-role/);
+  assert.match(cluster, /name: "gateway_runtime"[\s\S]*superuser: false[\s\S]*passwordSecret:\s+name: omg-scim60-runtime-role/);
+  assert.doesNotMatch(cluster, /CREATE EXTENSION|template:|vector|imageCatalogRef:/i);
+  const [pooler] = docsOfKind(rendered, "Pooler");
+  assert.match(pooler, /^  name: omg-scim60-pooler$/m);
+  assert.match(pooler, /cluster:\s+name: omg-scim60-db/);
+  assert.match(pooler, /^  instances: 1$/m);
+  assert.match(pooler, /poolMode: transaction/);
+  assert.doesNotMatch(pooler, /^\s+image:/m, "operator chooses the Pooler image; preflight must verify it");
+});
+
+test("SCIM #60 native OIDC/SCIM secrets and runtime/direct database wiring", () => {
+  const rendered = scim60Template();
+  const [config] = docsOfKind(rendered, "ConfigMap");
+  for (const line of [
+    'GATEWAY_ENV: "production"', 'GATEWAY_LISTEN: "0.0.0.0:8080"',
+    'GATEWAY_PUBLIC_URL: "https://omg-scim60.bitop.dev"',
+    'GATEWAY_OIDC_GROUPS_CLAIM: "groups"', 'GATEWAY_SCIM_TOKEN_ENV: "OMG_SCIM60_TOKEN"',
+  ]) assert.ok(config.includes(line), line);
+  assert.doesNotMatch(config, /^\s*(?:OMG_SCIM60_TOKEN|GATEWAY_OIDC_ISSUER|GATEWAY_OIDC_CLIENT_ID|GATEWAY_OIDC_CLIENT_SECRET|GATEWAY_SECRET_ENV_ALLOWLIST):/m);
+  const [deployment] = docsOfKind(rendered, "Deployment");
+  for (const key of ["GATEWAY_OIDC_ISSUER", "GATEWAY_OIDC_CLIENT_ID"]) {
+    assert.match(deployment, new RegExp(`- name: ${key}\\s+valueFrom:\\s+secretKeyRef:\\s+name: omg-scim60-oidc\\s+key: ${key}`));
+  }
+  assert.match(deployment, /name: GATEWAY_OIDC_CLIENT_SECRET_FILE\s+value: \/var\/run\/omg-secrets\/oidc\/GATEWAY_OIDC_CLIENT_SECRET/);
+  assert.match(deployment, /secretName: omg-scim60-oidc\s+items:\s+- key: GATEWAY_OIDC_CLIENT_SECRET/);
+  assert.match(deployment, /name: OMG_SCIM60_TOKEN\s+valueFrom:\s+secretKeyRef:\s+key: OMG_SCIM60_TOKEN\s+name: omg-scim60-scim/);
+  assertScim60RoleRefs(deployment, "OMG_DB_RUNTIME", "omg-scim60-runtime-role", 2);
+  assertScim60RoleRefs(deployment, "OMG_DB_LISTEN", "omg-scim60-runtime-role", 1);
+  assert.match(deployment, /name: DATABASE_URL\s+value: "postgres:\/\/\$\(OMG_DB_RUNTIME_USERNAME\):\$\(OMG_DB_RUNTIME_PASSWORD\)@omg-scim60-pooler:5432\/omg_scim60"/);
+  assert.match(deployment, /name: GATEWAY_LISTEN_DATABASE_URL\s+value: "postgres:\/\/\$\(OMG_DB_LISTEN_USERNAME\):\$\(OMG_DB_LISTEN_PASSWORD\)@omg-scim60-db-rw:5432\/omg_scim60"/);
+  assert.doesNotMatch(deployment, /MIGRATOR|omg-scim60-migrator-role|OPENAI_API_KEY|ANTHROPIC_API_KEY/);
+});
+
+test("SCIM #60 migration is an explicit zero-replica initial-install action", () => {
+  const rendered = scim60Template(["--set", "migrations.run=true"]);
+  const [deployment] = docsOfKind(rendered, "Deployment");
+  assert.match(deployment, /^  replicas: 0$/m);
+  const jobs = docsOfKind(rendered, "Job");
+  assert.equal(jobs.length, 1);
+  const [job] = jobs;
+  assert.doesNotMatch(job, /helm\.sh\/hook|bootstrap|RUNTIME|omg-scim60-pooler|configMapRef/);
+  assert.match(job, /args: \["wait-for-database"\][\s\S]*args: \["migrate"\][\s\S]*args: \["grants", "apply"\]/);
+  assertScim60RoleRefs(job, "OMG_DB_MIGRATOR", "omg-scim60-migrator-role", 3);
+  assert.equal([...job.matchAll(/value: "postgres:\/\/\$\(OMG_DB_MIGRATOR_USERNAME\):\$\(OMG_DB_MIGRATOR_PASSWORD\)@omg-scim60-db-rw:5432\/omg_scim60"/g)].length, 3);
+  assert.deepEqual([...job.matchAll(/^\s+image: (.+)$/gm)].map(m => m[1]), [scim60Image, scim60Image, scim60Image]);
+  assertScim60NoLiteralCredentials(job);
+});
+
+test("SCIM #60 standalone bootstrap uses only owner refs, supported commands and hardened security", () => {
+  const job = readFileSync(scim60Bootstrap, "utf8");
+  assert.equal(docsOfKind(job, "Job").length, 1);
+  assert.match(job, /^  name: omg-scim60-bootstrap$/m);
+  assert.match(job, /^  namespace: dev-omg$/m);
+  assert.match(job, /^  backoffLimit: 0$/m);
+  const deadline = Number(job.match(/^  activeDeadlineSeconds: (\d+)$/m)?.[1]);
+  assert.ok(deadline > 0 && deadline <= 900);
+  assert.match(job, /restartPolicy: Never/);
+  assert.match(job, /automountServiceAccountToken: false/);
+  for (const setting of ["runAsNonRoot: true", "runAsUser: 10001", "runAsGroup: 10001", "fsGroup: 10001", "type: RuntimeDefault"]) assert.ok(job.includes(setting));
+  for (const setting of ["allowPrivilegeEscalation: false", "privileged: false", "readOnlyRootFilesystem: true", "drop: [ALL]"]) {
+    assert.equal(job.split(setting).length - 1, 2, `both containers: ${setting}`);
+  }
+  assert.match(job, /args: \["wait-for-database", "--schema", "--timeout-seconds", "600"\]/);
+  assert.match(job, /args: \["provision-user", "--email", "omg-scim60-bootstrap@bitop.invalid", "--platform-admin"\]/);
+  assert.deepEqual([...job.matchAll(/^\s+image: (.+)$/gm)].map(m => m[1]), [scim60Image, scim60Image]);
+  assertScim60RoleRefs(job, "OMG_DB_MIGRATOR", "omg-scim60-migrator-role", 2);
+  assert.equal([...job.matchAll(/value: "postgres:\/\/\$\(OMG_DB_MIGRATOR_USERNAME\):\$\(OMG_DB_MIGRATOR_PASSWORD\)@omg-scim60-db-rw:5432\/omg_scim60"/g)].length, 2);
+  assert.doesNotMatch(job, /configMapRef|envFrom:|secretRef:|runtime-role|OIDC|SCIM_TOKEN|pooler|helm\.sh\/hook|ttlSecondsAfterFinished|args: \["(?:serve|migrate|grants)"/);
+  assertScim60NoLiteralCredentials(job);
+});
+
+test("SCIM #60 bootstrap migration labels are conventions, not invented NetworkPolicy grants", () => {
+  const job = readFileSync(scim60Bootstrap, "utf8");
+  const rendered = scim60Template();
+  const policies = docsOfKind(rendered, "NetworkPolicy");
+  assert.equal(policies.length, 3, "only the existing gateway policies");
+  const podLabels = job.match(/template:\s+metadata:\s+labels:\n((?:        [^\n]+\n)+)/)?.[1];
+  assert.ok(podLabels, "bootstrap Pod must have explicit ownership labels");
+  for (const line of ["app.kubernetes.io/name: open-model-gateway", "app.kubernetes.io/instance: omg-scim60", "app.kubernetes.io/component: migrate"]) assert.ok(podLabels.includes(line));
+  for (const policy of policies) {
+    const selector = policy.match(/  podSelector:\n    matchLabels:\n((?:      [^\n]+\n)+)/)?.[1];
+    assert.ok(selector?.includes("app.kubernetes.io/component: gateway"));
+    assert.doesNotMatch(policy, /component: migrate|omg-scim60-bootstrap/);
+  }
+});
