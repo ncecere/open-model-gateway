@@ -73,7 +73,12 @@ impl Handle {
         }))
     }
     pub fn snapshot(&self) -> Snapshot {
+        self.snapshot_after_copy(|| {})
+    }
+    // Private deterministic interleaving seam: the copy's lock is released before the callback.
+    fn snapshot_after_copy(&self, after_copy: impl FnOnce()) -> Snapshot {
         let events = self.0.events.try_lock().ok().map(|events| events.clone());
+        after_copy();
         Snapshot {
             unavailable: events.is_none(),
             events: events.unwrap_or_default(),

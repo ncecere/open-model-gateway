@@ -133,6 +133,71 @@ async fn inherit_captures_the_construction_scope_before_spawn() {
 }
 
 #[tokio::test]
+async fn inherit_without_an_owner_masks_a_later_unrelated_scope() {
+    assert!(current().is_none());
+    let inherited = inherit(async {
+        assert!(
+            current().is_none(),
+            "unobserved work must not adopt its poller's recorder"
+        );
+        observe_sqlx(Stage::Setup, &sqlx::Error::PoolClosed);
+    });
+    let unrelated = Handle::new();
+    scope(unrelated.clone(), inherited).await;
+    assert!(unrelated.snapshot().events.is_empty());
+}
+
+#[tokio::test]
+async fn settlement_without_an_owner_masks_a_later_unrelated_scope() {
+    let future = settlement(None, Stage::ExplicitSettlement, async {
+        assert!(
+            current().is_none(),
+            "an unobserved guard must not adopt another request"
+        );
+        observe_sqlx(Stage::GovernanceStorage, &sqlx::Error::PoolClosed);
+        Ok::<_, tokio::time::error::Elapsed>(Ok::<(), crate::inference::error::InferenceError>(()))
+    });
+    let unrelated = Handle::new();
+    scope(unrelated.clone(), future).await.unwrap().unwrap();
+    assert!(unrelated.snapshot().events.is_empty());
+}
+
+#[test]
+fn snapshot_marks_completion_between_copy_and_counter_capture_incomplete() {
+    let handle = Handle::new();
+    let operation = Operation::new(handle.clone(), Stage::Setup);
+    let go = Arc::new(std::sync::Barrier::new(2));
+    let worker_go = go.clone();
+    let (send, receive) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        worker_go.wait();
+        operation.finish(Outcome::Success, None);
+        send.send(()).unwrap();
+    });
+    let raced = handle.snapshot_after_copy(|| {
+        go.wait();
+        receive
+            .recv_timeout(Duration::from_secs(10))
+            .expect("completion did not reach the forced snapshot gap");
+    });
+    worker.join().unwrap();
+    assert!(
+        raced.events.is_empty(),
+        "completion happens after this snapshot's copy"
+    );
+    assert!(
+        raced.unavailable || raced.pending > 0 || raced.dropped > 0,
+        "omitted completion must never look like complete, available evidence"
+    );
+    let after = handle.snapshot();
+    assert!(!after.unavailable);
+    assert_eq!(
+        (after.pending, after.dropped, after.events.len()),
+        (0, 0, 1)
+    );
+}
+
+#[tokio::test]
 async fn disabled_capture_has_no_current_observer_and_preserves_results() {
     // No Handle is constructed. Do not use global allocator instrumentation:
     // this checks the observable disabled path, not unrelated runtime allocation.
