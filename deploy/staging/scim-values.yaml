@@ -1,4 +1,5 @@
-# PREPARATION ONLY (#60): no apply, routing or live acceptance is implied.
+# PREPARATION ONLY (#60): operator-approved routing, NOT PUBLISHED / NOT RUN.
+# No apply, DNS/IdP mutation or live acceptance is implied.
 # Use release omg-scim60 and --namespace dev-omg; see docs/live-acceptance.md.
 fullnameOverride: omg-scim60
 replicaCount: 0
@@ -11,6 +12,19 @@ service:
 ingress:
   enabled: false
 
+# Direct Pangolin -> Newt -> this Service: no Traefik/global policy changes.
+networkPolicy:
+  enabled: true
+  ingress:
+    fromNamespace: pangolin
+    fromPodLabels:
+      app.kubernetes.io/name: newt
+    metrics:
+      enabled: false
+  egress:
+    # Do not override the namespace's public-web RFC1918 exclusions with any:443.
+    allowHttpsEgress: false
+
 image:
   repository: ghcr.io/ncecere/open-model-gateway
   # Unsigned/unscanned amd64 branch image, not release qualification.
@@ -21,7 +35,7 @@ gateway:
   env:
     GATEWAY_ENV: production
     GATEWAY_LISTEN: "0.0.0.0:8080"
-    # Proposed origin only: DNS, TLS and routing are not registered/approved.
+    # Operator-approved dedicated origin; DNS/TLS/routing NOT PUBLISHED / NOT RUN.
     GATEWAY_PUBLIC_URL: "https://omg-scim60.bitop.dev"
     GATEWAY_OIDC_GROUPS_CLAIM: groups
     GATEWAY_SCIM_TOKEN_ENV: OMG_SCIM60_TOKEN

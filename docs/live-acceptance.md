@@ -2,7 +2,7 @@
 
 Use a dedicated staging hostname, database, identities and provider project. This checklist is **not yet live-provider/enterprise-IdP verification**. The automated suite uses fixtures; the staging smoke leaves OIDC disabled and sends no paid traffic.
 
-## Isolated SCIM #60 preparation — NOT RUN / NOT ACCEPTED
+## Isolated SCIM #60 preparation — NOT PUBLISHED / NOT RUN / NOT ACCEPTED
 
 This section prepares a **fresh, disposable, single-enterprise** staging installation only.
 No deployment, Kubernetes/API/DNS/secret operation, IdP mutation or live acceptance is
@@ -20,6 +20,17 @@ Historical Authentik results in `scim.md` do not accept this image or environmen
   replicas**, HPA/PDB off, ClusterIP only, ingress disabled and `migrations.run=false`.
   Merely applying it would still create database resources: these are preparation files,
   not permission to apply. Enable migrations only by explicit initial-install override.
+- **Operator-approved routing, not published:** only `https://omg-scim60.bitop.dev`
+  through Pangolin → Newt → **`http://omg-scim60.dev-omg.svc.cluster.local:8080`**.
+  Target this specific Service, never a namespace-wide route, production host or metrics
+  port `9464`. Chart NetworkPolicy is explicitly enabled: its ingress peer requires
+  namespace label `kubernetes.io/metadata.name: pangolin` **AND** pod label
+  `app.kubernetes.io/name: newt` in the **same peer**, selecting only release
+  `omg-scim60` / `component: gateway` for TCP `8080`. Metrics ingress is disabled;
+  this adds no metrics allowance, not a claim that metrics are globally unreachable.
+  No Traefik provider-namespace allowlist change or global NetworkPolicy broadening is
+  approved or needed. The staging profile alone disables chart `allowHttpsEgress`,
+  avoiding its default unrestricted `443` allowance; chart templates/defaults stay unchanged.
 - Gateway and standalone bootstrap use
   `ghcr.io/ncecere/open-model-gateway@sha256:31d34b3bcde748148fa96b252c9d73b6964b5e224a7269aaecdf636342c3dc4a`
   (`dev-731ca715e202`, source `731ca715e202`, whose tree matches base `26cf0114` and
@@ -57,6 +68,8 @@ helm template omg-scim60 deploy/helm/open-model-gateway --namespace dev-omg \
 helm template omg-scim60 deploy/helm/open-model-gateway --namespace dev-omg \
   -f deploy/staging/scim-values.yaml --set migrations.run=true
 helm lint deploy/helm/open-model-gateway -f deploy/staging/scim-values.yaml
+helm lint deploy/helm/open-model-gateway -f deploy/staging/scim-values.yaml --set migrations.run=true
+helm lint deploy/helm/open-model-gateway -f deploy/staging/scim-values.yaml --set replicaCount=1
 node --test tests/helm-chart.test.mjs
 ```
 
@@ -71,9 +84,12 @@ Before **any external mutation**, settle and record in the issue the operator, s
 namespace/environment record, resource ownership, disposable identity/group names, endpoint,
 TLS/route design, real IdP app/provider choices, lifetime, explicit teardown and guarded
 recovery procedure. Isolated `dev-omg` staging and dedicated Authentik test objects are approved
-in principle, not yet enacted. Routing/TLS/DNS changes outside `dev-omg` require separate
-approval. The proposed origin **`https://omg-scim60.bitop.dev` is not DNS-registered or
-route-approved**. Do not substitute production routing or alter another namespace/repository.
+in principle, not yet enacted. The operator explicitly approved publishing
+**`https://omg-scim60.bitop.dev`** and the minimal reviewed staging routing above;
+publication, DNS/TLS registration and real IdP setup remain **NOT PUBLISHED / NOT RUN**.
+This does not authorize production hosts/routes, Traefik configuration changes, global
+policy broadening or PostgreSQL remediation. Any additional exception needs separate
+approval; do not substitute production routing or alter another namespace/repository.
 
 1. **Prove freshness and selection.** Check the explicitly selected record, Helm release,
    Cluster identity/UID, standalone Pooler identity/cluster target, PVC ownership and bound
@@ -86,20 +102,27 @@ route-approved**. Do not substitute production routing or alter another namespac
    absence. Never reuse, reset, migrate or delete an old installation implicitly.
 2. **Verify reachability, without inventing migration policy.** The reviewed static
    homelab `kubernetes/platform/dev-areas/base/network-policies.yaml` has default-deny
-   plus `allow-cluster-dns` and `allow-same-namespace` for **all pods**. These allow
-   bootstrap/migrator DNS and direct same-namespace PostgreSQL. This is namespace-level
-   development trust, **not per-Job isolation**: NetworkPolicies are additive, so adding
-   a narrow policy would not tighten that existing allowance. The chart's three policies
-   select only `component: gateway`; no migration-specific policy exists in this base.
+   plus `allow-cluster-dns`, `allow-same-namespace` and public-web egress for **all pods**.
+   These allow bootstrap/migrator DNS and direct same-namespace PostgreSQL; public-web
+   egress still permits public `443` with RFC1918 exclusions. This is **additive
+   namespace-level development trust, not per-Job or ingress isolation**, nor proof of
+   issuer connectivity. A narrow chart policy cannot tighten those existing allowances.
+   Disabling chart `allowHttpsEgress` avoids defeating the namespace's private-range
+   exclusions with an additional unrestricted `443` rule; it does not remove the existing
+   namespace public `443` allowance. The chart's three policies select only release
+   `omg-scim60` / `component: gateway`; no migration-specific policy exists in this base.
    Bootstrap's release/app labels and `component: migrate` identify ownership/convention,
    **not a selector granting connectivity**. No extra egress is added here. The operator
-   must verify the **deployed** namespace policy before apply. Read-only namespace/policy
-   metadata checks do not prove freshness, Helm history or connection reachability; no
+   must verify the **deployed** namespace policy and actual Newt namespace/pod labels
+   before apply; the rendered conjunctive peer is not a live connectivity proof.
+   Read-only namespace/policy metadata checks do not prove freshness, Helm history or
+   connection reachability; no
    Helm-history Secret lookup or connection probe is claimed. Real issuer DNS/discovery/JWKS
    and HTTPS reachability also need preflight: same-namespace allowance does not allow
-   a cross-namespace IdP. If needed, separately review a namespace-local destination-scoped
-   exception and gateway private-egress approval, not broad egress or an out-of-namespace
-   routing change. Never disable TLS or identity checks to pass preflight.
+   a cross-namespace IdP. An issuer resolving to a private destination requires a separate,
+   precise destination-scoped network gate and gateway private-egress approval; do not
+   assume public-web egress reaches it or re-enable unrestricted chart `443` to bypass
+   RFC1918 exclusions. Never disable TLS or identity checks to pass preflight.
 3. **Create fresh references only, then explicitly install at zero replicas.** Generate
    URL-safe random role passwords operationally, never in Git, logs or shell transcripts.
    `omg-scim60-migrator-role` and `omg-scim60-runtime-role` are separate
@@ -163,6 +186,19 @@ route-approved**. Do not substitute production routing or alter another namespac
    `migrations.run=false` and `cnpg.pooler.enabled=false`**; the standalone Pooler remains
    required and runtime connections remain pooled.
    Never mount the migrator credential into runtime or bootstrap through `serve`.
+7. **Gate publication separately.** Keep the public route disabled until private-path
+   application readiness, matching image/schema/runtime grants, the **full peer privilege
+   verifier** (after Pooler reconciliation), and SCIM missing/invalid-token and unsupported
+   operation refusals pass. Verify ownership, the sole direct target
+   `omg-scim60.dev-omg.svc.cluster.local:8080`, and the intended TLS/Host configuration.
+   Configuration is not certificate-issuance or public-connectivity proof. With SCIM
+   synchronization still disabled, explicitly enable only the owned staging route, then
+   verify its actual public certificate, canonical Host/origin, real issuer discovery/JWKS,
+   callback and authentication/refusals. Disable that route on failure; never weaken TLS
+   or identity checks. Enable synchronization only after these public checks pass.
+   Approval is not execution evidence: no IdP, DNS or Kubernetes objects have been created
+   by this preparation. Image provenance/execution qualification and all existing
+   acceptance gates remain outstanding.
 
 ### Future Authentik setup and closeout gates
 
@@ -189,13 +225,14 @@ this disposable installation and identities for last-Admin/deactivation tests, *
 `omg-acceptance`**. No such acceptance has run here.
 
 This is not the auto-TTL demo. Assign an owner and explicit teardown deadline. Disable/unassign
-the dedicated SCIM provider first, stop the gateway, revoke test sessions/keys and references,
-then remove only proven-owned staging release/IdP objects, separately owned standalone
-Pooler and bootstrap/migration Jobs (tracked explicitly outside Helm), and deliberately selected
+the dedicated SCIM provider and disable the dedicated public route first, stop the gateway,
+revoke test sessions/keys and references, then remove only proven-owned staging
+release/IdP/routing objects, separately owned standalone Pooler and bootstrap/migration
+Jobs (tracked explicitly outside Helm), and deliberately selected
 PVC/PVs under the approved retention policy; never delete `dev-omg` or unrelated resources.
 Retain required sanitized audit/history outcomes in the issue. On failure keep zero replicas
-and sync disabled, preserve state for diagnosis, and use a separately reviewed recovery or
-fresh replacement plan: no automatic reseed, volume deletion, privilege bypass, silent retry
+and sync/publication disabled, preserve state for diagnosis, and use a separately reviewed
+recovery or fresh replacement plan: no automatic reseed, volume deletion, privilege bypass, silent retry
 of bootstrap or production cutover. Record outcomes only after execution; status remains
 **NOT RUN / NOT ACCEPTED**.
 

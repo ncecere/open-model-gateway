@@ -524,6 +524,58 @@ test("SCIM #60 preparation stays stopped, private and fresh-init-only", () => {
   assert.deepEqual([...pooler.matchAll(/^\s+image: (.+)$/gm)].map(m => m[1]), [scim60Pgbouncer]);
 });
 
+test("SCIM #60 chart policy adds only the direct Newt peer and no HTTPS egress allowance", () => {
+  const raw = readFileSync(scim60Values, "utf8");
+  const policies = docsOfKind(scim60Template(), "NetworkPolicy");
+  assert.equal(policies.length, 3);
+  for (const policy of policies) {
+    assert.match(policy, /^  namespace: dev-omg$/m);
+    assert.equal(policy.match(/  podSelector:\n    matchLabels:\n((?:      [^\n]+\n)+)/)?.[1],
+      "      app.kubernetes.io/name: open-model-gateway\n" +
+      "      app.kubernetes.io/instance: omg-scim60\n" +
+      "      app.kubernetes.io/component: gateway\n");
+  }
+  const ingress = policies.find(p => /^  name: omg-scim60-ingress$/m.test(p));
+  // Pin the whole rule: namespace AND pod labels in ONE peer, only TCP 8080.
+  assert.equal(ingress?.slice(ingress.indexOf("  policyTypes:")).trimEnd(), `  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: pangolin
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: newt
+      ports:
+        - { protocol: TCP, port: 8080 }`);
+  assert.doesNotMatch(ingress, /9464|traefik/);
+  const egress = policies.find(p => /^  name: omg-scim60-egress$/m.test(p));
+  const rules = egress?.slice(egress.indexOf("  policyTypes:")).split("\n")
+    .filter(line => line.trim() && !line.trimStart().startsWith("#")).join("\n");
+  assert.equal(rules, `  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: omg-scim60-db
+      ports:
+        - { protocol: TCP, port: 5432 }
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/poolerName: omg-scim60-pooler
+      ports:
+        - { protocol: TCP, port: 5432 }`);
+  assert.doesNotMatch(egress, /port: 443|ipBlock:/);
+  // These decisions must be explicit in staging, not inherited chart defaults.
+  assert.match(raw, /^networkPolicy:\n  enabled: true\n  ingress:\n    fromNamespace: pangolin\n    fromPodLabels:\n      app.kubernetes.io\/name: newt\n    metrics:\n      enabled: false\n  egress:\n(?:    #[^\n]*\n)*    allowHttpsEgress: false$/m);
+});
+
 test("SCIM #60 native OIDC/SCIM secrets and runtime/direct database wiring", () => {
   const rendered = scim60Template();
   const [config] = docsOfKind(rendered, "ConfigMap");
