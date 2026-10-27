@@ -1517,6 +1517,24 @@ async fn steering_expect_records_diagnostics_before_rejecting_injected_503(pool:
         .as_u64()
         .expect("monotonic elapsed time");
     assert!(u128::from(duration) <= elapsed_ns);
+    let database = diagnostic["database"]
+        .as_object()
+        .expect("request-owned native database evidence must survive detached transaction starts");
+    assert_eq!(database["pending"], 0);
+    assert_eq!(database["dropped"], 0);
+    assert_eq!(database["unavailable"], false);
+    let events = database["events"]
+        .as_array()
+        .expect("bounded native events");
+    assert!(
+        events.iter().any(
+            |event| event["stage"] == "pool_acquire_and_begin" && event["outcome"] == "success"
+        )
+    );
+    assert!(
+        events.iter().all(|event| event["sqlstate"].is_null()),
+        "a fabricated HTTP 503 must not fabricate a native SQL failure"
+    );
     let phases = diagnostic["phases"]
         .as_array()
         .expect("real phase capture, not unavailable");
@@ -1535,6 +1553,7 @@ async fn steering_expect_records_diagnostics_before_rejecting_injected_503(pool:
         &json!({
             "elapsed_ns":duration,
             "phases":phases,
+            "database":database,
             "status":503,
             "accounting_unavailable":true,
             "approved_hits":1,
