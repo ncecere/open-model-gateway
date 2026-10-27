@@ -712,7 +712,9 @@ BEGIN
   IF (SELECT count(*) FROM alert_events WHERE rule_id=ar AND resolved_at IS NULL)<>1 THEN RAISE EXCEPTION 'duplicate open alert allowed'; END IF;
   INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,workspace_id,summary) VALUES(gen_random_uuid(),'personal_budget','budget_threshold','key:'||personal||':-:day',100,'critical',personal,'API key daily budget reached 100%');
   -- SCIM last-admin incident (0018): installation-wide built-in, no workspace.
-  INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,summary) VALUES(gen_random_uuid(),'scim_last_admin','scim_last_admin','scim_last_admin',1,'critical','SCIM tried to remove the last Platform Admin');
+  -- A live canonical incident may already be open. Own a closed synthetic
+  -- history row instead; never reuse or resolve the installation's incident.
+  INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,summary,resolved_at,resolution) VALUES(gen_random_uuid(),'scim_last_admin','scim_last_admin','scim_last_admin',1,'critical','SCIM tried to remove the last Platform Admin',clock_timestamp(),'cleared');
   BEGIN INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,workspace_id,summary) VALUES(gen_random_uuid(),'scim_last_admin','scim_last_admin','x',1,'critical',ws,'x'); RAISE EXCEPTION 'scoped scim alert allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,summary) VALUES(gen_random_uuid(),ar,'scim_last_admin','y',1,'critical','x'); RAISE EXCEPTION 'rule scim alert allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
   PERFORM id FROM alert_events WHERE id=ev FOR UPDATE;
@@ -752,7 +754,10 @@ BEGIN
    BEGIN INSERT INTO alert_events(id,kind,subject_key,workspace_id,level,severity,summary,details) VALUES(gen_random_uuid(),'aged_unknown_hold','workspace:'||ws,ws,1,'warning','Holds with unknown cost are over 24 hours old','{"threshold_hours":24}'); RAISE EXCEPTION 'duplicate aged incident allowed'; EXCEPTION WHEN unique_violation THEN NULL; END;
    BEGIN INSERT INTO alert_events(id,kind,subject_key,level,severity,summary,details) VALUES(gen_random_uuid(),'aged_unknown_hold','personal',3,'warning','x','{}'); RAISE EXCEPTION 'bad aged level allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
    BEGIN INSERT INTO alert_events(id,kind,subject_key,workspace_id,level,severity,summary,details) VALUES(gen_random_uuid(),'aged_unknown_hold','workspace:'||personal,personal,1,'warning','Holds with unknown cost are over 24 hours old','{"threshold_hours":24}'); RAISE EXCEPTION 'personal identity in aged incident'; EXCEPTION WHEN check_violation THEN NULL; END;
-   INSERT INTO alert_events(id,kind,subject_key,level,severity,summary,details) VALUES(pev,'aged_unknown_hold','personal',2,'critical','Holds with unknown cost are over 168 hours old','{"threshold_hours":168}');
+   -- Project our own historical fired envelope without colliding with the
+   -- live personal aggregate. 'cleared' also makes the resolved-transition
+   -- refusal below exercise the aged-specific guard, not the generic one.
+   INSERT INTO alert_events(id,kind,subject_key,level,severity,summary,details,resolved_at,resolution) VALUES(pev,'aged_unknown_hold','personal',2,'critical','Holds with unknown cost are over 168 hours old','{"threshold_hours":168}',clock_timestamp(),'cleared');
    IF alert_webhook_payload(gen_random_uuid(),aev,'fired') IS NOT NULL THEN RAISE EXCEPTION 'workspace aged incident exported'; END IF;
    envelope=alert_webhook_payload(gen_random_uuid(),pev,'fired')::jsonb;
    IF envelope IS NULL OR envelope->'event'->>'summary'<>'Holds with unknown cost need review' OR (SELECT count(*) FROM jsonb_object_keys(envelope->'event'))<>6 THEN RAISE EXCEPTION 'unsafe installation aged projection'; END IF;
