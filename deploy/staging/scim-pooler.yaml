@@ -1,0 +1,39 @@
+# PREPARATION ONLY (#60). Separately owned; not created or managed by Helm.
+# Required after migration/grants and before the full peer privilege verifier.
+# Keep cnpg.pooler.enabled=false in scim-values.yaml to avoid an unpinned duplicate.
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: omg-scim60-pooler
+  namespace: dev-omg
+  labels:
+    app.kubernetes.io/name: open-model-gateway
+    app.kubernetes.io/instance: omg-scim60
+spec:
+  cluster:
+    name: omg-scim60-db
+  type: rw
+  instances: 1
+  pgbouncer:
+    poolMode: transaction
+    parameters:
+      default_pool_size: "25"
+      max_client_conn: "200"
+      max_prepared_statements: "200"
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: open-model-gateway
+        app.kubernetes.io/instance: omg-scim60
+        app.kubernetes.io/component: pooler
+    spec:
+      containers:
+        - name: pgbouncer
+          image: ghcr.io/cloudnative-pg/pgbouncer@sha256:b15c428057d1ffbc19fb70496911a5f1a47066dcc1315bf794f4e85ade29e2e5
+          resources:
+            limits:
+              cpu: 500m
+              memory: 256Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi

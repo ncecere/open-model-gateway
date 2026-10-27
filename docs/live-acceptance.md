@@ -30,15 +30,24 @@ Historical Authentik results in `scim.md` do not accept this image or environmen
   The qualified clean homelab `postgres-18` catalog supplied the plain image
   `ghcr.io/cloudnative-pg/postgresql:18-minimal-trixie@sha256:37ade18dbdddba430858c72725aceeec66f33fa5333e82ea1df4942f6c1c83a3`;
   the values use that direct pin, **not** template/vector bootstrap or extra extensions.
-  One transaction-mode Pooler remains enabled: chart runtime URLs always target it;
-  LISTEN and migrator URLs target `omg-scim60-db-rw` directly.
-- **Unresolved Pooler image gate:** the existing chart has no Pooler image override.
-  Before the initial install (which starts the Pooler even at zero gateway replicas),
-  the operator must verify the operator-selected Pooler image is published and selected
-  by digest, and verify the actual selection before gateway startup/admission.
-  A tag-only/unpublished selection is a blocker;
-  do not add an ignored values key, fabricate a digest, disable the Pooler or silently
-  change cluster-wide operator configuration.
+  Exactly one transaction-mode Pooler is required: the separately owned
+  [`scim-pooler.yaml`](../deploy/staging/scim-pooler.yaml), named `omg-scim60-pooler` in
+  `dev-omg`, targeting `omg-scim60-db`. `cnpg.pooler.enabled=false` disables **only chart
+  creation**, not pooling in the installation. Keep that value false for activation and
+  upgrades to avoid an unpinned duplicate. The existing chart helper still wires runtime
+  and schema-wait URLs to `omg-scim60-pooler`; LISTEN and migrator URLs still target
+  `omg-scim60-db-rw` directly, with unchanged database and role Secret references.
+- **Explicit namespace-local Pooler pin:** operator-default image pinning was unproven:
+  read-only preflight found no `PGBOUNCER_IMAGE_NAME` in the live operator Deployment or
+  `cnpg-controller-manager-config`. Rather than changing the operator or chart, the
+  standalone Pooler's `spec.template.spec.containers[name=pgbouncer].image` selects
+  `ghcr.io/cloudnative-pg/pgbouncer@sha256:b15c428057d1ffbc19fb70496911a5f1a47066dcc1315bf794f4e85ade29e2e5`.
+  The coordinator verified the published OCI root index's exact descriptor digest and
+  four index descriptors. This is **publication metadata only**, not a pull, execution,
+  scan, signature verification or release qualification claim. No mutable tag selects the
+  image. Preserve the existing chart's Pooler pod labels, resource sizing, transaction mode
+  and prepared-statement settings; no extra egress, ingress or operator change is needed.
+  This manifest has **not** been deployed; verify the actual selected pin/readiness later.
 
 Local-only checks (no cluster or new dependencies):
 
@@ -67,10 +76,11 @@ approval. The proposed origin **`https://omg-scim60.bitop.dev` is not DNS-regist
 route-approved**. Do not substitute production routing or alter another namespace/repository.
 
 1. **Prove freshness and selection.** Check the explicitly selected record, Helm release,
-   Cluster identity/UID, PVC ownership and bound PV claim references all belong to
-   `dev-omg` / `omg-scim60-db`. This boundary is **not `dev-env-pg`**. Before creation,
-   any existing release, Cluster, matching old PVC/PV, retained volume or unexpected
-   resource is a stop condition, not permission to adopt/reset it. After creation, match
+   Cluster identity/UID, standalone Pooler identity/cluster target, PVC ownership and bound
+   PV claim references all belong to `dev-omg` / `omg-scim60-db`, with Pooler name exactly
+   `omg-scim60-pooler`. This boundary is **not `dev-env-pg`**. Before creation, any existing
+   release, Cluster, Pooler, matching old PVC/PV, retained volume or unexpected resource
+   is a stop condition, not permission to adopt/reset it. After creation, match
    the newly created Cluster UID through PVC owner references and PV bindings to the
    selected record before migrations. A failed lookup/permission error is not proof of
    absence. Never reuse, reset, migrate or delete an old installation implicitly.
@@ -83,8 +93,9 @@ route-approved**. Do not substitute production routing or alter another namespac
    select only `component: gateway`; no migration-specific policy exists in this base.
    Bootstrap's release/app labels and `component: migrate` identify ownership/convention,
    **not a selector granting connectivity**. No extra egress is added here. The operator
-   must verify the **deployed** namespace policy before apply; this preparation only read
-   the static file and performed no cluster inspection. Real issuer DNS/discovery/JWKS
+   must verify the **deployed** namespace policy before apply. Read-only namespace/policy
+   metadata checks do not prove freshness, Helm history or connection reachability; no
+   Helm-history Secret lookup or connection probe is claimed. Real issuer DNS/discovery/JWKS
    and HTTPS reachability also need preflight: same-namespace allowance does not allow
    a cross-namespace IdP. If needed, separately review a namespace-local destination-scoped
    exception and gateway private-egress approval, not broad egress or an out-of-namespace
@@ -102,8 +113,9 @@ route-approved**. Do not substitute production routing or alter another namespac
    the demo `18084`/localhost issuer. `omg-scim60-scim` holds `OMG_SCIM60_TOKEN`, injected
    only by `extraEnv.secretKeyRef`; `GATEWAY_SCIM_TOKEN_ENV` names it. It is neither a
    ConfigMap token nor a provider secret-allowlist entry. Follow [SCIM token requirements](scim.md#turn-it-on).
-   After approved preflight, install the stopped profile with `migrations.run=false`,
-   `replicaCount=0`, namespace passed via Helm `--namespace dev-omg`. Complete the new
+   After approved preflight, install the base profile with `migrations.run=false`,
+   `replicaCount=0`, **`cnpg.pooler.enabled=false`**, namespace passed via Helm
+   `--namespace dev-omg`. No Pooler is created by that Helm install. Complete the new
    Cluster/PVC/PV identity checks and await managed runtime-role LOGIN/password readiness
    **before creating the migration Job**. Then explicitly render only the initial-install
    Job with the exact chart path and arguments below for separate operator-reviewed
@@ -116,11 +128,20 @@ route-approved**. Do not substitute production routing or alter another namespac
    ```
 
    An all-at-once install with migrations enabled would start that Job concurrently and
-   cannot enforce these
-   intervening gates. Await successful `wait-for-database`, `migrate`, `grants apply`;
-   a CNPG/Job/grants error stops the sequence. Keep stored Helm values at migrations false
-   and zero replicas throughout; track the separately applied Job for explicit teardown.
-4. **Verify grants before bootstrap.** Run the matching image/source's official
+   cannot enforce these intervening gates. Await successful `wait-for-database`, `migrate`,
+   `grants apply`; a CNPG/Job/grants error stops the sequence. Keep stored Helm values at
+   migrations false, chart Pooler creation false and zero replicas throughout; track the
+   separately applied Job for explicit teardown.
+4. **Create the required pinned standalone Pooler.** After migration/grants success,
+   recheck the selected namespace, fresh Pooler name and `omg-scim60-db` target, then
+   explicitly apply only `deploy/staging/scim-pooler.yaml` under the operator-reviewed
+   plan. Record its separate ownership/UID; Helm does not manage its lifecycle. Wait for
+   CNPG Pooler readiness and confirm the actual `pgbouncer` image selects the published
+   root-index digest above. Do not substitute the operator default, a mutable tag or a
+   different database. A failure stops the sequence at zero gateway replicas. The Pooler
+   **must be ready before the full peer privilege verifier**, so CNPG's Pooler `auth_query`
+   reconciliation effects are included in that verification.
+5. **Verify grants before bootstrap.** Run the matching image/source's official
    `deploy/staging/verify-privileges.sql` with fail-on-error (`psql -v ON_ERROR_STOP=1`)
    over the CNPG primary's local Unix socket as peer-authenticated database `postgres`,
    selecting **only `omg_scim60`**. Its rollback-only probes require `SET ROLE gateway_runtime`;
@@ -128,7 +149,7 @@ route-approved**. Do not substitute production routing or alter another namespac
    membership, omit failing probes or waive verification. Confirm schema family/checksums
    and runtime refusal cases against the matching pinned image. This is a future operator
    step, not an extra manifest or an execution claim in this preparation.
-5. **Explicit bootstrap, then separate activation.** Only after migration/grants/verifier
+6. **Explicit bootstrap, then separate activation.** Only after migration/grants/verifier
    success manually run [`scim-bootstrap-job.yaml`](../deploy/staging/scim-bootstrap-job.yaml).
    Its pinned `wait-for-database --schema --timeout-seconds 600` init step waits/fails on an
    early apply without migrating; it does **not** replace grants verification. Its only
@@ -137,8 +158,10 @@ route-approved**. Do not substitute production routing or alter another namespac
    permission; it never runs `bootstrap-demo`, starts serving or auto-activates. Both
    containers use only migrator role refs on `omg-scim60-db-rw`, UID/GID 10001, read-only
    root, dropped capabilities, no service-account token; backoff is zero and deadline 900s.
-   Require Job success. Then, only once Pooler digest, real OIDC and endpoint readiness gates
-   pass, make the separate reviewed activation use **one replica and `migrations.run=false`**.
+   Require Job success. Then, only once standalone Pooler pin/readiness, real OIDC and
+   endpoint readiness gates pass, make the separate reviewed activation use **one replica,
+   `migrations.run=false` and `cnpg.pooler.enabled=false`**; the standalone Pooler remains
+   required and runtime connections remain pooled.
    Never mount the migrator credential into runtime or bootstrap through `serve`.
 
 ### Future Authentik setup and closeout gates
@@ -167,7 +190,8 @@ this disposable installation and identities for last-Admin/deactivation tests, *
 
 This is not the auto-TTL demo. Assign an owner and explicit teardown deadline. Disable/unassign
 the dedicated SCIM provider first, stop the gateway, revoke test sessions/keys and references,
-then remove only proven-owned staging release/Job/IdP objects and deliberately selected
+then remove only proven-owned staging release/IdP objects, separately owned standalone
+Pooler and bootstrap/migration Jobs (tracked explicitly outside Helm), and deliberately selected
 PVC/PVs under the approved retention policy; never delete `dev-omg` or unrelated resources.
 Retain required sanitized audit/history outcomes in the issue. On failure keep zero replicas
 and sync disabled, preserve state for diagnosis, and use a separately reviewed recovery or

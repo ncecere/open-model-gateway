@@ -67,7 +67,8 @@ cnpg:
       parameters:
         max_wal_size: 512MB
   pooler:
-    enabled: true
+    # Disable only chart creation: scim-pooler.yaml is REQUIRED and separately
+    # owned, with an explicit published image digest. Keep false on activation
+    # and upgrades; runtime URLs still target omg-scim60-pooler.
+    enabled: false
     instances: 1
-    # No image override exists in this chart. Verify the operator-selected
-    # published image digest before any startup/admission; otherwise STOP.

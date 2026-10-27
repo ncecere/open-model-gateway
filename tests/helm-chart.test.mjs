@@ -458,6 +458,8 @@ test("an extraEgress rule for the OTLP collector port renders in the egress Netw
 
 const scim60Values = join(root, "deploy/staging/scim-values.yaml");
 const scim60Bootstrap = join(root, "deploy/staging/scim-bootstrap-job.yaml");
+const scim60Pooler = join(root, "deploy/staging/scim-pooler.yaml");
+const scim60Pgbouncer = "ghcr.io/cloudnative-pg/pgbouncer@sha256:b15c428057d1ffbc19fb70496911a5f1a47066dcc1315bf794f4e85ade29e2e5";
 const scim60Image = "ghcr.io/ncecere/open-model-gateway@sha256:31d34b3bcde748148fa96b252c9d73b6964b5e224a7269aaecdf636342c3dc4a";
 const scim60Postgres = "ghcr.io/cloudnative-pg/postgresql:18-minimal-trixie@sha256:37ade18dbdddba430858c72725aceeec66f33fa5333e82ea1df4942f6c1c83a3";
 const scim60Args = ["--namespace", "dev-omg", "-f", scim60Values];
@@ -511,12 +513,15 @@ test("SCIM #60 preparation stays stopped, private and fresh-init-only", () => {
   assert.match(cluster, /database: "omg_scim60"\s+owner: "gateway_migrator"\s+(?:#[^\n]*\n\s+)*secret:\s+name: omg-scim60-migrator-role/);
   assert.match(cluster, /name: "gateway_runtime"[\s\S]*superuser: false[\s\S]*passwordSecret:\s+name: omg-scim60-runtime-role/);
   assert.doesNotMatch(cluster, /CREATE EXTENSION|template:|vector|imageCatalogRef:/i);
-  const [pooler] = docsOfKind(rendered, "Pooler");
+  assert.equal(docsOfKind(rendered, "Pooler").length, 0, "chart must not create an unpinned fallback Pooler");
+  const poolers = docsOfKind(`${rendered}\n---\n${readFileSync(scim60Pooler, "utf8")}`, "Pooler");
+  assert.equal(poolers.length, 1, "exactly one required Pooler across chart and standalone manifests");
+  const [pooler] = poolers;
   assert.match(pooler, /^  name: omg-scim60-pooler$/m);
   assert.match(pooler, /cluster:\s+name: omg-scim60-db/);
   assert.match(pooler, /^  instances: 1$/m);
   assert.match(pooler, /poolMode: transaction/);
-  assert.doesNotMatch(pooler, /^\s+image:/m, "operator chooses the Pooler image; preflight must verify it");
+  assert.deepEqual([...pooler.matchAll(/^\s+image: (.+)$/gm)].map(m => m[1]), [scim60Pgbouncer]);
 });
 
 test("SCIM #60 native OIDC/SCIM secrets and runtime/direct database wiring", () => {
@@ -592,5 +597,45 @@ test("SCIM #60 bootstrap migration labels are conventions, not invented NetworkP
     const selector = policy.match(/  podSelector:\n    matchLabels:\n((?:      [^\n]+\n)+)/)?.[1];
     assert.ok(selector?.includes("app.kubernetes.io/component: gateway"));
     assert.doesNotMatch(policy, /component: migrate|omg-scim60-bootstrap/);
+  }
+});
+
+test("SCIM #60 standalone Pooler pins the published index and preserves chart pooling/ownership conventions", () => {
+  const raw = readFileSync(scim60Pooler, "utf8");
+  const [pooler] = docsOfKind(raw, "Pooler");
+  assert.equal(docsOf(raw).length, 1, "only a standalone Pooler, no new network or routing resources");
+  assert.match(pooler, /^apiVersion: postgresql\.cnpg\.io\/v1$/m);
+  assert.match(pooler, /^  name: omg-scim60-pooler$/m);
+  assert.match(pooler, /^  namespace: dev-omg$/m);
+  assert.match(pooler, /cluster:\s+name: omg-scim60-db/);
+  assert.match(pooler, /^  instances: 1$/m);
+  assert.match(pooler, /^  type: rw$/m);
+  assert.match(pooler, /poolMode: transaction/);
+  for (const [key, value] of [["max_client_conn", "200"], ["default_pool_size", "25"], ["max_prepared_statements", "200"]]) {
+    assert.match(pooler, new RegExp(`^      ${key}: "${value}"$`, "m"));
+  }
+  assert.match(pooler, /containers:\s+- name: pgbouncer\s+image: ghcr\.io\/cloudnative-pg\/pgbouncer@sha256:[a-f0-9]{64}\s+resources:/);
+  assert.deepEqual([...pooler.matchAll(/^\s+image: (.+)$/gm)].map(m => m[1]), [scim60Pgbouncer]);
+  assert.doesNotMatch(pooler, /imageName:|env:|envFrom:|secretRef:|secretKeyRef:|ownerReferences:|app\.kubernetes\.io\/managed-by: Helm|helm\.sh\/hook/);
+  assertScim60NoLiteralCredentials(pooler);
+
+  // Compare against the actual chart template, enabled only for this local
+  // reference render. This does not enable the chart Pooler in the profile.
+  const [reference] = docsOfKind(scim60Template(["--set", "cnpg.pooler.enabled=true"]), "Pooler");
+  const podLabels = doc => doc.match(/template:\s+metadata:\s+labels:\n((?:        [^\n]+\n)+)/)?.[1];
+  assert.ok(podLabels(pooler));
+  assert.equal(podLabels(pooler), podLabels(reference));
+  for (const line of ["app.kubernetes.io/name: open-model-gateway", "app.kubernetes.io/instance: omg-scim60"]) {
+    assert.ok(pooler.split("spec:\n")[0].includes(line), `standalone ownership: ${line}`);
+  }
+  const resources = doc => doc.match(/          resources:\n([\s\S]*)$/m)?.[1]?.trim();
+  assert.ok(resources(pooler));
+  assert.equal(resources(pooler), resources(reference), "keep chart resource requests/limits");
+  for (const extraArgs of [[], ["--set", "migrations.run=true"]]) {
+    const rendered = scim60Template(extraArgs);
+    assert.equal(docsOfKind(rendered, "Pooler").length, 0);
+    assert.equal(docsOfKind(`${rendered}\n---\n${raw}`, "Pooler").length, 1);
+    const [deployment] = docsOfKind(rendered, "Deployment");
+    assert.equal([...deployment.matchAll(/name: DATABASE_URL\s+value: "postgres:\/\/\$\(OMG_DB_RUNTIME_USERNAME\):\$\(OMG_DB_RUNTIME_PASSWORD\)@omg-scim60-pooler:5432\/omg_scim60"/g)].length, 2, "runtime and schema-wait URLs stay pooled with chart Pooler disabled");
   }
 });
