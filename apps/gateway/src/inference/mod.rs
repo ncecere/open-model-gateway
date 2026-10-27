@@ -1036,6 +1036,8 @@ struct ExecutionGuard {
     /// (never logged) or while telemetry is disabled. Never affects
     /// accounting; `x-request-id` is unchanged.
     log_trace_id: Option<LogTraceId>,
+    #[cfg(test)]
+    diagnostics: Option<crate::db::diagnostics::Handle>,
 }
 fn millis(d: Duration) -> u64 {
     d.as_millis().min(u64::MAX as u128) as u64
@@ -1062,6 +1064,8 @@ impl ExecutionGuard {
             health_observation: true,
             _permit: permit,
             log_trace_id,
+            #[cfg(test)]
+            diagnostics: crate::db::diagnostics::current(),
         }
     }
     /// Streams: the first delta carrying text or a tool call sets time to first token.
@@ -1102,21 +1106,28 @@ impl ExecutionGuard {
         let record = self.record(outcome, error);
         let attempt_telemetry = self.telemetry_now();
         let repository = self.repository.clone();
-        let result = timeout(Duration::from_secs(3), async move {
+        let settlement = timeout(Duration::from_secs(3), async move {
             let settle = repository.finish_attempt(&record, &attempt_telemetry);
             match phases {
                 Some(buffer) => telemetry::with_phases(buffer, settle).await,
                 None => settle.await,
             }
-        })
-        .await
-        .map_err(|_| {
-            // A write that fails fast counts itself as held inside
-            // `finish_attempt`; one that times out never gets that far (#136).
-            crate::metrics::METRICS.observe_settlement(crate::metrics::Settlement::Held);
-            InferenceError::Storage
-        })
-        .and_then(|result| result);
+        });
+        #[cfg(test)]
+        let settlement = crate::db::diagnostics::settlement(
+            self.diagnostics.clone(),
+            crate::db::diagnostics::Stage::ExplicitSettlement,
+            settlement,
+        );
+        let result = settlement
+            .await
+            .map_err(|_| {
+                // A write that fails fast counts itself as held inside
+                // `finish_attempt`; one that times out never gets that far (#136).
+                crate::metrics::METRICS.observe_settlement(crate::metrics::Settlement::Held);
+                InferenceError::Storage
+            })
+            .and_then(|result| result);
         if result.is_err() {
             tracing::error!(execution_id = %self.id, trace_id = self.log_trace_id.as_ref().map(LogTraceId::as_str), "inference finalization failed; reconciliation required");
             // Only generation finalization (this call) may carry a trace id,
@@ -1155,13 +1166,28 @@ impl Drop for ExecutionGuard {
         let log_trace_id = self.log_trace_id.clone();
         // Network work is dropped synchronously. Only best-effort accounting is detached.
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let execution_id = record.id;
+            // Construct only the future here; its unchanged deadline starts inside the owner task.
+            let settlement = async move {
+                timeout(
+                    Duration::from_secs(3),
+                    repository.finish_attempt(&record, &telemetry),
+                )
+                .await
+            };
+            #[cfg(test)]
+            let settlement = crate::db::diagnostics::settlement(
+                self.diagnostics.clone(),
+                crate::db::diagnostics::Stage::CancellationSettlement,
+                settlement,
+            );
             runtime.spawn(async move {
-                let finished = timeout(Duration::from_secs(3), repository.finish_attempt(&record, &telemetry)).await;
+                let finished = settlement.await;
                 if finished.is_err() {
                     crate::metrics::METRICS.observe_settlement(crate::metrics::Settlement::Held);
                 }
                 if !matches!(finished, Ok(Ok(()))) {
-                    tracing::error!(execution_id = %record.id, trace_id = log_trace_id.as_ref().map(LogTraceId::as_str), "cancelled inference finalization failed; reconciliation required");
+                    tracing::error!(execution_id = %execution_id, trace_id = log_trace_id.as_ref().map(LogTraceId::as_str), "cancelled inference finalization failed; reconciliation required");
                     // Cancellation never carries a trace id (#294): only the
                     // explicit `finish` path above is generation-finalization-proven.
                     crate::ops_log::emit(crate::ops_log::OpsEvent::FinalizationNeedsReconciliation {

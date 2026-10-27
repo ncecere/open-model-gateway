@@ -197,6 +197,21 @@ fn snapshot_marks_completion_between_copy_and_counter_capture_incomplete() {
     );
 }
 
+#[test]
+fn snapshot_marks_in_progress_and_overlapping_mutations_unavailable() {
+    let handle = Handle::new();
+    let first = Mutation::new(&handle.0);
+    let second = Mutation::new(&handle.0);
+    assert!(handle.snapshot().unavailable);
+    drop(first);
+    assert!(
+        handle.snapshot().unavailable,
+        "another writer is still active"
+    );
+    drop(second);
+    assert!(!handle.snapshot().unavailable);
+}
+
 #[tokio::test]
 async fn disabled_capture_has_no_current_observer_and_preserves_results() {
     // No Handle is constructed. Do not use global allocator instrumentation:
