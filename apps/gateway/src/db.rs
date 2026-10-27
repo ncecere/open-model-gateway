@@ -18,6 +18,8 @@
 //! (`disallowed-methods`) outside this sanctioned call site.
 use sqlx::{PgPool, Postgres, Transaction};
 
+#[cfg(test)]
+pub(crate) mod diagnostics;
 #[cfg(all(test, feature = "integration-tests"))]
 mod tests;
 
