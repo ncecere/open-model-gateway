@@ -20,37 +20,12 @@ use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 type Tx<'a> = Transaction<'a, Postgres>;
 fn storage(error: sqlx::Error) -> InferenceError {
+    #[cfg(test)]
+    crate::db::diagnostics::observe_sqlx(crate::db::diagnostics::Stage::GovernanceStorage, &error);
     // A deadlock victim may be re-run (`locks::retry_deadlocks`).
     locks::note(&error);
     InferenceError::Storage
 }
-#[cfg(test)]
-mod diagnostic_tests {
-    #[tokio::test]
-    async fn diagnostic_storage_mapping_preserves_error_and_never_projects_its_message() {
-        use crate::db::diagnostics::{self, Handle, Outcome, SqlxKind, Stage};
-        let capture = Handle::new();
-        let mapped = diagnostics::scope(capture.clone(), async {
-            super::storage(sqlx::Error::Protocol("native-secret-canary-370".into()))
-        })
-        .await;
-        assert!(matches!(mapped, super::InferenceError::Storage));
-        let snapshot = capture.snapshot();
-        assert!(!snapshot.unavailable);
-        assert_eq!((snapshot.pending, snapshot.dropped), (0, 0));
-        assert_eq!(snapshot.events.len(), 1);
-        assert_eq!(snapshot.events[0].stage, Stage::GovernanceStorage);
-        assert_eq!(snapshot.events[0].outcome, Outcome::Error);
-        assert_eq!(snapshot.events[0].sqlx_error, Some(SqlxKind::Protocol));
-        assert!(snapshot.events[0].sqlstate.is_none());
-        assert!(
-            !serde_json::to_string(&snapshot)
-                .unwrap()
-                .contains("native-secret-canary-370")
-        );
-    }
-}
-
 /// A private submodule so [`SharedEligibilityCommitted`]'s own tuple field
 /// (and therefore `SharedEligibilityCommitted(())` construction) is scoped
 /// to this submodule alone, not to the whole `governance` module tree
@@ -2085,6 +2060,8 @@ pub(crate) async fn set_test_budget(
         sqlx::query("INSERT INTO policy_budgets(layer,kind,workspace_id,governance_key_id,period,amount_microusd) VALUES($1,$2,$3,$4,$5,$6)").bind(layer).bind(kind).bind(workspace).bind(key).bind(period).bind(amount).execute(pool).await.unwrap();
     }
 }
+#[cfg(test)]
+mod diagnostic_tests;
 #[cfg(all(test, feature = "integration-tests"))]
 mod image_tests;
 #[cfg(all(test, feature = "integration-tests"))]
