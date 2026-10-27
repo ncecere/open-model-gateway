@@ -2128,7 +2128,7 @@
   "info": {
     "description": "INCOMPLETE contract skeleton (#81 PR1). Access extensions are minimum boundaries, not complete authority. Live owner, role, membership, personal-workspace and object-visibility checks remain authoritative. Personal details are owner-only; platform totals do not grant personal detail access. Shared members see their own activity unless an administrator or the object's visibility permits more; ownership checks can hide objects with 404. Auditor platform authority is read-only, independent User/membership entitlements remain usable. Credential families are exclusive, duplicate Authorization headers are refused, inference keys never authorize management, undeclared routes fail closed, and write scopes do not imply read scopes. BrowserAdminOnly includes Platform Admin even on GET. HEAD implicitly follows GET unless separately declared; no synthetic HEAD operations are listed. Request/response placeholders live in x-omg-request-schema and x-omg-response-schema until actual body presence, status and media types are reviewed; they are not permissive acceptance schemas. No universally enveloped error response is promised.",
     "title": "Open Model Gateway management API",
-    "version": "0.9.1"
+    "version": "0.9.2"
   },
   "jsonSchemaDialect": "https://spec.openapis.org/oas/3.1/dialect/base",
   "openapi": "3.1.0",
