@@ -203,6 +203,32 @@ async fn check_incidents(pool: &PgPool, store: &Store, personal: bool, scim: boo
         }
     }
 
+    if personal {
+        // The production verifier now owns closed history. Preserve explicit
+        // runtime-role coverage of fired projection for an actual open aggregate.
+        let runtime = super::runtime_pool(pool).await;
+        let id = open[0];
+        let envelope: Value =
+            sqlx::query_scalar("SELECT alert_webhook_payload(gen_random_uuid(),$1,'fired')::jsonb")
+                .bind(id)
+                .fetch_one(&runtime)
+                .await
+                .unwrap();
+        assert_eq!(
+            envelope["event"]["summary"],
+            "Holds with unknown cost need review"
+        );
+        assert_eq!(envelope["event"].as_object().unwrap().len(), 6);
+        let resolved_refused: bool = sqlx::query_scalar(
+            "SELECT alert_webhook_payload(gen_random_uuid(),$1,'resolved') IS NULL",
+        )
+        .bind(id)
+        .fetch_one(&runtime)
+        .await
+        .unwrap();
+        assert!(resolved_refused);
+        runtime.close().await;
+    }
     let before = snapshot(pool).await;
     assert_open_identities(pool, &open).await;
     let mut failures = Vec::new();
@@ -236,6 +262,68 @@ async fn check_incidents(pool: &PgPool, store: &Store, personal: bool, scim: boo
         failures.is_empty(),
         "complete verifier must succeed twice without touching existing incidents: {failures:#?}"
     );
+    unexpected_unique_must_escape(pool, store).await;
+    resolved_projection_guard_must_remain(pool, store).await;
+    assert_eq!(
+        snapshot(pool).await,
+        before,
+        "adversarial failures must also roll back"
+    );
+    assert_open_identities(pool, &open).await;
+}
+
+/// An unrelated uniqueness failure must never be swallowed to accommodate an
+/// existing aggregate. Inject only into the verifier's fresh closed fixture.
+async fn unexpected_unique_must_escape(pool: &PgPool, store: &Store) {
+    sqlx::raw_sql(
+        "CREATE FUNCTION issue_382_injected_unique() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN RAISE EXCEPTION 'injected unrelated unique failure'
+          USING ERRCODE='23505',CONSTRAINT='issue_382_injected_unique'; END $$;
+         REVOKE ALL ON FUNCTION issue_382_injected_unique() FROM PUBLIC,gateway_runtime;
+         CREATE TRIGGER aaa_issue_382_injected_unique BEFORE INSERT ON alert_events
+         FOR EACH ROW WHEN (NEW.kind='aged_unknown_hold' AND NEW.workspace_id IS NULL AND NEW.resolved_at IS NOT NULL)
+         EXECUTE FUNCTION issue_382_injected_unique();",
+    ).execute(pool).await.unwrap();
+    let result = store.verify_runtime_grants().await;
+    sqlx::raw_sql("DROP TRIGGER aaa_issue_382_injected_unique ON alert_events; DROP FUNCTION issue_382_injected_unique();")
+        .execute(pool).await.unwrap();
+    let error = result.expect_err("arbitrary 23505 must fail the complete verifier");
+    let database = error
+        .downcast_ref::<sqlx::Error>()
+        .unwrap()
+        .as_database_error()
+        .unwrap();
+    assert_eq!(database.code().as_deref(), Some("23505"));
+    assert_eq!(database.constraint(), Some("issue_382_injected_unique"));
+}
+
+/// The cleared synthetic history row must expose loss of the aged-specific
+/// resolved-transition exclusion, rather than passing via the generic guard.
+async fn resolved_projection_guard_must_remain(pool: &PgPool, store: &Store) {
+    let original: String = sqlx::query_scalar(
+        "SELECT pg_get_functiondef('alert_webhook_payload(uuid,uuid,text)'::regprocedure)",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let predicate = "p_transition<>'fired'";
+    assert_eq!(
+        original.matches(predicate).count(),
+        1,
+        "mutant must change the actual guard once"
+    );
+    let mutant = original.replacen(predicate, "false", 1);
+    sqlx::raw_sql(&mutant).execute(pool).await.unwrap();
+    let result = store.verify_runtime_grants().await;
+    sqlx::raw_sql(&original).execute(pool).await.unwrap();
+    let error = result.expect_err("missing aged resolved exclusion must fail verification");
+    let database = error
+        .downcast_ref::<sqlx::Error>()
+        .unwrap()
+        .as_database_error()
+        .unwrap();
+    assert_eq!(database.code().as_deref(), Some("P0001"));
+    assert_eq!(database.message(), "resolved aged webhook allowed");
 }
 
 async fn assert_open_identities(pool: &PgPool, expected: &[Uuid]) {
