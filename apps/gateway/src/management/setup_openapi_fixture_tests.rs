@@ -61,6 +61,80 @@ fn v3_price() -> Value {
     }
     json!({"pricing_version":3,"input_token_limit":100,"output_token_limit":10,"price_lines":lines,"max_units":{"requests":"1"}})
 }
+/// The twelve meters every price must state (`Meter::ALL`).
+const METERS: [&str; 12] = [
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "cache_write_5m_tokens",
+    "cache_write_1h_tokens",
+    "output_images",
+    "input_characters",
+    "input_audio_seconds_ms",
+    "output_audio_seconds_ms",
+    "search_units",
+    "requests",
+];
+/// A priced line: `(meter, batch)` fixes the canonical unit label.
+fn line(meter: &str, batch: u64, amount: u64) -> Value {
+    let label = match (meter, batch) {
+        ("output_images", _) => "/image",
+        ("input_characters", _) => "/M characters",
+        ("search_units", _) => "/search",
+        ("requests", _) => "/request",
+        (_, 1000) => "/second",
+        (_, 60000) => "/minute",
+        (_, 3600000) => "/hour",
+        _ => "/M tokens",
+    };
+    json!({"meter":meter,"microusd_per_batch":amount.to_string(),"batch":batch,"unit_label":label,"sku_label":format!("SKU {meter}")})
+}
+fn tiered(mut l: Value, min: u64) -> Value {
+    l["min_prompt_tokens"] = json!(min);
+    l
+}
+fn varied(mut l: Value, variant: &str) -> Value {
+    l["variant"] = json!(variant);
+    l
+}
+/// A v3 price stating all twelve meters: the given priced lines, the rest not
+/// applicable. The batch list mirrors the same meters at other amounts.
+fn v3_with(priced: &[Value], extra: &[Value], max_units: Value) -> Value {
+    let build = |bump: u64| {
+        let mut lines: Vec<Value> = METERS
+            .iter()
+            .filter(|m| !priced.iter().any(|p| p["meter"] == **m))
+            .map(|m| json!({"meter":m,"not_applicable":true}))
+            .collect();
+        for l in priced.iter().chain(extra) {
+            let mut l = l.clone();
+            let amount: u64 = l["microusd_per_batch"].as_str().unwrap().parse().unwrap();
+            l["microusd_per_batch"] = json!((amount + bump).to_string());
+            lines.push(l);
+        }
+        lines
+    };
+    json!({"pricing_version":3,"input_token_limit":100,"output_token_limit":10,"price_lines":build(0),"batch_price_lines":build(1),"max_units":max_units})
+}
+/// Observes every view of the route's latest price: the deployment detail, and
+/// the first-route price of the platform and workspace model comparisons.
+async fn price_views<'a>(
+    j: &mut Journey<'a>,
+    admin: &'a Browser,
+    owner: &'a Browser,
+    team: Uuid,
+    deployment: Uuid,
+    models: (Uuid, Uuid),
+) {
+    let saved = j.actor;
+    j.actor = admin;
+    j.request("GET", &format!("/api/v1/platform/deployments/{deployment}"), None).await;
+    j.request("GET", &format!("/api/v1/platform/models/compare?ids={},{}", models.0, models.1), None).await;
+    j.actor = owner;
+    j.request("GET", &format!("/api/v1/workspaces/{team}/models/compare?ids={},{}", models.0, models.1), None).await;
+    j.actor = saved;
+}
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn management_openapi_slice3_fixtures(pool: PgPool) {
     let mut f = fixture(&pool).await;
