@@ -84,7 +84,7 @@ fn schema_vectors<T: DeserializeOwned>(method: &str, template: &str, schema: &Va
     let compare = |label: &str, value: Value| {
         let actual = serde_json::from_value::<T>(value.clone()).is_ok();
         let contract = super::responses::validate_value(document, schema, &value).is_ok();
-        assert_eq!(contract, actual, "{method} {template}: {label}: {value}");
+        assert_eq!(contract, actual, "{method} {template}: {label}");
     };
     compare("positive", valid.clone());
     let positional = fields
