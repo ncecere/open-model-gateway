@@ -14,6 +14,10 @@
 //!   with `x-omg-unobserved-branch: "<reason>"` on the branch (or on the
 //!   nullable node).
 //!
+//! * A query parameter that can never ride a positive request (its handler
+//!   always refuses a request carrying it) is exempt only with
+//!   `x-omg-unobserved-parameter: "<reason>"` on the parameter.
+//!
 //! Messages name schema/data JSON pointers only, never instance values.
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
@@ -21,6 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) const MAY_BE_EMPTY: &str = "x-omg-may-be-empty";
 pub(super) const UNOBSERVED_BRANCH: &str = "x-omg-unobserved-branch";
+pub(super) const UNOBSERVED_PARAMETER: &str = "x-omg-unobserved-parameter";
 
 #[derive(Default)]
 struct OpObserved {
@@ -118,11 +123,13 @@ fn success_schemas<'a>(
     }
     Ok(out)
 }
-pub(super) fn documented_queries(document: &Value, operation: &Value) -> Result<BTreeSet<String>> {
+fn queries(document: &Value, operation: &Value, exempt_only: bool) -> Result<BTreeSet<String>> {
     let mut names = BTreeSet::new();
     for parameter in operation["parameters"].as_array().into_iter().flatten() {
         let parameter = follow(document, parameter)?.map_or(parameter, |(target, _)| target);
-        if parameter["in"] == "query" {
+        if parameter["in"] == "query"
+            && (!exempt_only || reason(parameter, UNOBSERVED_PARAMETER).is_some())
+        {
             names.insert(
                 parameter["name"]
                     .as_str()
@@ -132,6 +139,13 @@ pub(super) fn documented_queries(document: &Value, operation: &Value) -> Result<
         }
     }
     Ok(names)
+}
+pub(super) fn documented_queries(document: &Value, operation: &Value) -> Result<BTreeSet<String>> {
+    queries(document, operation, false)
+}
+/// Query parameters exempt from positive acceptance, each with a reason.
+fn unobservable_queries(document: &Value, operation: &Value) -> Result<BTreeSet<String>> {
+    queries(document, operation, true)
 }
 
 #[derive(Default)]
@@ -415,8 +429,9 @@ impl Observed {
         let empty = OpObserved::default();
         let seen = self.0.get(op_key).unwrap_or(&empty);
         let mut gaps = Vec::new();
+        let unobservable = unobservable_queries(document, operation)?;
         for name in documented_queries(document, operation)? {
-            if !seen.queries.contains(&name) {
+            if !seen.queries.contains(&name) && !unobservable.contains(&name) {
                 gaps.push(format!(
                     "query parameter `{name}` is documented but no positive request accepted it"
                 ));
