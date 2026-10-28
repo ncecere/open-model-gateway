@@ -62,9 +62,11 @@ export function writeBinding(b: Binding): Binding {
 }
 export const dimensionLabel = (id: string | null) => id === null ? "Provider default / missing identifier" : id;
 const dayMs = 86400000;
-/** Preserve arbitrarily small fractions: Date.parse truncates them. Normalize
- * integral seconds/offsets exactly, then test the fraction separately. Refuse
- * unsupported timestamps, including leap seconds and non-RFC offsets. */
+/** Date.parse truncates to milliseconds, so test the fraction separately.
+ * Bindings are stored as PostgreSQL microseconds (sqlx truncates), which is
+ * what matching.rs compares: only the first six fractional digits count.
+ * Normalize integral seconds/offsets exactly; refuse leap seconds and
+ * non-RFC offsets. */
 function exactUtcDay(value: string): { day: number; midnight: boolean } | undefined {
   const match = /^(\d{4}-\d{2}-\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?([Zz]|[+-]\d{2}:\d{2})$/.exec(value);
   if (!match) return;
@@ -78,7 +80,7 @@ function exactUtcDay(value: string): { day: number; midnight: boolean } | undefi
     offsetSeconds = (offset[0] === "+" ? 1 : -1) * (h * 3600 + m * 60);
   }
   const utcSeconds = +hours * 3600 + +minutes * 60 + +seconds - offsetSeconds;
-  return { day: dateMs + Math.floor(utcSeconds / 86400) * dayMs, midnight: utcSeconds % 86400 === 0 && !/[1-9]/.test(fraction ?? "") };
+  return { day: dateMs + Math.floor(utcSeconds / 86400) * dayMs, midnight: utcSeconds % 86400 === 0 && !/[1-9]/.test((fraction ?? "").slice(0, 6)) };
 }
 /** Reports use half-open UTC 1d buckets. A binding must cover a whole bucket
  * (matching.rs); joining two partial-day attestations cannot prove that day.

@@ -63,6 +63,13 @@ describe("provider-cost write reads", () => {
     { name: "fractional-midnight start excludes the day", start: "2026-10-01T00:00:00.000001Z", end: report.period_end, expected: false },
     { name: "fractional-midnight end covers the previous day", start: report.period_start, end: "2026-10-02T00:00:00.000001Z", expected: true },
     { name: "all-zero fractional midnight is exact", start: "2026-10-01T00:00:00.000000000Z", end: "2026-10-02T00:00:00.000000000Z", expected: true },
+    // Stored bindings are PostgreSQL microseconds (sqlx truncates): matching.rs
+    // compares the truncated value, so sub-microsecond digits cannot move a day.
+    { name: "sub-microsecond start truncates to stored midnight", start: "2026-10-01T00:00:00.0000009Z", end: report.period_end, expected: true },
+    { name: "excess fractional digits truncate to stored midnight", start: "2026-10-01T00:00:00.0000000001Z", end: report.period_end, expected: true },
+    { name: "sub-microsecond end before midnight stays on the previous day", start: report.period_start, end: "2026-10-01T23:59:59.9999999Z", expected: false },
+    { name: "leap second is refused", start: "2026-09-30T23:59:60Z", end: report.period_end, expected: false },
+    { name: "pre-epoch dates normalize exactly", start: "1969-12-31T19:00:00-05:00", end: "1970-01-02T00:00:00Z", expected: true, period: { period_start: "1970-01-01T00:00:00Z", period_end: "1970-01-02T00:00:00Z" } },
     { name: "positive offsets normalize to UTC midnight", start: "2026-10-01T05:30:00+05:30", end: "2026-10-02T05:30:00+05:30", expected: true },
     { name: "negative offsets cross calendar dates", start: "2026-09-30T20:00:00-04:00", end: "2026-10-01T20:00:00-04:00", expected: true },
     { name: "offset fractional-midnight start excludes the day", start: "2026-10-01T05:30:00.000001+05:30", end: "2026-10-02T05:30:00+05:30", expected: false },
@@ -75,9 +82,9 @@ describe("provider-cost write reads", () => {
     { name: "non-RFC format is refused", start: "2026-10-01", end: report.period_end, expected: false },
     { name: "trailing newline is refused", start: "2026-10-01T00:00:00Z\n", end: report.period_end, expected: false },
     { name: "24-hour rollover is refused", start: "2026-09-30T24:00:00Z", end: report.period_end, expected: false },
-  ])("uses exact RFC 3339 whole-day boundaries: $name", ({ start, end, expected }) => {
+  ] as { name: string; start: string; end: string; expected: boolean; period?: Pick<CostImport, "period_start" | "period_end"> }[])("uses exact RFC 3339 whole-day boundaries: $name", ({ start, end, expected, period }) => {
     const b = { provider_workspace_id: null, attested: true, effective_start: start, effective_end: end } as Binding;
-    expect(coversPeriod([b], null, report)).toBe(expected);
+    expect(coversPeriod([b], null, period ? { ...report, ...period } : report)).toBe(expected);
   });
   it.each([
     { name: "fractional start", start: "2026-10-01T00:00:00.000001Z", end: report.period_end },
