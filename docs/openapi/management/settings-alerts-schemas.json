@@ -365,7 +365,7 @@
               ]
             },
             "min_spend_microusd": {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "$ref": "#/components/schemas/IdentityNullableDecimal"
             },
             "window_minutes": {
               "anyOf": [
@@ -422,7 +422,7 @@
               "$ref": "#/components/schemas/IdentityNullableString"
             },
             "spend_amount_microusd": {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "$ref": "#/components/schemas/IdentityNullableDecimal"
             },
             "ceiling_requests_per_second": {
               "anyOf": [
@@ -524,7 +524,7 @@
               ]
             },
             {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "$ref": "#/components/schemas/IdentityNullableDecimal"
             },
             {
               "anyOf": [
@@ -581,7 +581,7 @@
               "$ref": "#/components/schemas/IdentityNullableString"
             },
             {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "$ref": "#/components/schemas/IdentityNullableDecimal"
             },
             {
               "anyOf": [

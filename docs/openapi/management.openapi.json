@@ -2602,7 +2602,7 @@
                 ]
               },
               "min_spend_microusd": {
-                "$ref": "#/components/schemas/IdentityNullableString"
+                "$ref": "#/components/schemas/IdentityNullableDecimal"
               },
               "name": {
                 "type": "string"
@@ -2626,7 +2626,7 @@
                 "$ref": "#/components/schemas/IdentityNullableUuid"
               },
               "spend_amount_microusd": {
-                "$ref": "#/components/schemas/IdentityNullableString"
+                "$ref": "#/components/schemas/IdentityNullableDecimal"
               },
               "spend_period": {
                 "$ref": "#/components/schemas/IdentityNullableString"
@@ -2733,7 +2733,7 @@
                 ]
               },
               {
-                "$ref": "#/components/schemas/IdentityNullableString"
+                "$ref": "#/components/schemas/IdentityNullableDecimal"
               },
               {
                 "anyOf": [
@@ -2790,7 +2790,7 @@
                 "$ref": "#/components/schemas/IdentityNullableString"
               },
               {
-                "$ref": "#/components/schemas/IdentityNullableString"
+                "$ref": "#/components/schemas/IdentityNullableDecimal"
               },
               {
                 "anyOf": [
