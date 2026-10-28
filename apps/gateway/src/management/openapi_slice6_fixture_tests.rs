@@ -87,7 +87,7 @@ impl Wire {
 }
 async fn execution(pool: &PgPool, ws: Uuid, key: Uuid, deployment: Uuid, redacted: bool) -> Uuid {
     let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,input_tokens,output_tokens,completed_at,elapsed_ms,client_session_id,details_redacted_at) VALUES($1,$2,$3,$4,'contract-log','openai',false,'succeeded',$1,5,1,clock_timestamp()+interval '20 milliseconds',20,'contract-session',CASE WHEN $5 THEN now() END)")
+    sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,input_tokens,output_tokens,completed_at,elapsed_ms,client_session_id,details_redacted_at) VALUES($1,$2,$3,$4,'contract-log','openai',false,'succeeded',$1,5,1,clock_timestamp()+interval '20 milliseconds',CASE WHEN $5 THEN NULL ELSE 20 END,CASE WHEN $5 THEN NULL ELSE 'contract-session' END,CASE WHEN $5 THEN now() END)")
         .bind(id).bind(ws).bind(key).bind(deployment).bind(redacted).execute(pool).await.unwrap();
     id
 }

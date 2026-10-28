@@ -5590,7 +5590,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "id": {
-                    "pattern": "^(video|batch)_[0-9a-f]{32}$",
+                    "pattern": "^batch_[0-9a-f]{32}$|^video_[0-9a-f]{32}$",
                     "type": "string"
                   },
                   "kind": {
@@ -5893,7 +5893,7 @@
                     "$ref": "#/components/schemas/IdentityNullableTime"
                   },
                   "id": {
-                    "pattern": "^(video|batch)_[0-9a-f]{32}$",
+                    "pattern": "^batch_[0-9a-f]{32}$|^video_[0-9a-f]{32}$",
                     "type": "string"
                   },
                   "kind": {
@@ -6946,7 +6946,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "id": {
-                    "pattern": "^(video|batch)_[0-9a-f]{32}$",
+                    "pattern": "^batch_[0-9a-f]{32}$|^video_[0-9a-f]{32}$",
                     "type": "string"
                   },
                   "kind": {
@@ -7253,7 +7253,7 @@
                     "$ref": "#/components/schemas/IdentityNullableTime"
                   },
                   "id": {
-                    "pattern": "^(video|batch)_[0-9a-f]{32}$",
+                    "pattern": "^batch_[0-9a-f]{32}$|^video_[0-9a-f]{32}$",
                     "type": "string"
                   },
                   "kind": {
