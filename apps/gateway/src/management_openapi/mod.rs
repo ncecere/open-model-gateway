@@ -1,5 +1,6 @@
 //! Test-only management contract: no runtime endpoint or production dependency.
 mod generator;
+mod hardening_tests;
 mod middleware;
 mod mutation_tests;
 mod quality;
