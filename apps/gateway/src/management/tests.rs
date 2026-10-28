@@ -60,7 +60,7 @@ mod legal_holds_tests;
 mod me_models_tests;
 #[path = "members/tests.rs"]
 mod member_tests;
-#[path = "openapi_fixtures.rs"]
+#[path = "openapi_fixture_tests.rs"]
 mod openapi_fixtures;
 #[path = "personal_data_tests.rs"]
 mod personal_data_tests;
