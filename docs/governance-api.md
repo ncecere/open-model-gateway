@@ -1,6 +1,6 @@
 # Governance API
 
-All paths below are under `/api/v1`, authenticated by browser session. Mutations require exact Origin/CSRF. Platform reads allow Admin/Auditor; writes require Admin unless a workspace/key tightening operation permits scoped authority. Personal keys and request details remain owner-private.
+All paths below are under `/api/v1`, authenticated by browser session. Mutations require exact Origin/CSRF. Platform reads allow Admin/Auditor; writes require Admin unless a workspace/key tightening operation permits scoped authority. Personal keys and request details remain owner-private. A personal workspace's id and owner label, its totals and its platform-managed configuration (`/platform/workspaces/{ws}/policy` and `/catalogs`) are visible to Admin/Auditor; see [platform administration](platform-administration.md#ownership).
 
 Money and financial aggregate/token counts are decimal **strings**; unknown measurements are `null`, never zero. Limit fields, pagination and attempt numbers remain JSON numbers. USD values are exact integer micro-USD. Configured rates are estimates, not invoices.
 
@@ -114,7 +114,7 @@ The reserved 0058–0064 prefix must land in order; never fill reservations with
 | --- | --- |
 | `/platform/installation/policy` | **Removed** (0026): GET/PUT return `410` with `reason:"installation_limits_removed"`. There are no installation-wide limits. |
 | `/platform/workspace-types/{kind}/policy` | GET/PUT per-workspace defaults, kind personal/team/project. |
-| `/platform/workspaces/{ws}/policy` | GET/PUT replacement override; DELETE restores live type defaults. |
+| `/platform/workspaces/{ws}/policy` | GET/PUT replacement override; DELETE restores live type defaults. Applies to personal workspaces too (platform-managed; Auditor reads, Admin writes). |
 | `/workspaces/{ws}/policy` | GET/PUT local tightening by owner/shared administrator. |
 | `/workspaces/{ws}/keys/{key}/policy` | GET/PUT visible key-lineage tightening; rotations retain consumption. |
 | `/workspaces/{ws}/key-issuance` | GET the caller's key issuance budget: `{window_seconds, holder:{used, limit, next_available_at}}`, plus `workspace:{…}` for workspace admins only. Members and admins only; admin API tokens are refused. |
@@ -277,7 +277,7 @@ Response: `{deployment_id,upstream_model,source:"openrouter_public_catalog",cata
 
 ## Reports, detail and CSV
 
-- `GET /platform/cost-report`: authorized platform aggregates including personal totals, no request-detail endpoint; platform `service_accounts` breakdown is empty. Each personal workspace's `workspaces` breakdown row is named `Personal · <owner>` (display name, else email, `former user` after cleanup) instead of the bare workspace name.
+- `GET /platform/cost-report`: authorized platform aggregates including personal totals, no request-detail endpoint; platform `service_accounts` breakdown is empty. Each personal workspace's `workspaces` breakdown row has its `id`, `kind:"personal"` and is named `Personal · <owner>` (display name, else email, `former user` after cleanup) instead of the bare workspace name.
 - `GET /workspaces/{ws}/cost-report`: workspace-wide for administrators, own human-key activity for ordinary members.
 - `GET /workspaces/{ws}/costs`: `{data,has_more}` with authorized detail rows, `limit=1..200`, `offset=0..100000`.
 - `GET /workspaces/{ws}/usage-export`: one CSV page, `limit=1..1000`, `offset=0..100000`, no-store and formula-safe quoted cells. Headers include `x-export-limit`, `x-export-offset`, `x-export-rows`.

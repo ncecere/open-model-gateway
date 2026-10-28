@@ -95,6 +95,10 @@ Tighten-only local/key rules are per period: a child budget for period P may not
 - **Locks.** Since 0026 the installation row lock protected no limit data, only the serialization of admission with authorization, membership and policy changes. Scoped admission (0027, next section) replaced it in admission and settlement.
 - **API.** `GET/PUT /platform/installation/policy` answer `410` with `reason:"installation_limits_removed"` (see [governance API](governance-api.md)).
 
+### Personal workspace visibility
+
+A personal workspace is owner-private, with one defined exception. Platform Admins and Auditors may see its identity (id and owner label), its usage, cost and storage totals and its platform-managed configuration (workspace policy and limits, catalog overrides). They never see its keys, request or execution details, prompts or responses, sessions, file contents or owner-made choices. Provider-cost reconciliation keeps its identity-free personal subset as a deliberately stricter view. Personal limits are platform-controlled (type default plus an optional per-workspace override); the owner cannot change them. See [platform administration](platform-administration.md#ownership).
+
 ### Scoped admission lock order
 
 `0027_scoped_admission.sql` (scale plan P3) removes the installation row lock from admission and settlement. Admissions of different workspaces no longer wait for each other; admissions of one workspace serialize on that workspace's totals and counter rows, so budgets stay exact. Every transaction takes a subset of these locks, always in this order, which makes the protocol deadlock-free:

@@ -23,7 +23,11 @@ Only Platform Admins create Teams/Projects. Each shared workspace has an explici
 | Platform Auditor | User access plus platform-wide read-only configuration, financial totals and privacy-filtered audit. |
 | Platform Admin | User access plus installation, user, shared-workspace, catalog, policy, infrastructure and allocation administration. |
 
-Admin/Auditor includes User entitlement. Neither grants another user's private keys or request details. Both may read authorized platform financial totals including personal totals. Shared administrative visibility does not replace actual membership for issuing a human key.
+Admin/Auditor includes User entitlement. Neither grants another user's private keys or request details.
+
+**Personal workspace visibility.** Platform Admins and Auditors may see a personal workspace's identity (workspace id and owner label) with its usage, cost and storage totals and its platform-managed configuration (workspace policy and limits, catalog overrides). They never see its keys, request or execution details, prompts or responses, sessions, file contents or anything the owner chose. Provider-cost reconciliation is deliberately stricter: its personal subset is identity-free. The platform cost report, usage explore and storage usage list personal workspaces with their id (cost and usage name the row `Personal · <owner>`; storage shows the workspace's own name and kind), and `GET/PUT /platform/workspaces/{ws}/policy` and `/catalogs` work on a personal workspace (Admin and Auditor read, Admin writes). The owner has no such route and reads only their own catalog; personal limits are platform-controlled.
+
+Shared administrative visibility does not replace actual membership for issuing a human key.
 
 ## Configure model access
 

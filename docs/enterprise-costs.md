@@ -33,7 +33,7 @@ Before each attempt the gateway pins a price and reserves conservative cost. Mis
 
 ## Read reports safely
 
-Platform Admin/Auditor reporting includes personal financial totals, without foreign personal keys or request details. Shared administrators see whole-workspace activity; ordinary members their own human-key activity. Platform totals do not grant a private detail/export endpoint.
+Platform Admin/Auditor reporting includes personal financial totals with the workspace's identity (id and owner label), without foreign personal keys or request details; provider-cost reconciliation's personal subset is identity-free. Shared administrators see whole-workspace activity; ordinary members their own human-key activity. Platform totals do not grant a private detail/export endpoint.
 
 Financial amounts/counts are decimal strings and unknown measurements null. UTC reports use **[start,end)** with exclusive end, 1–93 days; comparisons use the same filters and equal preceding length. Known settled cost, active holds, unbounded/unknown coverage and overlapping health indicators must remain distinct. Do not sum holds as extra charges, or health indicators as independent failed requests.
 
