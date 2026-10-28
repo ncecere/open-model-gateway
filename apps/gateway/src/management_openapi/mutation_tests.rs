@@ -42,6 +42,10 @@ fn sample(document: &Value, schema: &Value) -> Value {
                 .as_str()
                 .is_some_and(|p| p.contains("branding/logo")) =>
                 "/api/v1/branding/logo?v=000000000000".into(),
+            _ if schema["pattern"]
+                .as_str()
+                .is_some_and(|p| p.starts_with("^env:")) =>
+                "env:REFERENCE".into(),
             _ if schema.get("pattern").is_some() => "0".into(),
             _ => "fixture".into(),
         }),
@@ -239,8 +243,13 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
             let method = method.to_ascii_uppercase();
             operations += 1;
             let mut h = HeaderMap::new();
+            let status = if op["responses"].get("200").is_some() {
+                StatusCode::OK
+            } else {
+                StatusCode::GONE
+            };
             if let Some(schema) =
-                op["responses"]["200"]["content"]["application/json"].get("schema")
+                op["responses"][status.as_str()]["content"]["application/json"].get("schema")
             {
                 json_operations += 1;
                 h.insert("content-type", "application/json".parse().unwrap());
@@ -256,22 +265,23 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                     );
                     h.insert("x-omg-export-sha256", "a".repeat(64).parse().unwrap());
                 }
-                let valid = sample(&document, schema);
+                let mut valid = sample(&document, schema);
+                if valid["error"].is_object() {
+                    valid["error"]["code"] = json!(status.as_str());
+                }
                 let encode = |v: &Value| serde_json::to_vec(v).unwrap();
-                validate(
-                    &document,
-                    &method,
-                    path,
-                    StatusCode::OK,
-                    &h,
-                    &encode(&valid),
-                )
-                .unwrap_or_else(|e| {
-                    panic!("positive schema control {method} {path}: {e:#}; {valid}")
-                });
+                validate(&document, &method, path, status, &h, &encode(&valid)).unwrap_or_else(
+                    |e| panic!("positive schema control {method} {path}: {e:#}; {valid}"),
+                );
                 let mut body_schema = schema;
-                while let Some(reference) = body_schema["$ref"].as_str() {
-                    body_schema = document.pointer(&reference[1..]).unwrap();
+                loop {
+                    if let Some(reference) = body_schema["$ref"].as_str() {
+                        body_schema = document.pointer(&reference[1..]).unwrap();
+                    } else if let Some(branches) = body_schema["oneOf"].as_array() {
+                        body_schema = &branches[0];
+                    } else {
+                        break;
+                    }
                 }
                 let field = body_schema["required"].as_array().unwrap()[0]
                     .as_str()
@@ -286,15 +296,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                 };
                 for (pointer, corrupt) in recursive_mutations(&document, schema, &valid) {
                     assert!(
-                        validate(
-                            &document,
-                            &method,
-                            path,
-                            StatusCode::OK,
-                            &h,
-                            &encode(&corrupt)
-                        )
-                        .is_err(),
+                        validate(&document, &method, path, status, &h, &encode(&corrupt)).is_err(),
                         "accepted recursive sensitive property/array element at {pointer}: {method} {path}"
                     );
                 }
@@ -306,15 +308,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                     ("sensitive unexpected property", extra),
                 ] {
                     assert!(
-                        validate(
-                            &document,
-                            &method,
-                            path,
-                            StatusCode::OK,
-                            &h,
-                            &encode(&corrupt)
-                        )
-                        .is_err(),
+                        validate(&document, &method, path, status, &h, &encode(&corrupt)).is_err(),
                         "accepted {label}: {method} {path}"
                     );
                 }
@@ -459,7 +453,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
             }
         }
     }
-    assert_eq!((operations, json_operations), (22, 18));
+    assert_eq!((operations, json_operations), (59, 55));
 }
 
 #[test]

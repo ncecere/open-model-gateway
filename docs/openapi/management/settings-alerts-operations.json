@@ -1,0 +1,1848 @@
+{
+  "operations": {
+    "DELETE /api/v1/platform/alerts/rules/{id}": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Platform rules: Admin writes, Auditor reads. Shared-workspace rules: actual workspace administrator writes; platform readers may read shared workspaces. Personal owner sees immutable built-in budget rules only; foreign personal workspaces are hidden with 404. Rule kind is immutable (409); inappropriate kind-specific fields return 400. Monetary fields are integer micro-USD strings; no installation budget layer exists.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/delete_api_v1_platform_alerts_rules_by_idResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Path/query or handler refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "governance:write",
+      "token_policy": "Scope"
+    },
+    "DELETE /api/v1/platform/alerts/webhooks/{id}": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Saved receivers only; no caller-selected test destination. Create/PATCH bodies are manually decoded with serde_json::from_slice irrespective of Content-Type; serde object and positional array shapes are both accepted. Secret fields are allowlisted env:NAME REFERENCES, never secret values. Reads have distinct privileged and redacted projections. Test enqueues a durable waiting delivery, not synchronous delivery success. Handler test throttle is a 429 envelope with a retry instruction message, no Retry-After header; authentication throttle retry information is separate.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/delete_api_v1_platform_alerts_webhooks_by_idResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/delete_api_v1_platform_alerts_webhooks_by_idRequest"
+              }
+            },
+            "*/*": {
+              "schema": {
+                "$ref": "#/components/schemas/delete_api_v1_platform_alerts_webhooks_by_idRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": "settings:write",
+      "token_policy": "Scope"
+    },
+    "DELETE /api/v1/platform/settings/general/logo": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Raw PNG, JPEG or WebP bytes with matching Content-Type, NOT multipart. Maximum 512 KiB, each side 16–4096 pixels. SVG, animation, markup, malformed containers and trailing bytes are refused. Store-off uploads return 409; DELETE still works when storage is off.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/delete_api_v1_platform_settings_general_logoResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "settings:write",
+      "token_policy": "Scope"
+    },
+    "DELETE /api/v1/workspaces/{ws}/alerts/rules/{id}": {
+      "access": "WorkspaceAdmin",
+      "operation": {
+        "description": "Platform rules: Admin writes, Auditor reads. Shared-workspace rules: actual workspace administrator writes; platform readers may read shared workspaces. Personal owner sees immutable built-in budget rules only; foreign personal workspaces are hidden with 404. Rule kind is immutable (409); inappropriate kind-specific fields return 400. Monetary fields are integer micro-USD strings; no installation budget layer exists.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/delete_api_v1_workspaces_by_ws_alerts_rules_by_idResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Path/query or handler refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/platform/alerts/events": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "Live visibility: platform history excludes personal request/key identities. Workspace history requires workspace administration or shared-workspace platform reader authority. Admission-ceiling identities are suppressed for personal workspaces even for Admins; Auditors have no workspace/name reference. Delivery counters are JSON integers.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_alerts_eventsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "enum": [
+                "firing",
+                "resolved"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "enum": [
+                "budget_threshold",
+                "spend_threshold",
+                "spend_spike",
+                "error_rate",
+                "provider_failing",
+                "batch_failed",
+                "batch_stalled",
+                "admission_ceiling",
+                "key_expiring",
+                "aged_unknown_hold",
+                "scim_last_admin",
+                "partitions_missing",
+                "history_orphans"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "rule_id",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 100
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000,
+              "default": 0
+            }
+          }
+        ]
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/alerts/rules": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "Platform rules: Admin writes, Auditor reads. Shared-workspace rules: actual workspace administrator writes; platform readers may read shared workspaces. Personal owner sees immutable built-in budget rules only; foreign personal workspaces are hidden with 404. Rule kind is immutable (409); inappropriate kind-specific fields return 400. Monetary fields are integer micro-USD strings; no installation budget layer exists.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_alerts_rulesResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/alerts/rules/{id}": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "Platform rules: Admin writes, Auditor reads. Shared-workspace rules: actual workspace administrator writes; platform readers may read shared workspaces. Personal owner sees immutable built-in budget rules only; foreign personal workspaces are hidden with 404. Rule kind is immutable (409); inappropriate kind-specific fields return 400. Monetary fields are integer micro-USD strings; no installation budget layer exists.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_alerts_rules_by_idResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Path/query or handler refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/alerts/webhooks": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "Saved receivers only; no caller-selected test destination. Create/PATCH bodies are manually decoded with serde_json::from_slice irrespective of Content-Type; serde object and positional array shapes are both accepted. Secret fields are allowlisted env:NAME REFERENCES, never secret values. Reads have distinct privileged and redacted projections. Test enqueues a durable waiting delivery, not synchronous delivery success. Handler test throttle is a 429 envelope with a retry instruction message, no Retry-After header; authentication throttle retry information is separate.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_alerts_webhooksResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/alerts/webhooks/{id}": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "Saved receivers only; no caller-selected test destination. Create/PATCH bodies are manually decoded with serde_json::from_slice irrespective of Content-Type; serde object and positional array shapes are both accepted. Secret fields are allowlisted env:NAME REFERENCES, never secret values. Reads have distinct privileged and redacted projections. Test enqueues a durable waiting delivery, not synchronous delivery success. Handler test throttle is a 429 envelope with a retry instruction message, no Retry-After header; authentication throttle retry information is separate.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_alerts_webhooks_by_idResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Path/query or handler refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/alerts/webhooks/{id}/deliveries": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "Saved receivers only; no caller-selected test destination. Create/PATCH bodies are manually decoded with serde_json::from_slice irrespective of Content-Type; serde object and positional array shapes are both accepted. Secret fields are allowlisted env:NAME REFERENCES, never secret values. Reads have distinct privileged and redacted projections. Test enqueues a durable waiting delivery, not synchronous delivery success. Handler test throttle is a 429 envelope with a retry instruction message, no Retry-After header; authentication throttle retry information is separate.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_alerts_webhooks_by_id_deliveriesResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Path/query or handler refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/installation/policy": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "Intentional 410 tombstone: installation-wide inference limits were removed. The handler ignores request bytes; no policy body is accepted or applied.",
+        "responses": {
+          "410": {
+            "description": "Intentional removed-policy tombstone, reason installation_limits_removed",
+            "x-omg-positive": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_installation_policyResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/server-policy": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_server_policyResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/settings/audit-export": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_settings_audit_exportResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/settings/email": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_settings_emailResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/settings/general": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_settings_generalResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/settings/privacy": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "Environment values lock settings. PUT may resend the stored values unchanged; attempts to change a locked stored setting return 409. Prompt/response bodies are never stored.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_settings_privacyResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/settings/sign-in": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_settings_sign_inResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/settings/storage": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": " Server-controlled backend may be off; groups remain visible but inactive. Enabling customer content requires configured healthy storage (409 otherwise). Counts and bytes are JSON integers.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_settings_storageResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/workspaces/{ws}/alerts/events": {
+      "access": "WorkspaceAdminOrReader",
+      "operation": {
+        "description": "Live visibility: platform history excludes personal request/key identities. Workspace history requires workspace administration or shared-workspace platform reader authority. Admission-ceiling identities are suppressed for personal workspaces even for Admins; Auditors have no workspace/name reference. Delivery counters are JSON integers.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_workspaces_by_ws_alerts_eventsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "enum": [
+                "firing",
+                "resolved"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "enum": [
+                "budget_threshold",
+                "spend_threshold",
+                "spend_spike",
+                "error_rate",
+                "provider_failing",
+                "batch_failed",
+                "batch_stalled",
+                "admission_ceiling",
+                "key_expiring",
+                "aged_unknown_hold",
+                "scim_last_admin",
+                "partitions_missing",
+                "history_orphans"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "rule_id",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 100
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000,
+              "default": 0
+            }
+          }
+        ]
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/workspaces/{ws}/alerts/rules": {
+      "access": "WorkspaceAdminOrReader",
+      "operation": {
+        "description": "Platform rules: Admin writes, Auditor reads. Shared-workspace rules: actual workspace administrator writes; platform readers may read shared workspaces. Personal owner sees immutable built-in budget rules only; foreign personal workspaces are hidden with 404. Rule kind is immutable (409); inappropriate kind-specific fields return 400. Monetary fields are integer micro-USD strings; no installation budget layer exists.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_workspaces_by_ws_alerts_rulesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Path/query or handler refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/workspaces/{ws}/alerts/rules/{id}": {
+      "access": "WorkspaceAdminOrReader",
+      "operation": {
+        "description": "Platform rules: Admin writes, Auditor reads. Shared-workspace rules: actual workspace administrator writes; platform readers may read shared workspaces. Personal owner sees immutable built-in budget rules only; foreign personal workspaces are hidden with 404. Rule kind is immutable (409); inappropriate kind-specific fields return 400. Monetary fields are integer micro-USD strings; no installation budget layer exists.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_workspaces_by_ws_alerts_rules_by_idResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Path/query or handler refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "PATCH /api/v1/platform/alerts/webhooks/{id}": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Saved receivers only; no caller-selected test destination. Create/PATCH bodies are manually decoded with serde_json::from_slice irrespective of Content-Type; serde object and positional array shapes are both accepted. Secret fields are allowlisted env:NAME REFERENCES, never secret values. Reads have distinct privileged and redacted projections. Test enqueues a durable waiting delivery, not synchronous delivery success. Handler test throttle is a 429 envelope with a retry instruction message, no Retry-After header; authentication throttle retry information is separate.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/patch_api_v1_platform_alerts_webhooks_by_idResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/patch_api_v1_platform_alerts_webhooks_by_idRequest"
+              }
+            },
+            "*/*": {
+              "schema": {
+                "$ref": "#/components/schemas/patch_api_v1_platform_alerts_webhooks_by_idRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": "settings:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/alerts/rules": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Platform rules: Admin writes, Auditor reads. Shared-workspace rules: actual workspace administrator writes; platform readers may read shared workspaces. Personal owner sees immutable built-in budget rules only; foreign personal workspaces are hidden with 404. Rule kind is immutable (409); inappropriate kind-specific fields return 400. Monetary fields are integer micro-USD strings; no installation budget layer exists.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_alerts_rulesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Framework extraction refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Framework extraction refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_alerts_rulesRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": "governance:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/alerts/webhooks": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Saved receivers only; no caller-selected test destination. Create/PATCH bodies are manually decoded with serde_json::from_slice irrespective of Content-Type; serde object and positional array shapes are both accepted. Secret fields are allowlisted env:NAME REFERENCES, never secret values. Reads have distinct privileged and redacted projections. Test enqueues a durable waiting delivery, not synchronous delivery success. Handler test throttle is a 429 envelope with a retry instruction message, no Retry-After header; authentication throttle retry information is separate.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_alerts_webhooksResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_alerts_webhooksRequest"
+              }
+            },
+            "*/*": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_alerts_webhooksRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": "settings:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/alerts/webhooks/{id}/test": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Saved receivers only; no caller-selected test destination. Create/PATCH bodies are manually decoded with serde_json::from_slice irrespective of Content-Type; serde object and positional array shapes are both accepted. Secret fields are allowlisted env:NAME REFERENCES, never secret values. Reads have distinct privileged and redacted projections. Test enqueues a durable waiting delivery, not synchronous delivery success. Handler test throttle is a 429 envelope with a retry instruction message, no Retry-After header; authentication throttle retry information is separate.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_alerts_webhooks_by_id_testResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_alerts_webhooks_by_id_testRequest"
+              }
+            },
+            "*/*": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_alerts_webhooks_by_id_testRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": "settings:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/settings/audit-export/test": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Tests saved server configuration only. Accepts absent bytes or an empty JSON object, not JSON null; no Content-Type requirement. Handler test throttles return 429 envelope with a retry instruction in the message (no numeric retry field or Retry-After header); serving authentication throttles are separate.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_settings_audit_export_testResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_settings_audit_export_testRequest"
+              }
+            },
+            "*/*": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_settings_audit_export_testRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": "settings:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/settings/email/test": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Tests saved server configuration only. Accepts absent bytes or an empty JSON object, not JSON null; no Content-Type requirement. Handler test throttles return 429 envelope with a retry instruction in the message (no numeric retry field or Retry-After header); serving authentication throttles are separate.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_settings_email_testResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_settings_email_testRequest"
+              }
+            },
+            "*/*": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_settings_email_testRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": "settings:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/settings/storage/test": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Tests saved server configuration only. Accepts absent bytes or an empty JSON object, not JSON null; no Content-Type requirement. Handler test throttles return 429 envelope with a retry instruction in the message (no numeric retry field or Retry-After header); serving authentication throttles are separate. Server-controlled backend may be off; groups remain visible but inactive. Enabling customer content requires configured healthy storage (409 otherwise). Counts and bytes are JSON integers.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_settings_storage_testResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_settings_storage_testRequest"
+              }
+            },
+            "*/*": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_settings_storage_testRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": "settings:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/workspaces/{ws}/alerts/rules": {
+      "access": "WorkspaceAdmin",
+      "operation": {
+        "description": "Platform rules: Admin writes, Auditor reads. Shared-workspace rules: actual workspace administrator writes; platform readers may read shared workspaces. Personal owner sees immutable built-in budget rules only; foreign personal workspaces are hidden with 404. Rule kind is immutable (409); inappropriate kind-specific fields return 400. Monetary fields are integer micro-USD strings; no installation budget layer exists.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_workspaces_by_ws_alerts_rulesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Framework extraction refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Framework extraction refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_workspaces_by_ws_alerts_rulesRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "PUT /api/v1/platform/alerts/rules/{id}": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Platform rules: Admin writes, Auditor reads. Shared-workspace rules: actual workspace administrator writes; platform readers may read shared workspaces. Personal owner sees immutable built-in budget rules only; foreign personal workspaces are hidden with 404. Rule kind is immutable (409); inappropriate kind-specific fields return 400. Monetary fields are integer micro-USD strings; no installation budget layer exists.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/put_api_v1_platform_alerts_rules_by_idResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Framework extraction refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Framework extraction refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/put_api_v1_platform_alerts_rules_by_idRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": "governance:write",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/installation/policy": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Intentional 410 tombstone: installation-wide inference limits were removed. The handler ignores request bytes; no policy body is accepted or applied.",
+        "responses": {
+          "410": {
+            "description": "Intentional removed-policy tombstone, reason installation_limits_removed",
+            "x-omg-positive": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/put_api_v1_platform_installation_policyResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "governance:write",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/settings/email": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/put_api_v1_platform_settings_emailResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Framework extraction refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Framework extraction refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/put_api_v1_platform_settings_emailRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": "settings:write",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/settings/general": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/put_api_v1_platform_settings_generalResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Framework extraction refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Framework extraction refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/put_api_v1_platform_settings_generalRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": "settings:write",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/settings/general/logo": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Raw PNG, JPEG or WebP bytes with matching Content-Type, NOT multipart. Maximum 512 KiB, each side 16–4096 pixels. SVG, animation, markup, malformed containers and trailing bytes are refused. Store-off uploads return 409; DELETE still works when storage is off.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/put_api_v1_platform_settings_general_logoResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "image/png": {
+              "schema": {
+                "type": "string",
+                "format": "binary",
+                "minLength": 1,
+                "maxLength": 524288,
+                "x-omg-validate-image": true
+              }
+            },
+            "image/jpeg": {
+              "schema": {
+                "type": "string",
+                "format": "binary",
+                "minLength": 1,
+                "maxLength": 524288,
+                "x-omg-validate-image": true
+              }
+            },
+            "image/webp": {
+              "schema": {
+                "type": "string",
+                "format": "binary",
+                "minLength": 1,
+                "maxLength": 524288,
+                "x-omg-validate-image": true
+              }
+            }
+          }
+        }
+      },
+      "scope": "settings:write",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/settings/privacy": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Environment values lock settings. PUT may resend the stored values unchanged; attempts to change a locked stored setting return 409. Prompt/response bodies are never stored.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/put_api_v1_platform_settings_privacyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Framework extraction refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Framework extraction refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/put_api_v1_platform_settings_privacyRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": "settings:write",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/settings/storage": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": " Server-controlled backend may be off; groups remain visible but inactive. Enabling customer content requires configured healthy storage (409 otherwise). Counts and bytes are JSON integers.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/put_api_v1_platform_settings_storageResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Framework extraction refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Framework extraction refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/put_api_v1_platform_settings_storageRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": "settings:write",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/workspaces/{ws}/alerts/rules/{id}": {
+      "access": "WorkspaceAdmin",
+      "operation": {
+        "description": "Platform rules: Admin writes, Auditor reads. Shared-workspace rules: actual workspace administrator writes; platform readers may read shared workspaces. Personal owner sees immutable built-in budget rules only; foreign personal workspaces are hidden with 404. Rule kind is immutable (409); inappropriate kind-specific fields return 400. Monetary fields are integer micro-USD strings; no installation budget layer exists.",
+        "responses": {
+          "200": {
+            "description": "Actual handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/put_api_v1_workspaces_by_ws_alerts_rules_by_idResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Handler refusal; code equals HTTP status string",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Framework extraction refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Framework extraction refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/put_api_v1_workspaces_by_ws_alerts_rules_by_idRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    }
+  }
+}

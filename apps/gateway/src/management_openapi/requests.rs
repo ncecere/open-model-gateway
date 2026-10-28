@@ -38,6 +38,28 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
         !schema.is_null(),
         "request schema must be bound to an operation"
     );
+    boundary_vectors::<T>(method, template, schema, valid);
+}
+
+/// Bind recursively reachable nested DTOs as well, so a new optional nested
+/// field cannot escape the parent's positive/negative boundary vectors.
+pub(crate) fn component_vectors<T: DeserializeOwned>(
+    method: &str,
+    template: &str,
+    component: &str,
+    valid: Value,
+) {
+    let schema = json!({"$ref":format!("#/components/schemas/{component}")});
+    boundary_vectors::<T>(method, template, &schema, valid);
+}
+
+fn boundary_vectors<T: DeserializeOwned>(
+    method: &str,
+    template: &str,
+    schema: &Value,
+    valid: Value,
+) {
+    let document = super::responses::artifact();
     let fields = Fields::default();
     let _ = T::deserialize(&fields);
     let actual: BTreeSet<_> = fields.0.borrow().iter().copied().collect();
@@ -45,9 +67,12 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
         !actual.is_empty(),
         "unsupported DTO deserializer: inventory explicitly"
     );
-    let component = document
-        .pointer(&schema["$ref"].as_str().unwrap()[1..])
-        .unwrap();
+    let mut component = schema;
+    let mut seen = BTreeSet::new();
+    while let Some(reference) = component["$ref"].as_str() {
+        assert!(seen.insert(reference), "cyclic request component alias");
+        component = document.pointer(&reference[1..]).unwrap();
+    }
     let object = component
         .get("properties")
         .unwrap_or(&component["oneOf"][0]["properties"]);
@@ -71,6 +96,52 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
         assert_eq!(contract, actual, "{method} {template}: {label}: {value}");
     };
     compare("positive", valid.clone());
+    // Recursively probe nested DTOs as well as their parent field's type.
+    // Nested schemas must bind unknown/missing/null boundaries, not merely
+    // reject replacement of the entire nested object with a scalar.
+    fn nested_objects(value: &Value, path: &str, found: &mut Vec<String>) {
+        if let Some(object) = value.as_object() {
+            if !path.is_empty() {
+                found.push(path.to_owned());
+            }
+            for (key, child) in object {
+                nested_objects(child, &format!("{path}/{key}"), found);
+            }
+        } else if let Some(array) = value.as_array() {
+            for (index, child) in array.iter().enumerate() {
+                nested_objects(child, &format!("{path}/{index}"), found);
+            }
+        }
+    }
+    let mut nested = Vec::new();
+    nested_objects(&valid, "", &mut nested);
+    for path in nested {
+        let mut unknown = valid.clone();
+        unknown.pointer_mut(&path).unwrap()["unexpected_configuration"] = json!(true);
+        compare("nested object unknown field", unknown);
+        for field in valid.pointer(&path).unwrap().as_object().unwrap().keys() {
+            let mut missing = valid.clone();
+            missing
+                .pointer_mut(&path)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            compare("nested missing field", missing);
+            for wrong in [
+                Value::Null,
+                json!("wrong"),
+                json!({}),
+                json!([]),
+                json!(true),
+                json!(1),
+            ] {
+                let mut probe = valid.clone();
+                probe.pointer_mut(&path).unwrap()[field] = wrong;
+                compare("nested wrong-type/null", probe);
+            }
+        }
+    }
     let positional = fields
         .0
         .borrow()
@@ -107,7 +178,11 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
         // array-item boundary so a future nested shape cannot be silently loose.
         let mut nested = valid.clone();
         if let Some(items) = nested[field].as_array_mut() {
-            items[0] = json!({"unexpected_configuration":true});
+            if items.is_empty() {
+                items.push(json!({"unexpected_configuration":true}));
+            } else {
+                items[0] = json!({"unexpected_configuration":true});
+            }
         } else {
             nested[field] = json!({"unexpected_configuration":true});
         }
@@ -121,6 +196,21 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
         json!([]),
     ] {
         compare("wrong root type / JSON null is not omission", value);
+    }
+    if valid.get("previous_secret_until").is_some() {
+        for value in [
+            "2026-10-28T00:00:00Z",
+            "2026-10-28 00:00:00Z",
+            "2026-10-28t00:00:00z",
+            "2026-10-28T00:00:00+0000",
+            "2026-02-30T00:00:00Z",
+            "2026-10-28T00:00:60Z",
+            "not-a-time",
+        ] {
+            let mut probe = valid.clone();
+            probe["previous_secret_until"] = json!(value);
+            compare("chrono serde timestamp boundary", probe);
+        }
     }
     // UUID serde deliberately accepts all these spellings. JSON Schema format
     // assertions must match that parser rather than only canonical output.

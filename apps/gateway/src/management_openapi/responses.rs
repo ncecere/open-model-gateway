@@ -15,8 +15,17 @@ pub(crate) const IDENTITY_SELF_SERVICE_AREAS: &[&str] = &[
     "me",
     "access-request-targets",
 ];
-pub(crate) const AREA_GROUPS: &[(&str, &[&str])] =
-    &[("IDENTITY_SELF_SERVICE_AREAS", IDENTITY_SELF_SERVICE_AREAS)];
+pub(crate) const SLICE5_AREAS: &[&str] = &[
+    "platform/alerts",
+    "platform/installation",
+    "platform/server-policy",
+    "platform/settings",
+    "workspaces/{ws}/alerts",
+];
+pub(crate) const AREA_GROUPS: &[(&str, &[&str])] = &[
+    ("IDENTITY_SELF_SERVICE_AREAS", IDENTITY_SELF_SERVICE_AREAS),
+    ("SLICE5_AREAS", SLICE5_AREAS),
+];
 
 /// Whether an area's schemas are complete and gated by an executed fixture group.
 pub(crate) fn completed(area: &str) -> bool {
@@ -693,7 +702,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(count, 22);
+        assert_eq!(count, 59);
     }
     #[test]
     fn management_openapi_response_rejects_incomplete_completed_slot() {

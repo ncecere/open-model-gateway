@@ -164,6 +164,28 @@ struct StorageInput {
     export: RetentionInput,
 }
 
+#[test]
+fn management_openapi_storage_request_vectors() {
+    use crate::management::openapi::requests::component_vectors;
+    component_vectors::<GroupInput>(
+        "PUT",
+        "/api/v1/platform/settings/storage",
+        "SettingsStorageGroupInput",
+        json!({"enabled":false,"retention_days":30}),
+    );
+    component_vectors::<RetentionInput>(
+        "PUT",
+        "/api/v1/platform/settings/storage",
+        "SettingsStorageRetentionInput",
+        json!({"retention_days":7}),
+    );
+    crate::management::openapi::requests::vectors::<StorageInput>(
+        "PUT",
+        "/api/v1/platform/settings/storage",
+        json!({"batch":{"enabled":false,"retention_days":30}, "video":{"enabled":false,"retention_days":30}, "user_files":{"enabled":false,"retention_days":30}, "export":{"retention_days":7}}),
+    );
+}
+
 async fn update_storage(
     State(s): State<Store>,
     Extension(u): Extension<ManagementPrincipal>,

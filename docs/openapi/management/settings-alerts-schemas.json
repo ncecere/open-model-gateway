@@ -1,0 +1,2921 @@
+{
+  "schemas": {
+    "SettingsEmptyConfiguration": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "SettingsGeneralInput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "display_name": {
+              "type": "string"
+            },
+            "support_url": {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            "logo_url": {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            "human_key_max_lifetime_days": {
+              "type": "integer",
+              "minimum": -2147483648,
+              "maximum": 2147483647
+            }
+          },
+          "required": [
+            "display_name",
+            "human_key_max_lifetime_days"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            {
+              "type": "integer",
+              "minimum": -2147483648,
+              "maximum": 2147483647
+            }
+          ],
+          "minItems": 4,
+          "maxItems": 4,
+          "items": false
+        }
+      ],
+      "description": "Closed serde struct object or positional array [display_name, support_url, logo_url, human_key_max_lifetime_days]. Deserialization constraints only; handler validation additionally applies."
+    },
+    "SettingsPrivacyInput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "openrouter_data_collection": {
+              "type": "string"
+            },
+            "request_log_retention_days": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "openrouter_data_collection"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string"
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2,
+          "items": false
+        }
+      ],
+      "description": "Closed serde struct object or positional array [openrouter_data_collection, request_log_retention_days]. Deserialization constraints only; handler validation additionally applies."
+    },
+    "SettingsEmailInput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "host": {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            "port": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "tls": {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            "username": {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            "password_ref": {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            "from_address": {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            "from_name": {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            }
+          ],
+          "minItems": 7,
+          "maxItems": 7,
+          "items": false
+        }
+      ],
+      "description": "Closed serde struct object or positional array [host, port, tls, username, password_ref, from_address, from_name]. Deserialization constraints only; handler validation additionally applies."
+    },
+    "SettingsStorageGroupInput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "retention_days": {
+              "type": "integer",
+              "minimum": -2147483648,
+              "maximum": 2147483647
+            }
+          },
+          "required": [
+            "enabled",
+            "retention_days"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer",
+              "minimum": -2147483648,
+              "maximum": 2147483647
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2,
+          "items": false
+        }
+      ],
+      "description": "Closed serde struct object or positional array [enabled, retention_days]. Deserialization constraints only; handler validation additionally applies."
+    },
+    "SettingsStorageRetentionInput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "retention_days": {
+              "type": "integer",
+              "minimum": -2147483648,
+              "maximum": 2147483647
+            }
+          },
+          "required": [
+            "retention_days"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "integer",
+              "minimum": -2147483648,
+              "maximum": 2147483647
+            }
+          ],
+          "minItems": 1,
+          "maxItems": 1,
+          "items": false
+        }
+      ],
+      "description": "Closed serde struct object or positional array [retention_days]. Deserialization constraints only; handler validation additionally applies."
+    },
+    "SettingsStorageInput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "batch": {
+              "$ref": "#/components/schemas/SettingsStorageGroupInput"
+            },
+            "video": {
+              "$ref": "#/components/schemas/SettingsStorageGroupInput"
+            },
+            "user_files": {
+              "$ref": "#/components/schemas/SettingsStorageGroupInput"
+            },
+            "export": {
+              "$ref": "#/components/schemas/SettingsStorageRetentionInput"
+            }
+          },
+          "required": [
+            "batch",
+            "video",
+            "user_files",
+            "export"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "$ref": "#/components/schemas/SettingsStorageGroupInput"
+            },
+            {
+              "$ref": "#/components/schemas/SettingsStorageGroupInput"
+            },
+            {
+              "$ref": "#/components/schemas/SettingsStorageGroupInput"
+            },
+            {
+              "$ref": "#/components/schemas/SettingsStorageRetentionInput"
+            }
+          ],
+          "minItems": 4,
+          "maxItems": 4,
+          "items": false
+        }
+      ],
+      "description": "Closed serde struct object or positional array [batch, video, user_files, export]. Deserialization constraints only; handler validation additionally applies."
+    },
+    "SettingsAlertRuleInput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "budget_layers": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "thresholds": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": -2147483648,
+                    "maximum": 2147483647
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "spike_factor_percent": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "min_spend_microusd": {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            "window_minutes": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "error_rate_percent": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "min_requests": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "consecutive_failures": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "provider_connection_id": {
+              "$ref": "#/components/schemas/IdentityNullableUuid"
+            },
+            "spend_period": {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            "spend_amount_microusd": {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            "ceiling_requests_per_second": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "ceiling_lock_wait_ms": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "notify_workspace_admins": {
+              "type": "boolean",
+              "default": false
+            },
+            "notify_platform_admins": {
+              "type": "boolean",
+              "default": false
+            },
+            "notify_emails": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          },
+          "required": [
+            "name",
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "boolean",
+              "default": true
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": -2147483648,
+                    "maximum": 2147483647
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableUuid"
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "boolean",
+              "default": false
+            },
+            {
+              "type": "boolean",
+              "default": false
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          ],
+          "minItems": 16,
+          "maxItems": 19,
+          "items": false
+        }
+      ],
+      "description": "Closed serde struct object or positional array [name, kind, enabled, budget_layers, thresholds, spike_factor_percent, min_spend_microusd, window_minutes, error_rate_percent, min_requests, consecutive_failures, provider_connection_id, spend_period, spend_amount_microusd, ceiling_requests_per_second, ceiling_lock_wait_ms, notify_workspace_admins, notify_platform_admins, notify_emails]. Deserialization constraints only; handler validation additionally applies."
+    },
+    "SettingsWebhookCreateInput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            },
+            "current_secret_ref": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label",
+            "url",
+            "current_secret_ref"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "minItems": 3,
+          "maxItems": 3,
+          "items": false
+        }
+      ],
+      "description": "Closed serde struct object or positional array [label, url, current_secret_ref]. Deserialization constraints only; handler validation additionally applies."
+    },
+    "SettingsChronoDateTime": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "omg-chrono-date-time",
+      "description": "The real chrono DateTime<Utc> serde parser, including relaxed RFC 3339 spellings; response timestamps use canonical date-time instead."
+    },
+    "SettingsWebhookPatchInput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "current_secret_ref": {
+              "type": "string"
+            },
+            "previous_secret_ref": {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            "previous_secret_until": {
+              "$ref": "#/components/schemas/SettingsChronoDateTime"
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            {
+              "$ref": "#/components/schemas/SettingsChronoDateTime"
+            }
+          ],
+          "minItems": 0,
+          "maxItems": 5,
+          "items": false
+        }
+      ],
+      "description": "Manually decoded JSON via serde_json::from_slice, independent of Content-Type. Positional array order is [label, enabled, current_secret_ref, previous_secret_ref, previous_secret_until], with trailing elements omittable. No URL update field. Omitted fields retain saved values. Explicit null is rejected for label/enabled/current_secret_ref, but clears previous_secret_ref/previous_secret_until; both rotation fields must be jointly present/absent in the resulting state. References must be allowlisted env:NAME references, never secret values."
+    },
+    "SettingsGeneral": {
+      "type": "object",
+      "properties": {
+        "display_name": {
+          "type": "string"
+        },
+        "support_url": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "logo_url": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "human_key_max_lifetime_days": {
+          "type": "integer"
+        },
+        "timezone": {
+          "const": "UTC"
+        },
+        "updated_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "updated_by": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "logo": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "url": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "$ref": "#/components/schemas/IdentityTime"
+                },
+                "width": {
+                  "type": "integer"
+                },
+                "height": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "url",
+                "updated_at",
+                "width",
+                "height"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "logo_upload": {
+          "type": "object",
+          "properties": {
+            "available": {
+              "type": "boolean"
+            },
+            "max_bytes": {
+              "const": 524288
+            },
+            "content_types": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "image/png",
+                  "image/jpeg",
+                  "image/webp"
+                ]
+              }
+            },
+            "min_side": {
+              "const": 16
+            },
+            "max_side": {
+              "const": 4096
+            },
+            "recommended_side": {
+              "const": 64
+            }
+          },
+          "required": [
+            "available",
+            "max_bytes",
+            "content_types",
+            "min_side",
+            "max_side",
+            "recommended_side"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "display_name",
+        "support_url",
+        "logo_url",
+        "human_key_max_lifetime_days",
+        "timezone",
+        "updated_at",
+        "updated_by",
+        "logo",
+        "logo_upload"
+      ],
+      "additionalProperties": false
+    },
+    "SettingsPrivacy": {
+      "type": "object",
+      "properties": {
+        "openrouter_data_collection": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "enum": [
+                "allow",
+                "deny"
+              ]
+            },
+            "stored": {
+              "enum": [
+                "allow",
+                "deny"
+              ]
+            },
+            "locked": {
+              "type": "boolean"
+            },
+            "source": {
+              "enum": [
+                "environment",
+                "installation"
+              ]
+            },
+            "variable": {
+              "const": "GATEWAY_OPENROUTER_DATA_COLLECTION"
+            }
+          },
+          "required": [
+            "value",
+            "stored",
+            "locked",
+            "source",
+            "variable"
+          ],
+          "additionalProperties": false
+        },
+        "request_log_retention_days": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "stored": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "locked": {
+              "type": "boolean"
+            },
+            "source": {
+              "enum": [
+                "environment",
+                "installation"
+              ]
+            },
+            "variable": {
+              "const": "GATEWAY_EXECUTION_DETAIL_RETENTION_DAYS"
+            },
+            "minimum": {
+              "const": 30
+            },
+            "maximum": {
+              "const": 3650
+            }
+          },
+          "required": [
+            "value",
+            "stored",
+            "locked",
+            "source",
+            "variable",
+            "minimum",
+            "maximum"
+          ],
+          "additionalProperties": false
+        },
+        "prompt_response_storage": {
+          "const": "never_stored"
+        },
+        "updated_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        }
+      },
+      "required": [
+        "openrouter_data_collection",
+        "request_log_retention_days",
+        "prompt_response_storage",
+        "updated_at"
+      ],
+      "additionalProperties": false
+    },
+    "SettingsEmail": {
+      "type": "object",
+      "properties": {
+        "configured": {
+          "type": "boolean"
+        },
+        "status": {
+          "enum": [
+            "not_configured",
+            "host_not_allowed",
+            "credential_unavailable",
+            "ready"
+          ]
+        },
+        "host": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "port": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tls": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "username": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "password_ref": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^env:[A-Z_][A-Z_0-9]{0,127}$",
+              "description": "Allowlisted environment reference, never the SMTP password value."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "password_ref_allowed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host_allowed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "from_address": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "from_name": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "public_url_configured": {
+          "type": "boolean"
+        },
+        "last_test": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "at": {
+                  "$ref": "#/components/schemas/IdentityTime"
+                },
+                "ok": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "error": {
+                  "$ref": "#/components/schemas/IdentityNullableString"
+                }
+              },
+              "required": [
+                "at",
+                "ok",
+                "error"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "updated_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        }
+      },
+      "required": [
+        "configured",
+        "status",
+        "host",
+        "port",
+        "tls",
+        "username",
+        "password_ref",
+        "password_ref_allowed",
+        "host_allowed",
+        "from_address",
+        "from_name",
+        "public_url_configured",
+        "last_test",
+        "updated_at"
+      ],
+      "additionalProperties": false
+    },
+    "SettingsEmailTest": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "error": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "recipient": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ok",
+        "error",
+        "recipient"
+      ],
+      "additionalProperties": false
+    },
+    "SettingsTestResult": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "error": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        }
+      },
+      "required": [
+        "ok",
+        "error"
+      ],
+      "additionalProperties": false
+    },
+    "SettingsStorage": {
+      "type": "object",
+      "properties": {
+        "backend": {
+          "enum": [
+            "off",
+            "local",
+            "s3",
+            "memory"
+          ]
+        },
+        "location": {
+          "anyOf": [
+            {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "local",
+                        "memory"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "s3"
+                    },
+                    "bucket": {
+                      "type": "string"
+                    },
+                    "region": {
+                      "type": "string"
+                    },
+                    "endpoint_host": {
+                      "$ref": "#/components/schemas/IdentityNullableString"
+                    },
+                    "endpoint_tls": {
+                      "type": "boolean"
+                    },
+                    "path_style": {
+                      "type": "boolean"
+                    },
+                    "prefix_set": {
+                      "type": "boolean"
+                    },
+                    "auth": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "bucket",
+                    "region",
+                    "endpoint_host",
+                    "endpoint_tls",
+                    "path_style",
+                    "prefix_set",
+                    "auth"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "encryption": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "key_id": {
+                  "type": "string"
+                },
+                "decrypt_only_keys": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "key_id",
+                "decrypt_only_keys"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "health": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "checked_at": {
+                  "$ref": "#/components/schemas/IdentityTime"
+                },
+                "ok": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "error": {
+                  "$ref": "#/components/schemas/IdentityNullableString"
+                },
+                "current": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "checked_at",
+                "ok",
+                "error",
+                "current"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "group": {
+                "enum": [
+                  "batch",
+                  "video",
+                  "user_files",
+                  "export",
+                  "branding"
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "purposes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "holds_customer_content": {
+                "type": "boolean"
+              },
+              "toggle": {
+                "type": "boolean"
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "retention_days": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "retention_editable": {
+                "type": "boolean"
+              },
+              "default_retention_days": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "minimum": {
+                "const": 1
+              },
+              "maximum": {
+                "const": 365
+              },
+              "objects": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "group",
+              "label",
+              "purposes",
+              "holds_customer_content",
+              "toggle",
+              "enabled",
+              "active",
+              "retention_days",
+              "retention_editable",
+              "default_retention_days",
+              "minimum",
+              "maximum",
+              "objects",
+              "bytes"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "updated_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        }
+      },
+      "required": [
+        "backend",
+        "location",
+        "encryption",
+        "health",
+        "groups",
+        "updated_at"
+      ],
+      "additionalProperties": false
+    },
+    "SettingsStorageTest": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "error": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "backend": {
+          "enum": [
+            "local",
+            "s3",
+            "memory"
+          ]
+        },
+        "round_trip_ms": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "ok",
+        "error",
+        "backend",
+        "round_trip_ms"
+      ],
+      "additionalProperties": false
+    },
+    "SettingsSignIn": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "const": false
+            },
+            "enabled_group_mappings": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "scim": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "enabled"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "const": true
+                    },
+                    "base_url": {
+                      "type": "string"
+                    },
+                    "users": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "active_users": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "groups": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "memberships": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "last_sync_at": {
+                      "$ref": "#/components/schemas/IdentityNullableTime"
+                    }
+                  },
+                  "required": [
+                    "enabled",
+                    "base_url",
+                    "users",
+                    "active_users",
+                    "groups",
+                    "memberships",
+                    "last_sync_at"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "enabled",
+            "enabled_group_mappings",
+            "scim"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "const": true
+            },
+            "issuer": {
+              "type": "string"
+            },
+            "client_id": {
+              "type": "string"
+            },
+            "client_type": {
+              "enum": [
+                "public",
+                "confidential"
+              ]
+            },
+            "groups_claim": {
+              "type": "string"
+            },
+            "public_url": {
+              "type": "string"
+            },
+            "callback_url": {
+              "type": "string"
+            },
+            "secure_cookies": {
+              "type": "boolean"
+            },
+            "jwks": {
+              "type": "object",
+              "properties": {
+                "keys": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "refreshed_at": {
+                  "$ref": "#/components/schemas/IdentityNullableTime"
+                },
+                "fresh_until": {
+                  "$ref": "#/components/schemas/IdentityNullableTime"
+                },
+                "last_failure_at": {
+                  "$ref": "#/components/schemas/IdentityNullableTime"
+                },
+                "state": {
+                  "enum": [
+                    "fresh",
+                    "stale",
+                    "unavailable"
+                  ]
+                }
+              },
+              "required": [
+                "keys",
+                "refreshed_at",
+                "fresh_until",
+                "last_failure_at",
+                "state"
+              ],
+              "additionalProperties": false
+            },
+            "enabled_group_mappings": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "scim": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "enabled"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "const": true
+                    },
+                    "base_url": {
+                      "type": "string"
+                    },
+                    "users": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "active_users": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "groups": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "memberships": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "last_sync_at": {
+                      "$ref": "#/components/schemas/IdentityNullableTime"
+                    }
+                  },
+                  "required": [
+                    "enabled",
+                    "base_url",
+                    "users",
+                    "active_users",
+                    "groups",
+                    "memberships",
+                    "last_sync_at"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "enabled",
+            "issuer",
+            "client_id",
+            "client_type",
+            "groups_claim",
+            "public_url",
+            "callback_url",
+            "secure_cookies",
+            "jwks",
+            "enabled_group_mappings",
+            "scim"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "SettingsAuditExport": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "enabled_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "destination_host": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "queued": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "oldest_queued_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "last_success_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "last_error": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "last_error_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "retrying": {
+          "type": "boolean"
+        },
+        "next_attempt_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "delivered_total": {
+          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+        },
+        "next_seq": {
+          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+        },
+        "last_heartbeat_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "schema": {
+          "const": "omg.audit.v1"
+        },
+        "configured": {
+          "type": "boolean"
+        },
+        "transport": {
+          "enum": [
+            "webhook",
+            "syslog",
+            "otlp",
+            null
+          ]
+        }
+      },
+      "required": [
+        "enabled",
+        "enabled_at",
+        "destination_host",
+        "queued",
+        "oldest_queued_at",
+        "last_success_at",
+        "last_error",
+        "last_error_at",
+        "retrying",
+        "next_attempt_at",
+        "delivered_total",
+        "next_seq",
+        "last_heartbeat_at",
+        "schema",
+        "configured",
+        "transport"
+      ],
+      "additionalProperties": false
+    },
+    "SettingsServerPolicy": {
+      "type": "object",
+      "properties": {
+        "openrouter": {
+          "type": "object",
+          "properties": {
+            "data_collection": {
+              "enum": [
+                "allow",
+                "deny"
+              ]
+            },
+            "free_models_available": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "data_collection",
+            "free_models_available"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "openrouter"
+      ],
+      "additionalProperties": false
+    },
+    "SettingsAlertRule": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "scope": {
+          "enum": [
+            "installation",
+            "workspace"
+          ]
+        },
+        "workspace_id": {
+          "$ref": "#/components/schemas/IdentityNullableUuid"
+        },
+        "kind": {
+          "enum": [
+            "budget_threshold",
+            "spend_threshold",
+            "spend_spike",
+            "error_rate",
+            "provider_failing",
+            "batch_failed",
+            "batch_stalled",
+            "admission_ceiling"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "budget_layers": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thresholds": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spike_factor_percent": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "min_spend_microusd": {
+          "$ref": "#/components/schemas/IdentityNullableDecimal"
+        },
+        "window_minutes": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error_rate_percent": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "min_requests": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "consecutive_failures": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provider_connection_id": {
+          "$ref": "#/components/schemas/IdentityNullableUuid"
+        },
+        "spend_period": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/IdentityPeriod"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spend_amount_microusd": {
+          "$ref": "#/components/schemas/IdentityNullableDecimal"
+        },
+        "ceiling_requests_per_second": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ceiling_lock_wait_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provider_connection": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "$ref": "#/components/schemas/IdentityUuid"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "provider": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "provider"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "notify_workspace_admins": {
+          "type": "boolean"
+        },
+        "notify_platform_admins": {
+          "type": "boolean"
+        },
+        "notify_emails": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "firing": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "last_fired_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "updated_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        }
+      },
+      "required": [
+        "id",
+        "scope",
+        "workspace_id",
+        "kind",
+        "name",
+        "enabled",
+        "budget_layers",
+        "thresholds",
+        "spike_factor_percent",
+        "min_spend_microusd",
+        "window_minutes",
+        "error_rate_percent",
+        "min_requests",
+        "consecutive_failures",
+        "provider_connection_id",
+        "spend_period",
+        "spend_amount_microusd",
+        "ceiling_requests_per_second",
+        "ceiling_lock_wait_ms",
+        "provider_connection",
+        "notify_workspace_admins",
+        "notify_platform_admins",
+        "notify_emails",
+        "firing",
+        "last_fired_at",
+        "created_at",
+        "updated_at"
+      ],
+      "additionalProperties": false
+    },
+    "SettingsPlatformRules": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/SettingsAlertRule"
+          }
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "SettingsWorkspaceRules": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "data": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/SettingsAlertRule"
+              }
+            },
+            "builtin": {
+              "type": "null"
+            },
+            "writable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "data",
+            "builtin",
+            "writable"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "data": {
+              "type": "array",
+              "items": false,
+              "maxItems": 0
+            },
+            "builtin": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "budget_threshold"
+                },
+                "thresholds": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  }
+                },
+                "budget_layers": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "kind",
+                "thresholds",
+                "budget_layers"
+              ],
+              "additionalProperties": false
+            },
+            "writable": {
+              "const": false
+            }
+          },
+          "required": [
+            "data",
+            "builtin",
+            "writable"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "SettingsAlertEvent": {
+      "type": "object",
+      "required": [
+        "id",
+        "rule",
+        "builtin",
+        "kind",
+        "state",
+        "severity",
+        "level",
+        "summary",
+        "details",
+        "workspace",
+        "connection",
+        "fired_at",
+        "resolved_at",
+        "resolution",
+        "email",
+        "cleared_email"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "rule": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "id",
+                "name",
+                "scope",
+                "deleted"
+              ],
+              "properties": {
+                "id": {
+                  "$ref": "#/components/schemas/IdentityUuid"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "scope": {
+                  "enum": [
+                    "installation",
+                    "workspace"
+                  ]
+                },
+                "deleted": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "builtin": {
+          "type": "boolean"
+        },
+        "kind": {
+          "enum": [
+            "budget_threshold",
+            "spend_threshold",
+            "spend_spike",
+            "error_rate",
+            "provider_failing",
+            "batch_failed",
+            "batch_stalled",
+            "admission_ceiling",
+            "key_expiring",
+            "aged_unknown_hold",
+            "scim_last_admin",
+            "partitions_missing",
+            "history_orphans"
+          ]
+        },
+        "state": {
+          "enum": [
+            "firing",
+            "resolved"
+          ]
+        },
+        "severity": {
+          "type": "string"
+        },
+        "level": {
+          "type": "integer"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "details": {
+          "$comment": "EVENT_JSON returns non-ceiling alert_events.details verbatim as stored producer-specific JSON; monetary refinements apply and ceiling details use the closed shared IdentityCeilingDetails schema.",
+          "type": "object",
+          "patternProperties": {
+            "(^|_)microusd$": {
+              "$ref": "#/components/schemas/IdentityNullableDecimal"
+            }
+          },
+          "description": "Stored JSON incident payload, not a serde DTO. Fields vary by producer/kind; readers do not deserialize or close this map. Monetary fields remain integer micro-USD strings. Admission-ceiling identity redaction is constrained by the separate variants below."
+        },
+        "workspace": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/IdentityWorkspaceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "connection": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "id",
+                "name",
+                "provider"
+              ],
+              "properties": {
+                "id": {
+                  "$ref": "#/components/schemas/IdentityUuid"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "provider": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "fired_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "resolved_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "resolution": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "email": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/IdentityDelivery"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cleared_email": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/IdentityDelivery"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "admission_ceiling"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/components/schemas/IdentityCeilingDetails"
+          }
+        }
+      }
+    },
+    "SettingsOrdinaryEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "kind": {
+              "not": {
+                "const": "admission_ceiling"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "SettingsAdminCeilingEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "admission_ceiling"
+            },
+            "workspace": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "name",
+                    "kind"
+                  ],
+                  "properties": {
+                    "id": {
+                      "$ref": "#/components/schemas/IdentityUuid"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "team",
+                        "project"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "details": {
+              "required": [
+                "personal"
+              ],
+              "properties": {
+                "personal": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "details": {
+                "properties": {
+                  "personal": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "personal"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "workspace": {
+                "type": "null"
+              },
+              "details": {
+                "properties": {
+                  "workspace_name": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "details": {
+                "required": [
+                  "workspace_name"
+                ],
+                "properties": {
+                  "workspace_name": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "description": "Even Platform Admins never receive a personal workspace identity: personal=true forces workspace=null and a null/absent workspace_name. Non-personal references are Team/Project only."
+    },
+    "SettingsRedactedCeilingEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "admission_ceiling"
+            },
+            "workspace": {
+              "type": "null"
+            },
+            "details": {
+              "required": [
+                "personal"
+              ],
+              "properties": {
+                "personal": {
+                  "const": false
+                }
+              },
+              "not": {
+                "required": [
+                  "workspace_name"
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "description": "Non-Admin projection of a non-personal event: no workspace identity/name, including nested details. A personal event carries no identity for any audience and matches only the personal branch of IdentityAdminCeilingNotification, keeping the oneOf exclusive."
+    },
+    "SettingsEvents": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SettingsOrdinaryEvent"
+              },
+              {
+                "$ref": "#/components/schemas/SettingsAdminCeilingEvent"
+              },
+              {
+                "$ref": "#/components/schemas/SettingsRedactedCeilingEvent"
+              }
+            ]
+          }
+        },
+        "has_more": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "data",
+        "has_more"
+      ],
+      "additionalProperties": false
+    },
+    "SettingsWebhookRedacted": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "label": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "updated_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "signing_configured": {
+          "const": true
+        },
+        "overlap_active": {
+          "type": "boolean"
+        },
+        "previous_secret_until": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "waiting": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "exhausted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "last_success_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "last_error": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "enabled",
+        "created_at",
+        "updated_at",
+        "signing_configured",
+        "overlap_active",
+        "previous_secret_until",
+        "waiting",
+        "exhausted",
+        "last_success_at",
+        "last_error"
+      ],
+      "additionalProperties": false
+    },
+    "SettingsWebhookPrivileged": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "label": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "updated_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "signing_configured": {
+          "const": true
+        },
+        "overlap_active": {
+          "type": "boolean"
+        },
+        "previous_secret_until": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "waiting": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "exhausted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "last_success_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "last_error": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "url": {
+          "type": "string"
+        },
+        "current_secret_ref": {
+          "type": "string",
+          "pattern": "^env:[A-Z_][A-Z_0-9]{0,127}$"
+        },
+        "previous_secret_ref": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^env:[A-Z_][A-Z_0-9]{0,127}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "enabled",
+        "created_at",
+        "updated_at",
+        "signing_configured",
+        "overlap_active",
+        "previous_secret_until",
+        "waiting",
+        "exhausted",
+        "last_success_at",
+        "last_error",
+        "url",
+        "current_secret_ref",
+        "previous_secret_ref"
+      ],
+      "additionalProperties": false
+    },
+    "SettingsWebhook": {
+      "oneOf": [
+        {
+          "$ref": "#/components/schemas/SettingsWebhookRedacted"
+        },
+        {
+          "$ref": "#/components/schemas/SettingsWebhookPrivileged"
+        }
+      ],
+      "description": "Privileged projection only for a live Platform Admin, and for tokens also settings:write. Auditor and platform:read-only tokens omit URL and both reference fields entirely. No response contains signing secret values."
+    },
+    "SettingsWebhooks": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/SettingsWebhook"
+          }
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "SettingsWebhookTest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "state": {
+          "const": "waiting"
+        }
+      },
+      "required": [
+        "id",
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "SettingsWebhookDeliveries": {
+      "type": "object",
+      "properties": {
+        "destination": {
+          "$ref": "#/components/schemas/SettingsWebhook"
+        },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "waiting": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "leased": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "sent": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "failed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "exhausted": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "ineligible": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "waiting",
+            "leased",
+            "sent",
+            "failed",
+            "exhausted",
+            "ineligible"
+          ],
+          "additionalProperties": false
+        },
+        "data": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/IdentityUuid"
+              },
+              "state": {
+                "enum": [
+                  "waiting",
+                  "leased",
+                  "sent",
+                  "failed",
+                  "exhausted",
+                  "ineligible"
+                ]
+              },
+              "test": {
+                "type": "boolean"
+              },
+              "attempt_count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "created_at": {
+                "$ref": "#/components/schemas/IdentityTime"
+              },
+              "completed_at": {
+                "$ref": "#/components/schemas/IdentityNullableTime"
+              },
+              "next_attempt_at": {
+                "$ref": "#/components/schemas/IdentityNullableTime"
+              },
+              "last_error": {
+                "$ref": "#/components/schemas/IdentityNullableString"
+              }
+            },
+            "required": [
+              "id",
+              "state",
+              "test",
+              "attempt_count",
+              "created_at",
+              "completed_at",
+              "next_attempt_at",
+              "last_error"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "destination",
+        "counts",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "SettingsDeleted": {
+      "type": "object",
+      "properties": {
+        "deleted": {
+          "const": true
+        }
+      },
+      "required": [
+        "deleted"
+      ],
+      "additionalProperties": false
+    },
+    "SettingsOk": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        }
+      },
+      "required": [
+        "ok"
+      ],
+      "additionalProperties": false
+    },
+    "SettingsRemovedPolicy": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "const": "410"
+            },
+            "message": {
+              "const": "Installation-wide limits were removed; set limits on workspace-type defaults, workspaces or API keys, and use an installation spend alert to watch total spend"
+            },
+            "reason": {
+              "const": "installation_limits_removed"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "reason"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "error"
+      ],
+      "additionalProperties": false
+    },
+    "delete_api_v1_platform_alerts_rules_by_idRequest": false,
+    "delete_api_v1_platform_alerts_rules_by_idResponse": {
+      "$ref": "#/components/schemas/SettingsOk"
+    },
+    "delete_api_v1_platform_alerts_webhooks_by_idRequest": {
+      "$ref": "#/components/schemas/SettingsEmptyConfiguration"
+    },
+    "delete_api_v1_platform_alerts_webhooks_by_idResponse": {
+      "$ref": "#/components/schemas/SettingsDeleted"
+    },
+    "delete_api_v1_platform_settings_general_logoRequest": false,
+    "delete_api_v1_platform_settings_general_logoResponse": {
+      "$ref": "#/components/schemas/SettingsGeneral"
+    },
+    "delete_api_v1_workspaces_by_ws_alerts_rules_by_idRequest": false,
+    "delete_api_v1_workspaces_by_ws_alerts_rules_by_idResponse": {
+      "$ref": "#/components/schemas/SettingsOk"
+    },
+    "get_api_v1_platform_alerts_eventsRequest": false,
+    "get_api_v1_platform_alerts_eventsResponse": {
+      "$ref": "#/components/schemas/SettingsEvents"
+    },
+    "get_api_v1_platform_alerts_rulesRequest": false,
+    "get_api_v1_platform_alerts_rulesResponse": {
+      "$ref": "#/components/schemas/SettingsPlatformRules"
+    },
+    "get_api_v1_platform_alerts_rules_by_idRequest": false,
+    "get_api_v1_platform_alerts_rules_by_idResponse": {
+      "$ref": "#/components/schemas/SettingsAlertRule"
+    },
+    "get_api_v1_platform_alerts_webhooksRequest": false,
+    "get_api_v1_platform_alerts_webhooksResponse": {
+      "$ref": "#/components/schemas/SettingsWebhooks"
+    },
+    "get_api_v1_platform_alerts_webhooks_by_idRequest": false,
+    "get_api_v1_platform_alerts_webhooks_by_idResponse": {
+      "$ref": "#/components/schemas/SettingsWebhook"
+    },
+    "get_api_v1_platform_alerts_webhooks_by_id_deliveriesRequest": false,
+    "get_api_v1_platform_alerts_webhooks_by_id_deliveriesResponse": {
+      "$ref": "#/components/schemas/SettingsWebhookDeliveries"
+    },
+    "get_api_v1_platform_installation_policyRequest": false,
+    "get_api_v1_platform_installation_policyResponse": {
+      "$ref": "#/components/schemas/SettingsRemovedPolicy"
+    },
+    "get_api_v1_platform_server_policyRequest": false,
+    "get_api_v1_platform_server_policyResponse": {
+      "$ref": "#/components/schemas/SettingsServerPolicy"
+    },
+    "get_api_v1_platform_settings_audit_exportRequest": false,
+    "get_api_v1_platform_settings_audit_exportResponse": {
+      "$ref": "#/components/schemas/SettingsAuditExport"
+    },
+    "get_api_v1_platform_settings_emailRequest": false,
+    "get_api_v1_platform_settings_emailResponse": {
+      "$ref": "#/components/schemas/SettingsEmail"
+    },
+    "get_api_v1_platform_settings_generalRequest": false,
+    "get_api_v1_platform_settings_generalResponse": {
+      "$ref": "#/components/schemas/SettingsGeneral"
+    },
+    "get_api_v1_platform_settings_privacyRequest": false,
+    "get_api_v1_platform_settings_privacyResponse": {
+      "$ref": "#/components/schemas/SettingsPrivacy"
+    },
+    "get_api_v1_platform_settings_sign_inRequest": false,
+    "get_api_v1_platform_settings_sign_inResponse": {
+      "$ref": "#/components/schemas/SettingsSignIn"
+    },
+    "get_api_v1_platform_settings_storageRequest": false,
+    "get_api_v1_platform_settings_storageResponse": {
+      "$ref": "#/components/schemas/SettingsStorage"
+    },
+    "get_api_v1_workspaces_by_ws_alerts_eventsRequest": false,
+    "get_api_v1_workspaces_by_ws_alerts_eventsResponse": {
+      "$ref": "#/components/schemas/SettingsEvents"
+    },
+    "get_api_v1_workspaces_by_ws_alerts_rulesRequest": false,
+    "get_api_v1_workspaces_by_ws_alerts_rulesResponse": {
+      "$ref": "#/components/schemas/SettingsWorkspaceRules"
+    },
+    "get_api_v1_workspaces_by_ws_alerts_rules_by_idRequest": false,
+    "get_api_v1_workspaces_by_ws_alerts_rules_by_idResponse": {
+      "$ref": "#/components/schemas/SettingsAlertRule"
+    },
+    "patch_api_v1_platform_alerts_webhooks_by_idRequest": {
+      "$ref": "#/components/schemas/SettingsWebhookPatchInput"
+    },
+    "patch_api_v1_platform_alerts_webhooks_by_idResponse": {
+      "$ref": "#/components/schemas/SettingsWebhookPrivileged"
+    },
+    "post_api_v1_platform_alerts_rulesRequest": {
+      "$ref": "#/components/schemas/SettingsAlertRuleInput"
+    },
+    "post_api_v1_platform_alerts_rulesResponse": {
+      "$ref": "#/components/schemas/SettingsAlertRule"
+    },
+    "post_api_v1_platform_alerts_webhooksRequest": {
+      "$ref": "#/components/schemas/SettingsWebhookCreateInput"
+    },
+    "post_api_v1_platform_alerts_webhooksResponse": {
+      "$ref": "#/components/schemas/SettingsWebhookPrivileged"
+    },
+    "post_api_v1_platform_alerts_webhooks_by_id_testRequest": {
+      "$ref": "#/components/schemas/SettingsEmptyConfiguration"
+    },
+    "post_api_v1_platform_alerts_webhooks_by_id_testResponse": {
+      "$ref": "#/components/schemas/SettingsWebhookTest"
+    },
+    "post_api_v1_platform_settings_audit_export_testRequest": {
+      "$ref": "#/components/schemas/SettingsEmptyConfiguration"
+    },
+    "post_api_v1_platform_settings_audit_export_testResponse": {
+      "$ref": "#/components/schemas/SettingsTestResult"
+    },
+    "post_api_v1_platform_settings_email_testRequest": {
+      "$ref": "#/components/schemas/SettingsEmptyConfiguration"
+    },
+    "post_api_v1_platform_settings_email_testResponse": {
+      "$ref": "#/components/schemas/SettingsEmailTest"
+    },
+    "post_api_v1_platform_settings_storage_testRequest": {
+      "$ref": "#/components/schemas/SettingsEmptyConfiguration"
+    },
+    "post_api_v1_platform_settings_storage_testResponse": {
+      "$ref": "#/components/schemas/SettingsStorageTest"
+    },
+    "post_api_v1_workspaces_by_ws_alerts_rulesRequest": {
+      "$ref": "#/components/schemas/SettingsAlertRuleInput"
+    },
+    "post_api_v1_workspaces_by_ws_alerts_rulesResponse": {
+      "$ref": "#/components/schemas/SettingsAlertRule"
+    },
+    "put_api_v1_platform_alerts_rules_by_idRequest": {
+      "$ref": "#/components/schemas/SettingsAlertRuleInput"
+    },
+    "put_api_v1_platform_alerts_rules_by_idResponse": {
+      "$ref": "#/components/schemas/SettingsAlertRule"
+    },
+    "put_api_v1_platform_installation_policyRequest": false,
+    "put_api_v1_platform_installation_policyResponse": {
+      "$ref": "#/components/schemas/SettingsRemovedPolicy"
+    },
+    "put_api_v1_platform_settings_emailRequest": {
+      "$ref": "#/components/schemas/SettingsEmailInput"
+    },
+    "put_api_v1_platform_settings_emailResponse": {
+      "$ref": "#/components/schemas/SettingsEmail"
+    },
+    "put_api_v1_platform_settings_generalRequest": {
+      "$ref": "#/components/schemas/SettingsGeneralInput"
+    },
+    "put_api_v1_platform_settings_generalResponse": {
+      "$ref": "#/components/schemas/SettingsGeneral"
+    },
+    "put_api_v1_platform_settings_general_logoRequest": {
+      "type": "string",
+      "format": "binary",
+      "minLength": 1,
+      "maxLength": 524288,
+      "x-omg-validate-image": true
+    },
+    "put_api_v1_platform_settings_general_logoResponse": {
+      "$ref": "#/components/schemas/SettingsGeneral"
+    },
+    "put_api_v1_platform_settings_privacyRequest": {
+      "$ref": "#/components/schemas/SettingsPrivacyInput"
+    },
+    "put_api_v1_platform_settings_privacyResponse": {
+      "$ref": "#/components/schemas/SettingsPrivacy"
+    },
+    "put_api_v1_platform_settings_storageRequest": {
+      "$ref": "#/components/schemas/SettingsStorageInput"
+    },
+    "put_api_v1_platform_settings_storageResponse": {
+      "$ref": "#/components/schemas/SettingsStorage"
+    },
+    "put_api_v1_workspaces_by_ws_alerts_rules_by_idRequest": {
+      "$ref": "#/components/schemas/SettingsAlertRuleInput"
+    },
+    "put_api_v1_workspaces_by_ws_alerts_rules_by_idResponse": {
+      "$ref": "#/components/schemas/SettingsAlertRule"
+    }
+  }
+}
