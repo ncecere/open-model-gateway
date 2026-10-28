@@ -45,14 +45,17 @@ async function seed(browser: Browser): Promise<Seeded> {
     const key = async (page: Page, ws: string) => create(page, `/workspaces/${ws}/keys`, { name: "reconciliation fixture", expires_in_days: 1, model_ids: null });
     const teamKey = await key(operator.page, product!), projectKey = await key(operator.page, research!), personalKey = await key(owner.page, personal);
     // Same historical fixtures as provider_cost_matching_tests.rs and the browser
-    // Holds tests: settled ledger entries plus one missing reservation (unknown
-    // usage/tier). SQL is restricted to this suite's disposable database.
+    // Holds tests: settled ledger entries plus an unknown reservation and ledger
+    // entry (unavailable usage/tier). SQL stays in the suite's disposable database.
     const attempt = async (workspace: string, apiKey: string, deployment: string, amount: string | null) => {
       const id = randomUUID();
       await db.query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,upstream_model,streamed,state,root_request_id,started_at,input_tokens,output_tokens) VALUES($1,$2,$3,$4,'acceptance/reconciliation','anthropic','claude-sonnet-4-20250514',false,$5,$1,'2025-08-01T12:00:00Z',100,20)", [id, workspace, apiKey, deployment, amount === null ? "indeterminate" : "succeeded"]);
       if (amount !== null) {
         await db.query("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,held_microusd,actual_microusd,input_tokens,output_tokens,price_tier) VALUES($1,$2,$3,$4,'2025-08-01T12:00:00Z','2025-08-01T12:00:00Z','2025-08-01T00:00:00Z',now(),'settled',0,$5,100,20,'standard')", [id, workspace, apiKey, deployment, amount]);
         await db.query("INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd,admitted_at) VALUES($1,$2,'settlement',$3,'2025-08-01T12:00:00Z')", [randomUUID(), id, amount]);
+      } else {
+        await db.query("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,held_microusd,unbounded_cost) VALUES($1,$2,$3,$4,'2025-08-01T12:00:00Z','2025-08-01T12:00:00Z','2025-08-01T00:00:00Z',now(),'unknown',123456,false)", [id, workspace, apiKey, deployment]);
+        await db.query("INSERT INTO monetary_ledger(id,execution_id,kind,admitted_at) VALUES($1,$2,'unknown','2025-08-01T12:00:00Z')", [randomUUID(), id]);
       }
     };
     await attempt(product!, teamKey, exclusive.deployment, "2500");
@@ -85,7 +88,7 @@ async function seed(browser: Browser): Promise<Seeded> {
     expect(response.status()).toBe(200);
     const { snapshot } = await response.json();
     expect(snapshot.imported_microusd).toBe("3717889");
-    expect(snapshot.estimates).toMatchObject({ settled_estimate_microusd: "4900", attempts: "5", unresolved_attempts: "1", complete: false });
+    expect(snapshot.estimates).toMatchObject({ settled_estimate_microusd: "4900", held_floor_microusd: "123456", attempts: "5", unresolved_attempts: "1", complete: false });
     expect(snapshot.personal_activity.estimates).toMatchObject({ settled_estimate_microusd: "1200", attempts: "1", complete: true });
     const ids = { id, import_id, mapping_id, personal, ownerName: me.user.display_name, ownerEmail: me.user.email, ownerId: me.user.id };
     expect(ids.ownerName).toBeTruthy(); expect(ids.ownerEmail).toBe("alex@demo.invalid");
@@ -126,6 +129,7 @@ async function comparison(page: Page, ids: Seeded, label: string) {
   await expectNoHorizontalScroll(page); await expectAccessible(page, `${label} comparison`);
   await page.getByRole("tab", { name: "Estimates & holds", exact: true }).click();
   const holds = page.getByRole("group", { name: "Separate holds", exact: true });
+  await expect(holds.locator("dl").filter({ hasText: "Held floor (at least)" }).locator("dt + dd")).toHaveText("$0.123456");
   await expect(holds.locator("dl").filter({ hasText: "Holds upper bound" }).locator("dd")).toHaveText("Unknown");
   await expectNoHorizontalScroll(page); await expectAccessible(page, `${label} holds`);
   await page.getByRole("tab", { name: "Unresolved coverage", exact: true }).click();
