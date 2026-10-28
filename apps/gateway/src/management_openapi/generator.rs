@@ -276,7 +276,7 @@ pub(super) fn generate(fragments: &Fragments) -> Result<Value> {
         );
         schemas.insert(name.clone(), schema.clone());
     }
-    Ok(json!({
+    let mut document = json!({
         "openapi":"3.1.0",
         "jsonSchemaDialect":"https://spec.openapis.org/oas/3.1/dialect/base",
         "info":{"title":"Open Model Gateway management API","version":env!("CARGO_PKG_VERSION"),
@@ -288,7 +288,9 @@ pub(super) fn generate(fragments: &Fragments) -> Result<Value> {
             "origin":{"type":"apiKey","in":"header","name":"Origin","description":"Must exactly equal the server-configured Origin; conjunctive with session and CSRF on browser mutations."},
             "adminToken":{"type":"http","scheme":"bearer","description":"Admin API token, never an inference key. Only Scope operations admit this alternative; x-omg-required-scope is exact, not an OAuth scope. Live token and owner authority is rechecked."}
         }}
-    }))
+    });
+    super::middleware::apply(&mut document)?;
+    Ok(document)
 }
 
 pub(super) fn verify(document: &Value) -> Result<()> {
@@ -508,14 +510,16 @@ fn quote_cfg_test(attr: &syn::Attribute) -> bool {
 fn error_schema() -> Result<Value> {
     Ok(
         json!({"type":"object","required":["error"],"additionalProperties":false,
-            "description":"Shared management handler envelope, not a universal framework response. code equals the HTTP status string. Selected reasons add period, limit, missing_meters or retry details. Reason-specific details are not yet exhaustive (#81).",
-            "properties":{"error":{"type":"object","required":["code","message"],"additionalProperties":true,
+            "description":"Shared management handler envelope, not a universal framework response. code equals the HTTP status string. Selected reasons add period, limit, missing_meters or retry details. Detail keys are closed over the inventoried handler vocabulary (policy period/limit, price missing_meters, and access/key-issuance retry details).",
+            "properties":{"error":{"type":"object","required":["code","message"],"additionalProperties":false,
                 "properties":{
                     "code":{"type":"string","pattern":"^[1-5][0-9]{2}$"},
                     "message":{"type":"string"},"reason":{"type":"string","enum":error_reasons()?},
                     "period":{"type":"string"},"limit":{"type":"string"},
                     "missing_meters":{"type":"array","items":{"type":"string"}},
-                    "retry_after_seconds":{"type":"integer","minimum":0}
+                    "retry_after_seconds":{"type":"integer","minimum":0},
+                    "scope":{"type":"string"},"operation":{"type":"string"},
+                    "window_seconds":{"type":"integer","minimum":0}
                 }}}
         }),
     )

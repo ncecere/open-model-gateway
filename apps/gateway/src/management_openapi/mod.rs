@@ -1,5 +1,8 @@
 //! Test-only management contract: no runtime endpoint or production dependency.
 mod generator;
+mod middleware;
+mod mutation_tests;
+mod quality;
 pub(crate) mod requests;
 pub(crate) mod responses;
 mod validation;
