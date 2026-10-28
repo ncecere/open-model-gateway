@@ -1591,7 +1591,7 @@
                 },
                 "properties": {
                   "personal": {
-                    "type": "boolean"
+                    "const": false
                   }
                 },
                 "required": [
@@ -1607,7 +1607,7 @@
             }
           }
         ],
-        "description": "Non-Admin projection: no workspace identity/name, including nested details."
+        "description": "Non-Admin projection of a non-personal event: no workspace identity/name, including nested details. A personal event carries no identity for any audience and matches only the personal branch of IdentityAdminCeilingNotification, keeping the oneOf exclusive."
       },
       "IdentityRevoked": {
         "additionalProperties": false,
