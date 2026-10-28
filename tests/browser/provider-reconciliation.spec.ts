@@ -102,9 +102,16 @@ async function identityFree(page: Page, ids: Seeded) {
   const dom = await page.locator("body").innerHTML();
   for (const privateValue of [ids.personal, ids.ownerId, ids.ownerEmail, ids.ownerName, "provider-personal"]) expect(dom).not.toContain(privateValue);
 }
-async function noWrites(page: Page) {
+// Frozen comparisons are read-only for everyone. On the list only, a Platform
+// Admin also gets the single entry point to the separate upload/mapping flow
+// (provider-cost-upload.spec.ts); Auditors get no write affordance at all.
+async function noWrites(page: Page, adminEntry = false) {
   await expect(page.getByRole("main").getByText("Read-only", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: /^(upload|import|create|freeze|map|delete|reconcile|settle|release)/i })).toHaveCount(0);
+  const writes = page.getByRole("button", { name: /^(upload|import|create|freeze|map|delete|reconcile|settle|release)/i });
+  if (adminEntry) {
+    await expect(writes).toHaveCount(1);
+    await expect(writes).toHaveAccessibleName("Upload & manage");
+  } else await expect(writes).toHaveCount(0);
   await expect(page.getByRole("textbox")).toHaveCount(0);
 }
 async function comparison(page: Page, ids: Seeded, label: string) {
@@ -159,7 +166,7 @@ for (const width of [1440, 390]) {
         const origin = page.getByRole("button", { name: new RegExp(`^Open reconciliation ${ids.id}: `) });
         await expect(origin).toBeVisible();
         await expect(page.getByRole("table", { name: "Frozen reconciliations", exact: true })).toContainText("browser-reconciliation-account");
-        await noWrites(page); await identityFree(page, ids);
+        await noWrites(page, persona === "operator"); await identityFree(page, ids);
         await expectNoHorizontalScroll(page); await expectAccessible(page, `${persona} ${width} list`);
         // Actual keyboard activation, not click() on a focusable element.
         await origin.focus(); await page.keyboard.press("Enter");

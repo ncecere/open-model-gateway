@@ -2,7 +2,7 @@
  * Unsaved changes: ONE confirmation everywhere (route leave, dialog close, tab switch) with the same words,
  * "Discard unsaved changes?" / "Keep editing" / "Discard". Only the one-line description may name what is lost.
  */
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { useBlocker, useRouter } from "@tanstack/react-router";
 import { AlertDialog } from "./ui/dialog/dialog";
 
@@ -13,8 +13,11 @@ export function DiscardChangesDialog({ open, onOpenChange, onDiscard, descriptio
   return <AlertDialog open={open} onOpenChange={onOpenChange} title={discardCopy.title} description={description} confirmLabel={discardCopy.confirm} cancelLabel={discardCopy.cancel} onConfirm={onDiscard} />;
 }
 
-export function NavigationGuard({ dirty, allow }: { dirty: boolean; allow?: () => boolean }) { const router = useRouter({ warn: false }); return router ? <Blocking dirty={dirty} allow={allow} /> : null; }
-function Blocking({ dirty, allow }: { dirty: boolean; allow?: () => boolean }) {
-  const blocker = useBlocker({ shouldBlockFn: () => dirty && !allow?.(), enableBeforeUnload: dirty, withResolver: true });
-  return <DiscardChangesDialog open={blocker.status === "blocked"} onOpenChange={open => { if (!open && blocker.status === "blocked") blocker.reset(); }} onDiscard={() => { if (blocker.status === "blocked") blocker.proceed(); }} />;
+/** Pending writes cannot be discarded: refuse navigation until their outcome is
+ * recorded. Auth-driven unmounts (sign-out/demotion) still cancel the workflow. */
+export function NavigationGuard({ dirty, allow, pending = false }: { dirty: boolean; allow?: () => boolean; pending?: boolean }) { const router = useRouter({ warn: false }); return router ? <Blocking dirty={dirty} allow={allow} pending={pending} /> : null; }
+function Blocking({ dirty, allow, pending }: { dirty: boolean; allow?: () => boolean; pending: boolean }) {
+  const blocker = useBlocker({ shouldBlockFn: () => pending || (dirty && !allow?.()), enableBeforeUnload: pending || dirty, withResolver: true });
+  useEffect(() => { if (pending && blocker.status === "blocked") blocker.reset(); }, [pending, blocker]);
+  return <DiscardChangesDialog open={!pending && blocker.status === "blocked"} onOpenChange={open => { if (!open && blocker.status === "blocked") blocker.reset(); }} onDiscard={() => { if (blocker.status === "blocked") blocker.proceed(); }} />;
 }
