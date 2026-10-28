@@ -31,7 +31,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: wait-for-schema
-          image: ghcr.io/ncecere/open-model-gateway@sha256:31d34b3bcde748148fa96b252c9d73b6964b5e224a7269aaecdf636342c3dc4a
+          image: ghcr.io/ncecere/open-model-gateway@sha256:da03b565093fded73b6ddbc636d56b60811b4c5dcbfc4956ce62bf4efe0cb819
           imagePullPolicy: IfNotPresent
           args: ["wait-for-database", "--schema", "--timeout-seconds", "600"]
           env:
@@ -58,7 +58,7 @@ spec:
               drop: [ALL]
       containers:
         - name: provision-bootstrap-admin
-          image: ghcr.io/ncecere/open-model-gateway@sha256:31d34b3bcde748148fa96b252c9d73b6964b5e224a7269aaecdf636342c3dc4a
+          image: ghcr.io/ncecere/open-model-gateway@sha256:da03b565093fded73b6ddbc636d56b60811b4c5dcbfc4956ce62bf4efe0cb819
           imagePullPolicy: IfNotPresent
           args: ["provision-user", "--email", "omg-scim60-bootstrap@bitop.invalid", "--platform-admin"]
           env:

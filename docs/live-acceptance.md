@@ -31,11 +31,16 @@ Historical Authentik results in `scim.md` do not accept this image or environmen
   No Traefik provider-namespace allowlist change or global NetworkPolicy broadening is
   approved or needed. The staging profile alone disables chart `allowHttpsEgress`,
   avoiding its default unrestricted `443` allowance; chart templates/defaults stay unchanged.
-- Gateway and standalone bootstrap use
-  `ghcr.io/ncecere/open-model-gateway@sha256:31d34b3bcde748148fa96b252c9d73b6964b5e224a7269aaecdf636342c3dc4a`
-  (`dev-731ca715e202`, source `731ca715e202`, whose tree matches base `26cf0114` and
-  includes #382). This is an **unsigned, unscanned amd64 branch image**, not release
-  qualification; the tag is informational and the digest selects the image.
+- Gateway and standalone bootstrap use the **signed, independently verified v0.9.1
+  release root (multi-arch index)**:
+  `ghcr.io/ncecere/open-model-gateway@sha256:da03b565093fded73b6ddbc636d56b60811b4c5dcbfc4956ce62bf4efe0cb819`.
+  The coordinator verified the tagged workflow's keyless signature, SPDX/provenance
+  and scans of both amd64 and arm64 images. Tag `v0.9.1` is informational; the digest
+  selects the image. Schema 0067 / 66 migration records match current main. This release
+  does **not** include later main changes #382 (verifier fixture isolation) or #384
+  (test-only diagnostics); neither changes runtime SCIM/OIDC behavior. This is **not a
+  v0.9.2 qualification** or a newer release. Isolated staging remains **NOT PUBLISHED /
+  NOT RUN / NOT ACCEPTED**; release verification is not live SCIM/OIDC acceptance.
 - Dedicated CNPG Cluster `omg-scim60-db`, database `omg_scim60`, one PG18 instance,
   `local-dev` data 5Gi/WAL 1Gi, zero synchronous replicas and `max_wal_size=512MB`.
   The qualified clean homelab `postgres-18` catalog supplied the plain image

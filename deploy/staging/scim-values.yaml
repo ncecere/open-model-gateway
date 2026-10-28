@@ -27,9 +27,9 @@ networkPolicy:
 
 image:
   repository: ghcr.io/ncecere/open-model-gateway
-  # Unsigned/unscanned amd64 branch image, not release qualification.
-  tag: dev-731ca715e202
-  digest: sha256:31d34b3bcde748148fa96b252c9d73b6964b5e224a7269aaecdf636342c3dc4a
+  # Signed/verified v0.9.1 release root (multi-arch index), not a newer release.
+  tag: v0.9.1
+  digest: sha256:da03b565093fded73b6ddbc636d56b60811b4c5dcbfc4956ce62bf4efe0cb819
 
 gateway:
   env:

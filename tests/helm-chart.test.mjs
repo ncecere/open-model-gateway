@@ -5,7 +5,7 @@
 // `helm lint` (run separately; see docs/kubernetes.md#validation).
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -460,7 +460,7 @@ const scim60Values = join(root, "deploy/staging/scim-values.yaml");
 const scim60Bootstrap = join(root, "deploy/staging/scim-bootstrap-job.yaml");
 const scim60Pooler = join(root, "deploy/staging/scim-pooler.yaml");
 const scim60Pgbouncer = "ghcr.io/cloudnative-pg/pgbouncer@sha256:b15c428057d1ffbc19fb70496911a5f1a47066dcc1315bf794f4e85ade29e2e5";
-const scim60Image = "ghcr.io/ncecere/open-model-gateway@sha256:31d34b3bcde748148fa96b252c9d73b6964b5e224a7269aaecdf636342c3dc4a";
+const scim60Image = "ghcr.io/ncecere/open-model-gateway@sha256:da03b565093fded73b6ddbc636d56b60811b4c5dcbfc4956ce62bf4efe0cb819";
 const scim60Postgres = "ghcr.io/cloudnative-pg/postgresql:18-minimal-trixie@sha256:37ade18dbdddba430858c72725aceeec66f33fa5333e82ea1df4942f6c1c83a3";
 const scim60Args = ["--namespace", "dev-omg", "-f", scim60Values];
 
@@ -483,6 +483,27 @@ function assertScim60RoleRefs(raw, prefix, secret, count) {
   }
 }
 
+test("staging and tests contain no retired SCIM #60 branch image pins", () => {
+  // Split the retired pins so this grep-style oracle does not match itself.
+  const retiredPins = [
+    ["31d34b3bcde748148fa96b252c9d73b69", "64b5e224a7269aaecdf636342c3dc4a"].join(""),
+    ["dev-", "731ca715e202"].join(""),
+  ];
+  const staleFiles = [];
+  function checkDirectory(directory) {
+    for (const entry of readdirSync(join(root, directory), { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) checkDirectory(path);
+      else if (entry.isFile()) {
+        const raw = readFileSync(join(root, path), "utf8");
+        if (retiredPins.some(pin => raw.includes(pin))) staleFiles.push(path);
+      }
+    }
+  }
+  for (const directory of ["deploy/staging", "tests"]) checkDirectory(directory);
+  assert.deepEqual(staleFiles, [], "retired branch image digest/tag must not remain in staging or tests");
+});
+
 test("SCIM #60 preparation stays stopped, private and fresh-init-only", () => {
   const raw = readFileSync(scim60Values, "utf8");
   const rendered = scim60Template();
@@ -500,7 +521,7 @@ test("SCIM #60 preparation stays stopped, private and fresh-init-only", () => {
   assertScim60NoLiteralCredentials(raw);
   assertScim60NoLiteralCredentials(rendered);
   assert.deepEqual([...deployment.matchAll(/^\s+image: (.+)$/gm)].map(m => m[1]), [scim60Image, scim60Image]);
-  assert.match(raw, /^  tag: dev-731ca715e202$/m);
+  assert.match(raw, /^  tag: v0\.9\.1$/m);
   const [cluster] = docsOfKind(rendered, "Cluster");
   assert.match(cluster, /^  name: omg-scim60-db$/m);
   assert.match(cluster, /^  instances: 1$/m);
