@@ -15,6 +15,7 @@ import { Tabs, TabsList, Tab, TabsPanel } from "../../components/ui/tabs/tabs";
 import { FilterToolbar, ToolbarField } from "../../components/templates/filter-toolbar";
 import { InfoBanner } from "../../components/templates/notices";
 import { StatTile, StatTileGrid } from "../../components/templates/stat-tile";
+import { ProviderCostManager } from "./provider-cost-manager";
 import s from "./provider-reconciliations.module.css";
 
 type Props = { session: Session; record?: string; onSelect?: (record?: string) => void };
@@ -22,8 +23,9 @@ export function ProviderReconciliations(props: Props) {
   if (!permissions(props.session).platformRead) return <EmptyState title="Access denied" description="Provider-reported cost reconciliation requires Platform Admin or Auditor access." />;
   return <ComparisonView {...props} />;
 }
-function ComparisonView({ record, onSelect }: Props) {
-  const [local, setLocal] = useState(record);
+function ComparisonView({ session, record, onSelect }: Props) {
+  const [local, setLocal] = useState(record), [managing, setManaging] = useState(false);
+  const writable = session.user.platform_role === "admin" && session.capabilities.platform_write;
   const selected = onSelect ? record : local;
   const origin = useRef<string | undefined>(undefined);
   const select = (next?: string) => {
@@ -31,9 +33,9 @@ function ComparisonView({ record, onSelect }: Props) {
     if (onSelect) onSelect(next); else setLocal(next);
   };
   return <Stack gap={4} className={s.view}>
-    <Heading title="Provider-reported cost reconciliation" description="Anthropic · Read-only" />
-    <InfoBanner title="Read-only">Frozen provider-reported charges against configured-rate estimates. Not a verified invoice or a complete payable balance. Priority Tier costs are not supplied. No estimates or holds are changed here.</InfoBanner>
-    {selected ? <><div><Button variant="ghost" size="sm" onClick={() => select()}>Back to reconciliations</Button></div><Detail key={selected} id={selected} /></> : <ReconciliationList onSelect={select} restoreFocusId={origin.current} />}
+    <Heading title="Provider-reported cost reconciliation" description="Anthropic · Frozen comparisons" actions={!selected && writable ? <Button variant="secondary" onClick={() => setManaging(value => !value)}>{managing ? "Back to comparisons" : "Upload & manage"}</Button> : undefined} />
+    {(!managing || selected || !writable) && <InfoBanner title="Read-only">Frozen provider-reported charges against configured-rate estimates. Not a verified invoice or a complete payable balance. Priority Tier costs are not supplied. No estimates or holds are changed here.</InfoBanner>}
+    {selected ? <><div><Button variant="ghost" size="sm" onClick={() => select()}>Back to reconciliations</Button></div><Detail key={selected} id={selected} /></> : managing && writable ? <ProviderCostManager session={session} onOpen={id => { setManaging(false); select(id); }} /> : <ReconciliationList onSelect={select} restoreFocusId={origin.current} />}
   </Stack>;
 }
 const periodKey = (r: ListedReconciliation) => `${r.report.period_start}/${r.report.period_end}`;
