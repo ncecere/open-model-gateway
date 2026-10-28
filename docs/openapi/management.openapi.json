@@ -645,6 +645,67 @@
       }
     },
     "schemas": {
+      "AccessApprovedRequest": {
+        "additionalProperties": false,
+        "description": "Decision response of an approve call: requester-private projection (no requester identity) after the decision. decided_by and decided_at are always set, and the applied membership grant is always present.",
+        "properties": {
+          "created_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "decided_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "decided_by": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "expires_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "membership_grant_id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "requested_role": {
+            "const": "member"
+          },
+          "requester": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "status": {
+            "const": "approved"
+          },
+          "target_kind": {
+            "const": "workspace_membership"
+          },
+          "workspace_id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "workspace_name_at_request": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "requester",
+          "target_kind",
+          "workspace_id",
+          "workspace_name_at_request",
+          "requested_role",
+          "status",
+          "reason",
+          "created_at",
+          "expires_at",
+          "decided_by",
+          "decided_at",
+          "membership_grant_id"
+        ],
+        "type": "object"
+      },
       "AccessApproverRequest": {
         "additionalProperties": false,
         "description": "Approver queue projection. Ineligible requester email and display name are both redacted to null; submitted workspace name stays a frozen snapshot.",
@@ -848,6 +909,67 @@
           "id",
           "name",
           "code"
+        ],
+        "type": "object"
+      },
+      "AccessDeniedRequest": {
+        "additionalProperties": false,
+        "description": "Decision response of a deny call: requester-private projection (no requester identity) after the decision. decided_by and decided_at are always set; a denial never carries a membership grant.",
+        "properties": {
+          "created_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "decided_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "decided_by": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "expires_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "membership_grant_id": {
+            "type": "null"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "requested_role": {
+            "const": "member"
+          },
+          "requester": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "status": {
+            "const": "denied"
+          },
+          "target_kind": {
+            "const": "workspace_membership"
+          },
+          "workspace_id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "workspace_name_at_request": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "requester",
+          "target_kind",
+          "workspace_id",
+          "workspace_name_at_request",
+          "requested_role",
+          "status",
+          "reason",
+          "created_at",
+          "expires_at",
+          "decided_by",
+          "decided_at",
+          "membership_grant_id"
         ],
         "type": "object"
       },
@@ -8012,11 +8134,11 @@
       },
       "post_api_v1_platform_access_requests_by_id_approveRequest": false,
       "post_api_v1_platform_access_requests_by_id_approveResponse": {
-        "$ref": "#/components/schemas/IdentityOwnAccessRequest"
+        "$ref": "#/components/schemas/AccessApprovedRequest"
       },
       "post_api_v1_platform_access_requests_by_id_denyRequest": false,
       "post_api_v1_platform_access_requests_by_id_denyResponse": {
-        "$ref": "#/components/schemas/IdentityOwnAccessRequest"
+        "$ref": "#/components/schemas/AccessDeniedRequest"
       },
       "post_api_v1_platform_admin_tokensRequest": {
         "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
@@ -8244,11 +8366,11 @@
       },
       "post_api_v1_workspaces_by_ws_access_requests_by_id_approveRequest": false,
       "post_api_v1_workspaces_by_ws_access_requests_by_id_approveResponse": {
-        "$ref": "#/components/schemas/IdentityOwnAccessRequest"
+        "$ref": "#/components/schemas/AccessApprovedRequest"
       },
       "post_api_v1_workspaces_by_ws_access_requests_by_id_denyRequest": false,
       "post_api_v1_workspaces_by_ws_access_requests_by_id_denyResponse": {
-        "$ref": "#/components/schemas/IdentityOwnAccessRequest"
+        "$ref": "#/components/schemas/AccessDeniedRequest"
       },
       "post_api_v1_workspaces_by_ws_alerts_rulesRequest": {
         "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",

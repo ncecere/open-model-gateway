@@ -3658,11 +3658,11 @@
     },
     "post_api_v1_platform_access_requests_by_id_approveRequest": false,
     "post_api_v1_platform_access_requests_by_id_approveResponse": {
-      "$ref": "#/components/schemas/IdentityOwnAccessRequest"
+      "$ref": "#/components/schemas/AccessApprovedRequest"
     },
     "post_api_v1_platform_access_requests_by_id_denyRequest": false,
     "post_api_v1_platform_access_requests_by_id_denyResponse": {
-      "$ref": "#/components/schemas/IdentityOwnAccessRequest"
+      "$ref": "#/components/schemas/AccessDeniedRequest"
     },
     "get_api_v1_platform_oidc_group_mappingsRequest": false,
     "get_api_v1_platform_oidc_group_mappingsResponse": {
@@ -3740,11 +3740,11 @@
     },
     "post_api_v1_workspaces_by_ws_access_requests_by_id_approveRequest": false,
     "post_api_v1_workspaces_by_ws_access_requests_by_id_approveResponse": {
-      "$ref": "#/components/schemas/IdentityOwnAccessRequest"
+      "$ref": "#/components/schemas/AccessApprovedRequest"
     },
     "post_api_v1_workspaces_by_ws_access_requests_by_id_denyRequest": false,
     "post_api_v1_workspaces_by_ws_access_requests_by_id_denyResponse": {
-      "$ref": "#/components/schemas/IdentityOwnAccessRequest"
+      "$ref": "#/components/schemas/AccessDeniedRequest"
     },
     "get_api_v1_workspaces_by_ws_invitationsRequest": false,
     "get_api_v1_workspaces_by_ws_invitationsResponse": {
@@ -3949,6 +3949,128 @@
       ],
       "additionalProperties": false,
       "description": "A Team or Project workspace-role group mapping: workspace_id, workspace_role (admin or member) and the live workspace name and kind set, platform_role null."
+    },
+    "AccessApprovedRequest": {
+      "type": "object",
+      "required": [
+        "id",
+        "requester",
+        "target_kind",
+        "workspace_id",
+        "workspace_name_at_request",
+        "requested_role",
+        "status",
+        "reason",
+        "created_at",
+        "expires_at",
+        "decided_by",
+        "decided_at",
+        "membership_grant_id"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "requester": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "target_kind": {
+          "const": "workspace_membership"
+        },
+        "workspace_id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "workspace_name_at_request": {
+          "type": "string"
+        },
+        "requested_role": {
+          "const": "member"
+        },
+        "status": {
+          "const": "approved"
+        },
+        "reason": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "expires_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "decided_by": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "decided_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "membership_grant_id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Decision response of an approve call: requester-private projection (no requester identity) after the decision. decided_by and decided_at are always set, and the applied membership grant is always present."
+    },
+    "AccessDeniedRequest": {
+      "type": "object",
+      "required": [
+        "id",
+        "requester",
+        "target_kind",
+        "workspace_id",
+        "workspace_name_at_request",
+        "requested_role",
+        "status",
+        "reason",
+        "created_at",
+        "expires_at",
+        "decided_by",
+        "decided_at",
+        "membership_grant_id"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "requester": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "target_kind": {
+          "const": "workspace_membership"
+        },
+        "workspace_id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "workspace_name_at_request": {
+          "type": "string"
+        },
+        "requested_role": {
+          "const": "member"
+        },
+        "status": {
+          "const": "denied"
+        },
+        "reason": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "expires_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "decided_by": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "decided_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "membership_grant_id": {
+          "type": "null"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Decision response of a deny call: requester-private projection (no requester identity) after the decision. decided_by and decided_at are always set; a denial never carries a membership grant."
     }
   }
 }
