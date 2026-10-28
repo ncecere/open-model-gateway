@@ -478,6 +478,7 @@ impl PositiveFixtures {
         }
     }
     pub(crate) fn finish(&self, areas: &[&str]) {
+        require_known_areas(areas).unwrap();
         let mut expected = BTreeSet::new();
         for (path, item) in artifact()["paths"].as_object().unwrap() {
             if areas.contains(&area(path)) {
@@ -496,6 +497,21 @@ impl PositiveFixtures {
             .collect();
         require_positives(&expected, &observed).unwrap();
     }
+}
+
+/// Every requested or registered area must own at least one artifact operation:
+/// a misspelled area (for example `{workspace}` instead of the artifact's `{ws}`)
+/// must fail rather than be silently satisfied by its valid neighbours.
+pub(crate) fn require_known_areas(areas: &[&str]) -> Result<()> {
+    ensure!(!areas.is_empty(), "no completed areas requested");
+    let paths = artifact()["paths"].as_object().unwrap();
+    for wanted in areas {
+        ensure!(
+            paths.keys().any(|path| area(path) == *wanted),
+            "area {wanted} has no operations in the artifact"
+        );
+    }
+    Ok(())
 }
 
 #[path = "review_tests.rs"]
@@ -528,9 +544,16 @@ mod tests {
         ] {
             assert_eq!(super::area(template), want, "{template}");
         }
+        assert!(super::require_known_areas(&["branding"]).is_ok());
+        assert!(
+            super::require_known_areas(&["branding", "workspaces/{workspace}/keys"]).is_err(),
+            "an unknown area beside a valid one must be rejected"
+        );
+        assert!(super::require_known_areas(&[]).is_err());
         let mut seen = std::collections::BTreeSet::new();
         for (_, group) in super::AREA_GROUPS {
             assert!(!group.is_empty());
+            super::require_known_areas(group).unwrap();
             for area in *group {
                 assert!(
                     seen.insert(*area),
