@@ -6,7 +6,7 @@ Measurements come from the bitop-talos homelab on 2026-10-14 (UTC, #25): CloudNa
 
 ## Checklist
 
-- Use a synchronous standby as the failover target ([replication](#synchronous-or-asynchronous-replication)).
+- Use the explicit required/quorum policy with three CNPG instances, not legacy min/max sync settings ([replication](#synchronous-or-asynchronous-replication)).
 - With chart-managed CNPG, keep `cnpg.cluster.smartShutdownTimeout` short (chart default 15 s, [failover timing](kubernetes.md#failover-timing)).
 - Point `GATEWAY_LISTEN_DATABASE_URL` at the primary directly, never at a transaction-mode pooler ([PgBouncer caveats](kubernetes.md#pgbouncer-caveats-read-before-enabling-the-pooler)).
 - Size PgBouncer and `max_connections` for every consumer in [Connection sizing](#connection-sizing).
@@ -172,8 +172,9 @@ Singleton jobs run under fenced work leases (30 s term, renewed every 10 s), so 
 
 - With CNPG's default `smartShutdownTimeout` of 180 s, deleting the primary under load kept writes down for about 3 minutes, because pooled and LISTEN sessions never disconnect on their own.
 - The chart now sets 15 s (`cnpg.cluster.smartShutdownTimeout`). Under load (60 requests/s, 3 gateway replicas, 2 database instances) the standby was promoted **in 18 s**, with about 15 s of fast failures (`503 accounting_unavailable` and 500 `api_error` within milliseconds).
-- About 22 s after recovering, writes stalled again: requests took about 30 s and most failed, for at least 19 s. The likely cause is that with only 2 instances and a required synchronous standby, commits wait while the old primary rejoins as the standby (#149, not yet confirmed). Until #149 settles it, run 3 instances if you need writes to stay available through a failover.
-- In both failover runs under load, every interrupted attempt was reconciled as `unknown` with its hold retained. No reservation stayed `pending`, nothing was charged twice, and `budget verify` and `history verify` reported no findings.
+- About 22 s after recovering, writes stalled again: requests took about 30 s and most failed, for at least 19 s. The cause of that earlier stall was not established by #25.
+- In the #25 runs, interrupted attempts with surviving reservations reconciled as `unknown` and the internal verifiers reported no findings. Those checks do not prove that all acknowledged records survived.
+- A later #149 fault run on CNPG 1.30.1 with two instances and legacy min/max `1/1` lost **16 acknowledged requests' accounting rows**. Primary deletion caused the legacy synchronous requirement to drop to zero while the old primary was still committing. The [explicit required/quorum policy](kubernetes.md#production-durability-policy-391) addresses that downgrade; three legacy instances alone are not a durability guarantee. No new fault-run result is claimed here.
 
 ### Pooler restart and a dropped LISTEN connection
 
@@ -200,11 +201,44 @@ Measured on bitop-talos (#25):
 
 ## Synchronous or asynchronous replication
 
-The chart-managed CNPG cluster uses synchronous replication (`minSyncReplicas: 1`, `maxSyncReplicas: 1`, two instances). Keep `synchronous_commit=on` ([PostgreSQL settings](operations.md#postgresql-settings-for-hot-rows-and-group-commit)).
+For production on CNPG 1.30.1, explicitly select three instances with this chart values fragment
+(merge it with your existing Secret/storage/backup settings):
 
-**Synchronous.** PostgreSQL acknowledges a commit only after a synchronous standby has flushed it. An admission the gateway acted on therefore exists on the standby, and a failover to that standby loses no acknowledged admission, settlement or management change. The measured failover above used this setup.
+```yaml
+cnpg:
+  cluster:
+    instances: 3
+    synchronous:
+      method: any
+      number: 1
+      dataDurability: required
+      failoverQuorum: true
+    postgresql:
+      parameters:
+        synchronous_commit: "on"
+```
 
-The cost is commit latency: every commit waits for the standby. On bitop-talos, above about 150 req/s the limit was primary CPU plus WAL writes and synchronous-replication commit waits. On slow-flush storage or with a synchronous standby, the runbook suggests trying `commit_delay` (see [group commit](operations.md#postgresql-settings-for-hot-rows-and-group-commit)). Also check what your platform does when no synchronous standby is connected. PostgreSQL itself makes commits wait; operators and managed services may relax that automatically. This guide has not tested it.
+See [production durability policy](kubernetes.md#production-durability-policy-391) for source
+citations, upgrade instructions and rehearsal requirements. Chart defaults deliberately remain
+two instances with legacy min/max `1/1` for compatibility; legacy CNPG may disable sync even
+below the configured minimum, as observed in #149. Upgrades must explicitly remove the legacy
+values and opt in to `cnpg.cluster.synchronous` (#391).
+
+**Required synchronous replication.** With application sessions using `synchronous_commit=on`,
+commits wait for the required standby WAL flush. `dataDurability: required` keeps that requirement
+during outages: writes block rather than acknowledge without a copy. `failoverQuorum: true`
+adds a safe-intersection check before automatic promotion; `required` alone does not ensure
+the available promotion candidate contains every acknowledged commit. With three instances and
+`number: 1`, the primary tolerates one standby outage; if the primary and a standby are lost,
+quorum can refuse automatic failover. With **two instances and `required`, writes cannot resume
+after promotion until a standby returns**. `preferred` can relax the requirement to preserve
+availability; it is not the recommended accounting durability policy.
+
+This is not protection against loss of all copies, unsafe manual promotion, or sessions overriding
+synchronous commit. It adds commit latency and failover downtime. On bitop-talos, above about
+150 req/s the limit was primary CPU plus WAL writes and synchronous-replication commit waits.
+On slow-flush storage, the runbook suggests trying `commit_delay` (see
+[group commit](operations.md#postgresql-settings-for-hot-rows-and-group-commit)).
 
 **Asynchronous.** Commits do not wait for the standby, so a failover can lose the most recent committed transactions. For the gateway that means:
 

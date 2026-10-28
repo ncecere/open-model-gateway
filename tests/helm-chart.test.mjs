@@ -148,6 +148,129 @@ test("CNPG fresh bootstrap restricts database ACLs without locking out operation
   assert.equal(docsOfKind(helmTemplate(profiles["external-db"]), "Cluster").length, 0);
 });
 
+// CNPG v1.30.1 api/v1/cluster_types.go:279,1509-1556,1594 defines
+// spec.postgresql.synchronous, including the native failoverQuorum boolean.
+const requiredSync = { method: "any", number: 1, dataDurability: "required", failoverQuorum: true };
+function synchronousArgs(config = requiredSync, extra = []) {
+  return [...profiles.cnpg, "--set", "cnpg.cluster.instances=3", "--set-json",
+    `cnpg.cluster.synchronous=${JSON.stringify(config)}`, ...extra];
+}
+function assertHelmRefuses(args, message) {
+  const result = spawnSync("helm", ["template", "omg-test", chart, ...args], { encoding: "utf8", timeout: 30_000 });
+  assert.notEqual(result.status, 0, `helm accepted invalid configuration: ${args.join(" ")}`);
+  assert.match(result.stderr, message);
+  assert.doesNotMatch(result.stderr, /nil pointer|wrong type for value/);
+}
+
+test("CNPG explicit synchronous replication renders only the native PostgreSQL stanza (#391)", () => {
+  for (const config of [requiredSync,
+    { method: "first", number: 1, dataDurability: "required", failoverQuorum: false,
+      standbyNamesPre: ["remote-a", "remote-b"], standbyNamesPost: ["remote-c"] },
+    { method: "any", number: 2, dataDurability: "preferred", failoverQuorum: false },
+    { method: "any", number: 2, dataDurability: "required", failoverQuorum: true }]) {
+    const [cluster] = docsOfKind(helmTemplate(synchronousArgs(config)), "Cluster");
+    const stanza = cluster.match(/^  postgresql:\n    synchronous:\n((?:      .*\n)+)/m)?.[1];
+    assert.ok(stanza, "missing spec.postgresql.synchronous");
+    if (config === requiredSync) {
+      assert.equal(stanza, "      dataDurability: required\n      failoverQuorum: true\n      method: any\n      number: 1\n");
+    }
+    for (const [field, value] of Object.entries(config)) {
+      if (Array.isArray(value)) {
+        assert.ok(stanza.includes(`      ${field}:\n${value.map(name => `      - ${name}\n`).join("")}`));
+      } else {
+        assert.match(stanza, new RegExp(`^      ${field}: ${value}$`, "m"));
+      }
+    }
+    assert.doesNotMatch(cluster, /minSyncReplicas|maxSyncReplicas|alpha\.cnpg\.io/);
+    assert.match(cluster, /^    parameters:\n      /m, "existing PostgreSQL parameters must remain");
+  }
+});
+
+test("CNPG synchronous count validation matches the CNPG 1.30.1 webhook exactly (#391)", () => {
+  // internal/webhook/v1/cluster_webhook.go:941-959: number < instances + standbyNamesPre + standbyNamesPost,
+  // for EVERY method/dataDurability combination.
+  assertHelmRefuses(synchronousArgs({ method: "first", number: 3, dataDurability: "required", failoverQuorum: false }),
+    /number must be less than instances plus the external standby names/);
+  assertHelmRefuses(synchronousArgs({ method: "any", number: 3, dataDurability: "preferred", failoverQuorum: false }),
+    /number must be less than instances plus the external standby names/);
+  // Upstream-valid: 3 instances + one external standby name allow number 3 (3 < 4).
+  const [cluster] = docsOfKind(helmTemplate(synchronousArgs(
+    { method: "any", number: 3, dataDurability: "required", failoverQuorum: false, standbyNamesPost: ["remote-a"] })), "Cluster");
+  assert.match(cluster, /^      number: 3$/m);
+});
+
+test("CNPG legacy defaults render byte-identically to main (#391)", () => {
+  const [defaults] = docsOfKind(helmTemplate(profiles.cnpg), "Cluster");
+  assert.match(defaults, /^  imageName: .*\n  minSyncReplicas: 1\n  maxSyncReplicas: 1\n  smartShutdownTimeout:/m);
+  assert.doesNotMatch(defaults, /Preserve the legacy|#391/);
+});
+
+test("CNPG legacy defaults and explicit legacy values remain unchanged (#391)", () => {
+  const [defaults] = docsOfKind(helmTemplate(profiles.cnpg), "Cluster");
+  assert.match(defaults, /^  instances: 2$/m);
+  assert.match(defaults, /^  minSyncReplicas: 1\n  maxSyncReplicas: 1$/m);
+  assert.doesNotMatch(defaults, /^    synchronous:/m);
+  for (const n of [0, 2]) {
+    const [legacy] = docsOfKind(helmTemplate([...profiles.cnpg, "--set", `cnpg.cluster.minSyncReplicas=${n}`,
+      "--set", `cnpg.cluster.maxSyncReplicas=${n}`]), "Cluster");
+    assert.match(legacy, new RegExp(`^  minSyncReplicas: ${n}\\n  maxSyncReplicas: ${n}$`, "m"));
+    assert.doesNotMatch(legacy, /^    synchronous:/m);
+  }
+});
+
+test("CNPG refuses synchronous together with either explicit legacy setting, including zero (#391)", () => {
+  for (const field of ["minSyncReplicas", "maxSyncReplicas"]) {
+    for (const n of [0, 1]) {
+      assertHelmRefuses(synchronousArgs(requiredSync, ["--set", `cnpg.cluster.${field}=${n}`]),
+        /cnpg\.cluster\.synchronous.*cannot be combined.*minSyncReplicas.*maxSyncReplicas/);
+    }
+  }
+});
+
+test("CNPG upgrade can explicitly clear inherited legacy settings with null (#391)", () => {
+  const clear = ["--set", "cnpg.cluster.minSyncReplicas=null", "--set", "cnpg.cluster.maxSyncReplicas=null"];
+  const [cluster] = docsOfKind(helmTemplate(synchronousArgs(requiredSync, clear)), "Cluster");
+  assert.doesNotMatch(cluster, /minSyncReplicas|maxSyncReplicas/);
+  assert.match(cluster, /^    synchronous:/m);
+  const [legacy] = docsOfKind(helmTemplate([...profiles.cnpg, ...clear]), "Cluster");
+  assert.match(legacy, /^  minSyncReplicas: 1\n  maxSyncReplicas: 1$/m);
+});
+
+test("CNPG synchronous schema is strict about fields, enums, counts and list types (#391)", () => {
+  const schema = JSON.parse(readFileSync(join(chart, "values.schema.json"), "utf8"));
+  const sync = schema.properties.cnpg.properties.cluster.properties.synchronous;
+  assert.ok(sync, "synchronous is missing from values.schema.json");
+  assert.equal(sync.additionalProperties, false);
+  for (const field of Object.keys(requiredSync)) assert.ok(sync.required.includes(field), `${field} must be explicit`);
+  const invalid = [{}, "any", false, [],
+    ...Object.keys(requiredSync).map(field => Object.fromEntries(Object.entries(requiredSync).filter(([key]) => key !== field))),
+    ...[{ method: "quorum" }, { method: 1 }, { number: 0 }, { number: -1 }, { number: 1.5 }, { number: "1" },
+      { dataDurability: "best-effort" }, { failoverQuorum: "true" }, { failoverQuorum: 1 },
+      { standbyNamesPre: "remote-a" }, { standbyNamesPost: [1] }, { standbyNamesPre: [""] },
+      { unexpectedField: true }].map(patch => ({ ...requiredSync, ...patch }))];
+  for (const config of invalid) assertHelmRefuses(synchronousArgs(config), /synchronous/);
+});
+
+test("CNPG required quorum count must be below the instance count without external names (#391)", () => {
+  for (const [instances, number] of [[1, 1], [2, 2], [3, 3], [3, 4]]) {
+    assertHelmRefuses(synchronousArgs({ ...requiredSync, number }, ["--set", `cnpg.cluster.instances=${instances}`]),
+      /cnpg\.cluster\.synchronous\.number must be less than instances plus the external standby names/);
+  }
+  // A two-instance required policy is valid but blocks writes after promotion
+  // until a standby returns; do not forbid the operator's explicit trade-off.
+  helmTemplate(synchronousArgs(requiredSync, ["--set", "cnpg.cluster.instances=2"]));
+});
+
+test("CNPG rejects upstream-invalid external standby combinations (#391)", () => {
+  for (const field of ["standbyNamesPre", "standbyNamesPost"]) {
+    assertHelmRefuses(synchronousArgs({ ...requiredSync, dataDurability: "preferred", [field]: ["remote-a"] }),
+      /preferred.*standbyNamesPre.*standbyNamesPost/);
+    assertHelmRefuses(synchronousArgs({ ...requiredSync, [field]: ["remote-a"] }),
+      /failoverQuorum.*number.*standbyNamesPre.*standbyNamesPost/);
+  }
+  helmTemplate(synchronousArgs({ ...requiredSync, number: 2, standbyNamesPre: ["remote-a"] }));
+});
+
 test("CNPG primary shuts down quickly so failover is not held up by pooled connections", () => {
   const [cluster] = docsOfKind(helmTemplate(["-f", join(chart, "ci/cnpg-values.yaml")]), "Cluster");
   // CNPG's default smart shutdown waits 180 s for clients; pooled and LISTEN sessions never leave.

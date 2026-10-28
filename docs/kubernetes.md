@@ -80,9 +80,12 @@ Other provider credentials not covered by the four built-in `_FILE` names use `g
 - **External** (default): set `cnpg.cluster.enabled=false` and point `secrets.database.*` /
   `secrets.migrator.existingSecret` at your own PostgreSQL 17 (managed HA, Patroni, or an existing
   CNPG Cluster you manage outside this chart). See [HA PostgreSQL](postgresql-ha.md).
-- **Chart-managed CNPG** (`cnpg.cluster.enabled=true`): the chart renders a `Cluster` (2 instances,
-  `minSyncReplicas: 1`, synchronous replication, `local-ssd` storage, anti-affinity across nodes,
-  the tuning starting points from `docs/operations.md` "Tuning starting points") and a `Pooler`
+- **Chart-managed CNPG** (`cnpg.cluster.enabled=true`): for upgrade compatibility the chart still
+  defaults to 2 instances and legacy `minSyncReplicas: 1` / `maxSyncReplicas: 1`. This policy can
+  become asynchronous and lose acknowledged writes (#149, #391); use the explicit
+  [production durability policy](#production-durability-policy-391) below. The chart uses
+  `local-ssd` storage, anti-affinity across nodes,
+  the tuning starting points from `docs/operations.md` "Tuning starting points" and a `Pooler`
   (PgBouncer, transaction mode, `max_prepared_statements: 200`). Pre-create the two role Secrets in
   [`ci/cnpg-values.yaml`](../deploy/helm/open-model-gateway/ci/cnpg-values.yaml) before installing:
 
@@ -102,6 +105,70 @@ Other provider credentials not covered by the four built-in `_FILE` names use `g
   No chart template ever writes a password into rendered YAML. CNPG's default password generator
   is alnum-only, so no URL-encoding is attempted; if you supply a password with `: / @ ?` characters
   in a pre-created Secret, URL-encode it yourself first.
+
+### Production durability policy (#391)
+
+For CNPG **1.30.1**, the recommended production values are:
+
+```yaml
+cnpg:
+  cluster:
+    enabled: true
+    instances: 3
+    synchronous:
+      method: any
+      number: 1
+      dataDurability: required
+      failoverQuorum: true
+    postgresql:
+      parameters:
+        synchronous_commit: "on"
+```
+
+Merge this into your complete values file, retaining role Secrets, storage, resources and
+backup settings. Three instances with required anti-affinity need three eligible nodes with
+adequate storage. This is a recommendation, **not a silent default change**.
+
+`cnpg.cluster.synchronous` renders **`spec.postgresql.synchronous`**, not PostgreSQL parameters.
+CNPG 1.30.1 declares that placement in
+[`cluster_types.go:279,1592–1594`](https://github.com/cloudnative-pg/cloudnative-pg/blob/v1.30.1/api/v1/cluster_types.go#L1592-L1594),
+and its fields in
+[`cluster_types.go:1509–1556`](https://github.com/cloudnative-pg/cloudnative-pg/blob/v1.30.1/api/v1/cluster_types.go#L1509-L1556).
+`failoverQuorum` is the native boolean at line 1556; no alpha annotation or feature gate is
+needed. Remove any old `alpha.cnpg.io/failoverQuorum` annotation: CNPG 1.30.1 can let it
+override the spec ([defaulting source](https://github.com/cloudnative-pg/cloudnative-pg/blob/v1.30.1/api/v1/cluster_defaults.go#L337-L356)).
+Verify compatibility before selecting this policy on another operator version.
+
+**Availability trade-off:** `required` keeps the synchronous acknowledgment requirement when
+standbys disappear: commits using `synchronous_commit=on` block rather than succeed without a
+standby copy. With three instances and `number: 1`, one standby outage is tolerated, but if the
+primary and another standby are unavailable, failover quorum can refuse automatic promotion.
+With **two instances and `required`, writes cannot resume after promotion until a standby
+returns**. Synchronous replication adds latency and does not protect against losing all copies,
+unsafe manual promotion, or transactions overriding synchronous commit. Replication is not a backup.
+
+**Explicit upgrade:** remove both `minSyncReplicas` and `maxSyncReplicas` from your supplied
+values before setting `synchronous`; even an explicit legacy `0` is refused. When unset,
+the template supplies legacy `1/1` as before. Avoid carrying old computed defaults through
+`--reuse-values`; use a reviewed complete values file with `--reset-values`, or explicitly
+clear inherited legacy keys with `--set cnpg.cluster.minSyncReplicas=null --set cnpg.cluster.maxSyncReplicas=null`.
+Review `helm template` output: only the new stanza should remain. No database reset, initdb,
+or migration is needed for this replication-policy change; rollout is an operator decision.
+**Transition window:** CNPG applies the change by configuration reload and temporarily resets its
+quorum metadata while doing so, so automatic failover is unavailable until the new configuration
+is applied on every instance. Roll out in a quiet period, then verify on the primary that
+`synchronous_standby_names` reflects the new policy and the standbys report `sync_state` quorum/sync
+before relying on it or running a failover drill.
+The schema requires all four scalar fields and validates their types/enums; the template
+mirrors CNPG's webhook and rejects `number >= instances + standbyNamesPre + standbyNamesPost`. Optional `standbyNamesPre` and
+`standbyNamesPost` are lists of external application names; CNPG forbids nonempty lists with
+`preferred`, and quorum failover requires `number` greater than their combined length.
+
+Before rollout, rehearse primary deletion under load and insufficient-standby/quorum refusal
+cases on a disposable cluster. Compare acknowledged requests to durable accounting rows;
+internal ledger consistency checks alone cannot detect records lost together. The chart render
+tests are not a new failover acceptance result; that drill remains part of #149/#391.
+See [HA PostgreSQL](postgresql-ha.md#synchronous-or-asynchronous-replication).
 
 ## First install (including chart-managed CNPG)
 
@@ -269,10 +336,12 @@ The Secret's `METRICS_COLLECTOR_HEADERS` key holds `Key=Value,Key2=Value2`; neve
 before a fast shutdown. CloudNativePG's own default is 180 s. The Pooler's server connections and
 each replica's LISTEN session never disconnect on their own, so with 180 s a failover kept writes
 down for about three minutes on bitop-talos; with 15 s the standby was promoted in 18 s under load.
-With `instances: 2`, writes stalled again while the old primary rejoined as the synchronous standby
-(#149); see [HA PostgreSQL](postgresql-ha.md#measured-failover).
-Requests interrupted by the failover keep their holds and are reconciled as unknown; nothing is
-refunded or charged twice (#25).
+With `instances: 2`, writes later stalled again; the cause of that earlier stall was not established
+(#25, #149). See [HA PostgreSQL](postgresql-ha.md#measured-failover).
+Interrupted requests whose reservations survive keep their holds and are reconciled as unknown
+(#25). The later #149 drill lost 16 acknowledged requests' accounting rows under legacy replication;
+reconciliation cannot recover reservations absent from the promoted standby. Drain timing is not a
+durability safeguard; use the [explicit policy](#production-durability-policy-391) and verify it.
 
 ## PgBouncer caveats (read before enabling the Pooler)
 

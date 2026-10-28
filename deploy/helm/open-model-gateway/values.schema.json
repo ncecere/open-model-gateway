@@ -30,6 +30,23 @@
         "cluster": {
           "type": "object",
           "properties": {
+            "instances": { "type": "integer", "minimum": 1 },
+            "minSyncReplicas": { "type": ["integer", "null"], "minimum": 0 },
+            "maxSyncReplicas": { "type": ["integer", "null"], "minimum": 0 },
+            "synchronous": {
+              "type": "object",
+              "description": "Explicit CNPG synchronous replication; mutually exclusive with legacy min/maxSyncReplicas. With any/required, number must not exceed instances minus one (template validated).",
+              "additionalProperties": false,
+              "required": ["method", "number", "dataDurability", "failoverQuorum"],
+              "properties": {
+                "method": { "type": "string", "enum": ["any", "first"] },
+                "number": { "type": "integer", "minimum": 1 },
+                "dataDurability": { "type": "string", "enum": ["required", "preferred"] },
+                "failoverQuorum": { "type": "boolean" },
+                "standbyNamesPre": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+                "standbyNamesPost": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+              }
+            },
             "backup": {
               "type": "object",
               "description": "CNPG Cluster backups: CNPG's in-tree barmanObjectStore (default), or the Barman Cloud plugin (#261).",

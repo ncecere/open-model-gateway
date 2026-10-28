@@ -334,13 +334,25 @@ cnpg:
     storageSize: 20Gi
     walStorageSize: 5Gi
     image: ghcr.io/cloudnative-pg/postgresql:17.6
-    minSyncReplicas: 1
-    maxSyncReplicas: 1
+    # With synchronous unset, the template preserves the legacy min/max=1/1
+    # behaviour. Optional explicit legacy overrides (including 0) remain supported:
+    # minSyncReplicas: 1
+    # maxSyncReplicas: 1
+    # Explicit opt-in for production on CNPG 1.30.1 (also set instances: 3):
+    # synchronous:
+    #   method: any
+    #   number: 1
+    #   dataDurability: required
+    #   failoverQuorum: true
+    #   standbyNamesPre: []   # optional external application names
+    #   standbyNamesPost: []  # optional external application names
+    # Do not combine synchronous with either explicit legacy field. See
+    # docs/kubernetes.md for upgrade steps and the write-availability trade-off.
     # Seconds a stopping primary waits for clients before a fast shutdown.
     # CNPG's default is 180; the Pooler and LISTEN sessions never disconnect on
     # their own, so with it a failover keeps writes down for about 3 minutes
-    # (measured on bitop-talos, #25). The gateway retries and reconciles
-    # interrupted attempts, so a short wait is safe.
+    # (measured on bitop-talos, #25). This controls drain time, not durability;
+    # legacy replication can lose acknowledged accounting writes (#149, #391).
     smartShutdownTimeout: 15
     # Fresh initdb hooks restrict maintenance CONNECT and application TEMP,
     # preserving CNPG operational roles. Never replayed on existing clusters;
