@@ -170,6 +170,12 @@ fn boundary_vectors<T: DeserializeOwned>(
             json!([]),
             json!({}),
         ] {
+            // A money field is a String to serde and an integer-pattern string to
+            // the contract; the handler (not serde) rejects `wrong`. The HTTP
+            // boundary vectors compare that verdict against the real handler.
+            if field.ends_with("_microusd") && wrong == json!("wrong") {
+                continue;
+            }
             let mut probe = valid.clone();
             probe[field] = wrong;
             compare(&format!("wrong-type/null {field}"), probe);

@@ -389,11 +389,13 @@ fn management_openapi_coverage_microusd_properties_are_pattern_constrained_strin
 // 5. ARBITRARY_JSON nodes declare a type.
 #[test]
 fn management_openapi_coverage_arbitrary_json_nodes_declare_a_type() {
-    let (pointer, reason) = quality::ARBITRARY_JSON[0];
-    assert_eq!(
-        pointer,
-        "/components/schemas/IdentityNotification/properties/details"
-    );
+    // Slices add reviewed nodes of their own, so find this one by pointer.
+    let (pointer, reason) = *quality::ARBITRARY_JSON
+        .iter()
+        .find(|(pointer, _)| {
+            *pointer == "/components/schemas/IdentityNotification/properties/details"
+        })
+        .expect("IdentityNotification details is a reviewed arbitrary node");
     let node = |ty: Option<Value>| {
         let mut node = json!({"$comment":reason,"patternProperties":{"(^|_)microusd$":{"type":"string","pattern":"^(0|[1-9][0-9]*)$"}}});
         if let Some(ty) = ty {

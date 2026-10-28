@@ -2855,7 +2855,11 @@
             "$ref": "#/components/schemas/IdentityNullableTime"
           },
           "last_error": {
-            "$ref": "#/components/schemas/IdentityNullableString"
+            "pattern": "^[a-z_0-9]{1,40}$",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "last_error_at": {
             "$ref": "#/components/schemas/IdentityNullableTime"
@@ -2935,29 +2939,33 @@
         "type": "object"
       },
       "SettingsEmail": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/SettingsEmailUnconfigured"
+          },
+          {
+            "$ref": "#/components/schemas/SettingsEmailConfigured"
+          }
+        ]
+      },
+      "SettingsEmailConfigured": {
         "additionalProperties": false,
+        "description": "A saved relay. `last_test` is the outcome of the last test against exactly this configuration, null until one ran.",
         "properties": {
           "configured": {
-            "type": "boolean"
+            "const": true
           },
           "from_address": {
-            "$ref": "#/components/schemas/IdentityNullableString"
+            "type": "string"
           },
           "from_name": {
             "$ref": "#/components/schemas/IdentityNullableString"
           },
           "host": {
-            "$ref": "#/components/schemas/IdentityNullableString"
+            "type": "string"
           },
           "host_allowed": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "type": "boolean"
           },
           "last_test": {
             "anyOf": [
@@ -2968,17 +2976,24 @@
                     "$ref": "#/components/schemas/IdentityTime"
                   },
                   "error": {
-                    "$ref": "#/components/schemas/IdentityNullableString"
+                    "description": "Delivery category of the last failed test; null when it succeeded.",
+                    "enum": [
+                      "credential",
+                      "address",
+                      "connection",
+                      "tls",
+                      "authentication",
+                      "rejected",
+                      "timeout",
+                      null
+                    ],
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   },
                   "ok": {
-                    "anyOf": [
-                      {
-                        "type": "boolean"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -3013,31 +3028,122 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Null when no password reference is saved."
           },
           "port": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "maximum": 65535,
+            "minimum": 1,
+            "type": "integer"
           },
           "public_url_configured": {
             "type": "boolean"
           },
           "status": {
             "enum": [
-              "not_configured",
               "host_not_allowed",
               "credential_unavailable",
               "ready"
             ]
           },
           "tls": {
+            "enum": [
+              "starttls",
+              "implicit",
+              "none"
+            ]
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "username": {
             "$ref": "#/components/schemas/IdentityNullableString"
+          }
+        },
+        "required": [
+          "configured",
+          "status",
+          "host",
+          "port",
+          "tls",
+          "username",
+          "password_ref",
+          "password_ref_allowed",
+          "host_allowed",
+          "from_address",
+          "from_name",
+          "public_url_configured",
+          "last_test",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "SettingsEmailConfiguredSaved": {
+        "additionalProperties": false,
+        "description": "A relay just saved: saving always clears the previous test result.",
+        "properties": {
+          "configured": {
+            "const": true
+          },
+          "from_address": {
+            "type": "string"
+          },
+          "from_name": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "host": {
+            "type": "string"
+          },
+          "host_allowed": {
+            "type": "boolean"
+          },
+          "last_test": {
+            "type": "null"
+          },
+          "password_ref": {
+            "anyOf": [
+              {
+                "description": "Allowlisted environment reference, never the SMTP password value.",
+                "pattern": "^env:[A-Z_][A-Z_0-9]{0,127}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "password_ref_allowed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when no password reference is saved."
+          },
+          "port": {
+            "maximum": 65535,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "public_url_configured": {
+            "type": "boolean"
+          },
+          "status": {
+            "enum": [
+              "host_not_allowed",
+              "credential_unavailable",
+              "ready"
+            ]
+          },
+          "tls": {
+            "enum": [
+              "starttls",
+              "implicit",
+              "none"
+            ]
           },
           "updated_at": {
             "$ref": "#/components/schemas/IdentityTime"
@@ -3144,23 +3250,132 @@
           }
         ]
       },
-      "SettingsEmailTest": {
-        "additionalProperties": false,
-        "properties": {
-          "error": {
-            "$ref": "#/components/schemas/IdentityNullableString"
+      "SettingsEmailSaved": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/SettingsEmailUnconfigured"
           },
-          "ok": {
+          {
+            "$ref": "#/components/schemas/SettingsEmailConfiguredSaved"
+          }
+        ]
+      },
+      "SettingsEmailTest": {
+        "description": "Outcome of one test message to the signed-in admin; `error` is a delivery category, never a relay reply.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "error": {
+                "type": "null"
+              },
+              "ok": {
+                "const": true
+              },
+              "recipient": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "ok",
+              "error",
+              "recipient"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "error": {
+                "enum": [
+                  "credential",
+                  "address",
+                  "connection",
+                  "tls",
+                  "authentication",
+                  "rejected",
+                  "timeout",
+                  "host_not_allowed"
+                ]
+              },
+              "ok": {
+                "const": false
+              },
+              "recipient": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "ok",
+              "error",
+              "recipient"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SettingsEmailUnconfigured": {
+        "additionalProperties": false,
+        "description": "Delivery is off: every relay field is null.",
+        "properties": {
+          "configured": {
+            "const": false
+          },
+          "from_address": {
+            "type": "null"
+          },
+          "from_name": {
+            "type": "null"
+          },
+          "host": {
+            "type": "null"
+          },
+          "host_allowed": {
+            "type": "null"
+          },
+          "last_test": {
+            "type": "null"
+          },
+          "password_ref": {
+            "type": "null"
+          },
+          "password_ref_allowed": {
+            "type": "null"
+          },
+          "port": {
+            "type": "null"
+          },
+          "public_url_configured": {
             "type": "boolean"
           },
-          "recipient": {
-            "type": "string"
+          "status": {
+            "const": "not_configured"
+          },
+          "tls": {
+            "type": "null"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "username": {
+            "type": "null"
           }
         },
         "required": [
-          "ok",
-          "error",
-          "recipient"
+          "configured",
+          "status",
+          "host",
+          "port",
+          "tls",
+          "username",
+          "password_ref",
+          "password_ref_allowed",
+          "host_allowed",
+          "from_address",
+          "from_name",
+          "public_url_configured",
+          "last_test",
+          "updated_at"
         ],
         "type": "object"
       },
@@ -3201,6 +3416,7 @@
       },
       "SettingsGeneral": {
         "additionalProperties": false,
+        "description": "General settings. `logo_url` is the deprecated external URL; `updated_by` is the email of the last writer and is null when no writer is recorded or the writer has no email.",
         "properties": {
           "display_name": {
             "type": "string"
@@ -3211,28 +3427,7 @@
           "logo": {
             "anyOf": [
               {
-                "additionalProperties": false,
-                "properties": {
-                  "height": {
-                    "type": "integer"
-                  },
-                  "updated_at": {
-                    "$ref": "#/components/schemas/IdentityTime"
-                  },
-                  "url": {
-                    "type": "string"
-                  },
-                  "width": {
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "url",
-                  "updated_at",
-                  "width",
-                  "height"
-                ],
-                "type": "object"
+                "$ref": "#/components/schemas/SettingsLogoMetadata"
               },
               {
                 "type": "null"
@@ -3357,6 +3552,193 @@
             "type": "array"
           }
         ]
+      },
+      "SettingsGeneralLogoCleared": {
+        "additionalProperties": false,
+        "description": "Result of a logo removal: `logo` is always null (the deprecated `logo_url` is left as it was).",
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "human_key_max_lifetime_days": {
+            "type": "integer"
+          },
+          "logo": {
+            "type": "null"
+          },
+          "logo_upload": {
+            "additionalProperties": false,
+            "properties": {
+              "available": {
+                "type": "boolean"
+              },
+              "content_types": {
+                "items": {
+                  "enum": [
+                    "image/png",
+                    "image/jpeg",
+                    "image/webp"
+                  ]
+                },
+                "type": "array"
+              },
+              "max_bytes": {
+                "const": 524288
+              },
+              "max_side": {
+                "const": 4096
+              },
+              "min_side": {
+                "const": 16
+              },
+              "recommended_side": {
+                "const": 64
+              }
+            },
+            "required": [
+              "available",
+              "max_bytes",
+              "content_types",
+              "min_side",
+              "max_side",
+              "recommended_side"
+            ],
+            "type": "object"
+          },
+          "logo_url": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "support_url": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "timezone": {
+            "const": "UTC"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "updated_by": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          }
+        },
+        "required": [
+          "display_name",
+          "support_url",
+          "logo_url",
+          "human_key_max_lifetime_days",
+          "timezone",
+          "updated_at",
+          "updated_by",
+          "logo",
+          "logo_upload"
+        ],
+        "type": "object"
+      },
+      "SettingsGeneralLogoSet": {
+        "additionalProperties": false,
+        "description": "Result of a logo upload: the logo is set and the deprecated `logo_url` is always cleared.",
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "human_key_max_lifetime_days": {
+            "type": "integer"
+          },
+          "logo": {
+            "$ref": "#/components/schemas/SettingsLogoMetadata"
+          },
+          "logo_upload": {
+            "additionalProperties": false,
+            "properties": {
+              "available": {
+                "type": "boolean"
+              },
+              "content_types": {
+                "items": {
+                  "enum": [
+                    "image/png",
+                    "image/jpeg",
+                    "image/webp"
+                  ]
+                },
+                "type": "array"
+              },
+              "max_bytes": {
+                "const": 524288
+              },
+              "max_side": {
+                "const": 4096
+              },
+              "min_side": {
+                "const": 16
+              },
+              "recommended_side": {
+                "const": 64
+              }
+            },
+            "required": [
+              "available",
+              "max_bytes",
+              "content_types",
+              "min_side",
+              "max_side",
+              "recommended_side"
+            ],
+            "type": "object"
+          },
+          "logo_url": {
+            "type": "null"
+          },
+          "support_url": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "timezone": {
+            "const": "UTC"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "updated_by": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          }
+        },
+        "required": [
+          "display_name",
+          "support_url",
+          "logo_url",
+          "human_key_max_lifetime_days",
+          "timezone",
+          "updated_at",
+          "updated_by",
+          "logo",
+          "logo_upload"
+        ],
+        "type": "object"
+      },
+      "SettingsLogoMetadata": {
+        "additionalProperties": false,
+        "description": "Metadata of the uploaded installation logo (never the image bytes or a storage path).",
+        "properties": {
+          "height": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "url": {
+            "type": "string"
+          },
+          "width": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "url",
+          "updated_at",
+          "width",
+          "height"
+        ],
+        "type": "object"
       },
       "SettingsOk": {
         "additionalProperties": false,
@@ -3664,60 +4046,17 @@
                 "type": "integer"
               },
               "scim": {
-                "oneOf": [
-                  {
-                    "additionalProperties": false,
-                    "properties": {
-                      "enabled": {
-                        "const": false
-                      }
-                    },
-                    "required": [
-                      "enabled"
-                    ],
-                    "type": "object"
-                  },
-                  {
-                    "additionalProperties": false,
-                    "properties": {
-                      "active_users": {
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "base_url": {
-                        "type": "string"
-                      },
-                      "enabled": {
-                        "const": true
-                      },
-                      "groups": {
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "last_sync_at": {
-                        "$ref": "#/components/schemas/IdentityNullableTime"
-                      },
-                      "memberships": {
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "users": {
-                        "minimum": 0,
-                        "type": "integer"
-                      }
-                    },
-                    "required": [
-                      "enabled",
-                      "base_url",
-                      "users",
-                      "active_users",
-                      "groups",
-                      "memberships",
-                      "last_sync_at"
-                    ],
-                    "type": "object"
+                "additionalProperties": false,
+                "description": "SCIM requires OIDC sign-in, so it is always off here.",
+                "properties": {
+                  "enabled": {
+                    "const": false
                   }
-                ]
+                },
+                "required": [
+                  "enabled"
+                ],
+                "type": "object"
               }
             },
             "required": [
@@ -3759,17 +4098,22 @@
                 "additionalProperties": false,
                 "properties": {
                   "fresh_until": {
-                    "$ref": "#/components/schemas/IdentityNullableTime"
+                    "$ref": "#/components/schemas/IdentityTime"
                   },
                   "keys": {
                     "minimum": 0,
                     "type": "integer"
                   },
                   "last_failure_at": {
-                    "$ref": "#/components/schemas/IdentityNullableTime"
+                    "format": "date-time",
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "x-omg-unobserved-branch": "Set only after a failed JWKS refresh, which needs a controllable clock beyond the unknown-key and failure backoff intervals; the cache unit tests in identity/jwks.rs cover it and the HTTP surface cannot fail the refresh."
                   },
                   "refreshed_at": {
-                    "$ref": "#/components/schemas/IdentityNullableTime"
+                    "$ref": "#/components/schemas/IdentityTime"
                   },
                   "state": {
                     "enum": [
@@ -3998,6 +4342,7 @@
             "anyOf": [
               {
                 "additionalProperties": false,
+                "description": "Outcome of the last probe; `current` says whether it ran against the configured store.",
                 "properties": {
                   "checked_at": {
                     "$ref": "#/components/schemas/IdentityTime"
@@ -4006,17 +4351,15 @@
                     "type": "boolean"
                   },
                   "error": {
-                    "$ref": "#/components/schemas/IdentityNullableString"
+                    "description": "Failure code of the last probe; null when it passed.",
+                    "pattern": "^[a-z_0-9]{1,40}$",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   },
                   "ok": {
-                    "anyOf": [
-                      {
-                        "type": "boolean"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -4233,56 +4576,105 @@
         ]
       },
       "SettingsStorageTest": {
-        "additionalProperties": false,
-        "properties": {
-          "backend": {
-            "enum": [
-              "local",
-              "s3",
-              "memory"
-            ]
-          },
-          "error": {
-            "$ref": "#/components/schemas/IdentityNullableString"
-          },
-          "ok": {
-            "type": "boolean"
-          },
-          "round_trip_ms": {
-            "anyOf": [
-              {
+        "description": "Outcome of one put/get/delete probe; the round trip is only known for a successful probe.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "backend": {
+                "enum": [
+                  "local",
+                  "s3",
+                  "memory"
+                ]
+              },
+              "error": {
+                "type": "null"
+              },
+              "ok": {
+                "const": true
+              },
+              "round_trip_ms": {
                 "minimum": 0,
                 "type": "integer"
+              }
+            },
+            "required": [
+              "ok",
+              "error",
+              "backend",
+              "round_trip_ms"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "backend": {
+                "enum": [
+                  "local",
+                  "s3",
+                  "memory"
+                ]
               },
-              {
+              "error": {
+                "pattern": "^[a-z_0-9]{1,40}$",
+                "type": "string"
+              },
+              "ok": {
+                "const": false
+              },
+              "round_trip_ms": {
                 "type": "null"
               }
-            ]
+            },
+            "required": [
+              "ok",
+              "error",
+              "backend",
+              "round_trip_ms"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "ok",
-          "error",
-          "backend",
-          "round_trip_ms"
-        ],
-        "type": "object"
+        ]
       },
       "SettingsTestResult": {
-        "additionalProperties": false,
-        "properties": {
-          "error": {
-            "$ref": "#/components/schemas/IdentityNullableString"
+        "description": "Outcome of one signed test delivery; `error` is a fixed category, never a destination URL or reply.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "error": {
+                "type": "null"
+              },
+              "ok": {
+                "const": true
+              }
+            },
+            "required": [
+              "ok",
+              "error"
+            ],
+            "type": "object"
           },
-          "ok": {
-            "type": "boolean"
+          {
+            "additionalProperties": false,
+            "properties": {
+              "error": {
+                "pattern": "^[a-z_0-9]{1,40}$",
+                "type": "string"
+              },
+              "ok": {
+                "const": false
+              }
+            },
+            "required": [
+              "ok",
+              "error"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "ok",
-          "error"
-        ],
-        "type": "object"
+        ]
       },
       "SettingsWebhook": {
         "description": "Privileged projection only for a live Platform Admin, and for tokens also settings:write. Auditor and platform:read-only tokens omit URL and both reference fields entirely. No response contains signing secret values.",
@@ -4810,7 +5202,7 @@
       },
       "delete_api_v1_platform_settings_general_logoRequest": false,
       "delete_api_v1_platform_settings_general_logoResponse": {
-        "$ref": "#/components/schemas/SettingsGeneral"
+        "$ref": "#/components/schemas/SettingsGeneralLogoCleared"
       },
       "delete_api_v1_platform_users_by_user_roles_by_roleRequest": {
         "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
@@ -7468,7 +7860,7 @@
         "$ref": "#/components/schemas/SettingsEmailInput"
       },
       "put_api_v1_platform_settings_emailResponse": {
-        "$ref": "#/components/schemas/SettingsEmail"
+        "$ref": "#/components/schemas/SettingsEmailSaved"
       },
       "put_api_v1_platform_settings_generalRequest": {
         "$ref": "#/components/schemas/SettingsGeneralInput"
@@ -7484,7 +7876,7 @@
         "x-omg-validate-image": true
       },
       "put_api_v1_platform_settings_general_logoResponse": {
-        "$ref": "#/components/schemas/SettingsGeneral"
+        "$ref": "#/components/schemas/SettingsGeneralLogoSet"
       },
       "put_api_v1_platform_settings_privacyRequest": {
         "$ref": "#/components/schemas/SettingsPrivacyInput"
