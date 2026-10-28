@@ -1,11 +1,5 @@
 {
   "operations": {
-    "DELETE /api/v1/me/sessions/{session}": {
-      "access": "Browser",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
-    },
     "DELETE /api/v1/platform/admin-tokens/{token}": {
       "access": "PlatformWrite",
       "operation": {},
@@ -128,78 +122,6 @@
     },
     "DELETE /api/v1/workspaces/{ws}/models/{model}": {
       "access": "WorkspaceAdmin",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
-    },
-    "GET /api/v1/auth/callback": {
-      "access": "Anonymous",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
-    },
-    "GET /api/v1/auth/config": {
-      "access": "Anonymous",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
-    },
-    "GET /api/v1/auth/login": {
-      "access": "Anonymous",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
-    },
-    "GET /api/v1/branding/logo": {
-      "access": "Anonymous",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
-    },
-    "GET /api/v1/me": {
-      "access": "Browser",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
-    },
-    "GET /api/v1/me/export": {
-      "access": "Browser",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
-    },
-    "GET /api/v1/me/keys": {
-      "access": "Browser",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
-    },
-    "GET /api/v1/me/models": {
-      "access": "Browser",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
-    },
-    "GET /api/v1/me/notifications": {
-      "access": "Browser",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
-    },
-    "GET /api/v1/me/notifications/summary": {
-      "access": "Browser",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
-    },
-    "GET /api/v1/me/sessions": {
-      "access": "Browser",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
-    },
-    "GET /api/v1/me/summary": {
-      "access": "Browser",
       "operation": {},
       "scope": null,
       "token_policy": "Denied"
@@ -998,30 +920,6 @@
     },
     "PATCH /api/v1/workspaces/{ws}/service-accounts/{id}": {
       "access": "WorkspaceAdmin",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
-    },
-    "POST /api/v1/auth/logout": {
-      "access": "BrowserLogout",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
-    },
-    "POST /api/v1/invitations/accept": {
-      "access": "Browser",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
-    },
-    "POST /api/v1/me/notifications/read": {
-      "access": "Browser",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
-    },
-    "POST /api/v1/me/sessions/revoke-others": {
-      "access": "Browser",
       "operation": {},
       "scope": null,
       "token_policy": "Denied"

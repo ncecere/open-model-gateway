@@ -1,0 +1,111 @@
+{
+  "operations": {
+    "GET /api/v1/me": {"access":"Browser","token_policy":"Denied","scope":null,"operation":{
+      "description":"Only the caller's verified identity, personal workspace and shared memberships. Platform roles do not add foreign personal workspaces.",
+      "responses":{
+        "200":{"description":"Caller context","content":{"application/json":{"schema":{"$ref":"#/components/schemas/get_api_v1_meResponse"}}}},
+        "400":{"description":"Invalid input; query/path extraction may return text instead of a handler envelope","content":{"application/json":{"schema":{"$ref":"#/components/schemas/IdentityFailure"}},"text/plain":{"schema":{"type":"string"}}}},
+        "401":{"description":"Management authentication required","content":{"application/json":{"schema":{"$ref":"#/components/schemas/IdentityFailure"}}}},
+        "403":{"description":"Live entitlement, credential-family, CSRF, Origin or authority refusal","content":{"application/json":{"schema":{"$ref":"#/components/schemas/IdentityFailure"}}}},
+        "404":{"description":"Not found or hidden by ownership","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorEnvelope"}}}},
+        "409":{"description":"Operation conflicts with current state","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorEnvelope"}}}},
+        "415":{"description":"JSON extractor requires application/json","content":{"text/plain":{"schema":{"type":"string"}}}},
+        "422":{"description":"JSON deserialization failed","content":{"text/plain":{"schema":{"type":"string"}}}},
+        "429":{"description":"Rate limit reached","content":{"application/json":{"schema":{"$ref":"#/components/schemas/IdentityFailure"}}}},
+        "500":{"description":"Internal management error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/IdentityFailure"}}}},
+        "503":{"description":"Management storage or report unavailable","content":{"application/json":{"schema":{"$ref":"#/components/schemas/IdentityFailure"}}}}
+      }
+    }},
+    "GET /api/v1/auth/config": {"access":"Anonymous","token_policy":"Denied","scope":null,"operation":{
+      "responses":{"200":{"description":"Public SSO configuration","headers":{"Cache-Control":{"required":true,"schema":{"const":"no-store"}},"Referrer-Policy":{"required":true,"schema":{"const":"no-referrer"}}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/get_api_v1_auth_configResponse"}}}}}
+    }},
+    "GET /api/v1/auth/login": {"access":"Anonymous","token_policy":"Denied","scope":null,"operation":{
+      "parameters":[{"name":"return_to","in":"query","description":"Optional same-origin dashboard path. Unsafe/malformed input is ignored; unknown query keys are ignored by serde.","schema":{"type":"string"}}],
+      "responses":{
+        "303":{"description":"OIDC authorization redirect; browser-binding cookie","headers":{"Location":{"required":true,"schema":{"type":"string","format":"uri"}},"Set-Cookie":{"required":true,"schema":{"type":"string","pattern":"^omg_oidc=[0-9a-f]{64}; Path=/; Max-Age=600; SameSite=Lax(; Secure)?; HttpOnly$"}},"Cache-Control":{"required":true,"schema":{"const":"no-store"}},"Referrer-Policy":{"required":true,"schema":{"const":"no-referrer"}}},"x-omg-required-cookies":["omg_oidc"]},
+        "429":{"description":"Sign-in throttled","headers":{"Retry-After":{"required":true,"schema":{"type":"string","pattern":"^[1-9][0-9]*$"}}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/IdentityFailure"}}}},
+        "500":{"$ref":"#/paths/~1api~1v1~1me/get/responses/500"},
+        "503":{"description":"SSO unavailable or pending-attempt cap reached","headers":{"Retry-After":{"schema":{"type":"string","pattern":"^[1-9][0-9]*$"}}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/IdentityFailure"}}}}
+      }
+    }},
+    "GET /api/v1/auth/callback": {"access":"Anonymous","token_policy":"Denied","scope":null,"operation":{
+      "parameters":[{"name":"state","in":"query","required":true,"schema":{"type":"string"}},{"name":"code","in":"query","schema":{"type":"string"}},{"name":"error","in":"query","schema":{"type":"string"}}],
+      "description":"One-use PKCE/OIDC callback. Unknown query keys are ignored. Browser refusals may redirect to sign-in without creating a session.",
+      "responses":{
+        "303":{"description":"Validated same-origin dashboard redirect, or browser denial redirect; sets or clears session/CSRF/browser cookies","x-omg-positive-cookie":"omg_session","headers":{"Location":{"required":true,"schema":{"type":"string","pattern":"^/"}},"Set-Cookie":{"required":true,"schema":{"type":"string","pattern":"^omg_(session=([0-9a-f]{64})?; Path=/; Max-Age=[0-9]+; SameSite=Lax(; Secure)?; HttpOnly|csrf=([0-9a-f]{64})?; Path=/; Max-Age=[0-9]+; SameSite=Strict(; Secure)?|oidc=; Path=/; Max-Age=0; SameSite=Lax(; Secure)?; HttpOnly)$"}},"Cache-Control":{"required":true,"schema":{"const":"no-store"}},"Referrer-Policy":{"required":true,"schema":{"const":"no-referrer"}}},"x-omg-required-cookies":["omg_session","omg_csrf","omg_oidc"]},
+        "400":{"$ref":"#/paths/~1api~1v1~1me/get/responses/400"},"401":{"$ref":"#/paths/~1api~1v1~1me/get/responses/401"},"403":{"$ref":"#/paths/~1api~1v1~1me/get/responses/403"},"409":{"description":"Identity link conflict","content":{"application/json":{"schema":{"$ref":"#/components/schemas/IdentityFailure"}}}},
+        "429":{"$ref":"#/paths/~1api~1v1~1auth~1login/get/responses/429"},"500":{"$ref":"#/paths/~1api~1v1~1me/get/responses/500"},"503":{"$ref":"#/paths/~1api~1v1~1me/get/responses/503"}
+      }
+    }},
+    "POST /api/v1/auth/logout": {"access":"BrowserLogout","token_policy":"Denied","scope":null,"operation":{
+      "responses":{"204":{"description":"Session revoked, authentication cookies cleared; no body","headers":{"Set-Cookie":{"required":true,"schema":{"type":"string","pattern":"^omg_((session|oidc)=; Path=/; Max-Age=0; SameSite=Lax(; Secure)?; HttpOnly|csrf=; Path=/; Max-Age=0; SameSite=Strict(; Secure)?)$"}},"Cache-Control":{"required":true,"schema":{"const":"no-store"}},"Referrer-Policy":{"required":true,"schema":{"const":"no-referrer"}}},"x-omg-required-cookies":["omg_session","omg_csrf","omg_oidc"]},"400":{"$ref":"#/paths/~1api~1v1~1me/get/responses/400"},"401":{"$ref":"#/paths/~1api~1v1~1me/get/responses/401"},"403":{"$ref":"#/paths/~1api~1v1~1me/get/responses/403"},"500":{"$ref":"#/paths/~1api~1v1~1me/get/responses/500"}}
+    }},
+    "GET /api/v1/branding/logo": {"access":"Anonymous","token_policy":"Denied","scope":null,"operation":{
+      "parameters":[{"name":"v","in":"query","description":"Cache-busting version; not decoded by the handler","schema":{"type":"string"}},{"name":"If-None-Match","in":"header","schema":{"type":"string"}}],
+      "responses":{
+        "200":{"description":"Uploaded logo bytes","headers":{"ETag":{"required":true,"schema":{"type":"string","pattern":"^\"[0-9a-f]{64}\"$"}},"Cache-Control":{"required":true,"schema":{"const":"public, max-age=300"}},"X-Content-Type-Options":{"required":true,"schema":{"const":"nosniff"}},"Content-Security-Policy":{"required":true,"schema":{"const":"default-src 'none'"}},"Cross-Origin-Resource-Policy":{"required":true,"schema":{"const":"same-origin"}}},"content":{"image/png":{"schema":{"$ref":"#/components/schemas/get_api_v1_branding_logoResponse"}},"image/jpeg":{"schema":{"$ref":"#/components/schemas/get_api_v1_branding_logoResponse"}},"image/webp":{"schema":{"$ref":"#/components/schemas/get_api_v1_branding_logoResponse"}}}},
+        "304":{"description":"Matching ETag; no body","headers":{"ETag":{"required":true,"schema":{"type":"string","pattern":"^\"[0-9a-f]{64}\"$"}},"Cache-Control":{"required":true,"schema":{"const":"public, max-age=300"}},"X-Content-Type-Options":{"required":true,"schema":{"const":"nosniff"}},"Content-Security-Policy":{"required":true,"schema":{"const":"default-src 'none'"}},"Cross-Origin-Resource-Policy":{"required":true,"schema":{"const":"same-origin"}}}},
+        "404":{"$ref":"#/paths/~1api~1v1~1me/get/responses/404"},"503":{"$ref":"#/paths/~1api~1v1~1me/get/responses/503"}
+      }
+    }},
+    "POST /api/v1/invitations/accept": {"access":"Browser","token_policy":"Denied","scope":null,"operation":{
+      "requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/post_api_v1_invitations_acceptRequest"}}}},
+      "responses":{"200":{"description":"Invitation accepted using the session's verified email","content":{"application/json":{"schema":{"$ref":"#/components/schemas/post_api_v1_invitations_acceptResponse"}}}},"413":{"description":"JSON body exceeds the extractor limit","content":{"text/plain":{"schema":{"type":"string"}}}},"400":{"$ref":"#/paths/~1api~1v1~1me/get/responses/400"},"401":{"$ref":"#/paths/~1api~1v1~1me/get/responses/401"},"403":{"$ref":"#/paths/~1api~1v1~1me/get/responses/403"},"404":{"$ref":"#/paths/~1api~1v1~1me/get/responses/404"},"415":{"$ref":"#/paths/~1api~1v1~1me/get/responses/415"},"422":{"$ref":"#/paths/~1api~1v1~1me/get/responses/422"},"500":{"$ref":"#/paths/~1api~1v1~1me/get/responses/500"},"503":{"$ref":"#/paths/~1api~1v1~1me/get/responses/503"}}
+    }},
+    "GET /api/v1/access-request-targets": {"access":"Browser","token_policy":"Denied","scope":null,"operation":{
+      "parameters":[{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":200}},{"name":"offset","in":"query","schema":{"type":"integer","minimum":0,"maximum":100000}}],
+      "responses":{"200":{"description":"Discoverable shared workspaces without the caller's existing membership","content":{"application/json":{"schema":{"$ref":"#/components/schemas/get_api_v1_access_request_targetsResponse"}}}},"400":{"$ref":"#/paths/~1api~1v1~1me/get/responses/400"},"401":{"$ref":"#/paths/~1api~1v1~1me/get/responses/401"},"403":{"$ref":"#/paths/~1api~1v1~1me/get/responses/403"},"500":{"$ref":"#/paths/~1api~1v1~1me/get/responses/500"},"503":{"$ref":"#/paths/~1api~1v1~1me/get/responses/503"}}
+    }},
+    "GET /api/v1/me/access-requests": {"access":"Browser","token_policy":"Denied","scope":null,"operation":{
+      "parameters":[{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":200}},{"name":"offset","in":"query","schema":{"type":"integer","minimum":0,"maximum":100000}}],
+      "responses":{"200":{"description":"Own requests, requester-private projection","content":{"application/json":{"schema":{"$ref":"#/components/schemas/get_api_v1_me_access_requestsResponse"}}}},"400":{"$ref":"#/paths/~1api~1v1~1me/get/responses/400"},"401":{"$ref":"#/paths/~1api~1v1~1me/get/responses/401"},"403":{"$ref":"#/paths/~1api~1v1~1me/get/responses/403"},"500":{"$ref":"#/paths/~1api~1v1~1me/get/responses/500"},"503":{"$ref":"#/paths/~1api~1v1~1me/get/responses/503"}}
+    }},
+    "POST /api/v1/me/access-requests": {"access":"Browser","token_policy":"Denied","scope":null,"operation":{
+      "requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/post_api_v1_me_access_requestsRequest"}}}},
+      "responses":{"200":{"description":"Created or idempotently replayed own request","content":{"application/json":{"schema":{"$ref":"#/components/schemas/post_api_v1_me_access_requestsResponse"}}}},"413":{"$ref":"#/paths/~1api~1v1~1invitations~1accept/post/responses/413"},"400":{"$ref":"#/paths/~1api~1v1~1me/get/responses/400"},"401":{"$ref":"#/paths/~1api~1v1~1me/get/responses/401"},"403":{"$ref":"#/paths/~1api~1v1~1me/get/responses/403"},"404":{"$ref":"#/paths/~1api~1v1~1me/get/responses/404"},"409":{"$ref":"#/paths/~1api~1v1~1me/get/responses/409"},"415":{"$ref":"#/paths/~1api~1v1~1me/get/responses/415"},"422":{"$ref":"#/paths/~1api~1v1~1me/get/responses/422"},"429":{"$ref":"#/paths/~1api~1v1~1me/get/responses/429"},"500":{"$ref":"#/paths/~1api~1v1~1me/get/responses/500"},"503":{"$ref":"#/paths/~1api~1v1~1me/get/responses/503"}}
+    }},
+    "GET /api/v1/me/access-requests/{id}": {"access":"Browser","token_policy":"Denied","scope":null,"operation":{
+      "responses":{"200":{"description":"Own request; foreign requests are hidden with 404","content":{"application/json":{"schema":{"$ref":"#/components/schemas/get_api_v1_me_access_requests_by_idResponse"}}}},"400":{"$ref":"#/paths/~1api~1v1~1me/get/responses/400"},"401":{"$ref":"#/paths/~1api~1v1~1me/get/responses/401"},"403":{"$ref":"#/paths/~1api~1v1~1me/get/responses/403"},"404":{"$ref":"#/paths/~1api~1v1~1me/get/responses/404"},"500":{"$ref":"#/paths/~1api~1v1~1me/get/responses/500"},"503":{"$ref":"#/paths/~1api~1v1~1me/get/responses/503"}}
+    }},
+    "POST /api/v1/me/access-requests/{id}/withdraw": {"access":"Browser","token_policy":"Denied","scope":null,"operation":{
+      "responses":{"200":{"description":"Own pending request withdrawn","content":{"application/json":{"schema":{"$ref":"#/components/schemas/post_api_v1_me_access_requests_by_id_withdrawResponse"}}}},"400":{"$ref":"#/paths/~1api~1v1~1me/get/responses/400"},"401":{"$ref":"#/paths/~1api~1v1~1me/get/responses/401"},"403":{"$ref":"#/paths/~1api~1v1~1me/get/responses/403"},"404":{"$ref":"#/paths/~1api~1v1~1me/get/responses/404"},"409":{"$ref":"#/paths/~1api~1v1~1me/get/responses/409"},"500":{"$ref":"#/paths/~1api~1v1~1me/get/responses/500"},"503":{"$ref":"#/paths/~1api~1v1~1me/get/responses/503"}}
+    }},
+    "GET /api/v1/me/sessions": {"access":"Browser","token_policy":"Denied","scope":null,"operation":{
+      "responses":{"200":{"description":"Own live sessions; no token hashes, addresses or raw user agents","content":{"application/json":{"schema":{"$ref":"#/components/schemas/get_api_v1_me_sessionsResponse"}}}},"401":{"$ref":"#/paths/~1api~1v1~1me/get/responses/401"},"403":{"$ref":"#/paths/~1api~1v1~1me/get/responses/403"},"500":{"$ref":"#/paths/~1api~1v1~1me/get/responses/500"}}
+    }},
+    "DELETE /api/v1/me/sessions/{session}": {"access":"Browser","token_policy":"Denied","scope":null,"operation":{
+      "responses":{"200":{"description":"Own live session revoked","content":{"application/json":{"schema":{"$ref":"#/components/schemas/delete_api_v1_me_sessions_by_sessionResponse"}}}},"400":{"$ref":"#/paths/~1api~1v1~1me/get/responses/400"},"401":{"$ref":"#/paths/~1api~1v1~1me/get/responses/401"},"403":{"$ref":"#/paths/~1api~1v1~1me/get/responses/403"},"404":{"$ref":"#/paths/~1api~1v1~1me/get/responses/404"},"500":{"$ref":"#/paths/~1api~1v1~1me/get/responses/500"}}
+    }},
+    "POST /api/v1/me/sessions/revoke-others": {"access":"Browser","token_policy":"Denied","scope":null,"operation":{
+      "responses":{"200":{"description":"Other own live sessions revoked, current session retained","content":{"application/json":{"schema":{"$ref":"#/components/schemas/post_api_v1_me_sessions_revoke_othersResponse"}}}},"400":{"$ref":"#/paths/~1api~1v1~1me/get/responses/400"},"401":{"$ref":"#/paths/~1api~1v1~1me/get/responses/401"},"403":{"$ref":"#/paths/~1api~1v1~1me/get/responses/403"},"500":{"$ref":"#/paths/~1api~1v1~1me/get/responses/500"}}
+    }},
+    "GET /api/v1/me/notifications": {"access":"Browser","token_policy":"Denied","scope":null,"operation":{
+      "parameters":[{"name":"status","in":"query","schema":{"enum":["unread"]}},{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":200}},{"name":"offset","in":"query","schema":{"type":"integer","minimum":0,"maximum":100000}}],
+      "responses":{"200":{"description":"Live-authorized incident feed; admission-ceiling workspace identities removed for non-Admins","content":{"application/json":{"schema":{"$ref":"#/components/schemas/get_api_v1_me_notificationsResponse"}}}},"400":{"$ref":"#/paths/~1api~1v1~1me/get/responses/400"},"401":{"$ref":"#/paths/~1api~1v1~1me/get/responses/401"},"403":{"$ref":"#/paths/~1api~1v1~1me/get/responses/403"},"500":{"$ref":"#/paths/~1api~1v1~1me/get/responses/500"}}
+    }},
+    "POST /api/v1/me/notifications/read": {"access":"Browser","token_policy":"Denied","scope":null,"operation":{
+      "requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/post_api_v1_me_notifications_readRequest"}}}},
+      "responses":{"200":{"description":"Visible notifications marked read; invisible IDs ignored","content":{"application/json":{"schema":{"$ref":"#/components/schemas/post_api_v1_me_notifications_readResponse"}}}},"413":{"$ref":"#/paths/~1api~1v1~1invitations~1accept/post/responses/413"},"400":{"$ref":"#/paths/~1api~1v1~1me/get/responses/400"},"401":{"$ref":"#/paths/~1api~1v1~1me/get/responses/401"},"403":{"$ref":"#/paths/~1api~1v1~1me/get/responses/403"},"415":{"$ref":"#/paths/~1api~1v1~1me/get/responses/415"},"422":{"$ref":"#/paths/~1api~1v1~1me/get/responses/422"},"500":{"$ref":"#/paths/~1api~1v1~1me/get/responses/500"}}
+    }},
+    "GET /api/v1/me/notifications/summary": {"access":"Browser","token_policy":"Denied","scope":null,"operation":{
+      "responses":{"200":{"description":"Live-authorized unread/firing counts","content":{"application/json":{"schema":{"$ref":"#/components/schemas/get_api_v1_me_notifications_summaryResponse"}}}},"401":{"$ref":"#/paths/~1api~1v1~1me/get/responses/401"},"403":{"$ref":"#/paths/~1api~1v1~1me/get/responses/403"},"500":{"$ref":"#/paths/~1api~1v1~1me/get/responses/500"}}
+    }},
+    "GET /api/v1/me/summary": {"access":"Browser","token_policy":"Denied","scope":null,"operation":{
+      "parameters":[{"name":"totals_only","in":"query","schema":{"type":"boolean","default":false}}],
+      "responses":{"200":{"description":"Only own human-key activity; workspace budgets only for workspace administrators","content":{"application/json":{"schema":{"$ref":"#/components/schemas/get_api_v1_me_summaryResponse"}}}},"400":{"$ref":"#/paths/~1api~1v1~1me/get/responses/400"},"401":{"$ref":"#/paths/~1api~1v1~1me/get/responses/401"},"403":{"$ref":"#/paths/~1api~1v1~1me/get/responses/403"},"500":{"$ref":"#/paths/~1api~1v1~1me/get/responses/500"},"503":{"$ref":"#/paths/~1api~1v1~1me/get/responses/503"}}
+    }},
+    "GET /api/v1/me/keys": {"access":"Browser","token_policy":"Denied","scope":null,"operation":{
+      "parameters":[{"name":"status","in":"query","schema":{"enum":["all","active","disabled","revoked","expired"]}},{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":200}},{"name":"offset","in":"query","schema":{"type":"integer","minimum":0,"maximum":100000}}],
+      "responses":{"200":{"description":"Own human-key metadata in own current workspaces, never tokens","content":{"application/json":{"schema":{"$ref":"#/components/schemas/get_api_v1_me_keysResponse"}}}},"400":{"$ref":"#/paths/~1api~1v1~1me/get/responses/400"},"401":{"$ref":"#/paths/~1api~1v1~1me/get/responses/401"},"403":{"$ref":"#/paths/~1api~1v1~1me/get/responses/403"},"500":{"$ref":"#/paths/~1api~1v1~1me/get/responses/500"},"503":{"$ref":"#/paths/~1api~1v1~1me/get/responses/503"}}
+    }},
+    "GET /api/v1/me/models": {"access":"Browser","token_policy":"Denied","scope":null,"operation":{
+      "parameters":[{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":50,"default":6}}],
+      "responses":{"200":{"description":"Own workspaces' eligible models, serving and not-serving projections","content":{"application/json":{"schema":{"$ref":"#/components/schemas/get_api_v1_me_modelsResponse"}}}},"400":{"$ref":"#/paths/~1api~1v1~1me/get/responses/400"},"401":{"$ref":"#/paths/~1api~1v1~1me/get/responses/401"},"403":{"$ref":"#/paths/~1api~1v1~1me/get/responses/403"},"500":{"$ref":"#/paths/~1api~1v1~1me/get/responses/500"},"503":{"$ref":"#/paths/~1api~1v1~1me/get/responses/503"}}
+    }},
+    "GET /api/v1/me/export": {"access":"Browser","token_policy":"Denied","scope":null,"operation":{
+      "parameters":[{"name":"from","in":"query","schema":{"type":"string","format":"date"}},{"name":"to","in":"query","schema":{"type":"string","format":"date"}}],
+      "description":"Own subject export; no other user's private data or credentials. Inclusive UTC range at most 93 days, default last 30. Lists are capped and explicitly truncated.",
+      "responses":{"200":{"description":"On-demand JSON attachment, never persisted","headers":{"Cache-Control":{"required":true,"schema":{"const":"no-store"}},"Content-Disposition":{"required":true,"schema":{"type":"string","pattern":"^attachment; filename=\"omg-export-[0-9-]+\\.json\"$"}},"X-OMG-Export-SHA256":{"required":true,"schema":{"type":"string","pattern":"^[0-9a-f]{64}$"}}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/get_api_v1_me_exportResponse"}}}},"400":{"$ref":"#/paths/~1api~1v1~1me/get/responses/400"},"401":{"$ref":"#/paths/~1api~1v1~1me/get/responses/401"},"403":{"$ref":"#/paths/~1api~1v1~1me/get/responses/403"},"404":{"$ref":"#/paths/~1api~1v1~1me/get/responses/404"},"429":{"$ref":"#/paths/~1api~1v1~1me/get/responses/429"},"500":{"$ref":"#/paths/~1api~1v1~1me/get/responses/500"},"503":{"$ref":"#/paths/~1api~1v1~1me/get/responses/503"}}
+    }}
+  }
+}
