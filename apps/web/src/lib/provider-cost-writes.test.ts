@@ -42,8 +42,22 @@ describe("provider-cost write reads", () => {
   });
   it("requires full effective coverage and keeps provider default distinct from a wildcard", () => {
     const b = { provider_workspace_id: null, attested: true, effective_start: report.period_start, effective_end: report.period_end } as Binding;
-    expect(coversPeriod(b, null, report)).toBe(true); expect(coversPeriod(b, "default", report)).toBe(false);
-    expect(coversPeriod({ ...b, effective_end: "2026-10-01T12:00:00Z" }, null, report)).toBe(false);
+    expect(coversPeriod([b], null, report)).toBe(true); expect(coversPeriod([b], "default", report)).toBe(false);
+    expect(coversPeriod([{ ...b, effective_end: "2026-10-01T12:00:00Z" }], null, report)).toBe(false);
+  });
+  it.each([
+    { name: "adjacent days", intervals: [[0, 1], [1, 3]], expected: true },
+    { name: "overlapping full days", intervals: [[1, 3], [0, 2]], expected: true },
+    { name: "a gap", intervals: [[0, 1], [2, 3]], expected: false },
+    { name: "subday adjacency cannot cover a daily bucket", intervals: [[0, 1.5], [1.5, 3]], expected: false },
+    { name: "subday overlap covering complete buckets", intervals: [[0, 2.5], [1.5, 3]], expected: true },
+  ])("computes attested daily interval-union coverage: $name", ({ intervals, expected }) => {
+    const start = Date.parse(report.period_start), day = 86400000;
+    const bindings = intervals.map(([a, b]) => ({ provider_workspace_id: null, attested: true, effective_start: new Date(start + a * day).toISOString(), effective_end: new Date(start + b * day).toISOString() }) as Binding);
+    const period = { ...report, period_end: new Date(start + 3 * day).toISOString() };
+    expect(coversPeriod(bindings, null, period)).toBe(expected);
+    expect(coversPeriod(bindings.map(b => ({ ...b, attested: false })), null, period)).toBe(false);
+    expect(coversPeriod(bindings, "different", period)).toBe(false);
   });
   it("allows the exact 5 MiB boundary for JSON-typed files but not a filename-only guess", () => {
     expect(() => validateReportFile({ size: 5 * 1024 * 1024, type: "application/json" } as File)).not.toThrow();

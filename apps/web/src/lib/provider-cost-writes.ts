@@ -61,6 +61,20 @@ export function writeBinding(b: Binding): Binding {
     evidence_reference: b.evidence_reference, model_mappings: b.model_mappings.map(m => ({ provider_model: m.provider_model, upstream_model: m.upstream_model })) };
 }
 export const dimensionLabel = (id: string | null) => id === null ? "Provider default / missing identifier" : id;
-export function coversPeriod(b: Binding, dimension: string | null, report: CostImport) {
-  return b.provider_workspace_id === dimension && b.attested && Date.parse(b.effective_start) <= Date.parse(report.period_start) && Date.parse(b.effective_end) >= Date.parse(report.period_end);
+/** Reports use half-open UTC 1d buckets. A binding must cover a whole bucket
+ * (matching.rs); joining two partial-day attestations cannot prove that day.
+ * Union the complete buckets, not the raw timestamp intervals. */
+export function coversPeriod(bindings: Binding[], dimension: string | null, report: CostImport) {
+  const day = 86400000, start = Date.parse(report.period_start), end = Date.parse(report.period_end);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end || start % day || end % day || end - start > 31 * day) return false;
+  const intervals = bindings.filter(b => b.provider_workspace_id === dimension && b.attested)
+    .map(b => [Math.ceil(Date.parse(b.effective_start) / day) * day, Math.floor(Date.parse(b.effective_end) / day) * day])
+    .filter(([a, b]) => Number.isFinite(a) && Number.isFinite(b) && a < b).sort(([a], [b]) => a - b);
+  let covered = start;
+  for (const [a, b] of intervals) {
+    if (a > covered) return false;
+    covered = Math.max(covered, b);
+    if (covered >= end) return true;
+  }
+  return false;
 }

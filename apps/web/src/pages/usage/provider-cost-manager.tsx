@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type RefObject } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api, platformPath, type Provider, type Session } from "../../lib/api";
 import { importsPath, mappingsPath, readCostPages, readImportSummary, readLatestMapping, validateReportFile, dimensionLabel, coversPeriod, writeBinding, type Binding, type CostImport, type ImportSummary, type MappingRevision } from "../../lib/provider-cost-writes";
@@ -8,19 +8,26 @@ import { Checkbox } from "../../components/ui/checkbox/checkbox";
 import { Tabs, TabsList, Tab, TabsPanel } from "../../components/ui/tabs/tabs";
 import { DataTable } from "../../components/ui/data-table/data-table";
 import { InfoBanner } from "../../components/templates/notices";
+import { DiscardChangesDialog, NavigationGuard } from "../../components/navigation-guard";
+import { AlertDialog } from "../../components/ui/dialog/dialog";
 import s from "./provider-cost-manager.module.css";
 
-/** No evidence Files or attestation drafts enter the Query mutation cache. */
+type Workflow = { busy: boolean; active: RefObject<boolean>; setBusy: (busy: boolean) => void; dirty: boolean; setDirty: (dirty: boolean) => void };
+const WorkflowContext = createContext<Workflow>(null!);
+
+/** Tasks live above tab panels, but still abort on demotion/sign-out unmount.
+ * No evidence Files or attestation drafts enter the Query mutation cache. */
 function useWriteTask() {
-  const client = useQueryClient(), request = useRef<AbortController | null>(null), active = useRef(false);
+  const client = useQueryClient(), request = useRef<AbortController | null>(null), workflow = useContext(WorkflowContext);
+  const active = workflow.active;
   const [busy, setBusy] = useState(false), [error, setError] = useState<unknown>();
   useEffect(() => () => { request.current?.abort(); }, []);
   async function run<T>(work: (signal: AbortSignal) => Promise<T>, done: (value: T) => void) {
     if (active.current) return;
-    active.current = true; const controller = new AbortController(); request.current = controller; setBusy(true); setError(undefined);
+    active.current = true; const controller = new AbortController(); request.current = controller; setBusy(true); workflow.setBusy(true); setError(undefined);
     try { const value = await work(controller.signal); if (!controller.signal.aborted) done(value); }
     catch (e) { if (!controller.signal.aborted) { setError(e); if (e instanceof ApiError && e.status === 403) void client.invalidateQueries({ queryKey: ["session"] }); } }
-    finally { active.current = false; if (!controller.signal.aborted) setBusy(false); }
+    finally { active.current = false; if (!controller.signal.aborted) { setBusy(false); workflow.setBusy(false); } }
   }
   return { run, busy, error, clear: () => setError(undefined) };
 }
@@ -33,12 +40,23 @@ function identifier(value: { id: string }) {
   if (typeof value?.id !== "string" || !value.id) throw new Error("No revision identifier returned. Reload to check the result before retrying.");
   return value.id;
 }
-export function ProviderCostManager({ session, onOpen }: { session: Session; onOpen: (id: string) => void }) {
+type ManagerProps = { onOpen: (id: string) => void; onClose: () => void };
+export function ProviderCostManager({ session, onOpen, onClose }: ManagerProps & { session: Session }) {
   // UI is not an authorization boundary. Rust checks live browser Admin + CSRF.
   if (session.user.platform_role !== "admin" || !session.capabilities.platform_write) return null;
-  return <Manager onOpen={onOpen} />;
+  return <Manager onOpen={onOpen} onClose={onClose} />;
 }
-function Manager({ onOpen }: { onOpen: (id: string) => void }) {
+function Manager(props: ManagerProps) {
+  const [busy, setBusy] = useState(false), [dirty, setDirty] = useState(false), active = useRef(false);
+  return <WorkflowContext.Provider value={{ busy, setBusy, dirty, setDirty, active }}><ManagerView {...props} /></WorkflowContext.Provider>;
+}
+function ManagerView({ onOpen, onClose }: ManagerProps) {
+  const workflow = useContext(WorkflowContext);
+  const [leaving, setLeaving] = useState<(() => void)>(), [pendingTab, setPendingTab] = useState<string>();
+  function leave(action: () => void) {
+    if (workflow.active.current) return;
+    if (workflow.dirty) setLeaving(() => action); else action();
+  }
   const scope = useApiScope(), client = useQueryClient(), task = useWriteTask();
   const [file, setFile] = useState<File>(), [selected, setSelected] = useState<CostImport>(), [resolved, setResolved] = useState<string>();
   const [mappingId, setMappingId] = useState<string>(), [tab, setTab] = useState("upload");
@@ -58,26 +76,31 @@ function Manager({ onOpen }: { onOpen: (id: string) => void }) {
       client.setQueryData(key, rows); return report;
     }, report => { setSelected(report); setResolved(report.id); setFile(undefined); if (fileInput.current) fileInput.current.value = ""; });
   }
-  return <Stack gap={4} className={s.view}>
+  return <Stack gap={4} className={s.view} data-dirty={workflow.dirty ? "true" : undefined}>
+    <div><Button variant="secondary" disabled={workflow.busy} onClick={() => leave(onClose)}>Back to comparisons</Button></div>
+    <NavigationGuard dirty={workflow.dirty} pending={workflow.busy} />
+    <DiscardChangesDialog open={!!leaving} onOpenChange={open => { if (!open) setLeaving(undefined); }} onDiscard={() => { if (!workflow.active.current) { leaving?.(); setLeaving(undefined); } }} description="Your staged mapping hasn't been saved." />
+    <AlertDialog open={pendingTab !== undefined} onOpenChange={open => { if (!open) setPendingTab(undefined); }} title="Write still in progress" description="Switching views will not cancel this write. Stay on this page until its result is known." confirmLabel="Switch view" cancelLabel="Stay here" tone="primary" onConfirm={() => { if (pendingTab) setTab(pendingTab); setPendingTab(undefined); }} />
+    {workflow.busy && <p role="status">Write in progress. Navigation is blocked until the gateway responds.</p>}
     <h2 ref={heading} tabIndex={-1}>Upload &amp; manage provider costs</h2>
     <InfoBanner title="Permanent financial evidence">Anthropic Cost Report envelope JSON only: account_id, evidence_reference, exported_at, optional supersedes, request and ordered pages. Upload the complete closed UTC period (1–31 days), grouped by workspace_id and description. Include supersedes in the file for changed exact-coverage revisions. No credentials, headers, prompts or responses. Retained append-only; not a verified invoice.</InfoBanner>
-    <Tabs value={tab} onValueChange={value => setTab(String(value))}><Stack gap={4}>
+    <Tabs value={tab} onValueChange={value => { if (workflow.active.current) setPendingTab(String(value)); else setTab(String(value)); }}><Stack gap={4}>
       <TabsList variant="pills" overflow="scroll" aria-label="Provider cost administration"><Tab value="upload">Upload report</Tab><Tab value="mappings" disabled={!selected}>Mappings</Tab><Tab value="freeze" disabled={!selected}>Freeze snapshot</Tab></TabsList>
       <TabsPanel value="upload"><Stack gap={4}>
-        <form onSubmit={e => { e.preventDefault(); upload(); }} className={s.form}>
-          <FormField label="Anthropic report JSON" description="Maximum 5 MiB (5,242,880 bytes), 50,000 lines. Raw bytes are sent unmodified; server validation is authoritative. Duplicate JSON keys, incomplete pagination and invalid coverage are refused."><Input ref={fileInput} type="file" accept="application/json,application/*+json" disabled={task.busy} onChange={e => { setFile(e.target.files?.[0]); task.clear(); }} /></FormField>
-          <div><Button type="submit" loading={task.busy}>Upload report</Button></div>
+        <form onSubmit={e => { e.preventDefault(); leave(upload); }} className={s.form}>
+          <FormField label="Anthropic report JSON" description="Maximum 5 MiB (5,242,880 bytes), 50,000 lines. Raw bytes are sent unmodified; server validation is authoritative. Duplicate JSON keys, incomplete pagination and invalid coverage are refused."><Input ref={fileInput} type="file" accept="application/json,application/*+json" disabled={workflow.busy} onChange={e => { setFile(e.target.files?.[0]); task.clear(); }} /></FormField>
+          <div><Button type="submit" disabled={workflow.busy} loading={task.busy}>Upload report</Button></div>
         </form>
         <Refusal error={task.error} />
         <p>Identical reuploads return the retained import, not a new revision. Changed reports never supersede automatically.</p>
-        <FormField label="Existing import" description="Resume mapping or freezing a retained import without downloading its raw evidence."><NativeSelect disabled={reports.isPending || !!reports.error || task.busy} value={selected?.id ?? ""} onChange={e => select(reports.data?.find(r => r.id === e.target.value))}><option value="">Choose an import…</option>{!reports.error && reports.data?.map(r => <option key={r.id} value={r.id}>{r.account_id} · {r.period_start} – {r.period_end} · {r.id}</option>)}</NativeSelect></FormField>
+        <FormField label="Existing import" description="Resume mapping or freezing a retained import without downloading its raw evidence."><NativeSelect disabled={reports.isPending || !!reports.error || workflow.busy} value={selected?.id ?? ""} onChange={e => { const report = reports.data?.find(r => r.id === e.target.value); leave(() => select(report)); }}><option value="">Choose an import…</option>{!reports.error && reports.data?.map(r => <option key={r.id} value={r.id}>{r.account_id} · {r.period_start} – {r.period_end} · {r.id}</option>)}</NativeSelect></FormField>
         <Refusal error={reports.error} />{reports.error && <Button onClick={() => void reports.refetch()}>Reload imports</Button>}
       </Stack></TabsPanel>
-      {selected && <ImportFlow key={selected.id} report={selected} resolved={resolved} mappingId={mappingId} onMapping={setMappingId} onOpen={onOpen} tab={tab} />}
+      {selected && <ImportFlow key={selected.id} report={selected} resolved={resolved} mappingId={mappingId} onMapping={setMappingId} onOpen={id => leave(() => onOpen(id))} />}
     </Stack></Tabs>
   </Stack>;
 }
-function ImportFlow({ report, resolved, mappingId, onMapping, onOpen, tab }: { report: CostImport; resolved?: string; mappingId?: string; onMapping: (id: string) => void; onOpen: (id: string) => void; tab: string }) {
+function ImportFlow({ report, resolved, mappingId, onMapping, onOpen }: { report: CostImport; resolved?: string; mappingId?: string; onMapping: (id: string) => void; onOpen: (id: string) => void }) {
   const scope = useApiScope();
   const summary = useQuery({ queryKey: ["api", scope, importsPath, report.id, "summary"], queryFn: ({ signal }) => readImportSummary(report, signal), retry: false });
   return <>
@@ -88,8 +111,8 @@ function ImportFlow({ report, resolved, mappingId, onMapping, onOpen, tab }: { r
       {summary.error ? <><Refusal error={summary.error} /><Button onClick={() => void summary.refetch()}>Reload import lines</Button></> : !summary.data ? <p role="status">Loading normalized import lines…</p> : <p>Imported total (signed): <strong>{formatSignedMicroUsd(summary.data.total)}</strong> · {report.line_count} lines</p>}
     </section>
     {summary.data && !summary.error && <>
-      <TabsPanel value="mappings">{tab === "mappings" && <MappingStep report={report} summary={summary.data} onSaved={onMapping} />}</TabsPanel>
-      <TabsPanel value="freeze">{tab === "freeze" && <FreezeStep report={report} mappingId={mappingId} onOpen={onOpen} />}</TabsPanel>
+      <MappingStep report={report} summary={summary.data} onSaved={onMapping} />
+      <FreezeStep report={report} mappingId={mappingId} onOpen={onOpen} />
     </>}
   </>;
 }
@@ -100,33 +123,38 @@ function MappingStep({ report, summary, onSaved }: { report: CostImport; summary
   // Only the explicit reload action replaces it after a revision conflict.
   const current = useQuery({ queryKey: key, queryFn: ({ signal }) => readLatestMapping(report.account_id, signal), retry: false, staleTime: Infinity });
   const connections = useChoices<Provider>(`${platformPath}/providers`);
-  if (current.error || connections.error) return <Stack gap={3}><Refusal error={current.error ?? connections.error} /><Button onClick={() => { void current.refetch(); void connections.refetch(); }}>Reload mapping data</Button></Stack>;
-  if (current.isPending || connections.isPending) return <p role="status">Loading current mapping revision…</p>;
-  return <Stack gap={4}>
-    {saved && <p role="status">Saved mapping revision: {saved}</p>}
-    <MappingEditor key={`${current.data?.id ?? "none"}/${generation}`} report={report} summary={summary} latest={current.data ?? null} connections={connections.data?.filter(c => c.provider === "anthropic") ?? []}
-      onSaved={revision => { setSaved(revision.id); onSaved(revision.id); client.setQueryData(key, revision); }} onReload={async () => { const result = await current.refetch(); if (!result.error) { setSaved(undefined); setGeneration(n => n + 1); } }} />
-  </Stack>;
+  if (current.error || connections.error) return <TabsPanel value="mappings"><Stack gap={3}><Refusal error={current.error ?? connections.error} /><Button onClick={() => { void current.refetch(); void connections.refetch(); }}>Reload mapping data</Button></Stack></TabsPanel>;
+  if (current.isPending || connections.isPending) return <TabsPanel value="mappings"><p role="status">Loading current mapping revision…</p></TabsPanel>;
+  return <MappingEditor saved={saved} key={`${current.data?.id ?? "none"}/${generation}`} report={report} summary={summary} latest={current.data ?? null} connections={connections.data?.filter(c => c.provider === "anthropic") ?? []}
+    onSaved={revision => { setSaved(revision.id); onSaved(revision.id); client.setQueryData(key, revision); }} onReload={async () => { const result = await current.refetch(); if (!result.error) { setSaved(undefined); setGeneration(n => n + 1); } }} />;
 }
-function MappingEditor({ report, summary, latest, connections, onSaved, onReload }: { report: CostImport; summary: ImportSummary; latest: MappingRevision | null; connections: Provider[]; onSaved: (revision: MappingRevision) => void; onReload: () => Promise<void> }) {
+// This controller is outside TabsPanel: drafts, refusals and task outcomes outlive
+// the panel's presentation. Only explicit reload/import change replaces a draft.
+function MappingEditor({ report, summary, latest, connections, onSaved, onReload, saved }: { report: CostImport; summary: ImportSummary; latest: MappingRevision | null; connections: Provider[]; onSaved: (revision: MappingRevision) => void; onReload: () => Promise<void>; saved?: string }) {
+  const { busy, setDirty } = useContext(WorkflowContext);
   const [draft, setDraft] = useState<Binding[]>(latest?.bindings ?? []), [base, setBase] = useState(latest?.id ?? null);
   const [evidence, setEvidence] = useState(""), [confirmed, setConfirmed] = useState(false), [edit, setEdit] = useState<number>(), [formKey, setFormKey] = useState(0);
   const task = useWriteTask(), conflict = task.error instanceof ApiError && [409, 412].includes(task.error.status);
-  const locked = task.busy || conflict;
+  const locked = busy || conflict;
+  useEffect(() => { setDirty(JSON.stringify(draft) !== JSON.stringify(latest?.bindings ?? []) || !!evidence); }, [draft, evidence, latest, setDirty]);
+  useEffect(() => () => setDirty(false), [setDirty]);
   function stage(binding: Binding) { setDraft(rows => edit === undefined ? [...rows, binding] : rows.map((r, i) => i === edit ? binding : r)); setEdit(undefined); setFormKey(n => n + 1); setConfirmed(false); }
-  return <Stack gap={4}>
+  return <TabsPanel value="mappings"><Stack gap={4}>
+    {saved && <p role="status">Saved mapping revision: {saved}</p>}
     <InfoBanner title="Whole replacement revision">All existing bindings are retained in this draft unless explicitly removed. One provider workspace maps to one connection per effective interval. If multiple OMG connections contribute, do not attest exclusive coverage of only one. Shared actual charges are never prorated. Default/missing provider identifiers are distinct from OMG Unallocated.</InfoBanner>
     <p>Base mapping revision: {base ?? "None (first revision)"}</p>
     <DataTable caption="Provider dimensions" stack columns={[
       { id: "dimension", header: "Provider workspace dimension", rowHeader: true, cell: (id: string | null) => dimensionLabel(id) },
-      { id: "coverage", header: "Draft period coverage", cell: (id: string | null) => draft.some(b => coversPeriod(b, id, report)) ? "Mapped" : "Unmapped" },
+      { id: "coverage", header: "Draft period coverage", cell: (id: string | null) => coversPeriod(draft, id, report) ? "Mapped" : "Unmapped" },
     ]} data={summary.dimensions} getRowId={id => JSON.stringify(id)} />
     <DataTable caption="Whole mapping draft" stack columns={[
       { id: "dimension", header: "Provider workspace", rowHeader: true, cell: (b: Binding) => dimensionLabel(b.provider_workspace_id) },
       { id: "scope", header: "Gateway scope", cell: (b: Binding) => <>{b.connection_id} · {b.deployment_id ?? "All deployments"} · {b.workspace_id ?? "Shared / unallocated"}</> },
       { id: "period", header: "Effective UTC interval", cell: (b: Binding) => `${b.effective_start} – ${b.effective_end}` },
+      { id: "models", header: "Explicit model mappings (read-only)", cell: (b: Binding) => b.model_mappings.length ? <ul>{b.model_mappings.map((m, i) => <li key={i}>{m.provider_model} → {m.upstream_model}</li>)}</ul> : "No explicit model mappings" },
       { id: "actions", header: "Actions", cell: (binding: Binding) => { const index = draft.indexOf(binding); return <><Button size="sm" variant="ghost" disabled={locked} onClick={() => { setEdit(index); setFormKey(n => n + 1); }}>Edit binding {index + 1}</Button><Button size="sm" variant="ghost" disabled={locked} onClick={() => { setDraft(rows => rows.filter((_, i) => i !== index)); setEdit(undefined); setFormKey(n => n + 1); setConfirmed(false); }}>Remove binding {index + 1}</Button></>; } },
     ]} data={draft} getRowId={(_, i) => String(i)} pageSize={10} />
+    <p>Editing explicit model mappings is API-only for now. Existing pairs are preserved.</p>
     <BindingForm key={formKey} report={report} dimensions={summary.dimensions} connections={connections} initial={edit === undefined ? undefined : draft[edit]} locked={locked} onStage={stage} />
     <form className={s.form} onSubmit={e => { e.preventDefault(); if (!confirmed || locked || !evidence.trim()) return; void task.run(async signal => identifier(await api<{ id: string }>(mappingsPath, { method: "POST", signal, body: { account_id: report.account_id, supersedes: base, evidence_reference: evidence.trim(), bindings: draft.map(writeBinding) } })), id => { setBase(id); setConfirmed(false); setEvidence(""); onSaved({ id, account_id: report.account_id, supersedes: base, evidence_reference: evidence.trim(), bindings: draft.map(writeBinding) }); }); }}>
       <FormField label="Mapping revision evidence reference" description="Opaque reference, retained permanently. Not a fetched URL." ><Input value={evidence} maxLength={256} disabled={locked} onChange={e => { setEvidence(e.target.value); setConfirmed(false); }} /></FormField>
@@ -135,8 +163,8 @@ function MappingEditor({ report, summary, latest, connections, onSaved, onReload
     </form>
     <Refusal error={task.error} />
     {conflict && <p>The mapping changed or the revision is no longer current. Reload and discard this draft, review the latest bindings, then attest and retry. Nothing is overwritten automatically.</p>}
-    <div><Button variant="secondary" disabled={task.busy} onClick={() => void onReload()}>Reload latest mapping and discard draft</Button></div>
-  </Stack>;
+    <div><Button variant="secondary" disabled={busy} onClick={() => void onReload()}>Reload latest mapping and discard draft</Button></div>
+  </Stack></TabsPanel>;
 }
 function BindingForm({ report, dimensions, connections, initial, locked, onStage }: { report: CostImport; dimensions: (string | null)[]; connections: Provider[]; initial?: Binding; locked: boolean; onStage: (binding: Binding) => void }) {
   const options = [...new Set([...dimensions, ...(initial ? [initial.provider_workspace_id] : [])])];
@@ -172,16 +200,17 @@ function BindingForm({ report, dimensions, connections, initial, locked, onStage
 }
 function FreezeStep({ report, mappingId, onOpen }: { report: CostImport; mappingId?: string; onOpen: (id: string) => void }) {
   const scope = useApiScope(), client = useQueryClient(), task = useWriteTask(), [frozen, setFrozen] = useState<string>();
-  const current = useQuery({ queryKey: ["api", scope, mappingsPath, report.account_id, "latest"], queryFn: ({ signal }) => readLatestMapping(report.account_id, signal), retry: false });
+  const current = useQuery({ queryKey: ["api", scope, mappingsPath, report.account_id, "latest"], queryFn: ({ signal }) => readLatestMapping(report.account_id, signal), retry: false, staleTime: Infinity });
+  const { busy } = useContext(WorkflowContext);
   const explicitMapping = mappingId ?? current.data?.id;
-  return <Stack gap={4}>
+  return <TabsPanel value="freeze"><Stack gap={4}>
     <h3>Freeze reconciliation for this period</h3>
     <p>Import revision: {report.id} · Mapping revision: {explicitMapping ?? "None selected"}</p>
     <p>UTC coverage [{report.period_start}, {report.period_end}). Pins these exact immutable revisions and an observation timestamp. No estimates, ledger entries or holds are changed. This is not a verified invoice; unknown comparisons remain unknown.</p>
     <Refusal error={current.error} />{current.error && <Button onClick={() => void current.refetch()}>Reload freeze mapping</Button>}
     {!current.isPending && !current.error && !explicitMapping && <p>Save a mapping revision first, including an explicitly empty replacement set for unmapped coverage.</p>}
-    <div><Button disabled={current.isPending || !!current.error || !explicitMapping || !!frozen} loading={task.busy} onClick={() => { if (!explicitMapping) return; void task.run(async signal => identifier(await api<{ id: string }>(reconciliationPath, { method: "POST", signal, body: { import_id: report.id, mapping_id: explicitMapping } })), id => { setFrozen(id); void client.invalidateQueries({ queryKey: ["api", scope, reconciliationPath] }); }); }}>Freeze reconciliation</Button></div>
+    <div><Button disabled={busy || current.isPending || !!current.error || !explicitMapping || !!frozen} loading={task.busy} onClick={() => { if (!explicitMapping) return; void task.run(async signal => identifier(await api<{ id: string }>(reconciliationPath, { method: "POST", signal, body: { import_id: report.id, mapping_id: explicitMapping } })), id => { setFrozen(id); void client.invalidateQueries({ queryKey: ["api", scope, reconciliationPath] }); }); }}>Freeze reconciliation</Button></div>
     <Refusal error={task.error} />
-    {frozen && <><p role="status">Snapshot frozen: {frozen}</p><div><Button onClick={() => onOpen(frozen)}>Open snapshot {frozen}</Button></div></>}
-  </Stack>;
+    {frozen && <><p role="status">Snapshot frozen: {frozen}</p><div><Button disabled={busy} onClick={() => onOpen(frozen)}>Open snapshot {frozen}</Button></div></>}
+  </Stack></TabsPanel>;
 }

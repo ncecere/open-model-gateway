@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { createBrowserHistory, createRootRoute, createRoute, createRouter, Link, Outlet, RouterProvider } from "@tanstack/react-router";
 import userEvent from "@testing-library/user-event";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { ProviderReconciliations } from "../pages/usage/provider-reconciliations";
@@ -9,7 +10,7 @@ import { admin, auditor, session, testClient } from "../lib/test-fixtures";
 const root = "/api/v1/platform", imports = `${root}/provider-cost-imports`, mappings = `${root}/provider-cost-mappings`;
 const report = { id: "import", account_id: "account", provider: "anthropic", period_start: "2026-10-01T00:00:00Z", period_end: "2026-10-02T00:00:00Z", supersedes: "previous", line_count: 2 };
 const binding = { provider_workspace_id: "already-mapped", connection_id: "connection", deployment_id: null, workspace_id: null, effective_start: report.period_start, effective_end: report.period_end, exclusive: false, non_omg_traffic: true, attested: true, evidence_reference: "old-proof", model_mappings: [] };
-function serve(options: { refusal?: number; conflict?: number } = {}) {
+function serve(options: { refusal?: number; conflict?: number; modelMappings?: { provider_model: string; upstream_model: string }[] } = {}) {
   let latest = "mapping-old";
   const fetch = vi.fn().mockImplementation((url: string, init: RequestInit) => {
     if (init.method === "POST") {
@@ -25,7 +26,7 @@ function serve(options: { refusal?: number; conflict?: number } = {}) {
       { amount_microusd: "-2", dimensions: { workspace_id: "already-mapped" } },
     ] };
     if (url.startsWith(`${mappings}?`)) data = { data: [{ id: latest, account_id: "account", supersedes: latest === "mapping-concurrent" ? "mapping-old" : null }] };
-    if (url === `${mappings}/${latest}`) data = { id: latest, account_id: "account", evidence_reference: "old-revision-proof", bindings: [{ ...binding, binding_number: 1 }] };
+    if (url === `${mappings}/${latest}`) data = { id: latest, account_id: "account", evidence_reference: "old-revision-proof", bindings: [{ ...binding, model_mappings: options.modelMappings ?? [], binding_number: 1 }] };
     if (url.startsWith(`${root}/providers?`)) data = { data: [{ id: "connection", name: "Anthropic connection", provider: "anthropic" }, { id: "other", name: "Other provider", provider: "openai" }] };
     return Promise.resolve(Response.json(data));
   });
@@ -131,6 +132,125 @@ describe("Admin provider-cost writes", () => {
     expect(within(screen.getByRole("table", { name: "Whole mapping draft" })).queryByText("already-mapped")).toBeNull();
     expect(fetch.mock.calls.filter(([url, init]) => url === mappings && init.method === "POST")).toHaveLength(1);
   });
+  it("retains an unsaved staged draft and warns before leaving it", async () => {
+    serve(); const user = await open(); await upload(user);
+    await user.click(screen.getByRole("tab", { name: "Mappings" }));
+    await user.click(await screen.findByRole("button", { name: "Remove binding 1" }));
+    await user.type(screen.getByLabelText("Mapping revision evidence reference"), "unsaved-proof");
+    await user.click(screen.getByRole("tab", { name: "Freeze snapshot" }));
+    await user.click(screen.getByRole("tab", { name: "Mappings" }));
+    expect(within(await screen.findByRole("table", { name: "Whole mapping draft" })).queryByText("already-mapped")).toBeNull();
+    expect((screen.getByLabelText("Mapping revision evidence reference") as HTMLInputElement).value).toBe("unsaved-proof");
+    await user.click(screen.getByRole("button", { name: "Back to comparisons" }));
+    await screen.findByRole("alertdialog", { name: "Discard unsaved changes?" });
+    await user.click(screen.getByRole("button", { name: "Keep editing" }));
+    expect(screen.getByRole("table", { name: "Whole mapping draft" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Back to comparisons" }));
+    await user.click(screen.getByRole("button", { name: /^Discard$/ }));
+    expect(screen.queryByRole("heading", { name: "Upload & manage provider costs" })).toBeNull();
+  });
+  it("exposes unsaved staged mappings to the shell sign-out confirmation until saved", async () => {
+    serve(); const user = await open(); await upload(user);
+    await user.click(screen.getByRole("tab", { name: "Mappings" }));
+    await user.click(await screen.findByRole("button", { name: "Remove binding 1" }));
+    await user.click(screen.getByRole("tab", { name: "Upload report" }));
+    // Home's sign-out flow checks this shared unsaved-changes contract, even
+    // when the mapping panel is hidden, before cancelling requests/signing out.
+    expect(document.querySelector('[data-dirty="true"]')).not.toBeNull();
+    await user.click(screen.getByRole("tab", { name: "Mappings" }));
+    await user.type(screen.getByLabelText("Mapping revision evidence reference"), "proof");
+    await user.click(screen.getByRole("checkbox", { name: "I confirm the whole replacement mapping revision" }));
+    await user.click(screen.getByRole("button", { name: "Save mapping revision" }));
+    await screen.findByText("Saved mapping revision: mapping-new");
+    expect(document.querySelector('[data-dirty="true"]')).toBeNull();
+  });
+  it("shows retained explicit model pairs read-only and preserves them on save", async () => {
+    const modelMappings = [{ provider_model: "claude-provider", upstream_model: "claude-historical" }];
+    const fetch = serve({ modelMappings }), user = await open(); await upload(user);
+    await user.click(screen.getByRole("tab", { name: "Mappings" }));
+    const draft = await screen.findByRole("table", { name: "Whole mapping draft" });
+    expect(draft.textContent).toContain("claude-provider → claude-historical");
+    expect(screen.getByText(/Editing explicit model mappings is API-only/)).toBeTruthy();
+    await user.type(screen.getByLabelText("Mapping revision evidence reference"), "proof");
+    await user.click(screen.getByRole("checkbox", { name: "I confirm the whole replacement mapping revision" }));
+    await user.click(screen.getByRole("button", { name: "Save mapping revision" }));
+    await screen.findByText("Saved mapping revision: mapping-new");
+    expect(JSON.parse(fetch.mock.calls.find(([url, init]) => url === mappings && init.method === "POST")![1].body).bindings[0].model_mappings).toEqual(modelMappings);
+  });
+  it.each(["Mappings", "Freeze snapshot"])("records pending %s success after a guarded tab switch and retains the result", async step => {
+    const fetch = serve(), original = fetch.getMockImplementation()!;
+    let finish!: (response: Response) => void, signal: AbortSignal | undefined;
+    fetch.mockImplementation((url: string, init: RequestInit) => {
+      if (init.method === "POST" && url !== imports) { signal = init.signal as AbortSignal; return new Promise<Response>(resolve => { finish = resolve; }); }
+      return original(url, init);
+    });
+    const user = await open(); await upload(user);
+    await user.click(screen.getByRole("tab", { name: step }));
+    if (step === "Mappings") {
+      await user.type(await screen.findByLabelText("Mapping revision evidence reference"), "proof");
+      await user.click(screen.getByRole("checkbox", { name: "I confirm the whole replacement mapping revision" }));
+      await user.click(screen.getByRole("button", { name: "Save mapping revision" }));
+    } else {
+      await screen.findByText(/Mapping revision: mapping-old/);
+      await user.click(screen.getByRole("button", { name: "Freeze reconciliation" }));
+    }
+    expect(screen.getByRole("button", { name: "Back to comparisons" }).hasAttribute("disabled")).toBe(true);
+    await user.click(screen.getByRole("tab", { name: "Upload report" }));
+    await screen.findByRole("alertdialog", { name: "Write still in progress" });
+    expect(screen.getByRole("tab", { name: step, hidden: true }).getAttribute("aria-selected")).toBe("true");
+    await user.click(screen.getByRole("button", { name: "Switch view" }));
+    expect(signal?.aborted).toBe(false);
+    expect(screen.queryByText(/Snapshot frozen:|Saved mapping revision:/)).toBeNull();
+    await act(async () => finish(Response.json({ id: "retained-result" })));
+    await user.click(screen.getByRole("tab", { name: step }));
+    expect(await screen.findByText(step === "Mappings" ? "Saved mapping revision: retained-result" : "Snapshot frozen: retained-result")).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "Upload report" }));
+    await user.click(screen.getByRole("tab", { name: step }));
+    expect(screen.getByText(step === "Mappings" ? "Saved mapping revision: retained-result" : "Snapshot frozen: retained-result")).toBeTruthy();
+  });
+  it("records a pending refusal on another tab without fabricating success", async () => {
+    const fetch = serve(), original = fetch.getMockImplementation()!;
+    let finish!: (response: Response) => void;
+    fetch.mockImplementation((url: string, init: RequestInit) => init.method === "POST" && url === mappings ? new Promise<Response>(resolve => { finish = resolve; }) : original(url, init));
+    const user = await open(); await upload(user);
+    await user.click(screen.getByRole("tab", { name: "Mappings" }));
+    await user.type(await screen.findByLabelText("Mapping revision evidence reference"), "proof");
+    await user.click(screen.getByRole("checkbox", { name: "I confirm the whole replacement mapping revision" }));
+    await user.click(screen.getByRole("button", { name: "Save mapping revision" }));
+    await user.click(screen.getByRole("tab", { name: "Upload report" }));
+    await user.click(await screen.findByRole("button", { name: "Switch view" }));
+    await act(async () => finish(Response.json({ error: { message: "Stale revision" } }, { status: 412 })));
+    await user.click(screen.getByRole("tab", { name: "Mappings" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("Stale revision");
+    expect(screen.queryByText(/Saved mapping revision:/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Save mapping revision" }).hasAttribute("disabled")).toBe(true);
+  });
+  it("blocks route navigation and unload during a pending write, then permits navigation after resolution", async () => {
+    const fetch = serve(), original = fetch.getMockImplementation()!;
+    let finish!: (response: Response) => void;
+    fetch.mockImplementation((url: string, init: RequestInit) => init.method === "POST" ? new Promise<Response>(resolve => { finish = resolve; }) : original(url, init));
+    vi.stubGlobal("scrollTo", vi.fn());
+    const rootRoute = createRootRoute({ component: () => <><Link to="/profile">Leave page</Link><Outlet /></> });
+    const home = createRoute({ getParentRoute: () => rootRoute, path: "/", component: () => <ProviderReconciliations session={admin} /> });
+    const away = createRoute({ getParentRoute: () => rootRoute, path: "/profile", component: () => <h2>Away</h2> });
+    window.history.replaceState(null, "", "/");
+    const router = createRouter({ routeTree: rootRoute.addChildren([home, away]), history: createBrowserHistory() });
+    document.cookie = "omg_csrf=test-csrf; path=/";
+    render(<QueryClientProvider client={testClient()}><RouterProvider router={router} /></QueryClientProvider>);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Upload & manage" }));
+    await user.upload(screen.getByLabelText("Anthropic report JSON"), new File(["{}"], "report.json", { type: "application/json" }));
+    await user.click(screen.getByRole("button", { name: "Upload report" }));
+    await user.click(screen.getByRole("link", { name: "Leave page" }));
+    expect(router.state.location.pathname).toBe("/");
+    expect(screen.queryByRole("button", { name: /^Discard$/ })).toBeNull();
+    const unload = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(unload);
+    expect(unload.defaultPrevented).toBe(true);
+    await act(async () => finish(Response.json({ id: "import" })));
+    await screen.findByText("Import resolved: import");
+    await user.click(screen.getByRole("link", { name: "Leave page" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/profile"));
+  });
   it("requires renewed attestation after a scope change and refuses contradictory exclusivity", async () => {
     const fetch = serve(), user = await open(); await upload(user);
     await user.click(screen.getByRole("tab", { name: "Mappings" }));
@@ -163,6 +283,36 @@ describe("Admin provider-cost writes", () => {
     expect(screen.queryByRole("button", { name: "Upload report" })).toBeNull();
     expect(signal?.aborted).toBe(true);
   });
+  it.each([
+    { step: "Mappings", cancellation: "demotion" }, { step: "Freeze snapshot", cancellation: "demotion" },
+    { step: "Mappings", cancellation: "sign-out unmount" }, { step: "Freeze snapshot", cancellation: "sign-out unmount" },
+  ])("cancels pending $step on $cancellation and ignores a late success", async ({ step, cancellation }) => {
+    const fetch = serve(), original = fetch.getMockImplementation()!;
+    let finish!: (response: Response) => void, signal: AbortSignal | undefined;
+    fetch.mockImplementation((url: string, init: RequestInit) => {
+      if (init.method === "POST" && url !== imports) { signal = init.signal as AbortSignal; return new Promise<Response>(resolve => { finish = resolve; }); }
+      return original(url, init);
+    });
+    document.cookie = "omg_csrf=test-csrf; path=/";
+    const client = testClient(), user = userEvent.setup();
+    const content = (viewer: typeof admin) => <QueryClientProvider client={client}><ProviderReconciliations session={viewer} /></QueryClientProvider>;
+    const view = render(content(admin));
+    await user.click(screen.getByRole("button", { name: "Upload & manage" })); await upload(user);
+    await user.click(screen.getByRole("tab", { name: step }));
+    if (step === "Mappings") {
+      await user.type(await screen.findByLabelText("Mapping revision evidence reference"), "proof");
+      await user.click(screen.getByRole("checkbox", { name: "I confirm the whole replacement mapping revision" }));
+      await user.click(screen.getByRole("button", { name: "Save mapping revision" }));
+    } else {
+      await screen.findByText(/Mapping revision: mapping-old/);
+      await user.click(screen.getByRole("button", { name: "Freeze reconciliation" }));
+    }
+    if (cancellation === "demotion") view.rerender(content(auditor)); else view.unmount();
+    expect(signal?.aborted).toBe(true);
+    await act(async () => finish(Response.json({ id: "late-success" })));
+    expect(screen.queryByText(/late-success/)).toBeNull();
+    expect(client.getQueryCache().findAll().some(q => (q.state.data as { id?: string } | undefined)?.id === "late-success")).toBe(false);
+  });
   it("opens the frozen snapshot in the read-only detail view, and shows a freeze refusal without success", async () => {
     const fetch = serve(), original = fetch.getMockImplementation()!;
     let refuse = true;
@@ -183,13 +333,16 @@ describe("Admin provider-cost writes", () => {
     expect(screen.getByRole("heading", { name: "Reconciliation frozen-new" })).toBeTruthy();
     expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Reconciliation frozen-new" }));
   });
-  it.each([409, 412])("locks mapping save on conflict %s until explicit reload, without overwriting", async conflict => {
+  it.each([409, 412])("retains conflict %s lock across tabs until explicit reload, without overwriting", async conflict => {
     const fetch = serve({ conflict }), user = await open(); await upload(user);
     await user.click(screen.getByRole("tab", { name: "Mappings" }));
     await screen.findByRole("table", { name: "Provider dimensions" });
     await user.type(screen.getByLabelText("Mapping revision evidence reference"), "finance:new");
     await user.click(screen.getByRole("checkbox", { name: "I confirm the whole replacement mapping revision" }));
     await user.click(screen.getByRole("button", { name: "Save mapping revision" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("Overlapping coverage");
+    await user.click(screen.getByRole("tab", { name: "Upload report" }));
+    await user.click(screen.getByRole("tab", { name: "Mappings" }));
     expect((await screen.findByRole("alert")).textContent).toContain("Overlapping coverage");
     expect(screen.getByRole("button", { name: "Save mapping revision" }).hasAttribute("disabled")).toBe(true);
     await user.click(screen.getByRole("button", { name: "Reload latest mapping and discard draft" }));

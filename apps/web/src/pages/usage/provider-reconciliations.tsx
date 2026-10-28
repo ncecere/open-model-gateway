@@ -33,9 +33,9 @@ function ComparisonView({ session, record, onSelect }: Props) {
     if (onSelect) onSelect(next); else setLocal(next);
   };
   return <Stack gap={4} className={s.view}>
-    <Heading title="Provider-reported cost reconciliation" description="Anthropic · Frozen comparisons" actions={!selected && writable ? <Button variant="secondary" onClick={() => setManaging(value => !value)}>{managing ? "Back to comparisons" : "Upload & manage"}</Button> : undefined} />
+    <Heading title="Provider-reported cost reconciliation" description="Anthropic · Frozen comparisons" actions={!selected && writable && !managing ? <Button variant="secondary" onClick={() => setManaging(true)}>Upload &amp; manage</Button> : undefined} />
     {(!managing || selected || !writable) && <InfoBanner title="Read-only">Frozen provider-reported charges against configured-rate estimates. Not a verified invoice or a complete payable balance. Priority Tier costs are not supplied. No estimates or holds are changed here.</InfoBanner>}
-    {selected ? <><div><Button variant="ghost" size="sm" onClick={() => select()}>Back to reconciliations</Button></div><Detail key={selected} id={selected} /></> : managing && writable ? <ProviderCostManager session={session} onOpen={id => { setManaging(false); select(id); }} /> : <ReconciliationList onSelect={select} restoreFocusId={origin.current} />}
+    {selected ? <><div><Button variant="ghost" size="sm" onClick={() => select()}>Back to reconciliations</Button></div><Detail key={selected} id={selected} /></> : managing && writable ? <ProviderCostManager session={session} onClose={() => setManaging(false)} onOpen={id => { setManaging(false); select(id); }} /> : <ReconciliationList onSelect={select} restoreFocusId={origin.current} />}
   </Stack>;
 }
 const periodKey = (r: ListedReconciliation) => `${r.report.period_start}/${r.report.period_end}`;
