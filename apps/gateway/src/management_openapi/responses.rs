@@ -614,12 +614,12 @@ impl PositiveFixtures {
             let has = |kind: &str| ran.is_some_and(|ran| ran.contains(kind));
             if !super::coverage::documented_queries(document, op)?.is_empty() && !has("query") {
                 failures.push(format!(
-                    "{key}: documented query parameters have no executed HTTP boundary vectors (call vectors::query_vectors)"
+                    "{key}: documented query parameters have no executed HTTP boundary vectors (call http_vectors::query_vectors)"
                 ));
             }
             if op.get("requestBody").is_some() && !has("body") {
                 failures.push(format!(
-                    "{key}: the request body has no executed HTTP boundary vectors (call vectors::body_vectors_http)"
+                    "{key}: the request body has no executed HTTP boundary vectors (call http_vectors::body_vectors_http)"
                 ));
             }
         }
