@@ -57,6 +57,28 @@ impl Client {
     async fn ok(&mut self, who: &Browser, method: &str, path: &str, input: Option<Value>) -> Value {
         self.send(who, method, path, input, StatusCode::OK).await
     }
+    /// A refused body, pinned against the documented request schema: a
+    /// STRUCTURAL refusal (wrong type, null, unknown field, wrong root) must
+    /// also be rejected by the schema (`schema_accepts == false`); a SEMANTIC
+    /// refusal (value rules the handler applies after parsing) is accepted by
+    /// the schema and listed with `schema_accepts == true`. Only the verdict
+    /// is compared; the body is never printed.
+    async fn refused(
+        &mut self,
+        who: &Browser,
+        method: &str,
+        path: &str,
+        body: Value,
+        status: StatusCode,
+        schema_accepts: bool,
+    ) {
+        assert_eq!(
+            openapi::responses::check_request(method, path, &body).is_ok(),
+            schema_accepts,
+            "{method} {path} {status}: request schema verdict disagrees with the handler class"
+        );
+        self.send(who, method, path, Some(body), status).await;
+    }
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
@@ -316,22 +338,49 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         StatusCode::UNSUPPORTED_MEDIA_TYPE,
     )
     .await;
-    for (probe, status) in [
+    // Structural refusals of the manual PATCH parser: the schema must reject
+    // each of them too. `{"enabled":null}`/`{"issuer":null}` are rejected because
+    // PATCH merges and re-deserializes MappingInput (only the three role/workspace
+    // fields are nullable); the semantic rows are accepted by the schema.
+    for (probe, status, schema_accepts) in [
         (
             json!({"unexpected_configuration":true}),
             StatusCode::UNPROCESSABLE_ENTITY,
+            false,
         ),
         (
             json!({"enabled":{"unexpected_configuration":true}}),
             StatusCode::BAD_REQUEST,
+            false,
         ),
-        (json!({"enabled":null}), StatusCode::BAD_REQUEST),
-        (json!({"issuer":null}), StatusCode::BAD_REQUEST),
-        (json!([]), StatusCode::BAD_REQUEST),
-        (Value::Null, StatusCode::BAD_REQUEST),
+        (json!({"enabled":null}), StatusCode::BAD_REQUEST, false),
+        (json!({"enabled":"true"}), StatusCode::BAD_REQUEST, false),
+        (json!({"issuer":null}), StatusCode::BAD_REQUEST, false),
+        (json!({"group_value":null}), StatusCode::BAD_REQUEST, false),
+        (json!({"target_kind":null}), StatusCode::BAD_REQUEST, false),
+        (
+            json!({"workspace_id":"not-a-uuid"}),
+            StatusCode::BAD_REQUEST,
+            false,
+        ),
+        (json!([]), StatusCode::BAD_REQUEST, false),
+        (Value::Null, StatusCode::BAD_REQUEST, false),
+        // Semantic: a well-typed target_kind the handler refuses.
+        (
+            json!({"target_kind":"bogus"}),
+            StatusCode::BAD_REQUEST,
+            true,
+        ),
     ] {
-        c.send(&admin, "PATCH", &mapping_path, Some(probe), status)
-            .await;
+        c.refused(
+            &admin,
+            "PATCH",
+            &mapping_path,
+            probe,
+            status,
+            schema_accepts,
+        )
+        .await;
     }
     let preview_path = format!("{mapping_path}/preview");
     c.ok(&admin, "POST", &preview_path, Some(json!({}))).await;
@@ -343,22 +392,56 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         StatusCode::UNSUPPORTED_MEDIA_TYPE,
     )
     .await;
-    for (probe, status) in [
+    for (probe, status, schema_accepts) in [
         (
             json!({"unexpected_configuration":true}),
             StatusCode::UNPROCESSABLE_ENTITY,
+            false,
         ),
-        (json!({"delete":null}), StatusCode::BAD_REQUEST),
-        (json!({"delete":[]}), StatusCode::BAD_REQUEST),
+        (json!({"delete":null}), StatusCode::BAD_REQUEST, false),
+        (json!({"delete":[]}), StatusCode::BAD_REQUEST, false),
+        (json!({"delete":"true"}), StatusCode::BAD_REQUEST, false),
+        (json!({"enabled":null}), StatusCode::BAD_REQUEST, false),
+        (json!({"issuer":null}), StatusCode::BAD_REQUEST, false),
         (
             json!({"enabled":{"unexpected_configuration":true}}),
             StatusCode::BAD_REQUEST,
+            false,
         ),
-        (json!([]), StatusCode::BAD_REQUEST),
-        (Value::Null, StatusCode::BAD_REQUEST),
+        (json!([]), StatusCode::BAD_REQUEST, false),
+        (Value::Null, StatusCode::BAD_REQUEST, false),
+        // Semantic: a well-typed target_kind the shared merge validator refuses.
+        (
+            json!({"target_kind":"bogus"}),
+            StatusCode::BAD_REQUEST,
+            true,
+        ),
     ] {
-        c.send(&admin, "POST", &preview_path, Some(probe), status)
-            .await;
+        c.refused(
+            &admin,
+            "POST",
+            &preview_path,
+            probe,
+            status,
+            schema_accepts,
+        )
+        .await;
+    }
+    // The NEW-mapping preview is a typed DTO whose fields are all Option: null is
+    // structurally accepted (schema accepts) and the handler then refuses the
+    // missing required value (semantic 400), unlike the merge-based bodies above.
+    for field in ["issuer", "group_value", "target_kind", "enabled"] {
+        let mut body = json!({"issuer":"https://issuer.example.test","group_value":"contract-group","target_kind":"platform","platform_role":"user","workspace_id":null,"workspace_role":null,"enabled":true});
+        body[field] = Value::Null;
+        c.refused(
+            &admin,
+            "POST",
+            "/api/v1/platform/oidc/group-mappings/preview",
+            body,
+            StatusCode::BAD_REQUEST,
+            true,
+        )
+        .await;
     }
     // object_visibility is also manually validated after OwnWorkspaceUpdate
     // deserialization. Omission/null are distinct from invalid raw JSON values.
@@ -369,44 +452,39 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         Some(json!({"name":"Owner renamed","object_visibility":null})),
     )
     .await;
+    // The handler's `object_visibility: Option<Value>` accepts any JSON and then
+    // refuses all but "member"/"workspace"; the schema's enum rejects them too.
     for probe in [
         json!(true),
         json!(1),
         json!("wrong"),
         json!([]),
+        json!({}),
         json!({"unexpected_configuration":true}),
     ] {
-        c.send(
+        c.refused(
             &owner,
             "PATCH",
             &own,
-            Some(json!({"object_visibility":probe})),
+            json!({"object_visibility":probe}),
             StatusCode::BAD_REQUEST,
+            false,
         )
         .await;
     }
-    c.send(
+    // Semantic: well-typed bodies that name nothing to change (null is the
+    // same as omission) are accepted by the schema and refused by the handler.
+    for body in [json!({}), json!({"object_visibility":null})] {
+        c.refused(&owner, "PATCH", &own, body, StatusCode::BAD_REQUEST, true)
+            .await;
+    }
+    c.refused(
         &owner,
         "PATCH",
         &own,
-        Some(json!({})),
-        StatusCode::BAD_REQUEST,
-    )
-    .await;
-    c.send(
-        &owner,
-        "PATCH",
-        &own,
-        Some(json!({"object_visibility":null})),
-        StatusCode::BAD_REQUEST,
-    )
-    .await;
-    c.send(
-        &owner,
-        "PATCH",
-        &own,
-        Some(json!({"unexpected_configuration":true})),
+        json!({"unexpected_configuration":true}),
         StatusCode::UNPROCESSABLE_ENTITY,
+        false,
     )
     .await;
     sqlx::query("INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source,mapping_id) VALUES($1,$2,'member','group',$3)").bind(ws).bind(f.member.user_id).bind(mapping).execute(&pool).await.unwrap();

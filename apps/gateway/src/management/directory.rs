@@ -20,12 +20,14 @@ fn management_openapi_slice2_directory_request_vectors() {
         "/api/v1/platform/users/{user}/roles",
         json!({"role":"user"}),
     );
-    // object_visibility is a raw Value: its manual handler validation is
-    // exercised separately over HTTP, not falsely treated as a typed enum.
-    vectors::<OwnWorkspaceUpdate>(
+    // object_visibility is a raw Value in the production DTO and validated
+    // by hand (`member`/`workspace`, else 400). The vectors therefore run on a
+    // typed wire mirror that does include object_visibility; the HTTP probes
+    // (openapi_slice2_fixture_tests) compare the real handler with the schema.
+    vectors::<slice2_wire::OwnWorkspaceUpdateWire>(
         "PATCH",
         "/api/v1/workspaces/{ws}",
-        json!({"name":"Fixture"}),
+        json!({"name":"Fixture","object_visibility":"workspace"}),
     );
     vectors::<NewWorkspace>(
         "POST",
@@ -52,6 +54,35 @@ fn management_openapi_slice2_directory_request_vectors() {
         "/api/v1/platform/oidc/group-mappings/{id}/preview",
         &[MAPPING_PATCH_FIELDS.as_slice(), &["delete"]].concat(),
     );
+}
+
+/// Test-only wire mirror of [`OwnWorkspaceUpdate`] with object_visibility typed
+/// as its accepted values. The exhaustive destructuring stops compiling if the
+/// production DTO gains or renames a field.
+#[cfg(test)]
+mod slice2_wire {
+    use super::*;
+    #[derive(Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    pub(super) enum Visibility {
+        Member,
+        Workspace,
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub(super) struct OwnWorkspaceUpdateWire {
+        #[allow(dead_code)]
+        name: Option<String>,
+        #[allow(dead_code)]
+        object_visibility: Option<Visibility>,
+    }
+    #[allow(dead_code)]
+    fn same_fields_as_production(p: OwnWorkspaceUpdate) {
+        let OwnWorkspaceUpdate {
+            name: _,
+            object_visibility: _,
+        } = p;
+    }
 }
 
 pub(super) fn routes() -> Router<Store> {
