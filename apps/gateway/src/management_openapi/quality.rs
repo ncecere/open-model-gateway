@@ -560,6 +560,18 @@ pub(super) fn operation(document: &Value, operation: &Value) -> Result<()> {
         }
         match node {
             Value::Object(map) => {
+                if let Some(value) = map.get(super::coverage::UNOBSERVED_PARAMETER) {
+                    ensure!(
+                        value.as_str().is_some_and(|r| !r.trim().is_empty()),
+                        "{} needs a non-empty reason at {location}",
+                        super::coverage::UNOBSERVED_PARAMETER
+                    );
+                    ensure!(
+                        map.get("in").is_some_and(|v| v == "query"),
+                        "{} is only valid on a query parameter at {location}",
+                        super::coverage::UNOBSERVED_PARAMETER
+                    );
+                }
                 for (key, child) in map {
                     let pointer = format!("{location}/{}", segment(key));
                     if key == "schema" {
