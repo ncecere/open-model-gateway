@@ -1,0 +1,3884 @@
+{
+  "schemas": {
+    "AccessOk": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        }
+      },
+      "required": [
+        "ok"
+      ],
+      "additionalProperties": false
+    },
+    "AccessIdentifier": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "AccessCostCenter": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "code"
+      ],
+      "additionalProperties": false
+    },
+    "AccessGrant": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "role": {
+          "enum": [
+            "owner",
+            "admin",
+            "member"
+          ]
+        },
+        "source": {
+          "enum": [
+            "manual",
+            "group"
+          ]
+        },
+        "mapping_id": {
+          "$ref": "#/components/schemas/IdentityNullableUuid"
+        }
+      },
+      "required": [
+        "id",
+        "role",
+        "source",
+        "mapping_id"
+      ],
+      "additionalProperties": false
+    },
+    "AccessMember": {
+      "type": "object",
+      "properties": {
+        "user_id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "email": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "display_name": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "enum": [
+                "owner",
+                "admin",
+                "member"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "disabled_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "membership_source": {
+          "enum": [
+            "manual",
+            "group",
+            "mixed"
+          ]
+        },
+        "grants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/AccessGrant"
+          }
+        }
+      },
+      "required": [
+        "user_id",
+        "email",
+        "display_name",
+        "role",
+        "disabled_at",
+        "membership_source",
+        "grants"
+      ],
+      "additionalProperties": false
+    },
+    "AccessCandidate": {
+      "type": "object",
+      "properties": {
+        "user_id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "email": {
+          "type": "string"
+        },
+        "display_name": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        }
+      },
+      "required": [
+        "user_id",
+        "email",
+        "display_name"
+      ],
+      "additionalProperties": false
+    },
+    "AccessSharedWorkspace": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "team",
+            "project"
+          ]
+        },
+        "cost_center_id": {
+          "$ref": "#/components/schemas/IdentityNullableUuid"
+        },
+        "cost_center": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/AccessCostCenter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "member_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "disabled_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "discoverable": {
+          "type": "boolean"
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "kind",
+        "cost_center_id",
+        "cost_center",
+        "member_count",
+        "disabled_at",
+        "discoverable",
+        "created_at"
+      ],
+      "additionalProperties": false
+    },
+    "AccessSharedContext": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "team",
+            "project"
+          ]
+        },
+        "owner_user_id": {
+          "type": "null"
+        },
+        "cost_center_id": {
+          "$ref": "#/components/schemas/IdentityNullableUuid"
+        },
+        "cost_center": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/AccessCostCenter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "object_visibility": {
+          "enum": [
+            "member",
+            "workspace"
+          ]
+        },
+        "role": {
+          "anyOf": [
+            {
+              "enum": [
+                "owner",
+                "admin",
+                "member"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "membership_source": {
+          "enum": [
+            "manual",
+            "group",
+            "mixed",
+            null
+          ]
+        },
+        "capabilities": {
+          "$ref": "#/components/schemas/IdentityCapabilities"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "kind",
+        "owner_user_id",
+        "cost_center_id",
+        "cost_center",
+        "created_at",
+        "object_visibility",
+        "role",
+        "membership_source",
+        "capabilities"
+      ],
+      "additionalProperties": false
+    },
+    "AccessPersonalContext": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "personal"
+        },
+        "owner_user_id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "cost_center_id": {
+          "$ref": "#/components/schemas/IdentityNullableUuid"
+        },
+        "cost_center": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/AccessCostCenter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "role": {
+          "const": "owner"
+        },
+        "membership_source": {
+          "const": "manual"
+        },
+        "capabilities": {
+          "$ref": "#/components/schemas/IdentityCapabilities"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "kind",
+        "owner_user_id",
+        "cost_center_id",
+        "cost_center",
+        "created_at",
+        "role",
+        "membership_source",
+        "capabilities"
+      ],
+      "additionalProperties": false
+    },
+    "AccessWorkspaceContext": {
+      "oneOf": [
+        {
+          "$ref": "#/components/schemas/AccessSharedContext"
+        },
+        {
+          "$ref": "#/components/schemas/AccessPersonalContext"
+        }
+      ],
+      "description": "Personal owner-private projection omits object_visibility entirely. A platform reader may see only shared metadata, with no membership role."
+    },
+    "AccessRoleGrant": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "role": {
+          "$ref": "#/components/schemas/IdentityRole"
+        },
+        "source": {
+          "enum": [
+            "manual",
+            "group",
+            "bootstrap"
+          ]
+        },
+        "mapping_id": {
+          "$ref": "#/components/schemas/IdentityNullableUuid"
+        },
+        "revoked_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        }
+      },
+      "required": [
+        "id",
+        "role",
+        "source",
+        "mapping_id",
+        "revoked_at"
+      ],
+      "additionalProperties": false
+    },
+    "AccessUser": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "email": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "display_name": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "platform_role": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/IdentityRole"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "disabled_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "cleanup_due_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "cleaned_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "disable_reason": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "oidc_link_allowed": {
+          "type": "boolean"
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "last_sign_in_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "shared_workspace_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "role_grants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/AccessRoleGrant"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "email",
+        "display_name",
+        "platform_role",
+        "disabled_at",
+        "cleanup_due_at",
+        "cleaned_at",
+        "disable_reason",
+        "oidc_link_allowed",
+        "created_at",
+        "last_sign_in_at",
+        "shared_workspace_count",
+        "role_grants"
+      ],
+      "additionalProperties": false
+    },
+    "AccessUserDetail": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "email": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "display_name": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "platform_role": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/IdentityRole"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "disabled_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "cleanup_due_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "cleaned_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "disable_reason": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "oidc_link_allowed": {
+          "type": "boolean"
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "last_sign_in_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "shared_workspace_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "role_grants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/AccessRoleGrant"
+          }
+        },
+        "active_sessions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "legal_holds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "first_sign_in_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "shared_memberships": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "workspace_id": {
+                "$ref": "#/components/schemas/IdentityUuid"
+              },
+              "name": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "team",
+                  "project"
+                ]
+              },
+              "disabled_at": {
+                "$ref": "#/components/schemas/IdentityNullableTime"
+              },
+              "role": {
+                "enum": [
+                  "owner",
+                  "admin",
+                  "member"
+                ]
+              },
+              "sources": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "manual",
+                    "group"
+                  ]
+                }
+              },
+              "grants": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "role": {
+                      "enum": [
+                        "owner",
+                        "admin",
+                        "member"
+                      ]
+                    },
+                    "source": {
+                      "enum": [
+                        "manual",
+                        "group"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "role",
+                    "source"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "workspace_id",
+              "name",
+              "kind",
+              "disabled_at",
+              "role",
+              "sources",
+              "grants"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "id",
+        "email",
+        "display_name",
+        "platform_role",
+        "disabled_at",
+        "cleanup_due_at",
+        "cleaned_at",
+        "disable_reason",
+        "oidc_link_allowed",
+        "created_at",
+        "last_sign_in_at",
+        "shared_workspace_count",
+        "role_grants",
+        "active_sessions",
+        "legal_holds",
+        "first_sign_in_at",
+        "shared_memberships"
+      ],
+      "additionalProperties": false
+    },
+    "AccessInvitation": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "email": {
+          "type": "string"
+        },
+        "workspace_id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "role": {
+          "enum": [
+            "admin",
+            "member"
+          ]
+        },
+        "expires_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "accepted_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "revoked_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        }
+      },
+      "required": [
+        "id",
+        "email",
+        "workspace_id",
+        "role",
+        "expires_at",
+        "accepted_at",
+        "revoked_at"
+      ],
+      "additionalProperties": false
+    },
+    "AccessInvitationCreated": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "token": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "readOnly": true,
+          "x-omg-one-time": true,
+          "description": "One-time invitation value; returned only at creation. Never an example, URL, log entry or list field."
+        },
+        "email_delivery": {
+          "enum": [
+            "sent",
+            "failed",
+            "not_configured"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "token",
+        "email_delivery"
+      ],
+      "additionalProperties": false
+    },
+    "AccessApproverRequest": {
+      "type": "object",
+      "required": [
+        "id",
+        "requester",
+        "target_kind",
+        "workspace_id",
+        "workspace_name_at_request",
+        "requested_role",
+        "status",
+        "reason",
+        "created_at",
+        "expires_at",
+        "decided_by",
+        "decided_at",
+        "membership_grant_id",
+        "requester_display_name",
+        "requester_email"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "requester": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "target_kind": {
+          "const": "workspace_membership"
+        },
+        "workspace_id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "workspace_name_at_request": {
+          "type": "string"
+        },
+        "requested_role": {
+          "const": "member"
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "approved",
+            "denied",
+            "withdrawn",
+            "expired"
+          ]
+        },
+        "reason": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "expires_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "decided_by": {
+          "$ref": "#/components/schemas/IdentityNullableUuid"
+        },
+        "decided_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "membership_grant_id": {
+          "$ref": "#/components/schemas/IdentityNullableUuid"
+        },
+        "requester_display_name": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "requester_email": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Approver queue projection. Ineligible requester email and display name are both redacted to null; submitted workspace name stays a frozen snapshot."
+    },
+    "AccessEligibleRequest": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/AccessApproverRequest"
+        },
+        {
+          "properties": {
+            "requester_email": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "AccessRedactedRequest": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/AccessApproverRequest"
+        },
+        {
+          "properties": {
+            "requester_email": {
+              "type": "null"
+            },
+            "requester_display_name": {
+              "type": "null"
+            }
+          }
+        }
+      ]
+    },
+    "AccessQueueItem": {
+      "oneOf": [
+        {
+          "$ref": "#/components/schemas/AccessEligibleRequest"
+        },
+        {
+          "$ref": "#/components/schemas/AccessRedactedRequest"
+        }
+      ]
+    },
+    "AccessMappingInput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "issuer": {
+              "type": "string"
+            },
+            "group_value": {
+              "type": "string"
+            },
+            "target_kind": {
+              "type": "string"
+            },
+            "platform_role": {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            "workspace_id": {
+              "$ref": "#/components/schemas/IdentityNullableUuid"
+            },
+            "workspace_role": {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            "enabled": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "issuer",
+            "group_value",
+            "target_kind",
+            "enabled"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableUuid"
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            {
+              "type": "boolean"
+            }
+          ],
+          "minItems": 7,
+          "maxItems": 7,
+          "items": false
+        }
+      ],
+      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+    },
+    "AccessMappingPreviewInput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "issuer": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "group_value": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "target_kind": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "platform_role": {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            "workspace_id": {
+              "$ref": "#/components/schemas/IdentityNullableUuid"
+            },
+            "workspace_role": {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            "enabled": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableUuid"
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          ],
+          "minItems": 7,
+          "maxItems": 7,
+          "items": false
+        }
+      ],
+      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+    },
+    "AccessMappingPatch": {
+      "type": "object",
+      "properties": {
+        "issuer": {
+          "type": "string"
+        },
+        "group_value": {
+          "type": "string"
+        },
+        "target_kind": {
+          "type": "string"
+        },
+        "platform_role": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "workspace_id": {
+          "$ref": "#/components/schemas/IdentityNullableUuid"
+        },
+        "workspace_role": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "AccessMappingExistingPreview": {
+      "type": "object",
+      "properties": {
+        "issuer": {
+          "type": "string"
+        },
+        "group_value": {
+          "type": "string"
+        },
+        "target_kind": {
+          "type": "string"
+        },
+        "platform_role": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "workspace_id": {
+          "$ref": "#/components/schemas/IdentityNullableUuid"
+        },
+        "workspace_role": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "delete": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "AccessMapping": {
+      "type": "object",
+      "properties": {
+        "issuer": {
+          "type": "string"
+        },
+        "group_value": {
+          "type": "string"
+        },
+        "target_kind": {
+          "type": "string"
+        },
+        "platform_role": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "workspace_id": {
+          "$ref": "#/components/schemas/IdentityNullableUuid"
+        },
+        "workspace_role": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "workspace_name": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "workspace_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "team",
+                "project"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "issuer",
+        "group_value",
+        "target_kind",
+        "platform_role",
+        "workspace_id",
+        "workspace_role",
+        "enabled",
+        "id",
+        "created_at",
+        "workspace_name",
+        "workspace_kind"
+      ],
+      "additionalProperties": false
+    },
+    "AccessMappingPreview": {
+      "type": "object",
+      "properties": {
+        "membership_basis": {
+          "enum": [
+            "scim",
+            "last_sign_in_derived"
+          ]
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "digest": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "immediate": {
+          "type": "object",
+          "properties": {
+            "applies": {
+              "type": "boolean"
+            },
+            "blocked_by_last_admin": {
+              "type": "boolean"
+            },
+            "platform_role_revoked": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  },
+                  "email": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  },
+                  "display_name": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  },
+                  "role": {
+                    "$ref": "#/components/schemas/IdentityRole"
+                  }
+                },
+                "required": [
+                  "user_id",
+                  "email",
+                  "display_name",
+                  "role"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "workspace_membership_revoked": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  },
+                  "email": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  },
+                  "display_name": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  },
+                  "role": {
+                    "enum": [
+                      "owner",
+                      "admin",
+                      "member"
+                    ]
+                  },
+                  "workspace_id": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  }
+                },
+                "required": [
+                  "user_id",
+                  "email",
+                  "display_name",
+                  "role",
+                  "workspace_id"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "users_suspended": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  },
+                  "email": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  },
+                  "display_name": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  }
+                },
+                "required": [
+                  "user_id",
+                  "email",
+                  "display_name"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "keys_revoked_count": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "applies",
+            "blocked_by_last_admin",
+            "platform_role_revoked",
+            "workspace_membership_revoked",
+            "users_suspended",
+            "keys_revoked_count"
+          ],
+          "additionalProperties": false
+        },
+        "diff": {
+          "type": "object",
+          "properties": {
+            "platform_role_gained": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  },
+                  "email": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  },
+                  "display_name": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  },
+                  "before": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/IdentityRole"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "after": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/IdentityRole"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "workspace_id": {
+                    "type": "null"
+                  },
+                  "reactivated": {
+                    "type": "boolean"
+                  },
+                  "would_be_suspended": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "user_id",
+                  "email",
+                  "display_name",
+                  "before",
+                  "after",
+                  "workspace_id",
+                  "reactivated",
+                  "would_be_suspended"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "platform_role_lost": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  },
+                  "email": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  },
+                  "display_name": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  },
+                  "before": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/IdentityRole"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "after": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/IdentityRole"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "workspace_id": {
+                    "type": "null"
+                  },
+                  "reactivated": {
+                    "type": "boolean"
+                  },
+                  "would_be_suspended": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "user_id",
+                  "email",
+                  "display_name",
+                  "before",
+                  "after",
+                  "workspace_id",
+                  "reactivated",
+                  "would_be_suspended"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "workspace_membership_gained": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  },
+                  "email": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  },
+                  "display_name": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  },
+                  "before": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "owner",
+                          "admin",
+                          "member"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "after": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "owner",
+                          "admin",
+                          "member"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "workspace_id": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  }
+                },
+                "required": [
+                  "user_id",
+                  "email",
+                  "display_name",
+                  "before",
+                  "after",
+                  "workspace_id"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "workspace_membership_lost": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  },
+                  "email": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  },
+                  "display_name": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  },
+                  "before": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "owner",
+                          "admin",
+                          "member"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "after": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "owner",
+                          "admin",
+                          "member"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "workspace_id": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  }
+                },
+                "required": [
+                  "user_id",
+                  "email",
+                  "display_name",
+                  "before",
+                  "after",
+                  "workspace_id"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "platform_role_gained",
+            "platform_role_lost",
+            "workspace_membership_gained",
+            "workspace_membership_lost"
+          ],
+          "additionalProperties": false
+        },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "gained": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "lost": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "gained",
+            "lost",
+            "truncated"
+          ],
+          "additionalProperties": false
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "membership_basis",
+        "complete",
+        "digest",
+        "immediate",
+        "diff",
+        "counts",
+        "warnings"
+      ],
+      "additionalProperties": false
+    },
+    "AccessPolicyInput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "requests_per_minute": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -9223372036854775808,
+                  "maximum": 9223372036854775807
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "tokens_per_minute": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -9223372036854775808,
+                  "maximum": 9223372036854775807
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "concurrent_requests": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -9223372036854775808,
+                  "maximum": 9223372036854775807
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "concurrent_jobs": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -9223372036854775808,
+                  "maximum": 9223372036854775807
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "storage_bytes": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -9223372036854775808,
+                  "maximum": 9223372036854775807
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "key_issuances_per_holder": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -9223372036854775808,
+                  "maximum": 9223372036854775807
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "key_issuances_per_workspace": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -9223372036854775808,
+                  "maximum": 9223372036854775807
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "monthly_budget_microusd": {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            "budget_period": {
+              "type": "string"
+            },
+            "budgets": {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "period": {
+                        "type": "string"
+                      },
+                      "amount_microusd": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "period",
+                      "amount_microusd"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "array",
+                    "prefixItems": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "items": false
+                  }
+                ],
+                "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+              }
+            }
+          },
+          "required": [
+            "requests_per_minute",
+            "tokens_per_minute",
+            "concurrent_requests"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -9223372036854775808,
+                  "maximum": 9223372036854775807
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -9223372036854775808,
+                  "maximum": 9223372036854775807
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -9223372036854775808,
+                  "maximum": 9223372036854775807
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -9223372036854775808,
+                  "maximum": 9223372036854775807
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -9223372036854775808,
+                  "maximum": 9223372036854775807
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -9223372036854775808,
+                  "maximum": 9223372036854775807
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -9223372036854775808,
+                  "maximum": 9223372036854775807
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "period": {
+                        "type": "string"
+                      },
+                      "amount_microusd": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "period",
+                      "amount_microusd"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "array",
+                    "prefixItems": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "items": false
+                  }
+                ],
+                "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+              }
+            }
+          ],
+          "minItems": 3,
+          "maxItems": 10,
+          "items": false
+        }
+      ],
+      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+    },
+    "AccessBudget": {
+      "type": "object",
+      "properties": {
+        "period": {
+          "$ref": "#/components/schemas/IdentityPeriod"
+        },
+        "amount_microusd": {
+          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+        }
+      },
+      "required": [
+        "period",
+        "amount_microusd"
+      ],
+      "additionalProperties": false
+    },
+    "AccessLimits": {
+      "type": "object",
+      "properties": {
+        "requests_per_minute": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -9223372036854775808,
+              "maximum": 9223372036854775807
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tokens_per_minute": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -9223372036854775808,
+              "maximum": 9223372036854775807
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "concurrent_requests": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -9223372036854775808,
+              "maximum": 9223372036854775807
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "concurrent_jobs": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -9223372036854775808,
+              "maximum": 9223372036854775807
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "storage_bytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -9223372036854775808,
+              "maximum": 9223372036854775807
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "key_issuances_per_holder": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -9223372036854775808,
+              "maximum": 9223372036854775807
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "key_issuances_per_workspace": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -9223372036854775808,
+              "maximum": 9223372036854775807
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "monthly_budget_microusd": {
+          "$ref": "#/components/schemas/IdentityNullableDecimal"
+        },
+        "budget_period": {
+          "$ref": "#/components/schemas/IdentityPeriod"
+        },
+        "budgets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/AccessBudget"
+          }
+        }
+      },
+      "required": [
+        "requests_per_minute",
+        "tokens_per_minute",
+        "concurrent_requests",
+        "concurrent_jobs",
+        "storage_bytes",
+        "key_issuances_per_holder",
+        "key_issuances_per_workspace",
+        "monthly_budget_microusd",
+        "budget_period",
+        "budgets"
+      ],
+      "additionalProperties": false
+    },
+    "AccessPlatformPolicy": {
+      "type": "object",
+      "properties": {
+        "storage": {
+          "type": "object",
+          "properties": {
+            "quota_bytes": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -9223372036854775808,
+                  "maximum": 9223372036854775807
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "used_bytes": {
+              "type": "integer",
+              "minimum": -9223372036854775808,
+              "maximum": 9223372036854775807
+            },
+            "usage_visible": {
+              "const": true
+            }
+          },
+          "required": [
+            "quota_bytes",
+            "used_bytes",
+            "usage_visible"
+          ],
+          "additionalProperties": false
+        },
+        "policy": {
+          "$ref": "#/components/schemas/AccessLimits"
+        },
+        "effective": {
+          "$ref": "#/components/schemas/AccessLimits"
+        },
+        "mode": {
+          "enum": [
+            "replace",
+            "inherit"
+          ]
+        },
+        "provenance": {
+          "type": "object",
+          "properties": {
+            "platform_source": {
+              "enum": [
+                "workspace_override",
+                "type_default"
+              ]
+            },
+            "platform": {
+              "$ref": "#/components/schemas/AccessLimits"
+            },
+            "local": {
+              "$ref": "#/components/schemas/AccessLimits"
+            },
+            "key": {
+              "type": "null"
+            },
+            "type_default": {
+              "$ref": "#/components/schemas/AccessLimits"
+            }
+          },
+          "required": [
+            "platform_source",
+            "platform",
+            "local",
+            "key",
+            "type_default"
+          ],
+          "additionalProperties": false
+        },
+        "budgets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/IdentityBudgetWindow"
+          }
+        }
+      },
+      "required": [
+        "storage",
+        "policy",
+        "effective",
+        "mode",
+        "provenance",
+        "budgets"
+      ],
+      "additionalProperties": false
+    },
+    "AccessWorkspaceAccess": {
+      "type": "object",
+      "properties": {
+        "workspace_id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "key_id": {
+          "type": "null"
+        },
+        "workspace_disabled": {
+          "type": "boolean"
+        },
+        "layers": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "object",
+              "properties": {
+                "layer": {
+                  "const": "type_default"
+                },
+                "source": {
+                  "const": "type_default"
+                },
+                "applies": {
+                  "type": "boolean"
+                },
+                "catalogs_apply": {
+                  "type": "boolean"
+                },
+                "limits": {
+                  "type": "object",
+                  "properties": {
+                    "requests_per_minute": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": -9223372036854775808,
+                          "maximum": 9223372036854775807
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "tokens_per_minute": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": -9223372036854775808,
+                          "maximum": 9223372036854775807
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "concurrent_requests": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": -9223372036854775808,
+                          "maximum": 9223372036854775807
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "concurrent_jobs": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": -9223372036854775808,
+                          "maximum": 9223372036854775807
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "requests_per_minute",
+                    "tokens_per_minute",
+                    "concurrent_requests",
+                    "concurrent_jobs"
+                  ],
+                  "additionalProperties": false
+                },
+                "budgets": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AccessBudget"
+                  }
+                },
+                "catalogs": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "$ref": "#/components/schemas/IdentityUuid"
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "name"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "models": {
+                  "type": "object",
+                  "properties": {
+                    "available": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "partial": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "unavailable": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "available",
+                    "partial",
+                    "unavailable"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "layer",
+                "source",
+                "applies",
+                "catalogs_apply",
+                "limits",
+                "budgets",
+                "catalogs",
+                "models"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "layer": {
+                  "const": "workspace_override"
+                },
+                "source": {
+                  "const": "workspace_override"
+                },
+                "applies": {
+                  "type": "boolean"
+                },
+                "catalogs_apply": {
+                  "type": "boolean"
+                },
+                "limits": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "requests_per_minute": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9223372036854775808,
+                              "maximum": 9223372036854775807
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "tokens_per_minute": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9223372036854775808,
+                              "maximum": 9223372036854775807
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "concurrent_requests": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9223372036854775808,
+                              "maximum": 9223372036854775807
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "concurrent_jobs": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9223372036854775808,
+                              "maximum": 9223372036854775807
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "requests_per_minute",
+                        "tokens_per_minute",
+                        "concurrent_requests",
+                        "concurrent_jobs"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "budgets": {
+                  "anyOf": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AccessBudget"
+                      }
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "catalogs": {
+                  "anyOf": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "$ref": "#/components/schemas/IdentityUuid"
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "models": {
+                  "type": "object",
+                  "properties": {
+                    "available": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "partial": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "unavailable": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "available",
+                    "partial",
+                    "unavailable"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "layer",
+                "source",
+                "applies",
+                "catalogs_apply",
+                "limits",
+                "budgets",
+                "catalogs",
+                "models"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "layer": {
+                  "const": "workspace"
+                },
+                "source": {
+                  "const": "local"
+                },
+                "applies": {
+                  "const": true
+                },
+                "limits": {
+                  "type": "object",
+                  "properties": {
+                    "requests_per_minute": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": -9223372036854775808,
+                          "maximum": 9223372036854775807
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "tokens_per_minute": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": -9223372036854775808,
+                          "maximum": 9223372036854775807
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "concurrent_requests": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": -9223372036854775808,
+                          "maximum": 9223372036854775807
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "concurrent_jobs": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": -9223372036854775808,
+                          "maximum": 9223372036854775807
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "requests_per_minute",
+                    "tokens_per_minute",
+                    "concurrent_requests",
+                    "concurrent_jobs"
+                  ],
+                  "additionalProperties": false
+                },
+                "budgets": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AccessBudget"
+                  }
+                },
+                "catalogs": {
+                  "type": "null"
+                },
+                "selections": {
+                  "type": "object",
+                  "properties": {
+                    "catalog": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "direct": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "catalog",
+                    "direct"
+                  ],
+                  "additionalProperties": false
+                },
+                "models": {
+                  "type": "object",
+                  "properties": {
+                    "available": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "partial": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "unavailable": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "available",
+                    "partial",
+                    "unavailable"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "layer",
+                "source",
+                "applies",
+                "limits",
+                "budgets",
+                "catalogs",
+                "selections",
+                "models"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "layer": {
+                  "const": "key"
+                },
+                "source": {
+                  "const": "key"
+                },
+                "applies": {
+                  "const": false
+                },
+                "limits": {
+                  "type": "null"
+                },
+                "budgets": {
+                  "type": "null"
+                },
+                "catalogs": {
+                  "type": "null"
+                },
+                "restriction": {
+                  "type": "null"
+                },
+                "models": {
+                  "type": "object",
+                  "properties": {
+                    "available": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "partial": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "unavailable": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "available",
+                    "partial",
+                    "unavailable"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "layer",
+                "source",
+                "applies",
+                "limits",
+                "budgets",
+                "catalogs",
+                "restriction",
+                "models"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "minItems": 4,
+          "maxItems": 4,
+          "items": false
+        },
+        "summary": {
+          "type": "object",
+          "properties": {
+            "available": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "partial": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "unavailable": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "available",
+            "partial",
+            "unavailable"
+          ],
+          "additionalProperties": false
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "model_id": {
+                "$ref": "#/components/schemas/IdentityUuid"
+              },
+              "public_name": {
+                "type": "string"
+              },
+              "display_name": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "available",
+                  "partial",
+                  "unavailable"
+                ]
+              },
+              "reasons": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "enum": [
+                        "workspace_disabled",
+                        "unresolved_usage_blocking",
+                        "budget_exhausted",
+                        "model_disabled",
+                        "no_enabled_route",
+                        "some_routes_unavailable",
+                        "not_in_catalog",
+                        "not_selected",
+                        "key_restriction"
+                      ]
+                    },
+                    "layer": {
+                      "enum": [
+                        "platform",
+                        "type_default",
+                        "workspace_override",
+                        "workspace",
+                        "key"
+                      ]
+                    },
+                    "period": {
+                      "$ref": "#/components/schemas/IdentityPeriod"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "layer"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "model_id",
+              "public_name",
+              "display_name",
+              "status",
+              "reasons"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "key_id",
+        "workspace_disabled",
+        "layers",
+        "summary",
+        "models",
+        "truncated"
+      ],
+      "additionalProperties": false
+    },
+    "AccessInferenceSession": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "workspace": {
+          "$ref": "#/components/schemas/IdentityWorkspaceRef"
+        },
+        "requests": {
+          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+        },
+        "attempts": {
+          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+        },
+        "failed_requests": {
+          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+        },
+        "in_progress_requests": {
+          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+        },
+        "known_cost_microusd": {
+          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+        },
+        "held_microusd": {
+          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+        },
+        "unresolved_requests": {
+          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+        },
+        "input_tokens": {
+          "$ref": "#/components/schemas/IdentityNullableDecimal"
+        },
+        "output_tokens": {
+          "$ref": "#/components/schemas/IdentityNullableDecimal"
+        },
+        "cost_microusd": {
+          "$ref": "#/components/schemas/IdentityNullableDecimal"
+        },
+        "first_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "last_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "model_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "last_model": {
+          "type": "string"
+        },
+        "app": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "keys": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "session_id",
+        "workspace",
+        "requests",
+        "attempts",
+        "failed_requests",
+        "in_progress_requests",
+        "known_cost_microusd",
+        "held_microusd",
+        "unresolved_requests",
+        "input_tokens",
+        "output_tokens",
+        "cost_microusd",
+        "first_at",
+        "last_at",
+        "models",
+        "model_count",
+        "last_model",
+        "app",
+        "keys"
+      ],
+      "additionalProperties": false
+    },
+    "AccessPlatformExport": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "const": "omg.subject-export.v1"
+        },
+        "generated_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "scope": {
+          "const": "platform"
+        },
+        "subject": {
+          "type": "object",
+          "required": [
+            "id",
+            "email",
+            "display_name",
+            "created_at",
+            "first_signed_in_at",
+            "last_signed_in_at",
+            "disabled_at",
+            "platform_role",
+            "cleaned_at"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            },
+            "email": {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            "display_name": {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            "created_at": {
+              "$ref": "#/components/schemas/IdentityTime"
+            },
+            "first_signed_in_at": {
+              "$ref": "#/components/schemas/IdentityNullableTime"
+            },
+            "last_signed_in_at": {
+              "$ref": "#/components/schemas/IdentityNullableTime"
+            },
+            "disabled_at": {
+              "$ref": "#/components/schemas/IdentityNullableTime"
+            },
+            "platform_role": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/IdentityRole"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "cleaned_at": {
+              "$ref": "#/components/schemas/IdentityNullableTime"
+            }
+          },
+          "additionalProperties": false
+        },
+        "platform_roles": {
+          "type": "object",
+          "required": [
+            "items",
+            "truncated"
+          ],
+          "properties": {
+            "truncated": {
+              "type": "boolean"
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "role",
+                  "source",
+                  "created_at",
+                  "revoked_at"
+                ],
+                "properties": {
+                  "role": {
+                    "$ref": "#/components/schemas/IdentityRole"
+                  },
+                  "source": {
+                    "type": "string"
+                  },
+                  "created_at": {
+                    "$ref": "#/components/schemas/IdentityTime"
+                  },
+                  "revoked_at": {
+                    "$ref": "#/components/schemas/IdentityNullableTime"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "shared_memberships": {
+          "type": "object",
+          "required": [
+            "items",
+            "truncated"
+          ],
+          "properties": {
+            "truncated": {
+              "type": "boolean"
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "workspace_id",
+                  "name",
+                  "kind",
+                  "role",
+                  "source",
+                  "created_at",
+                  "revoked_at"
+                ],
+                "properties": {
+                  "workspace_id": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": [
+                      "team",
+                      "project"
+                    ]
+                  },
+                  "role": {
+                    "enum": [
+                      "owner",
+                      "admin",
+                      "member"
+                    ]
+                  },
+                  "source": {
+                    "type": "string"
+                  },
+                  "created_at": {
+                    "$ref": "#/components/schemas/IdentityTime"
+                  },
+                  "revoked_at": {
+                    "$ref": "#/components/schemas/IdentityNullableTime"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "access_requests": {
+          "type": "object",
+          "required": [
+            "items",
+            "truncated"
+          ],
+          "properties": {
+            "truncated": {
+              "type": "boolean"
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/IdentityExportAccessRequest"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "audit": {
+          "type": "object",
+          "required": [
+            "items",
+            "truncated"
+          ],
+          "properties": {
+            "truncated": {
+              "type": "boolean"
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "occurred_at",
+                  "action",
+                  "resource_type",
+                  "resource_id",
+                  "workspace_id",
+                  "metadata",
+                  "actor_user_id"
+                ],
+                "properties": {
+                  "id": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  },
+                  "occurred_at": {
+                    "$ref": "#/components/schemas/IdentityTime"
+                  },
+                  "action": {
+                    "type": "string"
+                  },
+                  "resource_type": {
+                    "type": "string"
+                  },
+                  "resource_id": {
+                    "$ref": "#/components/schemas/IdentityNullableUuid"
+                  },
+                  "workspace_id": {
+                    "$ref": "#/components/schemas/IdentityNullableUuid"
+                  },
+                  "metadata": {
+                    "$comment": "Stored audit_events.metadata is exported verbatim as JSON; its vocabulary depends on the audited action.",
+                    "description": "Stored audit JSON metadata; no fixed DTO or closed property vocabulary."
+                  },
+                  "actor_user_id": {
+                    "$ref": "#/components/schemas/IdentityNullableUuid"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "format",
+        "generated_at",
+        "scope",
+        "subject",
+        "platform_roles",
+        "shared_memberships",
+        "access_requests",
+        "audit",
+        "notes"
+      ],
+      "additionalProperties": false
+    },
+    "AccessNewUser": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "email": {
+              "type": "string"
+            },
+            "platform_role": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "email",
+            "platform_role"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2,
+          "items": false
+        }
+      ],
+      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+    },
+    "AccessUserUpdate": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "email": {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            "disabled": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "oidc_link_allowed": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          ],
+          "minItems": 3,
+          "maxItems": 3,
+          "items": false
+        }
+      ],
+      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+    },
+    "AccessRoleInput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "role"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string"
+            }
+          ],
+          "minItems": 1,
+          "maxItems": 1,
+          "items": false
+        }
+      ],
+      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+    },
+    "AccessNewWorkspace": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string"
+            },
+            "owner_user_id": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
+          "required": [
+            "name",
+            "kind",
+            "owner_user_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          ],
+          "minItems": 3,
+          "maxItems": 3,
+          "items": false
+        }
+      ],
+      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+    },
+    "AccessWorkspaceUpdate": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            "disabled": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "cost_center_id": {
+              "$ref": "#/components/schemas/IdentityNullableUuid"
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableUuid"
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 3,
+          "items": false
+        }
+      ],
+      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+    },
+    "AccessOwnWorkspaceUpdate": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            "object_visibility": {
+              "enum": [
+                "member",
+                "workspace",
+                null
+              ]
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            {
+              "enum": [
+                "member",
+                "workspace",
+                null
+              ]
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2,
+          "items": false
+        }
+      ],
+      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+    },
+    "AccessMemberInput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "user_id": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            },
+            "role": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "user_id",
+            "role"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "$ref": "#/components/schemas/IdentityUuid"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2,
+          "items": false
+        }
+      ],
+      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+    },
+    "AccessInviteInput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "email": {
+              "type": "string"
+            },
+            "role": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "email",
+            "role"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2,
+          "items": false
+        }
+      ],
+      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+    },
+    "AccessDiscoverable": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "discoverable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "discoverable"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "boolean"
+            }
+          ],
+          "minItems": 1,
+          "maxItems": 1,
+          "items": false
+        }
+      ],
+      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+    },
+    "AccessCatalogIds": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "catalog_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/IdentityUuid"
+              }
+            }
+          },
+          "required": [
+            "catalog_ids"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/IdentityUuid"
+              }
+            }
+          ],
+          "minItems": 1,
+          "maxItems": 1,
+          "items": false
+        }
+      ],
+      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+    },
+    "AccessCatalogOverride": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string"
+            },
+            "catalog_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/IdentityUuid"
+              }
+            }
+          },
+          "required": [
+            "mode",
+            "catalog_ids"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/IdentityUuid"
+              }
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2,
+          "items": false
+        }
+      ],
+      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+    },
+    "AccessDirectModel": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "model_id": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
+          "required": [
+            "model_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          ],
+          "minItems": 1,
+          "maxItems": 1,
+          "items": false
+        }
+      ],
+      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+    },
+    "get_api_v1_platform_usersRequest": false,
+    "get_api_v1_platform_usersResponse": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/AccessUser"
+          }
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "post_api_v1_platform_usersRequest": {
+      "$ref": "#/components/schemas/AccessNewUser"
+    },
+    "post_api_v1_platform_usersResponse": {
+      "$ref": "#/components/schemas/AccessIdentifier"
+    },
+    "get_api_v1_platform_users_by_userRequest": false,
+    "get_api_v1_platform_users_by_userResponse": {
+      "$ref": "#/components/schemas/AccessUserDetail"
+    },
+    "patch_api_v1_platform_users_by_userRequest": {
+      "$ref": "#/components/schemas/AccessUserUpdate"
+    },
+    "patch_api_v1_platform_users_by_userResponse": {
+      "$ref": "#/components/schemas/AccessOk"
+    },
+    "get_api_v1_platform_users_by_user_exportRequest": false,
+    "get_api_v1_platform_users_by_user_exportResponse": {
+      "$ref": "#/components/schemas/AccessPlatformExport"
+    },
+    "post_api_v1_platform_users_by_user_remove_personal_dataRequest": false,
+    "post_api_v1_platform_users_by_user_remove_personal_dataResponse": {
+      "$ref": "#/components/schemas/AccessOk"
+    },
+    "post_api_v1_platform_users_by_user_rolesRequest": {
+      "$ref": "#/components/schemas/AccessRoleInput"
+    },
+    "post_api_v1_platform_users_by_user_rolesResponse": {
+      "$ref": "#/components/schemas/AccessOk"
+    },
+    "delete_api_v1_platform_users_by_user_roles_by_roleRequest": false,
+    "delete_api_v1_platform_users_by_user_roles_by_roleResponse": {
+      "$ref": "#/components/schemas/AccessOk"
+    },
+    "post_api_v1_platform_users_by_user_sessions_revokeRequest": false,
+    "post_api_v1_platform_users_by_user_sessions_revokeResponse": {
+      "$ref": "#/components/schemas/IdentityRevoked"
+    },
+    "get_api_v1_platform_workspacesRequest": false,
+    "get_api_v1_platform_workspacesResponse": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/AccessSharedWorkspace"
+          }
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "post_api_v1_platform_workspacesRequest": {
+      "$ref": "#/components/schemas/AccessNewWorkspace"
+    },
+    "post_api_v1_platform_workspacesResponse": {
+      "$ref": "#/components/schemas/AccessIdentifier"
+    },
+    "get_api_v1_platform_workspaces_by_wsRequest": false,
+    "get_api_v1_platform_workspaces_by_wsResponse": {
+      "$ref": "#/components/schemas/AccessSharedWorkspace"
+    },
+    "patch_api_v1_platform_workspaces_by_wsRequest": {
+      "$ref": "#/components/schemas/AccessWorkspaceUpdate"
+    },
+    "patch_api_v1_platform_workspaces_by_wsResponse": {
+      "$ref": "#/components/schemas/AccessOk"
+    },
+    "delete_api_v1_platform_workspaces_by_ws_catalogsRequest": false,
+    "delete_api_v1_platform_workspaces_by_ws_catalogsResponse": {
+      "$ref": "#/components/schemas/AccessOk"
+    },
+    "get_api_v1_platform_workspaces_by_ws_catalogsRequest": false,
+    "get_api_v1_platform_workspaces_by_ws_catalogsResponse": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "enum": [
+            "replace",
+            "inherit"
+          ]
+        },
+        "catalog_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          }
+        },
+        "effective_catalog_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          }
+        }
+      },
+      "required": [
+        "mode",
+        "catalog_ids",
+        "effective_catalog_ids"
+      ],
+      "additionalProperties": false
+    },
+    "put_api_v1_platform_workspaces_by_ws_catalogsRequest": {
+      "$ref": "#/components/schemas/AccessCatalogOverride"
+    },
+    "put_api_v1_platform_workspaces_by_ws_catalogsResponse": {
+      "$ref": "#/components/schemas/AccessOk"
+    },
+    "put_api_v1_platform_workspaces_by_ws_discoverableRequest": {
+      "$ref": "#/components/schemas/AccessDiscoverable"
+    },
+    "put_api_v1_platform_workspaces_by_ws_discoverableResponse": {
+      "$ref": "#/components/schemas/AccessOk"
+    },
+    "get_api_v1_platform_workspaces_by_ws_member_candidatesRequest": false,
+    "get_api_v1_platform_workspaces_by_ws_member_candidatesResponse": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/AccessCandidate"
+          }
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "get_api_v1_platform_workspaces_by_ws_membersRequest": false,
+    "get_api_v1_platform_workspaces_by_ws_membersResponse": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/AccessMember"
+          }
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "post_api_v1_platform_workspaces_by_ws_membersRequest": {
+      "$ref": "#/components/schemas/AccessMemberInput"
+    },
+    "post_api_v1_platform_workspaces_by_ws_membersResponse": {
+      "$ref": "#/components/schemas/AccessOk"
+    },
+    "delete_api_v1_platform_workspaces_by_ws_members_by_userRequest": false,
+    "delete_api_v1_platform_workspaces_by_ws_members_by_userResponse": {
+      "$ref": "#/components/schemas/AccessOk"
+    },
+    "post_api_v1_platform_workspaces_by_ws_modelsRequest": {
+      "$ref": "#/components/schemas/AccessDirectModel"
+    },
+    "post_api_v1_platform_workspaces_by_ws_modelsResponse": {
+      "$ref": "#/components/schemas/AccessOk"
+    },
+    "delete_api_v1_platform_workspaces_by_ws_models_by_modelRequest": false,
+    "delete_api_v1_platform_workspaces_by_ws_models_by_modelResponse": {
+      "$ref": "#/components/schemas/AccessOk"
+    },
+    "delete_api_v1_platform_workspaces_by_ws_policyRequest": false,
+    "delete_api_v1_platform_workspaces_by_ws_policyResponse": {
+      "$ref": "#/components/schemas/AccessOk"
+    },
+    "get_api_v1_platform_workspaces_by_ws_policyRequest": false,
+    "get_api_v1_platform_workspaces_by_ws_policyResponse": {
+      "$ref": "#/components/schemas/AccessPlatformPolicy"
+    },
+    "put_api_v1_platform_workspaces_by_ws_policyRequest": {
+      "$ref": "#/components/schemas/AccessPolicyInput"
+    },
+    "put_api_v1_platform_workspaces_by_ws_policyResponse": {
+      "$ref": "#/components/schemas/AccessOk"
+    },
+    "get_api_v1_platform_workspace_types_by_kind_catalogsRequest": false,
+    "get_api_v1_platform_workspace_types_by_kind_catalogsResponse": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/components/schemas/IdentityWorkspaceKind"
+        },
+        "catalog_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "catalog_ids"
+      ],
+      "additionalProperties": false
+    },
+    "put_api_v1_platform_workspace_types_by_kind_catalogsRequest": {
+      "$ref": "#/components/schemas/AccessCatalogIds"
+    },
+    "put_api_v1_platform_workspace_types_by_kind_catalogsResponse": {
+      "$ref": "#/components/schemas/AccessOk"
+    },
+    "get_api_v1_platform_workspace_types_by_kind_policyRequest": false,
+    "get_api_v1_platform_workspace_types_by_kind_policyResponse": {
+      "type": "object",
+      "properties": {
+        "policy": {
+          "$ref": "#/components/schemas/AccessLimits"
+        }
+      },
+      "required": [
+        "policy"
+      ],
+      "additionalProperties": false
+    },
+    "put_api_v1_platform_workspace_types_by_kind_policyRequest": {
+      "$ref": "#/components/schemas/AccessPolicyInput"
+    },
+    "put_api_v1_platform_workspace_types_by_kind_policyResponse": {
+      "$ref": "#/components/schemas/AccessOk"
+    },
+    "get_api_v1_platform_access_requestsRequest": false,
+    "get_api_v1_platform_access_requestsResponse": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/AccessQueueItem"
+          }
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "post_api_v1_platform_access_requests_by_id_approveRequest": false,
+    "post_api_v1_platform_access_requests_by_id_approveResponse": {
+      "$ref": "#/components/schemas/IdentityOwnAccessRequest"
+    },
+    "post_api_v1_platform_access_requests_by_id_denyRequest": false,
+    "post_api_v1_platform_access_requests_by_id_denyResponse": {
+      "$ref": "#/components/schemas/IdentityOwnAccessRequest"
+    },
+    "get_api_v1_platform_oidc_group_mappingsRequest": false,
+    "get_api_v1_platform_oidc_group_mappingsResponse": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/AccessMapping"
+          }
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "post_api_v1_platform_oidc_group_mappingsRequest": {
+      "$ref": "#/components/schemas/AccessMappingInput"
+    },
+    "post_api_v1_platform_oidc_group_mappingsResponse": {
+      "$ref": "#/components/schemas/AccessIdentifier"
+    },
+    "post_api_v1_platform_oidc_group_mappings_previewRequest": {
+      "$ref": "#/components/schemas/AccessMappingPreviewInput"
+    },
+    "post_api_v1_platform_oidc_group_mappings_previewResponse": {
+      "$ref": "#/components/schemas/AccessMappingPreview"
+    },
+    "delete_api_v1_platform_oidc_group_mappings_by_idRequest": false,
+    "delete_api_v1_platform_oidc_group_mappings_by_idResponse": {
+      "$ref": "#/components/schemas/AccessOk"
+    },
+    "patch_api_v1_platform_oidc_group_mappings_by_idRequest": {
+      "$ref": "#/components/schemas/AccessMappingPatch"
+    },
+    "patch_api_v1_platform_oidc_group_mappings_by_idResponse": {
+      "$ref": "#/components/schemas/AccessOk"
+    },
+    "post_api_v1_platform_oidc_group_mappings_by_id_previewRequest": {
+      "$ref": "#/components/schemas/AccessMappingExistingPreview"
+    },
+    "post_api_v1_platform_oidc_group_mappings_by_id_previewResponse": {
+      "$ref": "#/components/schemas/AccessMappingPreview"
+    },
+    "get_api_v1_workspaces_by_wsRequest": false,
+    "get_api_v1_workspaces_by_wsResponse": {
+      "$ref": "#/components/schemas/AccessWorkspaceContext"
+    },
+    "patch_api_v1_workspaces_by_wsRequest": {
+      "$ref": "#/components/schemas/AccessOwnWorkspaceUpdate"
+    },
+    "patch_api_v1_workspaces_by_wsResponse": {
+      "$ref": "#/components/schemas/AccessOk"
+    },
+    "get_api_v1_workspaces_by_ws_accessRequest": false,
+    "get_api_v1_workspaces_by_ws_accessResponse": {
+      "$ref": "#/components/schemas/AccessWorkspaceAccess"
+    },
+    "get_api_v1_workspaces_by_ws_access_requestsRequest": false,
+    "get_api_v1_workspaces_by_ws_access_requestsResponse": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/AccessQueueItem"
+          }
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "post_api_v1_workspaces_by_ws_access_requests_by_id_approveRequest": false,
+    "post_api_v1_workspaces_by_ws_access_requests_by_id_approveResponse": {
+      "$ref": "#/components/schemas/IdentityOwnAccessRequest"
+    },
+    "post_api_v1_workspaces_by_ws_access_requests_by_id_denyRequest": false,
+    "post_api_v1_workspaces_by_ws_access_requests_by_id_denyResponse": {
+      "$ref": "#/components/schemas/IdentityOwnAccessRequest"
+    },
+    "get_api_v1_workspaces_by_ws_invitationsRequest": false,
+    "get_api_v1_workspaces_by_ws_invitationsResponse": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/AccessInvitation"
+          }
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "post_api_v1_workspaces_by_ws_invitationsRequest": {
+      "$ref": "#/components/schemas/AccessInviteInput"
+    },
+    "post_api_v1_workspaces_by_ws_invitationsResponse": {
+      "$ref": "#/components/schemas/AccessInvitationCreated"
+    },
+    "delete_api_v1_workspaces_by_ws_invitations_by_idRequest": false,
+    "delete_api_v1_workspaces_by_ws_invitations_by_idResponse": {
+      "$ref": "#/components/schemas/AccessOk"
+    },
+    "get_api_v1_workspaces_by_ws_membersRequest": false,
+    "get_api_v1_workspaces_by_ws_membersResponse": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/AccessMember"
+          }
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "post_api_v1_workspaces_by_ws_membersRequest": {
+      "$ref": "#/components/schemas/AccessMemberInput"
+    },
+    "post_api_v1_workspaces_by_ws_membersResponse": {
+      "$ref": "#/components/schemas/AccessOk"
+    },
+    "delete_api_v1_workspaces_by_ws_members_by_userRequest": false,
+    "delete_api_v1_workspaces_by_ws_members_by_userResponse": {
+      "$ref": "#/components/schemas/AccessOk"
+    },
+    "get_api_v1_workspaces_by_ws_member_candidatesRequest": false,
+    "get_api_v1_workspaces_by_ws_member_candidatesResponse": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/AccessCandidate"
+          }
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "get_api_v1_workspaces_by_ws_sessionsRequest": false,
+    "get_api_v1_workspaces_by_ws_sessionsResponse": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/AccessInferenceSession"
+          }
+        },
+        "next_cursor": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        }
+      },
+      "required": [
+        "data",
+        "next_cursor"
+      ],
+      "additionalProperties": false
+    },
+    "get_api_v1_workspaces_by_ws_sessions_by_sessionRequest": false,
+    "get_api_v1_workspaces_by_ws_sessions_by_sessionResponse": {
+      "$ref": "#/components/schemas/AccessInferenceSession"
+    }
+  }
+}

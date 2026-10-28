@@ -67,6 +67,16 @@ pub(super) struct PreviewInput {
     workspace_role: Option<String>,
     enabled: Option<bool>,
 }
+#[cfg(test)]
+#[test]
+fn management_openapi_slice2_mapping_preview_request_vectors() {
+    super::openapi::requests::vectors::<PreviewInput>(
+        "POST",
+        "/api/v1/platform/oidc/group-mappings/preview",
+        json!({"issuer":"https://issuer.example.test","group_value":"fixture","target_kind":"platform","platform_role":"user","workspace_id":null,"workspace_role":null,"enabled":true}),
+    );
+}
+
 impl PreviewInput {
     /// The same shape create/update validate. A missing required field is
     /// the same `invalid()` a malformed create/update body would get,

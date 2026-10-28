@@ -48,6 +48,32 @@ pub(super) struct Policy {
     #[serde(default, deserialize_with = "present")]
     budgets: Option<Vec<BudgetInput>>,
 }
+#[cfg(test)]
+#[test]
+fn management_openapi_slice2_policy_request_vectors() {
+    for path in [
+        "/api/v1/platform/workspace-types/{kind}/policy",
+        "/api/v1/platform/workspaces/{ws}/policy",
+    ] {
+        crate::management::openapi::requests::vectors::<Policy>(
+            "PUT",
+            path,
+            json!({"requests_per_minute":null,"tokens_per_minute":100,"concurrent_requests":3,"concurrent_jobs":null,"storage_bytes":1024,"key_issuances_per_holder":3,"key_issuances_per_workspace":9,"budgets":[{"period":"month","amount_microusd":"9007199254740993"}]}),
+        );
+        crate::management::openapi::requests::vectors::<Policy>(
+            "PUT",
+            path,
+            json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"monthly_budget_microusd":null,"budget_period":"month"}),
+        );
+        crate::management::openapi::requests::nested_vectors::<BudgetInput>(
+            "PUT",
+            path,
+            "/oneOf/0/properties/budgets/items",
+            json!({"period":"month","amount_microusd":"9007199254740993"}),
+        );
+    }
+}
+
 fn present<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
 where
     D: serde::Deserializer<'de>,

@@ -15,11 +15,28 @@ pub(crate) const IDENTITY_SELF_SERVICE_AREAS: &[&str] = &[
     "me",
     "access-request-targets",
 ];
-pub(crate) const AREA_GROUPS: &[&[&str]] = &[IDENTITY_SELF_SERVICE_AREAS];
+pub(crate) const SLICE2_AREAS: &[&str] = &[
+    "platform/access-requests",
+    "platform/oidc",
+    "platform/users",
+    "platform/workspace-types",
+    "platform/workspaces",
+    "workspaces/{ws}",
+    "workspaces/{ws}/access",
+    "workspaces/{ws}/access-requests",
+    "workspaces/{ws}/invitations",
+    "workspaces/{ws}/member-candidates",
+    "workspaces/{ws}/members",
+    "workspaces/{ws}/sessions",
+];
+pub(crate) const AREA_GROUPS: &[(&str, &[&str])] = &[
+    ("IDENTITY_SELF_SERVICE_AREAS", IDENTITY_SELF_SERVICE_AREAS),
+    ("SLICE2_AREAS", SLICE2_AREAS),
+];
 
 /// Whether an area's schemas are complete and gated by an executed fixture group.
 pub(crate) fn completed(area: &str) -> bool {
-    AREA_GROUPS.iter().any(|group| group.contains(&area))
+    AREA_GROUPS.iter().any(|(_, group)| group.contains(&area))
 }
 
 pub(crate) fn artifact() -> &'static Value {
@@ -354,6 +371,18 @@ pub(crate) async fn capture(
     }
 }
 
+/// Validate an executed positive request against its exact routed operation,
+/// including manually decoded JSON bodies which have no derived struct DTO.
+#[cfg(feature = "integration-tests")]
+pub(crate) fn check_request(method: &str, path: &str, body: &Value) -> Result<()> {
+    let template = template(method, path)?.context("request operation must be documented")?;
+    let document = artifact();
+    let operation = operation(document, method, &template)?;
+    let schema = &operation["requestBody"]["content"]["application/json"]["schema"];
+    ensure!(!schema.is_null(), "operation has no JSON request body");
+    validate_value(document, schema, body)
+}
+
 pub(crate) fn check(
     method: &str,
     path: &str,
@@ -514,7 +543,8 @@ mod tests {
             assert_eq!(super::area(template), want, "{template}");
         }
         let mut seen = std::collections::BTreeSet::new();
-        for group in super::AREA_GROUPS {
+        for (name, group) in super::AREA_GROUPS {
+            assert!(!name.is_empty());
             assert!(!group.is_empty());
             for area in *group {
                 assert!(
@@ -669,7 +699,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(count, 22);
+        assert_eq!(count, 76);
     }
     #[test]
     fn management_openapi_response_rejects_incomplete_completed_slot() {

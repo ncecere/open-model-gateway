@@ -42,6 +42,7 @@ fn sample(document: &Value, schema: &Value) -> Value {
                 .as_str()
                 .is_some_and(|p| p.contains("branding/logo")) =>
                 "/api/v1/branding/logo?v=000000000000".into(),
+            _ if schema["pattern"].as_str() == Some("^[0-9a-f]{64}$") => "0".repeat(64),
             _ if schema.get("pattern").is_some() => "0".into(),
             _ => "fixture".into(),
         }),
@@ -108,9 +109,13 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                     h.insert("cache-control", "no-store".parse().unwrap());
                     h.insert(
                         "content-disposition",
-                        "attachment; filename=\"omg-export-2026-10-28-2026-10-28.json\""
-                            .parse()
-                            .unwrap(),
+                        if path.starts_with("/api/v1/platform/users/") {
+                            "attachment; filename=\"omg-user-00000000-0000-0000-0000-000000000000.json\""
+                        } else {
+                            "attachment; filename=\"omg-export-2026-10-28-2026-10-28.json\""
+                        }
+                        .parse()
+                        .unwrap(),
                     );
                     h.insert("x-omg-export-sha256", "a".repeat(64).parse().unwrap());
                 }
@@ -128,8 +133,14 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                     panic!("positive schema control {method} {path}: {e:#}; {valid}")
                 });
                 let mut body_schema = schema;
-                while let Some(reference) = body_schema["$ref"].as_str() {
-                    body_schema = document.pointer(&reference[1..]).unwrap();
+                loop {
+                    if let Some(reference) = body_schema["$ref"].as_str() {
+                        body_schema = document.pointer(&reference[1..]).unwrap();
+                    } else if let Some(branches) = body_schema["oneOf"].as_array() {
+                        body_schema = &branches[0];
+                    } else {
+                        break;
+                    }
                 }
                 let field = body_schema["required"].as_array().unwrap()[0]
                     .as_str()
@@ -303,7 +314,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
             }
         }
     }
-    assert_eq!((operations, json_operations), (22, 18));
+    assert_eq!((operations, json_operations), (76, 72));
 }
 
 #[test]

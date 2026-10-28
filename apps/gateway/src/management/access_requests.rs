@@ -82,6 +82,16 @@ struct Discoverable {
     discoverable: bool,
 }
 
+#[cfg(test)]
+#[test]
+fn management_openapi_slice2_discoverable_request_vectors() {
+    super::openapi::requests::vectors::<Discoverable>(
+        "PUT",
+        "/api/v1/platform/workspaces/{ws}/discoverable",
+        json!({"discoverable":true}),
+    );
+}
+
 async fn scope_locks(
     tx: &mut Transaction<'_, Postgres>,
     ws: Uuid,

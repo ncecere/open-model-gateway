@@ -1,6 +1,59 @@
 use super::*;
 use axum::http::HeaderMap;
 
+#[cfg(test)]
+#[test]
+fn management_openapi_slice2_directory_request_vectors() {
+    use crate::management::openapi::requests::vectors;
+    vectors::<NewUser>(
+        "POST",
+        "/api/v1/platform/users",
+        json!({"email":"fixture@example.test","platform_role":"user"}),
+    );
+    vectors::<UserUpdate>(
+        "PATCH",
+        "/api/v1/platform/users/{user}",
+        json!({"email":"fixture@example.test","disabled":false,"oidc_link_allowed":true}),
+    );
+    vectors::<RoleInput>(
+        "POST",
+        "/api/v1/platform/users/{user}/roles",
+        json!({"role":"user"}),
+    );
+    // object_visibility is a raw Value: its manual handler validation is
+    // exercised separately over HTTP, not falsely treated as a typed enum.
+    vectors::<OwnWorkspaceUpdate>(
+        "PATCH",
+        "/api/v1/workspaces/{ws}",
+        json!({"name":"Fixture"}),
+    );
+    vectors::<NewWorkspace>(
+        "POST",
+        "/api/v1/platform/workspaces",
+        json!({"name":"Fixture","kind":"team","owner_user_id":Uuid::nil()}),
+    );
+    vectors::<WorkspaceUpdate>(
+        "PATCH",
+        "/api/v1/platform/workspaces/{ws}",
+        json!({"name":"Fixture","disabled":false,"cost_center_id":Uuid::nil()}),
+    );
+    vectors::<MappingInput>(
+        "POST",
+        "/api/v1/platform/oidc/group-mappings",
+        json!({"issuer":"https://issuer.example.test","group_value":"fixture","target_kind":"platform","platform_role":"user","workspace_id":null,"workspace_role":null,"enabled":true}),
+    );
+    crate::management::openapi::requests::manual_fields(
+        "PATCH",
+        "/api/v1/platform/oidc/group-mappings/{id}",
+        &MAPPING_PATCH_FIELDS,
+    );
+    crate::management::openapi::requests::manual_fields(
+        "POST",
+        "/api/v1/platform/oidc/group-mappings/{id}/preview",
+        &[MAPPING_PATCH_FIELDS.as_slice(), &["delete"]].concat(),
+    );
+}
+
 pub(super) fn routes() -> Router<Store> {
     Router::new()
         .route(

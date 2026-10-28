@@ -1,0 +1,3804 @@
+{
+  "operations": {
+    "GET /api/v1/platform/users": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "Live authorization and current grant provenance are rechecked. Platform Auditor authority is read-only; independent workspace membership remains usable. Inference keys are never management credentials.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_usersResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000,
+              "default": 0
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "role",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "user",
+                "auditor",
+                "admin",
+                "none",
+                "any"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "active",
+                "suspended"
+              ]
+            }
+          }
+        ]
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/users": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Live authorization and current grant provenance are rechecked. Platform Auditor authority is read-only; independent workspace membership remains usable. Inference keys are never management credentials.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_usersResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown manually decoded field or JSON deserialization refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON media type required",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_usersRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": "access:write",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/users/{user}": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "Live authorization and current grant provenance are rechecked. Platform Auditor authority is read-only; independent workspace membership remains usable. Inference keys are never management credentials.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_users_by_userResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "PATCH /api/v1/platform/users/{user}": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Live authorization and current grant provenance are rechecked. Platform Auditor authority is read-only; independent workspace membership remains usable. Inference keys are never management credentials.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/patch_api_v1_platform_users_by_userResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown manually decoded field or JSON deserialization refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON media type required",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/patch_api_v1_platform_users_by_userRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": "access:write",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/users/{user}/export": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "Platform-visible subject export only: shared membership and audit, never personal workspace, keys, sessions or requests. No date query is accepted/decoded by this route.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_users_by_user_exportResponse"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Content-Disposition": {
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^attachment; filename=\"omg-user-[0-9a-f-]+\\.json\"$"
+                }
+              },
+              "X-OMG-Export-SHA256": {
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Export rate limit (no Retry-After header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Export serialization failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/users/{user}/remove-personal-data": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Live authorization and current grant provenance are rechecked. Platform Auditor authority is read-only; independent workspace membership remains usable. Inference keys are never management credentials.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_users_by_user_remove_personal_dataResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "access:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/users/{user}/roles": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Live authorization and current grant provenance are rechecked. Platform Auditor authority is read-only; independent workspace membership remains usable. Inference keys are never management credentials.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_users_by_user_rolesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown manually decoded field or JSON deserialization refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON media type required",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_users_by_user_rolesRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": "access:write",
+      "token_policy": "Scope"
+    },
+    "DELETE /api/v1/platform/users/{user}/roles/{role}": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Live authorization and current grant provenance are rechecked. Platform Auditor authority is read-only; independent workspace membership remains usable. Inference keys are never management credentials.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/delete_api_v1_platform_users_by_user_roles_by_roleResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "access:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/users/{user}/sessions/revoke": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Live authorization and current grant provenance are rechecked. Platform Auditor authority is read-only; independent workspace membership remains usable. Inference keys are never management credentials.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_users_by_user_sessions_revokeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "access:write",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/workspaces": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "Live authorization and current grant provenance are rechecked. Platform Auditor authority is read-only; independent workspace membership remains usable. Inference keys are never management credentials.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_workspacesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000,
+              "default": 0
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "team",
+                "project"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "active",
+                "disabled"
+              ]
+            }
+          }
+        ]
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/workspaces": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Live authorization and current grant provenance are rechecked. Platform Auditor authority is read-only; independent workspace membership remains usable. Inference keys are never management credentials.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_workspacesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown manually decoded field or JSON deserialization refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON media type required",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_workspacesRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": "access:write",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/workspaces/{ws}": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "Shared Team/Project metadata only; personal workspace IDs are hidden with 404, including for Admin/Auditor.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_workspaces_by_wsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "PATCH /api/v1/platform/workspaces/{ws}": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Platform-controlled metadata update. A personal workspace permits only cost-center assignment; name/state edits are 403. Omitted cost_center_id keeps its allocation, explicit null clears it.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/patch_api_v1_platform_workspaces_by_wsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown manually decoded field or JSON deserialization refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON media type required",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/patch_api_v1_platform_workspaces_by_wsRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": "access:write",
+      "token_policy": "Scope"
+    },
+    "DELETE /api/v1/platform/workspaces/{ws}/catalogs": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Live type defaults and replacement workspace overrides are separate. Empty replacement is deny-all, DELETE restores inheritance. Removed catalog selections never resurrect. Platform readers can read allocation metadata for personal/disabled workspaces without any keys or request detail.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/delete_api_v1_platform_workspaces_by_ws_catalogsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/workspaces/{ws}/catalogs": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "Live type defaults and replacement workspace overrides are separate. Empty replacement is deny-all, DELETE restores inheritance. Removed catalog selections never resurrect. Platform readers can read allocation metadata for personal/disabled workspaces without any keys or request detail.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_workspaces_by_ws_catalogsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/workspaces/{ws}/catalogs": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Live type defaults and replacement workspace overrides are separate. Empty replacement is deny-all, DELETE restores inheritance. Removed catalog selections never resurrect. Platform readers can read allocation metadata for personal/disabled workspaces without any keys or request detail.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/put_api_v1_platform_workspaces_by_ws_catalogsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown manually decoded field or JSON deserialization refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON media type required",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/put_api_v1_platform_workspaces_by_ws_catalogsRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/workspaces/{ws}/discoverable": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Live authorization and current grant provenance are rechecked. Platform Auditor authority is read-only; independent workspace membership remains usable. Inference keys are never management credentials.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/put_api_v1_platform_workspaces_by_ws_discoverableResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown manually decoded field or JSON deserialization refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON media type required",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/put_api_v1_platform_workspaces_by_ws_discoverableRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/platform/workspaces/{ws}/member-candidates": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "Live authorization and current grant provenance are rechecked. Platform Auditor authority is read-only; independent workspace membership remains usable. Inference keys are never management credentials.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_workspaces_by_ws_member_candidatesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "description": "Trimmed nonempty email fragment of at most 200 characters without controls; at most 20 active, entitled nonmembers."
+          }
+        ]
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/workspaces/{ws}/members": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "Shared workspaces only. Grants retain manual/group provenance; setting/revoking a manual membership never alters group grants. Last-owner removal is 409. Workspace owner changes require an actual owner; platform routes require live Admin writes (Auditor read-only).",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_workspaces_by_ws_membersResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000,
+              "default": 0
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Trimmed search of at most 200 characters without controls; an empty trimmed value is ignored."
+          }
+        ]
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/workspaces/{ws}/members": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Shared workspaces only. Grants retain manual/group provenance; setting/revoking a manual membership never alters group grants. Last-owner removal is 409. Workspace owner changes require an actual owner; platform routes require live Admin writes (Auditor read-only).",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_workspaces_by_ws_membersResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown manually decoded field or JSON deserialization refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON media type required",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_workspaces_by_ws_membersRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": "access:write",
+      "token_policy": "Scope"
+    },
+    "DELETE /api/v1/platform/workspaces/{ws}/members/{user}": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Revokes manual grants only, never group grants. Refuses removal of the last workspace owner. Foreign personal workspaces remain hidden.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/delete_api_v1_platform_workspaces_by_ws_members_by_userResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "access:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/workspaces/{ws}/models": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Platform Admin direct assignment is independent of catalog eligibility; removing it never restores an old catalog selection.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_workspaces_by_ws_modelsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown manually decoded field or JSON deserialization refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON media type required",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_workspaces_by_ws_modelsRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "DELETE /api/v1/platform/workspaces/{ws}/models/{model}": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Live authorization and current grant provenance are rechecked. Platform Auditor authority is read-only; independent workspace membership remains usable. Inference keys are never management credentials.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/delete_api_v1_platform_workspaces_by_ws_models_by_modelResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "DELETE /api/v1/platform/workspaces/{ws}/policy": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Live type default or replacement workspace policy, never installation-wide limits. Policy rates are required nullable fields; supplied fields distinguish omission (keep) from null (clear); present budgets/budget_period reject null. Budgets replace the full period set; deprecated monthly form is mutually exclusive. Money is exact micro-USD strings. Platform totals are permitted without request details.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/delete_api_v1_platform_workspaces_by_ws_policyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "governance:write",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/workspaces/{ws}/policy": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "Live type default or replacement workspace policy, never installation-wide limits. Policy rates are required nullable fields; supplied fields distinguish omission (keep) from null (clear); present budgets/budget_period reject null. Budgets replace the full period set; deprecated monthly form is mutually exclusive. Money is exact micro-USD strings. Platform totals are permitted without request details.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_workspaces_by_ws_policyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/workspaces/{ws}/policy": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Live type default or replacement workspace policy, never installation-wide limits. Policy rates are required nullable fields; supplied fields distinguish omission (keep) from null (clear); present budgets/budget_period reject null. Budgets replace the full period set; deprecated monthly form is mutually exclusive. Money is exact micro-USD strings. Platform totals are permitted without request details.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/put_api_v1_platform_workspaces_by_ws_policyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown manually decoded field or JSON deserialization refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON media type required",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/put_api_v1_platform_workspaces_by_ws_policyRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": "governance:write",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/workspace-types/{kind}/catalogs": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "Live type defaults and replacement workspace overrides are separate. Empty replacement is deny-all, DELETE restores inheritance. Removed catalog selections never resurrect. Platform readers can read allocation metadata for personal/disabled workspaces without any keys or request detail.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_workspace_types_by_kind_catalogsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/workspace-types/{kind}/catalogs": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Live type defaults and replacement workspace overrides are separate. Empty replacement is deny-all, DELETE restores inheritance. Removed catalog selections never resurrect. Platform readers can read allocation metadata for personal/disabled workspaces without any keys or request detail.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/put_api_v1_platform_workspace_types_by_kind_catalogsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown manually decoded field or JSON deserialization refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON media type required",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/put_api_v1_platform_workspace_types_by_kind_catalogsRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/workspace-types/{kind}/policy": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "Live type default or replacement workspace policy, never installation-wide limits. Policy rates are required nullable fields; supplied fields distinguish omission (keep) from null (clear); present budgets/budget_period reject null. Budgets replace the full period set; deprecated monthly form is mutually exclusive. Money is exact micro-USD strings. Platform totals are permitted without request details.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_workspace_types_by_kind_policyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/workspace-types/{kind}/policy": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Live type default or replacement workspace policy, never installation-wide limits. Policy rates are required nullable fields; supplied fields distinguish omission (keep) from null (clear); present budgets/budget_period reject null. Budgets replace the full period set; deprecated monthly form is mutually exclusive. Money is exact micro-USD strings. Platform totals are permitted without request details.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/put_api_v1_platform_workspace_types_by_kind_policyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown manually decoded field or JSON deserialization refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON media type required",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/put_api_v1_platform_workspace_types_by_kind_policyRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": "governance:write",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/access-requests": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "Approver queue only: requester identity fields are present but null when current requester eligibility is lost. Personal workspace queues are hidden. Auditor may read platform queue, never decide through platform authority.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_access_requestsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000,
+              "default": 0
+            }
+          }
+        ]
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/platform/access-requests/{id}/approve": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Independent live approver decision; cannot approve/deny oneself. Scoped mismatches are 404. Approval applies only a manual member grant and never entitlement or a replacement group/manual grant. Stale/ineligible/expired requests conflict; same-outcome replay is idempotent. Decision response omits requester identity fields (unlike the approver queue).",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_access_requests_by_id_approveResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/platform/access-requests/{id}/deny": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Independent live approver decision; cannot approve/deny oneself. Scoped mismatches are 404. Approval applies only a manual member grant and never entitlement or a replacement group/manual grant. Stale/ineligible/expired requests conflict; same-outcome replay is idempotent. Decision response omits requester identity fields (unlike the approver queue).",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_access_requests_by_id_denyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/platform/oidc/group-mappings": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "Live authorization and current grant provenance are rechecked. Platform Auditor authority is read-only; independent workspace membership remains usable. Inference keys are never management credentials.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_oidc_group_mappingsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000,
+              "default": 0
+            }
+          }
+        ]
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/oidc/group-mappings": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Live authorization and current grant provenance are rechecked. Platform Auditor authority is read-only; independent workspace membership remains usable. Inference keys are never management credentials.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_oidc_group_mappingsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown manually decoded field or JSON deserialization refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON media type required",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_oidc_group_mappingsRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": "access:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/oidc/group-mappings/preview": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Browser-session Platform Admin only, read-only proposal. Immediate revocations and post-reconciliation net effects are distinct. Roster may be sign-in-derived or incomplete; personal workspaces never appear. New mapping preview digest is null.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_oidc_group_mappings_previewResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown manually decoded field or JSON deserialization refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON media type required",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_oidc_group_mappings_previewRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "DELETE /api/v1/platform/oidc/group-mappings/{id}": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Mapping changes revoke group-derived grants immediately, retaining independent manual provenance; last-Admin loss is refused. Optional single quoted SHA-256 If-Match refuses stale review with 412; malformed/duplicate header is 400. Missing header preserves unconditional behavior.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/delete_api_v1_platform_oidc_group_mappings_by_idResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Stale mapping digest",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "pattern": "^\"[0-9a-f]{64}\"$"
+            }
+          }
+        ]
+      },
+      "scope": "access:write",
+      "token_policy": "Scope"
+    },
+    "PATCH /api/v1/platform/oidc/group-mappings/{id}": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Mapping changes revoke group-derived grants immediately, retaining independent manual provenance; last-Admin loss is refused. Optional single quoted SHA-256 If-Match refuses stale review with 412; malformed/duplicate header is 400. Missing header preserves unconditional behavior.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/patch_api_v1_platform_oidc_group_mappings_by_idResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown manually decoded field or JSON deserialization refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Stale mapping digest",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON media type required",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/patch_api_v1_platform_oidc_group_mappings_by_idRequest"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "pattern": "^\"[0-9a-f]{64}\"$"
+            }
+          }
+        ]
+      },
+      "scope": "access:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/oidc/group-mappings/{id}/preview": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "Browser-session Admin only. Empty object or delete:true previews deletion; otherwise partial PATCH merge (omission keeps, explicit null clears nullable fields). Returns observation digest, immediate revocations and net effects, without authorizing a commit.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_oidc_group_mappings_by_id_previewResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown manually decoded field or JSON deserialization refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON media type required",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_oidc_group_mappings_by_id_previewRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}": {
+      "access": "WorkspaceMetadata",
+      "operation": {
+        "description": "Personal workspace detail is owner-only (foreign IDs hidden with 404). Shared metadata is available to members and platform readers; a nonmember without platform read authority gets 403 (unlike the hidden personal 404). Platform authority does not fabricate a membership role.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_workspaces_by_wsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "PATCH /api/v1/workspaces/{ws}": {
+      "access": "WorkspaceAdmin",
+      "operation": {
+        "description": "Shared owners/admins rename or set member/workspace object visibility. Personal name/visibility are fixed (409); null/omission are no-op, at least one effective edit is required. object_visibility is manually validated after JSON extraction.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/patch_api_v1_workspaces_by_wsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown manually decoded field or JSON deserialization refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON media type required",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/patch_api_v1_workspaces_by_wsRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/access": {
+      "access": "WorkspaceMetadata",
+      "operation": {
+        "description": "Layered effective workspace access, not a key entitlement. Shared platform readers may inspect disabled workspace metadata; foreign personal workspaces are hidden. Models include precise blocking/partial reasons.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_workspaces_by_ws_accessResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "model_id",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/workspaces/{ws}/access-requests": {
+      "access": "WorkspaceAdmin",
+      "operation": {
+        "description": "Approver queue only: requester identity fields are present but null when current requester eligibility is lost. Personal workspace queues are hidden. Auditor may read platform queue, never decide through platform authority.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_workspaces_by_ws_access_requestsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000,
+              "default": 0
+            }
+          }
+        ]
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/workspaces/{ws}/access-requests/{id}/approve": {
+      "access": "WorkspaceAdmin",
+      "operation": {
+        "description": "Independent live approver decision; cannot approve/deny oneself. Scoped mismatches are 404. Approval applies only a manual member grant and never entitlement or a replacement group/manual grant. Stale/ineligible/expired requests conflict; same-outcome replay is idempotent. Decision response omits requester identity fields (unlike the approver queue).",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_workspaces_by_ws_access_requests_by_id_approveResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/workspaces/{ws}/access-requests/{id}/deny": {
+      "access": "WorkspaceAdmin",
+      "operation": {
+        "description": "Independent live approver decision; cannot approve/deny oneself. Scoped mismatches are 404. Approval applies only a manual member grant and never entitlement or a replacement group/manual grant. Stale/ineligible/expired requests conflict; same-outcome replay is idempotent. Decision response omits requester identity fields (unlike the approver queue).",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_workspaces_by_ws_access_requests_by_id_denyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/invitations": {
+      "access": "WorkspaceAdmin",
+      "operation": {
+        "description": "Shared owner/admin only. Creation alone returns the one-time token; inventory never returns token/hash. Only admin/member roles may be invited; delivery status is not acceptance.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_workspaces_by_ws_invitationsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000,
+              "default": 0
+            }
+          }
+        ]
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/workspaces/{ws}/invitations": {
+      "access": "WorkspaceAdmin",
+      "operation": {
+        "description": "Shared owner/admin only. Creation alone returns the one-time token; inventory never returns token/hash. Only admin/member roles may be invited; delivery status is not acceptance.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_workspaces_by_ws_invitationsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown manually decoded field or JSON deserialization refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON media type required",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_workspaces_by_ws_invitationsRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "DELETE /api/v1/workspaces/{ws}/invitations/{id}": {
+      "access": "WorkspaceAdmin",
+      "operation": {
+        "description": "Shared owner/admin revokes a workspace-scoped invitation; a foreign invitation ID is 404. No token is returned.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/delete_api_v1_workspaces_by_ws_invitations_by_idResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/members": {
+      "access": "WorkspaceAdminOrReader",
+      "operation": {
+        "description": "Shared workspaces only. Grants retain manual/group provenance; setting/revoking a manual membership never alters group grants. Last-owner removal is 409. Workspace owner changes require an actual owner; platform routes require live Admin writes (Auditor read-only).",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_workspaces_by_ws_membersResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000,
+              "default": 0
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Trimmed search of at most 200 characters without controls; an empty trimmed value is ignored."
+          }
+        ]
+      },
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/workspaces/{ws}/members": {
+      "access": "WorkspaceAdmin",
+      "operation": {
+        "description": "Shared workspaces only. Grants retain manual/group provenance; setting/revoking a manual membership never alters group grants. Last-owner removal is 409. Workspace owner changes require an actual owner; platform routes require live Admin writes (Auditor read-only).",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_workspaces_by_ws_membersResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown manually decoded field or JSON deserialization refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON media type required",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_workspaces_by_ws_membersRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "DELETE /api/v1/workspaces/{ws}/members/{user}": {
+      "access": "WorkspaceAdmin",
+      "operation": {
+        "description": "Revokes manual grants only, never group grants. Refuses removal of the last workspace owner. Foreign personal workspaces remain hidden.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/delete_api_v1_workspaces_by_ws_members_by_userResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Current state conflict (including last Admin/owner protection)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/member-candidates": {
+      "access": "WorkspaceAdmin",
+      "operation": {
+        "description": "Live authorization and current grant provenance are rechecked. Platform Auditor authority is read-only; independent workspace membership remains usable. Inference keys are never management credentials.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_workspaces_by_ws_member_candidatesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "description": "Trimmed nonempty email fragment of at most 200 characters without controls; at most 20 active, entitled nonmembers."
+          }
+        ]
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/sessions": {
+      "access": "WorkspaceMember",
+      "operation": {
+        "description": "Inference sessions, not browser devices. Shared members see only their own human-key activity; workspace admins/owners see workspace-wide activity. Foreign/personal details hidden with 404; platform authority alone never grants detail access. Counts and money strings preserve unknown usage as null. Dates are half-open UTC [start_date,end_date), default last 30 days and tomorrow end; at most 93 days. The detail route rejects paging and session_id query fields.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_workspaces_by_ws_sessionsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "start_date",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "finish_reason",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workload",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key_id",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
+          {
+            "name": "streamed",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "session_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          }
+        ]
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/sessions/{session}": {
+      "access": "WorkspaceMember",
+      "operation": {
+        "description": "Inference sessions, not browser devices. Shared members see only their own human-key activity; workspace admins/owners see workspace-wide activity. Foreign/personal details hidden with 404; platform authority alone never grants detail access. Counts and money strings preserve unknown usage as null. Dates are half-open UTC [start_date,end_date), default last 30 days and tomorrow end; at most 93 days. The detail route rejects paging and session_id query fields.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_workspaces_by_ws_sessions_by_sessionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Missing or hidden by workspace ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "start_date",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "finish_reason",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workload",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key_id",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
+          {
+            "name": "streamed",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ]
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    }
+  }
+}

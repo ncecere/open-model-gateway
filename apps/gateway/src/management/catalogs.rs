@@ -1,6 +1,27 @@
 //! Multiple live catalogs, replacement overrides, and independent authorization sources.
 use super::*;
 
+#[cfg(test)]
+#[test]
+fn management_openapi_slice2_catalog_assignment_request_vectors() {
+    use crate::management::openapi::requests::vectors;
+    vectors::<CatalogIds>(
+        "PUT",
+        "/api/v1/platform/workspace-types/{kind}/catalogs",
+        json!({"catalog_ids":[Uuid::nil()]}),
+    );
+    vectors::<Override>(
+        "PUT",
+        "/api/v1/platform/workspaces/{ws}/catalogs",
+        json!({"mode":"replace","catalog_ids":[Uuid::nil()]}),
+    );
+    vectors::<Grant>(
+        "POST",
+        "/api/v1/platform/workspaces/{ws}/models",
+        json!({"model_id":Uuid::nil()}),
+    );
+}
+
 pub(super) fn routes() -> Router<Store> {
     Router::new()
         .route(

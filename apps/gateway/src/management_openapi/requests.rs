@@ -34,6 +34,57 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
     let document = super::responses::artifact();
     let operation = &document["paths"][template][method.to_ascii_lowercase()];
     let schema = &operation["requestBody"]["content"]["application/json"]["schema"];
+    vectors_schema::<T>(method, template, schema, valid);
+}
+
+/// Bind a recursively reachable DTO to its actual location in an operation's
+/// request, so newly added optional nested fields cannot evade the inventory.
+pub(crate) fn nested_vectors<T: DeserializeOwned>(
+    method: &str,
+    template: &str,
+    pointer: &str,
+    valid: Value,
+) {
+    let document = super::responses::artifact();
+    let mut schema = &document["paths"][template][method.to_ascii_lowercase()]["requestBody"]["content"]
+        ["application/json"]["schema"];
+    while let Some(reference) = schema["$ref"].as_str() {
+        schema = document.pointer(&reference[1..]).unwrap();
+    }
+    vectors_schema::<T>(
+        method,
+        template,
+        schema
+            .pointer(pointer)
+            .expect("nested DTO binding disappeared"),
+        valid,
+    );
+}
+
+/// Manually decoded objects bind their parser's actual allowlist, not a
+/// synthetic DTO that could silently disagree with Json<Value> handling.
+pub(crate) fn manual_fields(method: &str, template: &str, fields: &[&str]) {
+    let document = super::responses::artifact();
+    let mut schema = &document["paths"][template][method.to_ascii_lowercase()]["requestBody"]["content"]
+        ["application/json"]["schema"];
+    while let Some(reference) = schema["$ref"].as_str() {
+        schema = document.pointer(&reference[1..]).unwrap();
+    }
+    let documented = schema["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        documented,
+        fields.iter().copied().collect(),
+        "{method} {template}: manual parser/schema field inventory drift"
+    );
+}
+
+fn vectors_schema<T: DeserializeOwned>(method: &str, template: &str, schema: &Value, valid: Value) {
+    let document = super::responses::artifact();
     assert!(
         !schema.is_null(),
         "request schema must be bound to an operation"
@@ -45,9 +96,10 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
         !actual.is_empty(),
         "unsupported DTO deserializer: inventory explicitly"
     );
-    let component = document
-        .pointer(&schema["$ref"].as_str().unwrap()[1..])
-        .unwrap();
+    let mut component = schema;
+    while let Some(reference) = component["$ref"].as_str() {
+        component = document.pointer(&reference[1..]).unwrap();
+    }
     let object = component
         .get("properties")
         .unwrap_or(&component["oneOf"][0]["properties"]);
@@ -122,9 +174,71 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
     ] {
         compare("wrong root type / JSON null is not omission", value);
     }
+    // Recursively exercise nested DTOs, rather than only replacing a whole
+    // array item with an unknown object (policies contain BudgetInput rows).
+    fn nested_objects(value: &Value, pointer: &str, out: &mut Vec<String>) {
+        match value {
+            Value::Object(fields) => {
+                if !pointer.is_empty() {
+                    out.push(pointer.to_owned());
+                }
+                for (name, value) in fields {
+                    nested_objects(
+                        value,
+                        &format!("{pointer}/{}", name.replace('~', "~0").replace('/', "~1")),
+                        out,
+                    );
+                }
+            }
+            Value::Array(values) => {
+                for (index, value) in values.iter().enumerate() {
+                    nested_objects(value, &format!("{pointer}/{index}"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut nested = Vec::new();
+    nested_objects(&valid, "", &mut nested);
+    for pointer in nested {
+        let original = valid.pointer(&pointer).unwrap().as_object().unwrap();
+        let mut unknown = valid.clone();
+        unknown.pointer_mut(&pointer).unwrap()["unexpected_configuration"] = json!(true);
+        compare("recursive nested unknown field", unknown);
+        for field in original.keys() {
+            let mut omitted = valid.clone();
+            omitted
+                .pointer_mut(&pointer)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            compare("recursive missing field", omitted);
+            for wrong in [
+                Value::Null,
+                json!(false),
+                json!(1),
+                json!("wrong"),
+                json!([]),
+                json!({}),
+            ] {
+                let mut changed = valid.clone();
+                changed.pointer_mut(&pointer).unwrap()[field] = wrong;
+                compare("recursive wrong-type/null", changed);
+            }
+        }
+    }
     // UUID serde deliberately accepts all these spellings. JSON Schema format
     // assertions must match that parser rather than only canonical output.
-    for field in ["workspace_id", "ids"] {
+    for field in [
+        "workspace_id",
+        "ids",
+        "user_id",
+        "owner_user_id",
+        "cost_center_id",
+        "catalog_ids",
+        "model_id",
+    ] {
         if valid.get(field).is_some() {
             let id = uuid::Uuid::nil();
             for value in [
@@ -135,7 +249,7 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
                 "not-a-uuid".into(),
             ] {
                 let mut probe = valid.clone();
-                probe[field] = if field == "ids" {
+                probe[field] = if valid[field].is_array() {
                     json!([value])
                 } else {
                     json!(value)
