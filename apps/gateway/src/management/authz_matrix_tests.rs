@@ -30,7 +30,7 @@ async fn session(pool: &PgPool, u: &BrowserPrincipal) -> Session {
         .execute(pool).await.unwrap();
     Session { cookie, csrf }
 }
-async fn request(
+async fn raw_request(
     app: &Router,
     method: &str,
     path: &str,
@@ -38,7 +38,7 @@ async fn request(
     bearer: Option<&str>,
     csrf: bool,
     origin: &str,
-) -> StatusCode {
+) -> axum::response::Response {
     let mut req = Request::builder()
         .method(method)
         .uri(path)
@@ -53,11 +53,21 @@ async fn request(
     if let Some(b) = bearer {
         req = req.header("authorization", format!("Bearer {b}"));
     }
-    let response = app
-        .clone()
+    app.clone()
         .oneshot(req.body(Body::from("{}")).unwrap())
         .await
-        .unwrap();
+        .unwrap()
+}
+async fn request(
+    app: &Router,
+    method: &str,
+    path: &str,
+    session: Option<&Session>,
+    bearer: Option<&str>,
+    csrf: bool,
+    origin: &str,
+) -> StatusCode {
+    let response = raw_request(app, method, path, session, bearer, csrf, origin).await;
     openapi::responses::capture(method, path, response)
         .await
         .status
@@ -425,8 +435,11 @@ async fn key_expiry_history_and_feed_use_real_router_authorization(pool: PgPool)
             .send()
             .await
             .unwrap();
-        let status = response.status();
-        (status, response.json().await.unwrap())
+        let captured = openapi::responses::capture_http("GET", path, response).await;
+        (
+            captured.status,
+            serde_json::from_slice(&captured.bytes).unwrap(),
+        )
     }
     let history = format!(
         "/api/v1/workspaces/{}/alerts/events?kind=key_expiring",

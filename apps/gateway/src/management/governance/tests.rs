@@ -115,11 +115,10 @@ mod db {
         body: Value,
     ) -> (StatusCode, Value) {
         let r = response(f, u, method, path, body).await;
-        let status = r.status();
-        let bytes = to_bytes(r.into_body(), 8 * 1024 * 1024).await.unwrap();
+        let captured = crate::management::openapi::responses::capture(method, path, r).await;
         (
-            status,
-            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+            captured.status,
+            serde_json::from_slice(&captured.bytes).unwrap_or(Value::Null),
         )
     }
     async fn member_key(f: &Fixture) -> Uuid {
