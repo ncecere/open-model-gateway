@@ -1,5 +1,5 @@
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import pg from "pg";
@@ -128,13 +128,38 @@ async function historicalScope(page: Page, label: number | string) {
   return { workspace, connection };
 }
 
+// Counts plus a checksum of every column in stable row order. Read only the
+// suite's disposable database, never the coordinator-owned admin database.
+async function contentState(tables: readonly string[]) {
+  const databaseUrl = process.env.OMG_BROWSER_DATABASE_URL;
+  expect(databaseUrl).toBeTruthy();
+  expect(new URL(databaseUrl!).pathname).toMatch(/^\/omg_browser_/);
+  const db = new pg.Client({ connectionString: databaseUrl });
+  await db.connect();
+  try {
+    await db.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    const state: Record<string, { count: string; checksum: string }> = {};
+    for (const table of tables) {
+      // Table identifiers are fixed test constants, never browser input.
+      const { rows: [row] } = await db.query(`SELECT count(*)::text AS count, coalesce(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text),'[]')::text AS content FROM ${table} t`);
+      state[table] = { count: row.count, checksum: createHash("sha256").update(row.content).digest("hex") };
+    }
+    await db.query("COMMIT");
+    return state;
+  } finally { await db.end(); }
+}
+const financialTables = ["monetary_ledger", "governance_reservations", "inference_executions"] as const;
+const providerTables = ["provider_cost_imports", "provider_cost_lines", "provider_cost_mappings", "provider_cost_bindings", "provider_reconciliations"] as const;
+
 for (const width of [1440, 390]) {
-  test(`Admin uploads exact file bytes, refuses invalid evidence, maps with conflict recovery and freezes at ${width}px`, async ({ browser }, info) => {
+  test(`Admin uploads exact file bytes, refuses invalid evidence, maps with conflict recovery and freezes without changing financial history at ${width}px`, async ({ browser }, info) => {
     const session = await signIn(browser, "operator"), page = session.page;
     try {
       await page.setViewportSize({ width, height: 900 });
       await observeUploadBytes(page);
       const scope = await historicalScope(page, width);
+      const financialBefore = await contentState(financialTables);
+      for (const table of financialTables) expect(BigInt(financialBefore[table].count), `${table} must not be an empty proof`).toBeGreaterThan(0n);
       const account = `browser-upload-${width}`;
       // Preserve the fixture's whitespace/newline; only substitute its account
       // sentinel. Playwright uploads a real disk FILE, not a JSON object.
@@ -271,12 +296,131 @@ for (const width of [1440, 390]) {
       await check(page, `Admin ${width} frozen PR1 detail`);
       const frozen = await read(page, `${reconciliations}/${id}`);
       expect(frozen.snapshot).toMatchObject({ import_id, mapping_id, imported_microusd: "-762111", estimates: { settled_estimate_microusd: "2500", attempts: "1" } });
+      expect(await contentState(financialTables), "upload, mapping and freeze must preserve every financial row and column").toEqual(financialBefore);
       await create(page, mappings, { account_id: account, supersedes: mapping_id, evidence_reference: "finance:post-freeze-change", bindings: [] });
       expect(await read(page, `${reconciliations}/${id}`)).toEqual(frozen);
       await page.getByRole("tab", { name: "Source & provenance", exact: true }).click();
       await expect(page.getByRole("table", { name: "Frozen mapping provenance (shared scopes only)", exact: true })).toContainText(scope.connection);
     } finally { await session.context.close(); }
   });
+
+  test(`Admin sees overlapping-import refusal and explicitly supersedes exact coverage at ${width}px`, async ({ browser }, info) => {
+    const session = await signIn(browser, "operator"), page = session.page;
+    try {
+      await page.setViewportSize({ width, height: 900 });
+      await observeUploadBytes(page);
+      const account = `overlap-${width}-${randomUUID()}`;
+      const original = JSON.parse(readFileSync(path.resolve("tests/browser/fixtures/anthropic-upload.json"), "utf8"));
+      original.account_id = account;
+      await page.goto(listUrl);
+      await page.getByRole("button", { name: "Upload & manage", exact: true }).click();
+      const send = async (name: string, report: unknown) => {
+        await uploadFile(page, info, name, Buffer.from(JSON.stringify(report)));
+        const response = page.waitForResponse(postTo(imports));
+        await page.getByRole("button", { name: "Upload report", exact: true }).click();
+        return response;
+      };
+      const first = await send("original.json", original);
+      expect(first.status()).toBe(200);
+      const firstId = (await first.json()).id as string;
+      await expect(page.getByRole("region", { name: "Selected import result", exact: true })).toContainText(`Import resolved: ${firstId}`);
+      const before = await contentState(providerTables);
+      const changed = structuredClone(original);
+      changed.pages[0].data[0].results[0].amount = "124";
+      const message = "Overlapping coverage or invalid supersession; select the current exact revision";
+      const refused = async (name: string, report: unknown) => {
+        const response = await send(name, report);
+        expect(response.status()).toBe(409);
+        expect((await response.json()).error.message).toBe(message);
+        const alert = page.getByRole("alert").filter({ hasText: message });
+        await expect(alert).toHaveText(message); await expect(alert).toBeFocused();
+        await expect(page.getByRole("region", { name: "Selected import result", exact: true })).toHaveCount(0);
+        expect(await contentState(providerTables)).toEqual(before);
+        await check(page, `Admin ${width} ${name} conflict`);
+      };
+      await refused("changed-without-supersession.json", changed);
+      const overlap = structuredClone(changed);
+      overlap.supersedes = firstId;
+      overlap.request.ending_at = "2025-08-03T00:00:00Z";
+      const next = structuredClone(overlap.pages[0].data[0]);
+      next.starting_at = "2025-08-02T00:00:00Z"; next.ending_at = overlap.request.ending_at;
+      overlap.pages[0].data.push(next);
+      await refused("partial-overlap.json", overlap);
+      changed.supersedes = firstId;
+      const superseded = await send("explicit-exact-supersession.json", changed);
+      expect(superseded.status()).toBe(200);
+      const secondId = (await superseded.json()).id as string;
+      expect(secondId).not.toBe(firstId);
+      const result = page.getByRole("region", { name: "Selected import result", exact: true });
+      await expect(result).toContainText(`Import resolved: ${secondId}`);
+      await expect(result).toContainText(`Supersedes import: ${firstId}`);
+      expect((await read(page, `${imports}/${secondId}`)).supersedes).toBe(firstId);
+      expect((await read(page, imports)).data.filter((r: { account_id: string }) => r.account_id === account)).toHaveLength(2);
+      await check(page, `Admin ${width} explicit import supersession`);
+    } finally { await session.context.close(); }
+  });
+
+  for (const stage of ["upload", "mapping", "freeze"] as const) {
+    test(`Mid-session Admin demotion refuses ${stage}, removes writes and persists nothing at ${width}px`, async ({ browser }, info) => {
+      const operator = await signIn(browser, "operator"), actor = await signIn(browser, "alex"), page = actor.page;
+      let roles: string | undefined;
+      try {
+        await page.setViewportSize({ width, height: 900 });
+        const me = await read(page, "/me");
+        roles = `/platform/users/${me.user.id}/roles`;
+        // Provision both grants in this test; no prior test's promotion or
+        // inferred group membership is needed. Operator stays the safety Admin.
+        for (const role of ["user", "admin"]) expect((await api(operator.page, "POST", roles, { role })).status()).toBe(200);
+        const account = `demotion-${stage}-${width}-${randomUUID()}`;
+        const report = JSON.parse(readFileSync(path.resolve("tests/browser/fixtures/anthropic-upload.json"), "utf8"));
+        report.account_id = account;
+        let importId: string | undefined;
+        if (stage !== "upload") importId = await create(operator.page, imports, report);
+        if (stage === "freeze") await create(operator.page, mappings, { account_id: account, supersedes: null, evidence_reference: "finance:demotion-base", bindings: [] });
+        await page.goto(listUrl);
+        await page.getByRole("button", { name: "Upload & manage", exact: true }).click();
+        if (stage === "upload") await uploadFile(page, info, "demoted-upload.json", Buffer.from(JSON.stringify(report)));
+        else {
+          await page.getByLabel("Existing import", { exact: true }).selectOption(importId!);
+          await page.getByRole("tab", { name: stage === "mapping" ? "Mappings" : "Freeze snapshot", exact: true }).click();
+          if (stage === "mapping") {
+            await page.getByLabel("Mapping revision evidence reference", { exact: true }).fill("finance:must-not-persist");
+            await page.getByRole("checkbox", { name: "I confirm the whole replacement mapping revision", exact: true }).check();
+          }
+        }
+        const button = page.getByRole("button", { name: stage === "upload" ? "Upload report" : stage === "mapping" ? "Save mapping revision" : "Freeze reconciliation", exact: true });
+        await expect(button).toBeEnabled();
+        await check(page, `Admin ${width} before ${stage} demotion`);
+        const before = await contentState(providerTables);
+        // A separate authenticated Admin performs a REAL management mutation
+        // while the stale editor remains open. Do not reload/probe actor access
+        // before its next write; that write must reach Rust and be refused.
+        expect((await api(operator.page, "DELETE", `${roles}/admin`)).status()).toBe(200);
+        await page.evaluate(() => {
+          Reflect.set(window, "fabricatedProviderSuccess", false);
+          new MutationObserver(() => {
+            if (/Import resolved:|Saved mapping revision:|Snapshot frozen:/.test(document.body.textContent ?? "")) Reflect.set(window, "fabricatedProviderSuccess", true);
+          }).observe(document.body, { subtree: true, childList: true, characterData: true });
+        });
+        const denied = page.waitForResponse(postTo(stage === "upload" ? imports : stage === "mapping" ? mappings : reconciliations));
+        const refreshed = page.waitForResponse(r => new URL(r.url()).pathname === "/api/v1/me" && r.request().method() === "GET" && r.status() === 200);
+        await button.click();
+        expect((await denied).status()).toBe(403);
+        await expect((await refreshed).json()).resolves.toMatchObject({ user: { platform_role: "user" }, capabilities: { platform_write: false } });
+        await expect(page).toHaveURL("/home");
+        await expect(page.getByRole("heading", { name: "Welcome, Alex", exact: true })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "Upload & manage provider costs", exact: true })).toHaveCount(0);
+        await expect(page.getByRole("button", { name: /upload|mapping|freeze/i })).toHaveCount(0);
+        await expect(page.locator('input[type="file"]')).toHaveCount(0);
+        expect(await page.evaluate(() => Reflect.get(window, "fabricatedProviderSuccess"))).toBe(false);
+        expect(await contentState(providerTables), "403 must not append evidence, bindings or snapshots").toEqual(before);
+        await check(page, `User ${width} after ${stage} demotion`);
+      } finally {
+        try { if (roles) expect((await api(operator.page, "DELETE", `${roles}/admin`)).status()).toBe(200); }
+        finally { await actor.context.close(); await operator.context.close(); }
+      }
+    });
+  }
 
   test(`Auditor reads frozen provider costs without upload, mapping or freeze authority at ${width}px`, async ({ browser }) => {
     const ids: Result = JSON.parse(readFileSync(seedFile, "utf8"));
