@@ -94,7 +94,12 @@ fn management_openapi_review_completed_components_and_inline_schemas_are_not_vac
 
 #[test]
 fn management_openapi_review_unused_completed_contracts_are_checked() {
-    for value in [json!(true),json!({}),json!({"anyOf":[{"type":"string"},{}]}),json!({"type":"object"})] {
+    for value in [
+        json!(true),
+        json!({}),
+        json!({"anyOf":[{"type":"string"},{}]}),
+        json!({"type":"object"}),
+    ] {
         let mut document = artifact().clone();
         document["components"]["schemas"]["UnusedComplete"] = value.clone();
         assert!(crate::management::openapi::quality::completed(&document).is_err());

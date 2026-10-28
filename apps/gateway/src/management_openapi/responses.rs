@@ -6,13 +6,21 @@ use axum::http::{HeaderMap, StatusCode};
 use serde_json::{Value, json};
 
 // Enabled only when the area's schemas AND executed fixture suite land together.
-pub(crate) const COMPLETED_AREAS: &[&str] = &[
+// Each #81 slice owns one group; its executed fixture test finishes exactly that
+// group. Add a group here, never another slice's names, to complete new areas.
+pub(crate) const IDENTITY_SELF_SERVICE_AREAS: &[&str] = &[
     "auth",
     "branding",
     "invitations",
     "me",
     "access-request-targets",
 ];
+pub(crate) const AREA_GROUPS: &[&[&str]] = &[IDENTITY_SELF_SERVICE_AREAS];
+
+/// Whether an area's schemas are complete and gated by an executed fixture group.
+pub(crate) fn completed(area: &str) -> bool {
+    AREA_GROUPS.iter().any(|group| group.contains(&area))
+}
 
 pub(crate) fn artifact() -> &'static Value {
     static DOCUMENT: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
@@ -262,8 +270,24 @@ fn require_positives(expected: &BTreeSet<String>, observed: &BTreeSet<String>) -
     Ok(())
 }
 
+/// Coverage area of a template: `platform/<resource>`,
+/// `workspaces/{workspace}/<resource>` (or `workspaces/{workspace}` itself, or
+/// the `workspaces` collection), otherwise the top-level segment such as `me`.
+/// Always a contiguous substring of the template after `/api/v1/`.
 pub(crate) fn area(template: &str) -> &str {
-    template.split('/').nth(3).unwrap_or("")
+    let Some(rest) = template.strip_prefix("/api/v1/") else {
+        return "";
+    };
+    let take = match rest.split('/').next() {
+        Some("platform") => 2,
+        Some("workspaces") => 3,
+        _ => 1,
+    };
+    let end = rest
+        .match_indices('/')
+        .nth(take - 1)
+        .map_or(rest.len(), |(i, _)| i);
+    &rest[..end]
 }
 
 /// Resolve a concrete request only at capture sites; validation itself requires
@@ -338,7 +362,7 @@ pub(crate) fn check(
     bytes: &[u8],
 ) -> Result<()> {
     if let Some(template) = template(method, path)?
-        && COMPLETED_AREAS.contains(&area(&template))
+        && completed(area(&template))
     {
         validate(artifact(), method, &template, status, headers, bytes)?;
     }
@@ -464,6 +488,42 @@ mod review_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn areas_are_fine_grained_and_groups_are_disjoint() {
+        for (template, want) in [
+            ("/api/v1/me", "me"),
+            ("/api/v1/me/sessions/{session}", "me"),
+            ("/api/v1/auth/callback", "auth"),
+            ("/api/v1/platform/users", "platform/users"),
+            (
+                "/api/v1/platform/users/{user}/roles/{role}",
+                "platform/users",
+            ),
+            ("/api/v1/workspaces", "workspaces"),
+            ("/api/v1/workspaces/{workspace}", "workspaces/{workspace}"),
+            (
+                "/api/v1/workspaces/{workspace}/keys",
+                "workspaces/{workspace}/keys",
+            ),
+            (
+                "/api/v1/workspaces/{workspace}/keys/{key}/rotate",
+                "workspaces/{workspace}/keys",
+            ),
+            ("/health/ready", ""),
+        ] {
+            assert_eq!(super::area(template), want, "{template}");
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for group in super::AREA_GROUPS {
+            assert!(!group.is_empty());
+            for area in *group {
+                assert!(
+                    seen.insert(*area),
+                    "area {area} is owned by two #81 slice groups"
+                );
+            }
+        }
+    }
     use super::*;
     fn document() -> Value {
         json!({"paths":{"/api/v1/me":{"get":{
@@ -598,7 +658,7 @@ mod tests {
     fn management_openapi_completed_areas_have_no_incomplete_references() {
         let mut count = 0;
         for (path, item) in artifact()["paths"].as_object().unwrap() {
-            if COMPLETED_AREAS.contains(&area(path)) {
+            if completed(area(path)) {
                 for op in item.as_object().unwrap().values() {
                     require_complete(artifact(), op).unwrap();
                     assert!(

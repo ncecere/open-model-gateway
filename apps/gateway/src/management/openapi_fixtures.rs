@@ -431,7 +431,7 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
     )
     .await;
     assert_eq!(r.status, StatusCode::PAYLOAD_TOO_LARGE);
-    for area in openapi::responses::COMPLETED_AREAS {
+    for area in openapi::responses::IDENTITY_SELF_SERVICE_AREAS {
         observed.finish(&[area]);
     }
 }

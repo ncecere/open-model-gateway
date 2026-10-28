@@ -295,9 +295,9 @@ async fn management_openapi_review_middleware_throttle_raw_wire() {
         .unwrap();
     let document = crate::management::openapi::responses::artifact();
     for (path, item) in document["paths"].as_object().unwrap() {
-        if !crate::management::openapi::responses::COMPLETED_AREAS
-            .contains(&crate::management::openapi::responses::area(path))
-        {
+        if !crate::management::openapi::responses::completed(
+            crate::management::openapi::responses::area(path),
+        ) {
             continue;
         }
         for (method, operation) in item.as_object().unwrap() {
