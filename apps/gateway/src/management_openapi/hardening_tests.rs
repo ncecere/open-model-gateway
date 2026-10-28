@@ -158,14 +158,20 @@ fn bindings(sources: &[String]) -> BTreeSet<String> {
     struct Runners(BTreeSet<String>);
     impl<'ast> Visit<'ast> for Runners {
         fn visit_item_fn(&mut self, function: &'ast syn::ItemFn) {
-            if function.attrs.iter().any(|a| {
+            let path = |a: &syn::Attribute| {
                 a.path()
                     .segments
                     .iter()
                     .map(|s| s.ident.to_string())
                     .collect::<Vec<_>>()
-                    == ["sqlx", "test"]
-            }) {
+            };
+            // Only runners that compile and run by default bind a group: a
+            // per-function cfg gate or #[ignore] would prove nothing.
+            let runs = !function
+                .attrs
+                .iter()
+                .any(|a| path(a) == ["cfg"] || path(a) == ["ignore"]);
+            if runs && function.attrs.iter().any(|a| path(a) == ["sqlx", "test"]) {
                 let mut finish = Finish::default();
                 finish.visit_block(&function.block);
                 self.0.extend(finish.0);
@@ -238,12 +244,45 @@ fn management_openapi_hardening_area_groups_have_sqlx_finish_bindings() {
 }
 
 #[test]
+fn management_openapi_hardening_untraversed_keywords_are_refused() {
+    // Keywords the checker does not traverse could hide permissive branches
+    // (e.g. dependentSchemas: {"x": true}). Completed schemas may only use the
+    // keywords the quality checker actually inspects.
+    let mut escapes = Vec::new();
+    for (i, child) in [
+        json!({"type":"object","required":[],"additionalProperties":false,"dependentSchemas":{"a":true}}),
+        json!({"type":"object","required":[],"additionalProperties":false,"dependentSchemas":{"a":{"type":"array"}}}),
+        json!({"type":"string","$defs":{"loose":true}}),
+        json!({"type":"string","definitions":{"loose":{}}}),
+        json!({"type":"string","$dynamicRef":"#loose"}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if check(closed(child.clone())).is_ok() {
+            escapes.push(format!("nested {i}"));
+        }
+        let doc = json!({"components":{"schemas":{},"parameters":{"Probe":{"schema":child}}},"paths":{}});
+        if quality::completed(&doc).is_ok() {
+            escapes.push(format!("parameter {i}"));
+        }
+    }
+    assert!(
+        escapes.is_empty(),
+        "untraversed keywords accepted: {escapes:?}"
+    );
+}
+
+#[test]
 fn management_openapi_hardening_finish_inventory_ignores_claimed_helpers() {
     for source in [
         "fn helper() { observed.finish(MISSING); }",
         "#[test] fn unit() { observed.finish(MISSING); }",
         "#[sqlx::test] async fn runner() { /* observed.finish(MISSING) */ observed.finish(&[area]); }",
         "#[sqlx::test] async fn runner() { fn unused() { observed.finish(MISSING); } }",
+        // A runner that never compiles or never runs by default proves nothing.
+        "#[cfg(any())] #[sqlx::test] async fn runner() { observed.finish(MISSING); }",
+        "#[sqlx::test] #[ignore] async fn runner() { observed.finish(MISSING); }",
     ] {
         assert!(!bindings(&[source.into()]).contains("MISSING"));
     }
