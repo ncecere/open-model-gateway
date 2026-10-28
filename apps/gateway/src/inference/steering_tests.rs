@@ -2446,7 +2446,8 @@ async fn rejection_fault_signature(pool: PgPool, fault: SettlementFault) {
     let app = w.app.clone();
     let request = json_request(&w.keys.personal_key.token, t.path, &headers, &body);
     let response = tokio::spawn(async move { send_observed(&app, request).await });
-    tokio::time::timeout(Duration::from_secs(3), pause.entered.notified())
+    // Orchestration headroom for slow CI shards; not a product deadline.
+    tokio::time::timeout(Duration::from_secs(10), pause.entered.notified())
         .await
         .expect("request reached approved upstream after admission");
 
@@ -2624,7 +2625,8 @@ async fn rejection_fault_signature(pool: PgPool, fault: SettlementFault) {
 
 /// Identify the actual settlement backend, not an idle or admission connection.
 async fn blocked_settlement(pool: &PgPool, blocker: i32) -> i32 {
-    tokio::time::timeout(Duration::from_secs(2), async {
+    // Orchestration headroom for slow CI shards; not a product deadline.
+    tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let pids = sqlx::query_scalar::<_, i32>("SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND $1 = ANY(pg_blocking_pids(pid)) AND query LIKE 'SELECT r.workspace_id,%FOR UPDATE OF r'")
                 .bind(blocker).fetch_all(pool).await.unwrap();
