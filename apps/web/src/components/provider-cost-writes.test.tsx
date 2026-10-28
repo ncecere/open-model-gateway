@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { createBrowserHistory, createRootRoute, createRoute, createRouter, Link, Outlet, RouterProvider } from "@tanstack/react-router";
 import userEvent from "@testing-library/user-event";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ProviderReconciliations } from "../pages/usage/provider-reconciliations";
 import { admin, auditor, session, testClient } from "../lib/test-fixtures";
 
@@ -32,12 +32,12 @@ function serve(options: { refusal?: number; conflict?: number; modelMappings?: {
   });
   vi.stubGlobal("fetch", fetch); return fetch;
 }
-function renderView(viewer = admin) {
+function renderView(viewer = admin, client = testClient()) {
   document.cookie = "omg_csrf=test-csrf; path=/";
-  render(<QueryClientProvider client={testClient()}><ProviderReconciliations session={viewer} /></QueryClientProvider>);
+  render(<QueryClientProvider client={client}><ProviderReconciliations session={viewer} /></QueryClientProvider>);
   return userEvent.setup({ applyAccept: false });
 }
-async function open() { const user = renderView(); await user.click(screen.getByRole("button", { name: "Upload & manage" })); return user; }
+async function open(client = testClient()) { const user = renderView(admin, client); await user.click(screen.getByRole("button", { name: "Upload & manage" })); return user; }
 async function upload(user: ReturnType<typeof userEvent.setup>) {
   const file = new File([' {"pages":[], "pages":[]}\r\n'], "report.json", { type: "application/json" });
   await user.upload(screen.getByLabelText("Anthropic report JSON"), file);
@@ -207,6 +207,114 @@ describe("Admin provider-cost writes", () => {
     await user.click(screen.getByRole("tab", { name: "Upload report" }));
     await user.click(screen.getByRole("tab", { name: step }));
     expect(screen.getByText(step === "Mappings" ? "Saved mapping revision: retained-result" : "Snapshot frozen: retained-result")).toBeTruthy();
+  });
+  it.each([
+    { step: "Mappings", source: "providers" }, { step: "Freeze snapshot", source: "providers" },
+    { step: "Mappings", source: "summary" }, { step: "Freeze snapshot", source: "summary" },
+  ])("records pending $step success through a $source refetch failure and unblocks navigation", async ({ step, source }) => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const fetch = serve(), original = fetch.getMockImplementation()!;
+    let failRead = false, finish!: (response: Response) => void, signal: AbortSignal | undefined;
+    fetch.mockImplementation((url: string, init: RequestInit) => {
+      if (init.method === "POST" && url !== imports) { signal = init.signal as AbortSignal; return new Promise<Response>(resolve => { finish = resolve; }); }
+      if (failRead && (source === "providers" ? url.startsWith(`${root}/providers?`) : url.includes("/lines?"))) return Promise.resolve(Response.json({ error: { message: "Background read failed" } }, { status: 503 }));
+      return original(url, init);
+    });
+    const user = await open(client); await upload(user);
+    await user.click(screen.getByRole("tab", { name: step }));
+    if (step === "Mappings") {
+      await user.type(await screen.findByLabelText("Mapping revision evidence reference"), "proof");
+      await user.click(screen.getByRole("checkbox", { name: "I confirm the whole replacement mapping revision" }));
+      await user.click(screen.getByRole("button", { name: "Save mapping revision" }));
+    } else {
+      await screen.findByText(/Mapping revision: mapping-old/);
+      await user.click(screen.getByRole("button", { name: "Freeze reconciliation" }));
+    }
+    failRead = true;
+    const predicate = (q: { queryKey: readonly unknown[] }) => source === "providers" ? q.queryKey.includes(`${root}/providers`) : q.queryKey.includes("summary");
+    expect(client.getQueryCache().findAll({ predicate }).every(q => q.isStale())).toBe(true);
+    await act(async () => { await client.refetchQueries({ predicate }); });
+    if (source !== "providers" || step === "Mappings") await screen.findByText("Background read failed");
+    else await waitFor(() => expect(client.getQueryCache().findAll({ predicate })[0].state.error).toBeTruthy());
+    expect(signal?.aborted).toBe(false);
+    expect(screen.getByRole("button", { name: "Back to comparisons" }).hasAttribute("disabled")).toBe(true);
+    await act(async () => finish(Response.json({ id: "retained-after-refetch" })));
+    expect(await screen.findByText(step === "Mappings" ? "Saved mapping revision: retained-after-refetch" : "Snapshot frozen: retained-after-refetch")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Back to comparisons" }).hasAttribute("disabled")).toBe(false);
+    if (source === "providers" && step === "Freeze snapshot") await user.click(screen.getByRole("tab", { name: "Mappings" }));
+    expect(screen.getByRole("alert").textContent).toContain("Background read failed");
+    await user.click(screen.getByRole("button", { name: "Back to comparisons" }));
+    expect(screen.queryByRole("heading", { name: "Upload & manage provider costs" })).toBeNull();
+  });
+  it("keeps the draft and conflict through a summary refetch failure and retry", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const fetch = serve({ conflict: 409 }), original = fetch.getMockImplementation()!;
+    let failRead = false;
+    fetch.mockImplementation((url: string, init: RequestInit) => failRead && url.includes("/lines?") ? Promise.resolve(Response.json({ error: { message: "Summary unavailable" } }, { status: 503 })) : original(url, init));
+    const user = await open(client); await upload(user);
+    await user.click(screen.getByRole("tab", { name: "Mappings" }));
+    await user.click(await screen.findByRole("button", { name: "Remove binding 1" }));
+    await user.type(screen.getByLabelText("Mapping revision evidence reference"), "unsaved-conflict-proof");
+    await user.click(screen.getByRole("checkbox", { name: "I confirm the whole replacement mapping revision" }));
+    await user.click(screen.getByRole("button", { name: "Save mapping revision" }));
+    await screen.findByText(/Overlapping coverage or invalid supersession/);
+    failRead = true;
+    await act(async () => { await client.refetchQueries({ predicate: q => q.queryKey.includes("summary") }); });
+    expect(await screen.findByText("Summary unavailable")).toBeTruthy();
+    expect(screen.getByText(/Overlapping coverage or invalid supersession/)).toBeTruthy();
+    expect((screen.getByLabelText("Mapping revision evidence reference") as HTMLInputElement).value).toBe("unsaved-conflict-proof");
+    expect(within(screen.getByRole("table", { name: "Whole mapping draft" })).queryByText("already-mapped")).toBeNull();
+    expect(screen.getByRole("button", { name: "Save mapping revision" }).hasAttribute("disabled")).toBe(true);
+    failRead = false; await user.click(screen.getByRole("button", { name: "Reload import lines" }));
+    await waitFor(() => expect(screen.queryByText("Summary unavailable")).toBeNull());
+    expect(screen.getByText(/Overlapping coverage or invalid supersession/)).toBeTruthy();
+    expect((screen.getByLabelText("Mapping revision evidence reference") as HTMLInputElement).value).toBe("unsaved-conflict-proof");
+  });
+  it("releases pending ownership on editor unmount without waiting for abort settlement or clearing a newer write", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const fetch = serve(), original = fetch.getMockImplementation()!;
+    let finishOld!: (response: Response) => void, finishNew!: (response: Response) => void, signal: AbortSignal | undefined;
+    fetch.mockImplementation((url: string, init: RequestInit) => {
+      if (init.method === "POST" && url === mappings) { signal = init.signal as AbortSignal; return new Promise<Response>(resolve => { finishOld = resolve; }); }
+      if (init.method === "POST" && url === `${root}/provider-reconciliations`) return new Promise<Response>(resolve => { finishNew = resolve; });
+      return original(url, init);
+    });
+    const user = await open(client); await upload(user);
+    await user.click(screen.getByRole("tab", { name: "Mappings" }));
+    await user.type(await screen.findByLabelText("Mapping revision evidence reference"), "proof");
+    await user.click(screen.getByRole("checkbox", { name: "I confirm the whole replacement mapping revision" }));
+    await user.click(screen.getByRole("button", { name: "Save mapping revision" }));
+    // A replacement query revision remounts the editor while the workflow lives.
+    act(() => { client.setQueryData(["api", undefined, mappings, "account", "latest"], { id: "replacement", account_id: "account", bindings: [binding] }); });
+    await screen.findByText("Base mapping revision: replacement");
+    expect(signal?.aborted).toBe(true);
+    expect(screen.getByRole("button", { name: "Back to comparisons" }).hasAttribute("disabled")).toBe(false);
+    await user.click(screen.getByRole("tab", { name: "Freeze snapshot" }));
+    await user.click(screen.getByRole("button", { name: "Freeze reconciliation" }));
+    expect(screen.getByRole("button", { name: "Back to comparisons" }).hasAttribute("disabled")).toBe(true);
+    await act(async () => finishOld(Response.json({ id: "cancelled-result" })));
+    expect(screen.getByRole("button", { name: "Back to comparisons" }).hasAttribute("disabled")).toBe(true);
+    await act(async () => finishNew(Response.json({ id: "new-result" })));
+    await screen.findByText("Snapshot frozen: new-result");
+    expect(screen.getByRole("button", { name: "Back to comparisons" }).hasAttribute("disabled")).toBe(false);
+    expect(client.getQueryCache().findAll().some(q => (q.state.data as { id?: string } | undefined)?.id === "cancelled-result")).toBe(false);
+  });
+  it("retains unapplied binding fields across tabs and warns before discarding them", async () => {
+    serve(); const user = await open(new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })); await upload(user);
+    await user.click(screen.getByRole("tab", { name: "Mappings" }));
+    await user.selectOptions(await screen.findByLabelText("Gateway connection"), "connection");
+    await user.type(screen.getByLabelText("Binding evidence reference"), "partial-evidence");
+    await user.type(screen.getByLabelText("Deployment ID (optional)"), "partial-deployment");
+    await user.click(screen.getByRole("tab", { name: "Freeze snapshot" }));
+    expect(document.querySelector('[data-dirty="true"]')).not.toBeNull();
+    await user.click(screen.getByRole("tab", { name: "Mappings" }));
+    expect((screen.getByLabelText("Binding evidence reference") as HTMLInputElement).value).toBe("partial-evidence");
+    expect((screen.getByLabelText("Deployment ID (optional)") as HTMLInputElement).value).toBe("partial-deployment");
+    expect((screen.getByLabelText("Gateway connection") as HTMLSelectElement).value).toBe("connection");
+    await user.click(screen.getByRole("button", { name: "Back to comparisons" }));
+    await screen.findByRole("alertdialog", { name: "Discard unsaved changes?" });
+    await user.click(screen.getByRole("button", { name: "Keep editing" }));
+    expect((screen.getByLabelText("Binding evidence reference") as HTMLInputElement).value).toBe("partial-evidence");
   });
   it("records a pending refusal on another tab without fabricating success", async () => {
     const fetch = serve(), original = fetch.getMockImplementation()!;

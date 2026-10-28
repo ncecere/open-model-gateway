@@ -59,6 +59,44 @@ describe("provider-cost write reads", () => {
     expect(coversPeriod(bindings.map(b => ({ ...b, attested: false })), null, period)).toBe(false);
     expect(coversPeriod(bindings, "different", period)).toBe(false);
   });
+  it.each([
+    { name: "fractional-midnight start excludes the day", start: "2026-10-01T00:00:00.000001Z", end: report.period_end, expected: false },
+    { name: "fractional-midnight end covers the previous day", start: report.period_start, end: "2026-10-02T00:00:00.000001Z", expected: true },
+    { name: "all-zero fractional midnight is exact", start: "2026-10-01T00:00:00.000000000Z", end: "2026-10-02T00:00:00.000000000Z", expected: true },
+    { name: "positive offsets normalize to UTC midnight", start: "2026-10-01T05:30:00+05:30", end: "2026-10-02T05:30:00+05:30", expected: true },
+    { name: "negative offsets cross calendar dates", start: "2026-09-30T20:00:00-04:00", end: "2026-10-01T20:00:00-04:00", expected: true },
+    { name: "offset fractional-midnight start excludes the day", start: "2026-10-01T05:30:00.000001+05:30", end: "2026-10-02T05:30:00+05:30", expected: false },
+    { name: "offset fractional-midnight end covers the previous day", start: "2026-09-30T20:00:00-04:00", end: "2026-10-01T20:00:00.000001-04:00", expected: true },
+    { name: "non-midnight offset does not cover the day", start: "2026-10-01T00:00:00-01:00", end: "2026-10-02T00:00:00-01:00", expected: false },
+    { name: "invalid offset is refused", start: "2026-10-01T00:00:00+24:00", end: report.period_end, expected: false },
+    { name: "negative zero offset still identifies an exact UTC time", start: "2026-10-01T00:00:00-00:00", end: report.period_end, expected: true },
+    { name: "unsupported offset format is refused", start: "2026-10-01T00:00:00+0000", end: report.period_end, expected: false },
+    { name: "invalid calendar day is refused", start: "2026-09-31T00:00:00Z", end: report.period_end, expected: false },
+    { name: "non-RFC format is refused", start: "2026-10-01", end: report.period_end, expected: false },
+    { name: "trailing newline is refused", start: "2026-10-01T00:00:00Z\n", end: report.period_end, expected: false },
+    { name: "24-hour rollover is refused", start: "2026-09-30T24:00:00Z", end: report.period_end, expected: false },
+  ])("uses exact RFC 3339 whole-day boundaries: $name", ({ start, end, expected }) => {
+    const b = { provider_workspace_id: null, attested: true, effective_start: start, effective_end: end } as Binding;
+    expect(coversPeriod([b], null, report)).toBe(expected);
+  });
+  it.each([
+    { name: "fractional start", start: "2026-10-01T00:00:00.000001Z", end: report.period_end },
+    { name: "fractional end", start: report.period_start, end: "2026-10-02T00:00:00.000001Z" },
+    { name: "non-midnight start", start: "2026-10-01T01:00:00Z", end: report.period_end },
+    { name: "invalid calendar date", start: "2026-09-31T00:00:00Z", end: report.period_end },
+    { name: "invalid timestamp", start: "invalid", end: report.period_end },
+    { name: "empty period", start: report.period_start, end: report.period_start },
+    { name: "reversed period", start: report.period_end, end: report.period_start },
+    { name: "over 31 days", start: report.period_start, end: "2026-11-02T00:00:00Z" },
+  ])("refuses non-aligned or invalid report periods: $name", ({ start, end }) => {
+    const b = { provider_workspace_id: null, attested: true, effective_start: "2026-01-01T00:00:00Z", effective_end: "2027-01-01T00:00:00Z" } as Binding;
+    expect(coversPeriod([b], null, { ...report, period_start: start, period_end: end })).toBe(false);
+  });
+  it("accepts an exactly 31-day report normalized from numeric offsets", () => {
+    const period = { ...report, period_start: "2026-10-01T01:00:00+01:00", period_end: "2026-11-01T01:00:00+01:00" };
+    const b = { provider_workspace_id: null, attested: true, effective_start: period.period_start, effective_end: period.period_end } as Binding;
+    expect(coversPeriod([b], null, period)).toBe(true);
+  });
   it("allows the exact 5 MiB boundary for JSON-typed files but not a filename-only guess", () => {
     expect(() => validateReportFile({ size: 5 * 1024 * 1024, type: "application/json" } as File)).not.toThrow();
     expect(() => validateReportFile({ size: 4, type: "" } as File)).toThrow("JSON file type");

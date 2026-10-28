@@ -61,20 +61,43 @@ export function writeBinding(b: Binding): Binding {
     evidence_reference: b.evidence_reference, model_mappings: b.model_mappings.map(m => ({ provider_model: m.provider_model, upstream_model: m.upstream_model })) };
 }
 export const dimensionLabel = (id: string | null) => id === null ? "Provider default / missing identifier" : id;
+const dayMs = 86400000;
+/** Preserve arbitrarily small fractions: Date.parse truncates them. Normalize
+ * integral seconds/offsets exactly, then test the fraction separately. Refuse
+ * unsupported timestamps, including leap seconds and non-RFC offsets. */
+function exactUtcDay(value: string): { day: number; midnight: boolean } | undefined {
+  const match = /^(\d{4}-\d{2}-\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?([Zz]|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!match) return;
+  const [, date, hours, minutes, seconds, fraction, offset] = match;
+  const dateMs = Date.parse(`${date}T00:00:00Z`);
+  if (!Number.isFinite(dateMs) || new Date(dateMs).toISOString().slice(0, 10) !== date || +hours > 23 || +minutes > 59 || +seconds > 59) return;
+  let offsetSeconds = 0;
+  if (!/^[Zz]$/.test(offset)) {
+    const h = +offset.slice(1, 3), m = +offset.slice(4, 6);
+    if (h > 23 || m > 59) return;
+    offsetSeconds = (offset[0] === "+" ? 1 : -1) * (h * 3600 + m * 60);
+  }
+  const utcSeconds = +hours * 3600 + +minutes * 60 + +seconds - offsetSeconds;
+  return { day: dateMs + Math.floor(utcSeconds / 86400) * dayMs, midnight: utcSeconds % 86400 === 0 && !/[1-9]/.test(fraction ?? "") };
+}
 /** Reports use half-open UTC 1d buckets. A binding must cover a whole bucket
  * (matching.rs); joining two partial-day attestations cannot prove that day.
  * Union the complete buckets, not the raw timestamp intervals. */
 export function coversPeriod(bindings: Binding[], dimension: string | null, report: CostImport) {
-  const day = 86400000, start = Date.parse(report.period_start), end = Date.parse(report.period_end);
-  if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end || start % day || end % day || end - start > 31 * day) return false;
+  const start = exactUtcDay(report.period_start), end = exactUtcDay(report.period_end);
+  if (!start?.midnight || !end?.midnight || start.day >= end.day || end.day - start.day > 31 * dayMs) return false;
   const intervals = bindings.filter(b => b.provider_workspace_id === dimension && b.attested)
-    .map(b => [Math.ceil(Date.parse(b.effective_start) / day) * day, Math.floor(Date.parse(b.effective_end) / day) * day])
-    .filter(([a, b]) => Number.isFinite(a) && Number.isFinite(b) && a < b).sort(([a], [b]) => a - b);
-  let covered = start;
+    .flatMap(b => {
+      const a = exactUtcDay(b.effective_start), z = exactUtcDay(b.effective_end);
+      if (!a || !z) return [];
+      const first = a.day + (a.midnight ? 0 : dayMs);
+      return first < z.day ? [[first, z.day]] : [];
+    }).sort(([a], [b]) => a - b);
+  let covered = start.day;
   for (const [a, b] of intervals) {
     if (a > covered) return false;
     covered = Math.max(covered, b);
-    if (covered >= end) return true;
+    if (covered >= end.day) return true;
   }
   return false;
 }
