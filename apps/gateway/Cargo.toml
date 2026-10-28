@@ -38,7 +38,12 @@ http-body-util = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 async-stream = "0.3"
 futures-util = "0.3"
-axum = { version = "0.8", features = ["ws"] }
+# Browser WebSocket errors are erased by Axum; keep this pin paired with
+# browser-tungstenite below and the real Axum error-identity regression test.
+axum = { version = "=0.8.9", features = ["ws"] }
+# Only the browser parser's error type, NOT the independently versioned upstream
+# transport's re-export. No TLS/default features are added to the browser stack.
+browser-tungstenite = { package = "tungstenite", version = "=0.29.0", default-features = false }
 clap = { version = "4", features = ["derive", "env"] }
 dotenvy = "0.15"
 hex = "0.4"
@@ -64,9 +69,9 @@ sha2 = "0.11"
 subtle = "2"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "uuid", "migrate", "macros", "json", "chrono"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "time", "sync", "process", "fs", "io-util"] }
-# Realtime upstream WebSocket (same tungstenite as axum's `ws`); TLS uses an explicit
-# ring-backed rustls config with webpki roots; no proxies, redirects or retries.
-tokio-tungstenite = { version = "=0.29.0", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+# Realtime upstream WebSocket (independent of Axum's browser parser); TLS uses an
+# explicit ring-backed rustls config with webpki roots; no proxies, redirects or retries.
+tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "=1.0.10"
 # Audit export over syslog/TLS (#107): the same ring-backed rustls, no new TLS stack.

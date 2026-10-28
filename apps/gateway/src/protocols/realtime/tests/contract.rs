@@ -939,6 +939,7 @@ async fn event_rate_and_message_size_caps_close_with_an_error(pool: PgPool) {
     assert_eq!(error["error"]["code"], "rate_limit_error");
     let close = next(&mut client).await;
     assert_eq!(close["code"], 1008, "{close}");
+    assert_eq!(close["reason"], "rate_limit_error", "{close}");
     let row = g.finished().await;
     assert_eq!(
         (row["state"].as_str(), row["error_code"].as_str()),
@@ -955,6 +956,9 @@ async fn event_rate_and_message_size_caps_close_with_an_error(pool: PgPool) {
         .await;
     let error = until(&mut client, "error").await;
     assert_eq!(error["error"]["code"], "message_too_big");
+    let close = next(&mut client).await;
+    assert_eq!(close["code"], 1009, "{close}");
+    assert_eq!(close["reason"], "message_too_big", "{close}");
     // Wait for the oversized session to settle before checking upstream.
     assert_eq!(g.finished().await["error_code"], "invalid_request_error");
     assert!(
