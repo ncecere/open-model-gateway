@@ -2210,7 +2210,8 @@
                 ]
               },
               "attempt_number": {
-                "minimum": 0,
+                "maximum": 3,
+                "minimum": 1,
                 "type": "integer"
               },
               "billing_usage": {
@@ -2632,7 +2633,8 @@
                 ]
               },
               "attempt_number": {
-                "minimum": 0,
+                "maximum": 3,
+                "minimum": 1,
                 "type": "integer"
               },
               "billing_usage": {
@@ -2682,7 +2684,7 @@
                 "$ref": "#/components/schemas/IdentityNullableDecimal"
               },
               "completed_at": {
-                "$ref": "#/components/schemas/IdentityNullableTime"
+                "$ref": "#/components/schemas/IdentityTime"
               },
               "connection": {
                 "additionalProperties": false,
@@ -2766,10 +2768,7 @@
                 "$ref": "#/components/schemas/IdentityTime"
               },
               "error_code": {
-                "type": [
-                  "string",
-                  "null"
-                ]
+                "type": "null"
               },
               "execution_id": {
                 "$ref": "#/components/schemas/IdentityUuid"
@@ -2804,15 +2803,7 @@
                 "$ref": "#/components/schemas/IdentityNullableDecimal"
               },
               "latency_ms": {
-                "anyOf": [
-                  {
-                    "minimum": 0,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "type": "null"
               },
               "meter_usage": {
                 "anyOf": [
@@ -3349,9 +3340,10 @@
             "additionalProperties": false,
             "properties": {
               "amount_microusd": {
-                "type": "string"
+                "$ref": "#/components/schemas/S6MoneyInput"
               },
               "period": {
+                "description": "Budget period: day, week, month or lifetime (validated by the handler, not by deserialization).",
                 "type": "string"
               }
             },
@@ -3367,10 +3359,11 @@
             "minItems": 2,
             "prefixItems": [
               {
+                "description": "Budget period: day, week, month or lifetime (validated by the handler, not by deserialization).",
                 "type": "string"
               },
               {
-                "type": "string"
+                "$ref": "#/components/schemas/S6MoneyInput"
               }
             ],
             "type": "array"
@@ -3597,7 +3590,8 @@
             ]
           },
           "attempt_number": {
-            "minimum": 0,
+            "maximum": 3,
+            "minimum": 1,
             "type": "integer"
           },
           "cached_input_tokens": {
@@ -4902,7 +4896,7 @@
                 "type": "boolean"
               },
               "used_microusd": {
-                "$ref": "#/components/schemas/IdentityNullableDecimal"
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
               },
               "window_end": {
                 "$ref": "#/components/schemas/IdentityNullableTime"
@@ -5494,6 +5488,12 @@
         ],
         "type": "object"
       },
+      "S6MoneyInput": {
+        "description": "Canonical integer micro-USD string, at most 19 digits; the handler rejects zero for budgets.",
+        "maxLength": 19,
+        "pattern": "^(0|[1-9][0-9]*)$",
+        "type": "string"
+      },
       "S6Ok": {
         "additionalProperties": false,
         "properties": {
@@ -5590,6 +5590,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "id": {
+                    "pattern": "^(video|batch)_[0-9a-f]{32}$",
                     "type": "string"
                   },
                   "kind": {
@@ -5892,6 +5893,7 @@
                     "$ref": "#/components/schemas/IdentityNullableTime"
                   },
                   "id": {
+                    "pattern": "^(video|batch)_[0-9a-f]{32}$",
                     "type": "string"
                   },
                   "kind": {
@@ -6203,7 +6205,8 @@
             "$ref": "#/components/schemas/IdentityUuid"
           },
           "metadata": {
-            "$comment": "Stored audit_events.metadata is returned verbatim as JSON; its vocabulary depends on the audited action."
+            "$comment": "Stored audit_events.metadata object. audit() keeps only typed safe keys (flags, counts, closed vocabulary values) for new rows; older rows and database-trigger rows carry action-specific keys.",
+            "type": "object"
           },
           "resource_id": {
             "$ref": "#/components/schemas/IdentityNullableUuid"
@@ -6943,6 +6946,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "id": {
+                    "pattern": "^(video|batch)_[0-9a-f]{32}$",
                     "type": "string"
                   },
                   "kind": {
@@ -7249,6 +7253,7 @@
                     "$ref": "#/components/schemas/IdentityNullableTime"
                   },
                   "id": {
+                    "pattern": "^(video|batch)_[0-9a-f]{32}$",
                     "type": "string"
                   },
                   "kind": {
@@ -7653,7 +7658,8 @@
             "$ref": "#/components/schemas/IdentityUuid"
           },
           "metadata": {
-            "$comment": "Stored audit_events.metadata is returned verbatim as JSON; its vocabulary depends on the audited action."
+            "$comment": "Stored audit_events.metadata object. audit() keeps only typed safe keys (flags, counts, closed vocabulary values) for new rows; older rows and database-trigger rows carry action-specific keys.",
+            "type": "object"
           },
           "resource_id": {
             "$ref": "#/components/schemas/IdentityNullableUuid"
@@ -11412,6 +11418,7 @@
             "additionalProperties": false,
             "properties": {
               "budget_period": {
+                "description": "Budget period: day, week, month or lifetime (validated by the handler, not by deserialization).",
                 "type": "string"
               },
               "budgets": {
@@ -11469,9 +11476,13 @@
                 ]
               },
               "monthly_budget_microusd": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/S6MoneyInput"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "requests_per_minute": {
@@ -11608,12 +11619,17 @@
                 ]
               },
               {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/S6MoneyInput"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               {
+                "description": "Budget period: day, week, month or lifetime (validated by the handler, not by deserialization).",
                 "type": "string"
               },
               {
@@ -13579,36 +13595,6 @@
               "minimum": 0,
               "type": "integer"
             }
-          },
-          {
-            "description": "actor_user_id",
-            "in": "query",
-            "name": "actor_user_id",
-            "required": false,
-            "schema": {
-              "$ref": "#/components/schemas/IdentityUuid"
-            }
-          },
-          {
-            "description": "hide_sign_ins",
-            "in": "query",
-            "name": "hide_sign_ins",
-            "required": false,
-            "schema": {
-              "enum": [
-                "true",
-                "false"
-              ]
-            }
-          },
-          {
-            "description": "exclude_actions",
-            "in": "query",
-            "name": "exclude_actions",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -14757,36 +14743,6 @@
               "maximum": 100000,
               "minimum": 0,
               "type": "integer"
-            }
-          },
-          {
-            "description": "actor_user_id",
-            "in": "query",
-            "name": "actor_user_id",
-            "required": false,
-            "schema": {
-              "$ref": "#/components/schemas/IdentityUuid"
-            }
-          },
-          {
-            "description": "hide_sign_ins",
-            "in": "query",
-            "name": "hide_sign_ins",
-            "required": false,
-            "schema": {
-              "enum": [
-                "true",
-                "false"
-              ]
-            }
-          },
-          {
-            "description": "exclude_actions",
-            "in": "query",
-            "name": "exclude_actions",
-            "required": false,
-            "schema": {
-              "type": "string"
             }
           }
         ],
@@ -17093,34 +17049,40 @@
         "operationId": "get_api_v1_platform_logs_generations",
         "parameters": [
           {
-            "description": "start_date",
+            "description": "Inclusive start day (UTC, YYYY-MM-DD). The window to end_date spans 1 to 93 days.",
             "in": "query",
             "name": "start_date",
             "required": false,
             "schema": {
+              "format": "date",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
           },
           {
-            "description": "end_date",
+            "description": "Exclusive end day (UTC, YYYY-MM-DD); at most tomorrow. Default tomorrow.",
             "in": "query",
             "name": "end_date",
             "required": false,
             "schema": {
+              "format": "date",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
           },
           {
-            "description": "model",
+            "description": "Exact public model name.",
             "in": "query",
             "name": "model",
             "required": false,
             "schema": {
+              "maxLength": 200,
+              "minLength": 1,
               "type": "string"
             }
           },
           {
-            "description": "key_id",
+            "description": "Only this key.",
             "in": "query",
             "name": "key_id",
             "required": false,
@@ -17129,34 +17091,37 @@
             }
           },
           {
-            "description": "status",
+            "description": "Comma-separated attempt statuses (succeeded, failed, cancelled, indeterminate, in_progress); no empty items.",
             "in": "query",
             "name": "status",
             "required": false,
             "schema": {
+              "pattern": "^(succeeded|failed|cancelled|indeterminate|in_progress)(,(succeeded|failed|cancelled|indeterminate|in_progress))*$",
               "type": "string"
             }
           },
           {
-            "description": "q",
+            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes.",
             "in": "query",
             "name": "q",
             "required": false,
             "schema": {
+              "pattern": "^[0-9a-fA-F-]{4,36}$",
               "type": "string"
             }
           },
           {
-            "description": "finish_reason",
+            "description": "Comma-separated finish reasons.",
             "in": "query",
             "name": "finish_reason",
             "required": false,
             "schema": {
+              "pattern": "^(stop|length|tool_calls|content_filter|error|cancelled|unknown)(,(stop|length|tool_calls|content_filter|error|cancelled|unknown))*$",
               "type": "string"
             }
           },
           {
-            "description": "streamed",
+            "description": "Only streamed (true) or non-streamed (false) requests.",
             "in": "query",
             "name": "streamed",
             "required": false,
@@ -17165,16 +17130,18 @@
             }
           },
           {
-            "description": "session_id",
+            "description": "Exact client session id (1 to 128 characters, no control characters, no surrounding whitespace).",
             "in": "query",
             "name": "session_id",
             "required": false,
             "schema": {
+              "maxLength": 128,
+              "minLength": 1,
               "type": "string"
             }
           },
           {
-            "description": "workspace_id",
+            "description": "Team or Project id (platform scope only).",
             "in": "query",
             "name": "workspace_id",
             "required": false,
@@ -17183,25 +17150,38 @@
             }
           },
           {
-            "description": "workload",
+            "description": "A workload kind, or jobs for async video and batch jobs.",
             "in": "query",
             "name": "workload",
             "required": false,
             "schema": {
-              "type": "string"
+              "enum": [
+                "generation",
+                "embeddings",
+                "images",
+                "audio_transcriptions",
+                "audio_speech",
+                "rerank",
+                "systemone",
+                "realtime",
+                "videos",
+                "batches",
+                "jobs"
+              ]
             }
           },
           {
-            "description": "cursor",
+            "description": "Opaque cursor from next_cursor of the previous page.",
             "in": "query",
             "name": "cursor",
             "required": false,
             "schema": {
+              "pattern": "^[0-9]{1,19}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
               "type": "string"
             }
           },
           {
-            "description": "limit",
+            "description": "Page size.",
             "in": "query",
             "name": "limit",
             "required": false,
@@ -17286,34 +17266,40 @@
         "operationId": "get_api_v1_platform_logs_metrics",
         "parameters": [
           {
-            "description": "start_date",
+            "description": "Inclusive start day (UTC, YYYY-MM-DD). The window to end_date spans 1 to 93 days.",
             "in": "query",
             "name": "start_date",
             "required": false,
             "schema": {
+              "format": "date",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
           },
           {
-            "description": "end_date",
+            "description": "Exclusive end day (UTC, YYYY-MM-DD); at most tomorrow. Default tomorrow.",
             "in": "query",
             "name": "end_date",
             "required": false,
             "schema": {
+              "format": "date",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
           },
           {
-            "description": "model",
+            "description": "Exact public model name.",
             "in": "query",
             "name": "model",
             "required": false,
             "schema": {
+              "maxLength": 200,
+              "minLength": 1,
               "type": "string"
             }
           },
           {
-            "description": "key_id",
+            "description": "Only this key.",
             "in": "query",
             "name": "key_id",
             "required": false,
@@ -17322,34 +17308,37 @@
             }
           },
           {
-            "description": "status",
+            "description": "Comma-separated attempt statuses (succeeded, failed, cancelled, indeterminate, in_progress); no empty items.",
             "in": "query",
             "name": "status",
             "required": false,
             "schema": {
+              "pattern": "^(succeeded|failed|cancelled|indeterminate|in_progress)(,(succeeded|failed|cancelled|indeterminate|in_progress))*$",
               "type": "string"
             }
           },
           {
-            "description": "q",
+            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes.",
             "in": "query",
             "name": "q",
             "required": false,
             "schema": {
+              "pattern": "^[0-9a-fA-F-]{4,36}$",
               "type": "string"
             }
           },
           {
-            "description": "finish_reason",
+            "description": "Comma-separated finish reasons.",
             "in": "query",
             "name": "finish_reason",
             "required": false,
             "schema": {
+              "pattern": "^(stop|length|tool_calls|content_filter|error|cancelled|unknown)(,(stop|length|tool_calls|content_filter|error|cancelled|unknown))*$",
               "type": "string"
             }
           },
           {
-            "description": "streamed",
+            "description": "Only streamed (true) or non-streamed (false) requests.",
             "in": "query",
             "name": "streamed",
             "required": false,
@@ -17358,16 +17347,18 @@
             }
           },
           {
-            "description": "session_id",
+            "description": "Exact client session id (1 to 128 characters, no control characters, no surrounding whitespace).",
             "in": "query",
             "name": "session_id",
             "required": false,
             "schema": {
+              "maxLength": 128,
+              "minLength": 1,
               "type": "string"
             }
           },
           {
-            "description": "workspace_id",
+            "description": "Team or Project id (platform scope only).",
             "in": "query",
             "name": "workspace_id",
             "required": false,
@@ -17376,12 +17367,24 @@
             }
           },
           {
-            "description": "workload",
+            "description": "A workload kind, or jobs for async video and batch jobs.",
             "in": "query",
             "name": "workload",
             "required": false,
             "schema": {
-              "type": "string"
+              "enum": [
+                "generation",
+                "embeddings",
+                "images",
+                "audio_transcriptions",
+                "audio_speech",
+                "rerank",
+                "systemone",
+                "realtime",
+                "videos",
+                "batches",
+                "jobs"
+              ]
             }
           }
         ],
@@ -17458,34 +17461,40 @@
         "operationId": "get_api_v1_platform_logs_requests",
         "parameters": [
           {
-            "description": "start_date",
+            "description": "Inclusive start day (UTC, YYYY-MM-DD). The window to end_date spans 1 to 93 days.",
             "in": "query",
             "name": "start_date",
             "required": false,
             "schema": {
+              "format": "date",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
           },
           {
-            "description": "end_date",
+            "description": "Exclusive end day (UTC, YYYY-MM-DD); at most tomorrow. Default tomorrow.",
             "in": "query",
             "name": "end_date",
             "required": false,
             "schema": {
+              "format": "date",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
           },
           {
-            "description": "model",
+            "description": "Exact public model name.",
             "in": "query",
             "name": "model",
             "required": false,
             "schema": {
+              "maxLength": 200,
+              "minLength": 1,
               "type": "string"
             }
           },
           {
-            "description": "key_id",
+            "description": "Only this key.",
             "in": "query",
             "name": "key_id",
             "required": false,
@@ -17494,34 +17503,37 @@
             }
           },
           {
-            "description": "status",
+            "description": "Comma-separated attempt statuses (succeeded, failed, cancelled, indeterminate, in_progress); no empty items.",
             "in": "query",
             "name": "status",
             "required": false,
             "schema": {
+              "pattern": "^(succeeded|failed|cancelled|indeterminate|in_progress)(,(succeeded|failed|cancelled|indeterminate|in_progress))*$",
               "type": "string"
             }
           },
           {
-            "description": "q",
+            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes.",
             "in": "query",
             "name": "q",
             "required": false,
             "schema": {
+              "pattern": "^[0-9a-fA-F-]{4,36}$",
               "type": "string"
             }
           },
           {
-            "description": "finish_reason",
+            "description": "Comma-separated finish reasons.",
             "in": "query",
             "name": "finish_reason",
             "required": false,
             "schema": {
+              "pattern": "^(stop|length|tool_calls|content_filter|error|cancelled|unknown)(,(stop|length|tool_calls|content_filter|error|cancelled|unknown))*$",
               "type": "string"
             }
           },
           {
-            "description": "streamed",
+            "description": "Only streamed (true) or non-streamed (false) requests.",
             "in": "query",
             "name": "streamed",
             "required": false,
@@ -17530,16 +17542,18 @@
             }
           },
           {
-            "description": "session_id",
+            "description": "Exact client session id (1 to 128 characters, no control characters, no surrounding whitespace).",
             "in": "query",
             "name": "session_id",
             "required": false,
             "schema": {
+              "maxLength": 128,
+              "minLength": 1,
               "type": "string"
             }
           },
           {
-            "description": "workspace_id",
+            "description": "Team or Project id (platform scope only).",
             "in": "query",
             "name": "workspace_id",
             "required": false,
@@ -17548,25 +17562,38 @@
             }
           },
           {
-            "description": "workload",
+            "description": "A workload kind, or jobs for async video and batch jobs.",
             "in": "query",
             "name": "workload",
             "required": false,
             "schema": {
-              "type": "string"
+              "enum": [
+                "generation",
+                "embeddings",
+                "images",
+                "audio_transcriptions",
+                "audio_speech",
+                "rerank",
+                "systemone",
+                "realtime",
+                "videos",
+                "batches",
+                "jobs"
+              ]
             }
           },
           {
-            "description": "cursor",
+            "description": "Opaque cursor from next_cursor of the previous page.",
             "in": "query",
             "name": "cursor",
             "required": false,
             "schema": {
+              "pattern": "^[0-9]{1,19}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
               "type": "string"
             }
           },
           {
-            "description": "limit",
+            "description": "Page size.",
             "in": "query",
             "name": "limit",
             "required": false,
@@ -17659,34 +17686,40 @@
             }
           },
           {
-            "description": "start_date",
+            "description": "Inclusive start day (UTC, YYYY-MM-DD). The window to end_date spans 1 to 93 days.",
             "in": "query",
             "name": "start_date",
             "required": false,
             "schema": {
+              "format": "date",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
           },
           {
-            "description": "end_date",
+            "description": "Exclusive end day (UTC, YYYY-MM-DD); at most tomorrow. Default tomorrow.",
             "in": "query",
             "name": "end_date",
             "required": false,
             "schema": {
+              "format": "date",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
           },
           {
-            "description": "model",
+            "description": "Exact public model name.",
             "in": "query",
             "name": "model",
             "required": false,
             "schema": {
+              "maxLength": 200,
+              "minLength": 1,
               "type": "string"
             }
           },
           {
-            "description": "key_id",
+            "description": "Only this key.",
             "in": "query",
             "name": "key_id",
             "required": false,
@@ -17695,34 +17728,37 @@
             }
           },
           {
-            "description": "status",
+            "description": "Comma-separated attempt statuses (succeeded, failed, cancelled, indeterminate, in_progress); no empty items.",
             "in": "query",
             "name": "status",
             "required": false,
             "schema": {
+              "pattern": "^(succeeded|failed|cancelled|indeterminate|in_progress)(,(succeeded|failed|cancelled|indeterminate|in_progress))*$",
               "type": "string"
             }
           },
           {
-            "description": "q",
+            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes.",
             "in": "query",
             "name": "q",
             "required": false,
             "schema": {
+              "pattern": "^[0-9a-fA-F-]{4,36}$",
               "type": "string"
             }
           },
           {
-            "description": "finish_reason",
+            "description": "Comma-separated finish reasons.",
             "in": "query",
             "name": "finish_reason",
             "required": false,
             "schema": {
+              "pattern": "^(stop|length|tool_calls|content_filter|error|cancelled|unknown)(,(stop|length|tool_calls|content_filter|error|cancelled|unknown))*$",
               "type": "string"
             }
           },
           {
-            "description": "streamed",
+            "description": "Only streamed (true) or non-streamed (false) requests.",
             "in": "query",
             "name": "streamed",
             "required": false,
@@ -17731,16 +17767,18 @@
             }
           },
           {
-            "description": "session_id",
+            "description": "Exact client session id (1 to 128 characters, no control characters, no surrounding whitespace).",
             "in": "query",
             "name": "session_id",
             "required": false,
             "schema": {
+              "maxLength": 128,
+              "minLength": 1,
               "type": "string"
             }
           },
           {
-            "description": "workspace_id",
+            "description": "Team or Project id (platform scope only).",
             "in": "query",
             "name": "workspace_id",
             "required": false,
@@ -17749,12 +17787,24 @@
             }
           },
           {
-            "description": "workload",
+            "description": "A workload kind, or jobs for async video and batch jobs.",
             "in": "query",
             "name": "workload",
             "required": false,
             "schema": {
-              "type": "string"
+              "enum": [
+                "generation",
+                "embeddings",
+                "images",
+                "audio_transcriptions",
+                "audio_speech",
+                "rerank",
+                "systemone",
+                "realtime",
+                "videos",
+                "batches",
+                "jobs"
+              ]
             }
           }
         ],
@@ -17841,34 +17891,40 @@
         "operationId": "get_api_v1_platform_logs_sessions",
         "parameters": [
           {
-            "description": "start_date",
+            "description": "Inclusive start day (UTC, YYYY-MM-DD). The window to end_date spans 1 to 93 days.",
             "in": "query",
             "name": "start_date",
             "required": false,
             "schema": {
+              "format": "date",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
           },
           {
-            "description": "end_date",
+            "description": "Exclusive end day (UTC, YYYY-MM-DD); at most tomorrow. Default tomorrow.",
             "in": "query",
             "name": "end_date",
             "required": false,
             "schema": {
+              "format": "date",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
           },
           {
-            "description": "model",
+            "description": "Exact public model name.",
             "in": "query",
             "name": "model",
             "required": false,
             "schema": {
+              "maxLength": 200,
+              "minLength": 1,
               "type": "string"
             }
           },
           {
-            "description": "key_id",
+            "description": "Only this key.",
             "in": "query",
             "name": "key_id",
             "required": false,
@@ -17877,34 +17933,37 @@
             }
           },
           {
-            "description": "status",
+            "description": "Comma-separated attempt statuses (succeeded, failed, cancelled, indeterminate, in_progress); no empty items.",
             "in": "query",
             "name": "status",
             "required": false,
             "schema": {
+              "pattern": "^(succeeded|failed|cancelled|indeterminate|in_progress)(,(succeeded|failed|cancelled|indeterminate|in_progress))*$",
               "type": "string"
             }
           },
           {
-            "description": "q",
+            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes.",
             "in": "query",
             "name": "q",
             "required": false,
             "schema": {
+              "pattern": "^[0-9a-fA-F-]{4,36}$",
               "type": "string"
             }
           },
           {
-            "description": "finish_reason",
+            "description": "Comma-separated finish reasons.",
             "in": "query",
             "name": "finish_reason",
             "required": false,
             "schema": {
+              "pattern": "^(stop|length|tool_calls|content_filter|error|cancelled|unknown)(,(stop|length|tool_calls|content_filter|error|cancelled|unknown))*$",
               "type": "string"
             }
           },
           {
-            "description": "streamed",
+            "description": "Only streamed (true) or non-streamed (false) requests.",
             "in": "query",
             "name": "streamed",
             "required": false,
@@ -17913,16 +17972,18 @@
             }
           },
           {
-            "description": "session_id",
+            "description": "Exact client session id (1 to 128 characters, no control characters, no surrounding whitespace).",
             "in": "query",
             "name": "session_id",
             "required": false,
             "schema": {
+              "maxLength": 128,
+              "minLength": 1,
               "type": "string"
             }
           },
           {
-            "description": "workspace_id",
+            "description": "Team or Project id (platform scope only).",
             "in": "query",
             "name": "workspace_id",
             "required": false,
@@ -17931,25 +17992,38 @@
             }
           },
           {
-            "description": "workload",
+            "description": "A workload kind, or jobs for async video and batch jobs.",
             "in": "query",
             "name": "workload",
             "required": false,
             "schema": {
-              "type": "string"
+              "enum": [
+                "generation",
+                "embeddings",
+                "images",
+                "audio_transcriptions",
+                "audio_speech",
+                "rerank",
+                "systemone",
+                "realtime",
+                "videos",
+                "batches",
+                "jobs"
+              ]
             }
           },
           {
-            "description": "cursor",
+            "description": "Opaque cursor from next_cursor of the previous page.",
             "in": "query",
             "name": "cursor",
             "required": false,
             "schema": {
+              "pattern": "^[0-9]{1,19}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_[0-9a-f]{2,1024}$",
               "type": "string"
             }
           },
           {
-            "description": "limit",
+            "description": "Page size.",
             "in": "query",
             "name": "limit",
             "required": false,
@@ -18050,34 +18124,40 @@
             }
           },
           {
-            "description": "start_date",
+            "description": "Inclusive start day (UTC, YYYY-MM-DD). The window to end_date spans 1 to 93 days.",
             "in": "query",
             "name": "start_date",
             "required": false,
             "schema": {
+              "format": "date",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
           },
           {
-            "description": "end_date",
+            "description": "Exclusive end day (UTC, YYYY-MM-DD); at most tomorrow. Default tomorrow.",
             "in": "query",
             "name": "end_date",
             "required": false,
             "schema": {
+              "format": "date",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
           },
           {
-            "description": "model",
+            "description": "Exact public model name.",
             "in": "query",
             "name": "model",
             "required": false,
             "schema": {
+              "maxLength": 200,
+              "minLength": 1,
               "type": "string"
             }
           },
           {
-            "description": "key_id",
+            "description": "Only this key.",
             "in": "query",
             "name": "key_id",
             "required": false,
@@ -18086,34 +18166,37 @@
             }
           },
           {
-            "description": "status",
+            "description": "Comma-separated attempt statuses (succeeded, failed, cancelled, indeterminate, in_progress); no empty items.",
             "in": "query",
             "name": "status",
             "required": false,
             "schema": {
+              "pattern": "^(succeeded|failed|cancelled|indeterminate|in_progress)(,(succeeded|failed|cancelled|indeterminate|in_progress))*$",
               "type": "string"
             }
           },
           {
-            "description": "q",
+            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes.",
             "in": "query",
             "name": "q",
             "required": false,
             "schema": {
+              "pattern": "^[0-9a-fA-F-]{4,36}$",
               "type": "string"
             }
           },
           {
-            "description": "finish_reason",
+            "description": "Comma-separated finish reasons.",
             "in": "query",
             "name": "finish_reason",
             "required": false,
             "schema": {
+              "pattern": "^(stop|length|tool_calls|content_filter|error|cancelled|unknown)(,(stop|length|tool_calls|content_filter|error|cancelled|unknown))*$",
               "type": "string"
             }
           },
           {
-            "description": "streamed",
+            "description": "Only streamed (true) or non-streamed (false) requests.",
             "in": "query",
             "name": "streamed",
             "required": false,
@@ -18122,7 +18205,7 @@
             }
           },
           {
-            "description": "workspace_id",
+            "description": "Team or Project id (platform scope only).",
             "in": "query",
             "name": "workspace_id",
             "required": false,
@@ -18131,12 +18214,24 @@
             }
           },
           {
-            "description": "workload",
+            "description": "A workload kind, or jobs for async video and batch jobs.",
             "in": "query",
             "name": "workload",
             "required": false,
             "schema": {
-              "type": "string"
+              "enum": [
+                "generation",
+                "embeddings",
+                "images",
+                "audio_transcriptions",
+                "audio_speech",
+                "rerank",
+                "systemone",
+                "realtime",
+                "videos",
+                "batches",
+                "jobs"
+              ]
             }
           }
         ],
@@ -23843,36 +23938,6 @@
               "minimum": 0,
               "type": "integer"
             }
-          },
-          {
-            "description": "actor_user_id",
-            "in": "query",
-            "name": "actor_user_id",
-            "required": false,
-            "schema": {
-              "$ref": "#/components/schemas/IdentityUuid"
-            }
-          },
-          {
-            "description": "hide_sign_ins",
-            "in": "query",
-            "name": "hide_sign_ins",
-            "required": false,
-            "schema": {
-              "enum": [
-                "true",
-                "false"
-              ]
-            }
-          },
-          {
-            "description": "exclude_actions",
-            "in": "query",
-            "name": "exclude_actions",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -24050,36 +24115,6 @@
               "maximum": 100000,
               "minimum": 0,
               "type": "integer"
-            }
-          },
-          {
-            "description": "actor_user_id",
-            "in": "query",
-            "name": "actor_user_id",
-            "required": false,
-            "schema": {
-              "$ref": "#/components/schemas/IdentityUuid"
-            }
-          },
-          {
-            "description": "hide_sign_ins",
-            "in": "query",
-            "name": "hide_sign_ins",
-            "required": false,
-            "schema": {
-              "enum": [
-                "true",
-                "false"
-              ]
-            }
-          },
-          {
-            "description": "exclude_actions",
-            "in": "query",
-            "name": "exclude_actions",
-            "required": false,
-            "schema": {
-              "type": "string"
             }
           }
         ],
@@ -24688,36 +24723,6 @@
               "minimum": 0,
               "type": "integer"
             }
-          },
-          {
-            "description": "actor_user_id",
-            "in": "query",
-            "name": "actor_user_id",
-            "required": false,
-            "schema": {
-              "$ref": "#/components/schemas/IdentityUuid"
-            }
-          },
-          {
-            "description": "hide_sign_ins",
-            "in": "query",
-            "name": "hide_sign_ins",
-            "required": false,
-            "schema": {
-              "enum": [
-                "true",
-                "false"
-              ]
-            }
-          },
-          {
-            "description": "exclude_actions",
-            "in": "query",
-            "name": "exclude_actions",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -24800,16 +24805,23 @@
             }
           },
           {
-            "description": "purpose",
+            "description": "Only files with this purpose.",
             "in": "query",
             "name": "purpose",
             "required": false,
             "schema": {
-              "type": "string"
+              "enum": [
+                "batch",
+                "batch_output",
+                "user_data",
+                "vision",
+                "assistants",
+                "evals"
+              ]
             }
           },
           {
-            "description": "search",
+            "description": "Filename search text (at most 120 characters; blank is ignored).",
             "in": "query",
             "name": "search",
             "required": false,
@@ -24831,11 +24843,12 @@
             }
           },
           {
-            "description": "after",
+            "description": "Keyset cursor: the id of the last file of the previous page.",
             "in": "query",
             "name": "after",
             "required": false,
             "schema": {
+              "pattern": "^file-[0-9a-f]{32}$",
               "type": "string"
             }
           }
@@ -24964,16 +24977,6 @@
           },
           "404": {
             "$ref": "#/components/responses/ManagementMiddleware404Variant1"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Handler validation, object visibility or conflict refusal."
           },
           "413": {
             "$ref": "#/components/responses/ManagementMiddleware413Variant3"
@@ -25238,34 +25241,40 @@
             }
           },
           {
-            "description": "start_date",
+            "description": "Inclusive start day (UTC, YYYY-MM-DD). The window to end_date spans 1 to 93 days.",
             "in": "query",
             "name": "start_date",
             "required": false,
             "schema": {
+              "format": "date",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
           },
           {
-            "description": "end_date",
+            "description": "Exclusive end day (UTC, YYYY-MM-DD); at most tomorrow. Default tomorrow.",
             "in": "query",
             "name": "end_date",
             "required": false,
             "schema": {
+              "format": "date",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
           },
           {
-            "description": "model",
+            "description": "Exact public model name.",
             "in": "query",
             "name": "model",
             "required": false,
             "schema": {
+              "maxLength": 200,
+              "minLength": 1,
               "type": "string"
             }
           },
           {
-            "description": "key_id",
+            "description": "Only this key.",
             "in": "query",
             "name": "key_id",
             "required": false,
@@ -25274,34 +25283,37 @@
             }
           },
           {
-            "description": "status",
+            "description": "Comma-separated attempt statuses (succeeded, failed, cancelled, indeterminate, in_progress); no empty items.",
             "in": "query",
             "name": "status",
             "required": false,
             "schema": {
+              "pattern": "^(succeeded|failed|cancelled|indeterminate|in_progress)(,(succeeded|failed|cancelled|indeterminate|in_progress))*$",
               "type": "string"
             }
           },
           {
-            "description": "q",
+            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes.",
             "in": "query",
             "name": "q",
             "required": false,
             "schema": {
+              "pattern": "^[0-9a-fA-F-]{4,36}$",
               "type": "string"
             }
           },
           {
-            "description": "finish_reason",
+            "description": "Comma-separated finish reasons.",
             "in": "query",
             "name": "finish_reason",
             "required": false,
             "schema": {
+              "pattern": "^(stop|length|tool_calls|content_filter|error|cancelled|unknown)(,(stop|length|tool_calls|content_filter|error|cancelled|unknown))*$",
               "type": "string"
             }
           },
           {
-            "description": "streamed",
+            "description": "Only streamed (true) or non-streamed (false) requests.",
             "in": "query",
             "name": "streamed",
             "required": false,
@@ -25310,34 +25322,49 @@
             }
           },
           {
-            "description": "session_id",
+            "description": "Exact client session id (1 to 128 characters, no control characters, no surrounding whitespace).",
             "in": "query",
             "name": "session_id",
             "required": false,
             "schema": {
+              "maxLength": 128,
+              "minLength": 1,
               "type": "string"
             }
           },
           {
-            "description": "workload",
+            "description": "A workload kind, or jobs for async video and batch jobs.",
             "in": "query",
             "name": "workload",
             "required": false,
             "schema": {
-              "type": "string"
+              "enum": [
+                "generation",
+                "embeddings",
+                "images",
+                "audio_transcriptions",
+                "audio_speech",
+                "rerank",
+                "systemone",
+                "realtime",
+                "videos",
+                "batches",
+                "jobs"
+              ]
             }
           },
           {
-            "description": "cursor",
+            "description": "Opaque cursor from next_cursor of the previous page.",
             "in": "query",
             "name": "cursor",
             "required": false,
             "schema": {
+              "pattern": "^[0-9]{1,19}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
               "type": "string"
             }
           },
           {
-            "description": "limit",
+            "description": "Page size.",
             "in": "query",
             "name": "limit",
             "required": false,
@@ -25881,36 +25908,6 @@
               "maximum": 100000,
               "minimum": 0,
               "type": "integer"
-            }
-          },
-          {
-            "description": "actor_user_id",
-            "in": "query",
-            "name": "actor_user_id",
-            "required": false,
-            "schema": {
-              "$ref": "#/components/schemas/IdentityUuid"
-            }
-          },
-          {
-            "description": "hide_sign_ins",
-            "in": "query",
-            "name": "hide_sign_ins",
-            "required": false,
-            "schema": {
-              "enum": [
-                "true",
-                "false"
-              ]
-            }
-          },
-          {
-            "description": "exclude_actions",
-            "in": "query",
-            "name": "exclude_actions",
-            "required": false,
-            "schema": {
-              "type": "string"
             }
           },
           {
@@ -26969,34 +26966,40 @@
             }
           },
           {
-            "description": "start_date",
+            "description": "Inclusive start day (UTC, YYYY-MM-DD). The window to end_date spans 1 to 93 days.",
             "in": "query",
             "name": "start_date",
             "required": false,
             "schema": {
+              "format": "date",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
           },
           {
-            "description": "end_date",
+            "description": "Exclusive end day (UTC, YYYY-MM-DD); at most tomorrow. Default tomorrow.",
             "in": "query",
             "name": "end_date",
             "required": false,
             "schema": {
+              "format": "date",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
           },
           {
-            "description": "model",
+            "description": "Exact public model name.",
             "in": "query",
             "name": "model",
             "required": false,
             "schema": {
+              "maxLength": 200,
+              "minLength": 1,
               "type": "string"
             }
           },
           {
-            "description": "key_id",
+            "description": "Only this key.",
             "in": "query",
             "name": "key_id",
             "required": false,
@@ -27005,34 +27008,37 @@
             }
           },
           {
-            "description": "status",
+            "description": "Comma-separated attempt statuses (succeeded, failed, cancelled, indeterminate, in_progress); no empty items.",
             "in": "query",
             "name": "status",
             "required": false,
             "schema": {
+              "pattern": "^(succeeded|failed|cancelled|indeterminate|in_progress)(,(succeeded|failed|cancelled|indeterminate|in_progress))*$",
               "type": "string"
             }
           },
           {
-            "description": "q",
+            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes.",
             "in": "query",
             "name": "q",
             "required": false,
             "schema": {
+              "pattern": "^[0-9a-fA-F-]{4,36}$",
               "type": "string"
             }
           },
           {
-            "description": "finish_reason",
+            "description": "Comma-separated finish reasons.",
             "in": "query",
             "name": "finish_reason",
             "required": false,
             "schema": {
+              "pattern": "^(stop|length|tool_calls|content_filter|error|cancelled|unknown)(,(stop|length|tool_calls|content_filter|error|cancelled|unknown))*$",
               "type": "string"
             }
           },
           {
-            "description": "streamed",
+            "description": "Only streamed (true) or non-streamed (false) requests.",
             "in": "query",
             "name": "streamed",
             "required": false,
@@ -27041,21 +27047,35 @@
             }
           },
           {
-            "description": "session_id",
+            "description": "Exact client session id (1 to 128 characters, no control characters, no surrounding whitespace).",
             "in": "query",
             "name": "session_id",
             "required": false,
             "schema": {
+              "maxLength": 128,
+              "minLength": 1,
               "type": "string"
             }
           },
           {
-            "description": "workload",
+            "description": "A workload kind, or jobs for async video and batch jobs.",
             "in": "query",
             "name": "workload",
             "required": false,
             "schema": {
-              "type": "string"
+              "enum": [
+                "generation",
+                "embeddings",
+                "images",
+                "audio_transcriptions",
+                "audio_speech",
+                "rerank",
+                "systemone",
+                "realtime",
+                "videos",
+                "batches",
+                "jobs"
+              ]
             }
           }
         ],
@@ -28264,34 +28284,40 @@
             }
           },
           {
-            "description": "start_date",
+            "description": "Inclusive start day (UTC, YYYY-MM-DD). The window to end_date spans 1 to 93 days.",
             "in": "query",
             "name": "start_date",
             "required": false,
             "schema": {
+              "format": "date",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
           },
           {
-            "description": "end_date",
+            "description": "Exclusive end day (UTC, YYYY-MM-DD); at most tomorrow. Default tomorrow.",
             "in": "query",
             "name": "end_date",
             "required": false,
             "schema": {
+              "format": "date",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
           },
           {
-            "description": "model",
+            "description": "Exact public model name.",
             "in": "query",
             "name": "model",
             "required": false,
             "schema": {
+              "maxLength": 200,
+              "minLength": 1,
               "type": "string"
             }
           },
           {
-            "description": "key_id",
+            "description": "Only this key.",
             "in": "query",
             "name": "key_id",
             "required": false,
@@ -28300,34 +28326,37 @@
             }
           },
           {
-            "description": "status",
+            "description": "Comma-separated attempt statuses (succeeded, failed, cancelled, indeterminate, in_progress); no empty items.",
             "in": "query",
             "name": "status",
             "required": false,
             "schema": {
+              "pattern": "^(succeeded|failed|cancelled|indeterminate|in_progress)(,(succeeded|failed|cancelled|indeterminate|in_progress))*$",
               "type": "string"
             }
           },
           {
-            "description": "q",
+            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes.",
             "in": "query",
             "name": "q",
             "required": false,
             "schema": {
+              "pattern": "^[0-9a-fA-F-]{4,36}$",
               "type": "string"
             }
           },
           {
-            "description": "finish_reason",
+            "description": "Comma-separated finish reasons.",
             "in": "query",
             "name": "finish_reason",
             "required": false,
             "schema": {
+              "pattern": "^(stop|length|tool_calls|content_filter|error|cancelled|unknown)(,(stop|length|tool_calls|content_filter|error|cancelled|unknown))*$",
               "type": "string"
             }
           },
           {
-            "description": "streamed",
+            "description": "Only streamed (true) or non-streamed (false) requests.",
             "in": "query",
             "name": "streamed",
             "required": false,
@@ -28336,34 +28365,49 @@
             }
           },
           {
-            "description": "session_id",
+            "description": "Exact client session id (1 to 128 characters, no control characters, no surrounding whitespace).",
             "in": "query",
             "name": "session_id",
             "required": false,
             "schema": {
+              "maxLength": 128,
+              "minLength": 1,
               "type": "string"
             }
           },
           {
-            "description": "workload",
+            "description": "A workload kind, or jobs for async video and batch jobs.",
             "in": "query",
             "name": "workload",
             "required": false,
             "schema": {
-              "type": "string"
+              "enum": [
+                "generation",
+                "embeddings",
+                "images",
+                "audio_transcriptions",
+                "audio_speech",
+                "rerank",
+                "systemone",
+                "realtime",
+                "videos",
+                "batches",
+                "jobs"
+              ]
             }
           },
           {
-            "description": "cursor",
+            "description": "Opaque cursor from next_cursor of the previous page.",
             "in": "query",
             "name": "cursor",
             "required": false,
             "schema": {
+              "pattern": "^[0-9]{1,19}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
               "type": "string"
             }
           },
           {
-            "description": "limit",
+            "description": "Page size.",
             "in": "query",
             "name": "limit",
             "required": false,
@@ -28463,34 +28507,40 @@
             }
           },
           {
-            "description": "start_date",
+            "description": "Inclusive start day (UTC, YYYY-MM-DD). The window to end_date spans 1 to 93 days.",
             "in": "query",
             "name": "start_date",
             "required": false,
             "schema": {
+              "format": "date",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
           },
           {
-            "description": "end_date",
+            "description": "Exclusive end day (UTC, YYYY-MM-DD); at most tomorrow. Default tomorrow.",
             "in": "query",
             "name": "end_date",
             "required": false,
             "schema": {
+              "format": "date",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
           },
           {
-            "description": "model",
+            "description": "Exact public model name.",
             "in": "query",
             "name": "model",
             "required": false,
             "schema": {
+              "maxLength": 200,
+              "minLength": 1,
               "type": "string"
             }
           },
           {
-            "description": "key_id",
+            "description": "Only this key.",
             "in": "query",
             "name": "key_id",
             "required": false,
@@ -28499,34 +28549,37 @@
             }
           },
           {
-            "description": "status",
+            "description": "Comma-separated attempt statuses (succeeded, failed, cancelled, indeterminate, in_progress); no empty items.",
             "in": "query",
             "name": "status",
             "required": false,
             "schema": {
+              "pattern": "^(succeeded|failed|cancelled|indeterminate|in_progress)(,(succeeded|failed|cancelled|indeterminate|in_progress))*$",
               "type": "string"
             }
           },
           {
-            "description": "q",
+            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes.",
             "in": "query",
             "name": "q",
             "required": false,
             "schema": {
+              "pattern": "^[0-9a-fA-F-]{4,36}$",
               "type": "string"
             }
           },
           {
-            "description": "finish_reason",
+            "description": "Comma-separated finish reasons.",
             "in": "query",
             "name": "finish_reason",
             "required": false,
             "schema": {
+              "pattern": "^(stop|length|tool_calls|content_filter|error|cancelled|unknown)(,(stop|length|tool_calls|content_filter|error|cancelled|unknown))*$",
               "type": "string"
             }
           },
           {
-            "description": "streamed",
+            "description": "Only streamed (true) or non-streamed (false) requests.",
             "in": "query",
             "name": "streamed",
             "required": false,
@@ -28535,21 +28588,35 @@
             }
           },
           {
-            "description": "session_id",
+            "description": "Exact client session id (1 to 128 characters, no control characters, no surrounding whitespace).",
             "in": "query",
             "name": "session_id",
             "required": false,
             "schema": {
+              "maxLength": 128,
+              "minLength": 1,
               "type": "string"
             }
           },
           {
-            "description": "workload",
+            "description": "A workload kind, or jobs for async video and batch jobs.",
             "in": "query",
             "name": "workload",
             "required": false,
             "schema": {
-              "type": "string"
+              "enum": [
+                "generation",
+                "embeddings",
+                "images",
+                "audio_transcriptions",
+                "audio_speech",
+                "rerank",
+                "systemone",
+                "realtime",
+                "videos",
+                "batches",
+                "jobs"
+              ]
             }
           }
         ],
@@ -28654,36 +28721,6 @@
               "maximum": 100000,
               "minimum": 0,
               "type": "integer"
-            }
-          },
-          {
-            "description": "actor_user_id",
-            "in": "query",
-            "name": "actor_user_id",
-            "required": false,
-            "schema": {
-              "$ref": "#/components/schemas/IdentityUuid"
-            }
-          },
-          {
-            "description": "hide_sign_ins",
-            "in": "query",
-            "name": "hide_sign_ins",
-            "required": false,
-            "schema": {
-              "enum": [
-                "true",
-                "false"
-              ]
-            }
-          },
-          {
-            "description": "exclude_actions",
-            "in": "query",
-            "name": "exclude_actions",
-            "required": false,
-            "schema": {
-              "type": "string"
             }
           }
         ],
