@@ -296,7 +296,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                             &document,
                             &method,
                             path,
-                            StatusCode::OK,
+                            success_status,
                             &h,
                             &encode(&corrupt)
                         )

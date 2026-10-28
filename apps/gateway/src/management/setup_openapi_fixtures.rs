@@ -164,6 +164,14 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         Some(v3_price()),
     )
     .await;
+    let mut mapped_price = v3_price();
+    mapped_price["price_lines"][0]["meter"] = json!({"input_tokens":null});
+    j.request(
+        "POST",
+        &format!("/api/v1/platform/deployments/{deployment}/prices"),
+        Some(mapped_price),
+    )
+    .await;
     j.request("PUT", &format!("/api/v1/platform/models/{model}/routing"), Some(json!({"strategy":"priority","max_attempts":2,"allow_ambiguous_failover":false,"required_residency":null}))).await;
     j.request("PUT", &format!("/api/v1/platform/deployments/{deployment}/routing"), Some(json!({"priority":-1,"weight":1,"residency":null,"failure_threshold":3,"cooldown_seconds":30}))).await;
     j.request("PUT", &format!("/api/v1/platform/deployments/{deployment}/batch-scheduling"), Some(json!({"max_concurrency":3,"yield_live_threshold":5,"window":{"timezone":"UTC","days":["mon","fri"],"start":"23:00","end":"06:00"}}))).await;

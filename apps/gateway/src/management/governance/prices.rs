@@ -18,6 +18,21 @@ fn management_openapi_slice3_price_and_routing_request_vectors() {
         "/api/v1/platform/deployments/{deployment}/prices",
         json!({"input_microusd_per_million":"1","output_microusd_per_million":"2","input_token_limit":100,"output_token_limit":10,"pricing_version":2,"cache_pricing":{"read":{"status":"priced","microusd_per_million":"1"},"write":{"status":"unknown"},"write_5m":{"status":"not_applicable"},"write_1h":{"status":"priced","microusd_per_million":"2"}},"price_lines":null,"max_units":null,"batch_price_lines":null}),
     );
+    // Externally tagged unit enums can also arrive as a one-key JSON map.
+    // Compare the real nested custom parser rather than assuming string-only.
+    let mapped_meter = json!({"pricing_version":3,"input_token_limit":100,"output_token_limit":10,"price_lines":[{"meter":{"input_tokens":null},"microusd_per_batch":"123","batch":1000000,"unit_label":"/M tokens","sku_label":"Input"}]});
+    vectors::<Price>(
+        "POST",
+        "/api/v1/platform/deployments/{deployment}/prices",
+        mapped_meter.clone(),
+    );
+    let schema = json!({"$ref":"#/components/schemas/SetupPrice"});
+    assert_eq!(
+        openapi::responses::validate_value(openapi::responses::artifact(), &schema, &mapped_meter)
+            .is_ok(),
+        serde_json::from_value::<Price>(mapped_meter).is_ok(),
+        "externally tagged Meter representation"
+    );
     vectors::<ModelRouting>(
         "PUT",
         "/api/v1/platform/models/{model}/routing",
