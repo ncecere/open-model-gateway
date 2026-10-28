@@ -9,6 +9,7 @@ mod quality;
 pub(crate) mod requests;
 pub(crate) mod responses;
 mod validation;
+mod wiring_tests;
 
 #[cfg(test)]
 mod tests {
