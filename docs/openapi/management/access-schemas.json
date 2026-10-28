@@ -1598,7 +1598,7 @@
               ]
             },
             "monthly_budget_microusd": {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "$ref": "#/components/schemas/IdentityNullableDecimal"
             },
             "budget_period": {
               "type": "string"
@@ -1614,7 +1614,7 @@
                         "type": "string"
                       },
                       "amount_microusd": {
-                        "type": "string"
+                        "$ref": "#/components/schemas/IdentityUnsignedDecimal"
                       }
                     },
                     "required": [
@@ -1737,7 +1737,7 @@
               ]
             },
             {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "$ref": "#/components/schemas/IdentityNullableDecimal"
             },
             {
               "type": "string"
@@ -1753,7 +1753,7 @@
                         "type": "string"
                       },
                       "amount_microusd": {
-                        "type": "string"
+                        "$ref": "#/components/schemas/IdentityUnsignedDecimal"
                       }
                     },
                     "required": [
@@ -1769,7 +1769,7 @@
                         "type": "string"
                       },
                       {
-                        "type": "string"
+                        "$ref": "#/components/schemas/IdentityUnsignedDecimal"
                       }
                     ],
                     "minItems": 2,
@@ -2943,7 +2943,8 @@
                   },
                   "metadata": {
                     "$comment": "Stored audit_events.metadata is exported verbatim as JSON; its vocabulary depends on the audited action.",
-                    "description": "Stored audit JSON metadata; no fixed DTO or closed property vocabulary."
+                    "description": "Stored audit JSON metadata; no fixed DTO or closed property vocabulary.",
+                    "type": "object"
                   },
                   "actor_user_id": {
                     "$ref": "#/components/schemas/IdentityNullableUuid"

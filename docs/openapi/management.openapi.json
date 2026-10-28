@@ -2292,7 +2292,8 @@
                     },
                     "metadata": {
                       "$comment": "Stored audit_events.metadata is exported verbatim as JSON; its vocabulary depends on the audited action.",
-                      "description": "Stored audit JSON metadata; no fixed DTO or closed property vocabulary."
+                      "description": "Stored audit JSON metadata; no fixed DTO or closed property vocabulary.",
+                      "type": "object"
                     },
                     "occurred_at": {
                       "$ref": "#/components/schemas/IdentityTime"
@@ -2621,7 +2622,7 @@
                       "additionalProperties": false,
                       "properties": {
                         "amount_microusd": {
-                          "type": "string"
+                          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
                         },
                         "period": {
                           "type": "string"
@@ -2700,7 +2701,7 @@
                 ]
               },
               "monthly_budget_microusd": {
-                "$ref": "#/components/schemas/IdentityNullableString"
+                "$ref": "#/components/schemas/IdentityNullableDecimal"
               },
               "requests_per_minute": {
                 "anyOf": [
@@ -2836,7 +2837,7 @@
                 ]
               },
               {
-                "$ref": "#/components/schemas/IdentityNullableString"
+                "$ref": "#/components/schemas/IdentityNullableDecimal"
               },
               {
                 "type": "string"
@@ -2849,7 +2850,7 @@
                       "additionalProperties": false,
                       "properties": {
                         "amount_microusd": {
-                          "type": "string"
+                          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
                         },
                         "period": {
                           "type": "string"
@@ -2870,7 +2871,7 @@
                           "type": "string"
                         },
                         {
-                          "type": "string"
+                          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
                         }
                       ],
                       "type": "array"
