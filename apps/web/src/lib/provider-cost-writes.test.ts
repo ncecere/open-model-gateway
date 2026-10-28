@@ -63,12 +63,21 @@ describe("provider-cost write reads", () => {
     { name: "fractional-midnight start excludes the day", start: "2026-10-01T00:00:00.000001Z", end: report.period_end, expected: false },
     { name: "fractional-midnight end covers the previous day", start: report.period_start, end: "2026-10-02T00:00:00.000001Z", expected: true },
     { name: "all-zero fractional midnight is exact", start: "2026-10-01T00:00:00.000000000Z", end: "2026-10-02T00:00:00.000000000Z", expected: true },
-    // Stored bindings are PostgreSQL microseconds (sqlx truncates): matching.rs
-    // compares the truncated value, so sub-microsecond digits cannot move a day.
+    // Stored bindings truncate microseconds toward zero relative to 2000-01-01.
+    // On/after that epoch, sub-microsecond digits cannot move a day.
     { name: "sub-microsecond start truncates to stored midnight", start: "2026-10-01T00:00:00.0000009Z", end: report.period_end, expected: true },
     { name: "excess fractional digits truncate to stored midnight", start: "2026-10-01T00:00:00.0000000001Z", end: report.period_end, expected: true },
     { name: "sub-microsecond end before midnight stays on the previous day", start: report.period_start, end: "2026-10-01T23:59:59.9999999Z", expected: false },
     { name: "leap second is refused", start: "2026-09-30T23:59:60Z", end: report.period_end, expected: false },
+    { name: "pre-2000 sub-microsecond start rounds up from midnight", start: "1999-01-01T00:00:00.0000009Z", end: "1999-01-02T00:00:00Z", expected: false, period: { period_start: "1999-01-01T00:00:00Z", period_end: "1999-01-02T00:00:00Z" } },
+    { name: "pre-2000 sub-microsecond end rolls into next midnight", start: "1999-01-01T00:00:00Z", end: "1999-01-01T23:59:59.9999999Z", expected: true, period: { period_start: "1999-01-01T00:00:00Z", period_end: "1999-01-02T00:00:00Z" } },
+    { name: "pre-2000 exact microsecond end does not roll over", start: "1999-01-01T00:00:00Z", end: "1999-01-01T23:59:59.999999000Z", expected: false, period: { period_start: "1999-01-01T00:00:00Z", period_end: "1999-01-02T00:00:00Z" } },
+    { name: "pre-2000 sub-nanosecond start is discarded by chrono before storage", start: "1999-01-01T00:00:00.0000000001Z", end: "1999-01-02T00:00:00Z", expected: true, period: { period_start: "1999-01-01T00:00:00Z", period_end: "1999-01-02T00:00:00Z" } },
+    { name: "pre-2000 sub-nanosecond end cannot cause a stored day rollover", start: "1999-01-01T00:00:00Z", end: "1999-01-01T23:59:59.9999990001Z", expected: false, period: { period_start: "1999-01-01T00:00:00Z", period_end: "1999-01-02T00:00:00Z" } },
+    { name: "pre-2000 all-zero fraction remains midnight", start: "1999-01-01T00:00:00.000000000Z", end: "1999-01-02T00:00:00Z", expected: true, period: { period_start: "1999-01-01T00:00:00Z", period_end: "1999-01-02T00:00:00Z" } },
+    { name: "negative epoch remainder rounds into the PostgreSQL epoch", start: "1999-12-31T23:59:59.9999999Z", end: "2000-01-02T00:00:00Z", expected: true, period: { period_start: "2000-01-01T00:00:00Z", period_end: "2000-01-02T00:00:00Z" } },
+    { name: "positive epoch remainder truncates to the PostgreSQL epoch", start: "2000-01-01T00:00:00.0000009Z", end: "2000-01-02T00:00:00Z", expected: true, period: { period_start: "2000-01-01T00:00:00Z", period_end: "2000-01-02T00:00:00Z" } },
+    { name: "UTC offset controls the pre-2000 rounding direction", start: "1999-01-01T01:00:00.0000009+01:00", end: "1999-01-02T01:00:00+01:00", expected: false, period: { period_start: "1999-01-01T00:00:00Z", period_end: "1999-01-02T00:00:00Z" } },
     { name: "pre-epoch dates normalize exactly", start: "1969-12-31T19:00:00-05:00", end: "1970-01-02T00:00:00Z", expected: true, period: { period_start: "1970-01-01T00:00:00Z", period_end: "1970-01-02T00:00:00Z" } },
     { name: "positive offsets normalize to UTC midnight", start: "2026-10-01T05:30:00+05:30", end: "2026-10-02T05:30:00+05:30", expected: true },
     { name: "negative offsets cross calendar dates", start: "2026-09-30T20:00:00-04:00", end: "2026-10-01T20:00:00-04:00", expected: true },
@@ -89,6 +98,8 @@ describe("provider-cost write reads", () => {
   it.each([
     { name: "fractional start", start: "2026-10-01T00:00:00.000001Z", end: report.period_end },
     { name: "fractional end", start: report.period_start, end: "2026-10-02T00:00:00.000001Z" },
+    { name: "sub-microsecond report start", start: "2026-10-01T00:00:00.0000001Z", end: report.period_end },
+    { name: "sub-microsecond report end", start: report.period_start, end: "2026-10-02T00:00:00.0000001Z" },
     { name: "non-midnight start", start: "2026-10-01T01:00:00Z", end: report.period_end },
     { name: "invalid calendar date", start: "2026-09-31T00:00:00Z", end: report.period_end },
     { name: "invalid timestamp", start: "invalid", end: report.period_end },

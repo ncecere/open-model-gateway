@@ -62,12 +62,13 @@ export function writeBinding(b: Binding): Binding {
 }
 export const dimensionLabel = (id: string | null) => id === null ? "Provider default / missing identifier" : id;
 const dayMs = 86400000;
-/** Date.parse truncates to milliseconds, so test the fraction separately.
- * Bindings are stored as PostgreSQL microseconds (sqlx truncates), which is
- * what matching.rs compares: only the first six fractional digits count.
- * Normalize integral seconds/offsets exactly; refuse leap seconds and
- * non-RFC offsets. */
-function exactUtcDay(value: string): { day: number; midnight: boolean } | undefined {
+/** Normalize integral seconds/offsets separately from fractions, without losing
+ * precision to Date.parse. Reports require an all-zero fraction (parser.rs).
+ * Bindings mirror chrono's fractional parsing (nanoseconds, ignoring later
+ * digits), then sqlx/chrono's microseconds truncated TOWARD ZERO relative to
+ * 2000-01-01: pre-epoch sub-microsecond remainders round up, possibly into the
+ * next UTC day. Refuse leap seconds and non-RFC offsets. */
+function exactUtcDay(value: string, kind: "report" | "binding"): { day: number; midnight: boolean } | undefined {
   const match = /^(\d{4}-\d{2}-\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?([Zz]|[+-]\d{2}:\d{2})$/.exec(value);
   if (!match) return;
   const [, date, hours, minutes, seconds, fraction, offset] = match;
@@ -79,18 +80,25 @@ function exactUtcDay(value: string): { day: number; midnight: boolean } | undefi
     if (h > 23 || m > 59) return;
     offsetSeconds = (offset[0] === "+" ? 1 : -1) * (h * 3600 + m * 60);
   }
-  const utcSeconds = +hours * 3600 + +minutes * 60 + +seconds - offsetSeconds;
-  return { day: dateMs + Math.floor(utcSeconds / 86400) * dayMs, midnight: utcSeconds % 86400 === 0 && !/[1-9]/.test((fraction ?? "").slice(0, 6)) };
+  let utcSeconds = +hours * 3600 + +minutes * 60 + +seconds - offsetSeconds;
+  const digits = fraction ?? "";
+  if (kind === "report" && /[1-9]/.test(digits)) return;
+  let micros = +digits.slice(0, 6).padEnd(6, "0");
+  if (kind === "binding" && dateMs + utcSeconds * 1000 < Date.UTC(2000, 0, 1) && /[1-9]/.test(digits.slice(6, 9))) {
+    micros++;
+    if (micros === 1000000) { utcSeconds++; micros = 0; }
+  }
+  return { day: dateMs + Math.floor(utcSeconds / 86400) * dayMs, midnight: utcSeconds % 86400 === 0 && micros === 0 };
 }
 /** Reports use half-open UTC 1d buckets. A binding must cover a whole bucket
  * (matching.rs); joining two partial-day attestations cannot prove that day.
  * Union the complete buckets, not the raw timestamp intervals. */
 export function coversPeriod(bindings: Binding[], dimension: string | null, report: CostImport) {
-  const start = exactUtcDay(report.period_start), end = exactUtcDay(report.period_end);
+  const start = exactUtcDay(report.period_start, "report"), end = exactUtcDay(report.period_end, "report");
   if (!start?.midnight || !end?.midnight || start.day >= end.day || end.day - start.day > 31 * dayMs) return false;
   const intervals = bindings.filter(b => b.provider_workspace_id === dimension && b.attested)
     .flatMap(b => {
-      const a = exactUtcDay(b.effective_start), z = exactUtcDay(b.effective_end);
+      const a = exactUtcDay(b.effective_start, "binding"), z = exactUtcDay(b.effective_end, "binding");
       if (!a || !z) return [];
       const first = a.day + (a.midnight ? 0 : dayMs);
       return first < z.day ? [[first, z.day]] : [];

@@ -1,6 +1,6 @@
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import pg from "pg";
 import { api, expectAccessible, expectNoCspViolations, expectNoHorizontalScroll, signIn } from "./helpers";
@@ -14,7 +14,7 @@ test.use({ trace: "off", screenshot: "off", video: "off" });
 test.afterEach(expectNoCspViolations);
 const listUrl = "/admin/costs?tab=provider-reconciliation";
 const imports = "/platform/provider-cost-imports", mappings = "/platform/provider-cost-mappings", reconciliations = "/platform/provider-reconciliations";
-const resultFile = (width: number) => path.resolve(`target/browser-tests/state/provider-cost-upload-${width}.json`);
+const seedFile = path.resolve("target/browser-tests/state/provider-cost-upload-roles.json");
 type Result = { id: string; import_id: string; mapping_id: string; account: string };
 
 async function create(page: Page, apiPath: string, body: unknown) {
@@ -74,7 +74,11 @@ async function saveMapping(page: Page, evidence: string) {
 
 // No dependency on journey.spec.ts: role provisioning is via real management
 // APIs, before these personas sign in and receive their live group grants.
+// Role tests read a separate immutable API-seeded snapshot, never Admin-test
+// output. Like provider-reconciliation's seed(), reuse it on worker restart so
+// an Admin failure cannot cascade into duplicate provisioning or missing state.
 test.beforeAll(async ({ browser }) => {
+  if (existsSync(seedFile)) return;
   const admin = await signIn(browser, "operator");
   try {
     for (const [group, role] of [["omg/platform-auditor", "auditor"], ["omg/platform-user", "user"]]) {
@@ -83,14 +87,30 @@ test.beforeAll(async ({ browser }) => {
         workspace_id: null, workspace_role: null, enabled: true,
       });
     }
+    const scope = await historicalScope(admin.page, "role-fixture");
+    const account = "browser-upload-role-fixture";
+    const report = JSON.parse(readFileSync(path.resolve("tests/browser/fixtures/anthropic-upload.json"), "utf8").replace("browser-upload-ACCOUNT", account));
+    const import_id = await create(admin.page, imports, report);
+    const mapping_id = await create(admin.page, mappings, {
+      account_id: account, supersedes: null, evidence_reference: "finance:role-fixture-mapping",
+      bindings: [{
+        provider_workspace_id: "provider-file-workspace", connection_id: scope.connection, deployment_id: null, workspace_id: scope.workspace,
+        effective_start: report.request.starting_at, effective_end: report.request.ending_at,
+        exclusive: true, non_omg_traffic: false, attested: true, evidence_reference: "finance:role-fixture-attestation", model_mappings: [],
+      }],
+    });
+    const id = await create(admin.page, reconciliations, { import_id, mapping_id });
+    const frozen = await read(admin.page, `${reconciliations}/${id}`);
+    expect(frozen.snapshot).toMatchObject({ import_id, mapping_id, imported_microusd: "-762111", estimates: { settled_estimate_microusd: "2500", attempts: "1" } });
+    writeFileSync(seedFile, JSON.stringify({ id, import_id, mapping_id, account } satisfies Result));
   } finally { await admin.context.close(); }
 });
 
-async function historicalScope(page: Page, width: number) {
+async function historicalScope(page: Page, label: number | string) {
   const me = await read(page, "/me");
-  const workspace = await create(page, "/platform/workspaces", { name: `Upload acceptance ${width}`, kind: "team", owner_user_id: me.user.id });
-  const connection = await create(page, "/platform/providers", { name: `Upload Anthropic ${width}`, provider: "anthropic", credential_ref: "env:OMG_BROWSER_UNUSED_ANTHROPIC", enabled: false });
-  const model = await create(page, "/platform/models", { public_name: `acceptance/upload-${width}`, display_name: "Upload historical fixture", enabled: false, supported_protocols: ["messages"] });
+  const workspace = await create(page, "/platform/workspaces", { name: `Upload acceptance ${label}`, kind: "team", owner_user_id: me.user.id });
+  const connection = await create(page, "/platform/providers", { name: `Upload Anthropic ${label}`, provider: "anthropic", credential_ref: "env:OMG_BROWSER_UNUSED_ANTHROPIC", enabled: false });
+  const model = await create(page, "/platform/models", { public_name: `acceptance/upload-${label}`, display_name: "Upload historical fixture", enabled: false, supported_protocols: ["messages"] });
   const deployment = await create(page, "/platform/deployments", { model_id: model, provider_connection_id: connection, upstream_model: "claude-sonnet-4-20250514", enabled: false });
   const key = await create(page, `/workspaces/${workspace}/keys`, { name: "upload historical fixture", expires_in_days: 1, model_ids: null });
   // Guard against accidentally using the coordinator's administrative database.
@@ -101,7 +121,7 @@ async function historicalScope(page: Page, width: number) {
   await db.connect();
   try {
     const execution = randomUUID();
-    await db.query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,upstream_model,streamed,state,root_request_id,started_at,input_tokens,output_tokens) VALUES($1,$2,$3,$4,$5,'anthropic','claude-sonnet-4-20250514',false,'succeeded',$1,'2025-08-01T12:00:00Z',100,20)", [execution, workspace, key, deployment, `acceptance/upload-${width}`]);
+    await db.query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,upstream_model,streamed,state,root_request_id,started_at,input_tokens,output_tokens) VALUES($1,$2,$3,$4,$5,'anthropic','claude-sonnet-4-20250514',false,'succeeded',$1,'2025-08-01T12:00:00Z',100,20)", [execution, workspace, key, deployment, `acceptance/upload-${label}`]);
     await db.query("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,held_microusd,actual_microusd,input_tokens,output_tokens,price_tier) VALUES($1,$2,$3,$4,'2025-08-01T12:00:00Z','2025-08-01T12:00:00Z','2025-08-01T00:00:00Z',now(),'settled',0,2500,100,20,'standard')", [execution, workspace, key, deployment]);
     await db.query("INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd,admitted_at) VALUES($1,$2,'settlement',2500,'2025-08-01T12:00:00Z')", [randomUUID(), execution]);
   } finally { await db.end(); }
@@ -255,12 +275,11 @@ for (const width of [1440, 390]) {
       expect(await read(page, `${reconciliations}/${id}`)).toEqual(frozen);
       await page.getByRole("tab", { name: "Source & provenance", exact: true }).click();
       await expect(page.getByRole("table", { name: "Frozen mapping provenance (shared scopes only)", exact: true })).toContainText(scope.connection);
-      writeFileSync(resultFile(width), JSON.stringify({ id, import_id, mapping_id, account } satisfies Result));
     } finally { await session.context.close(); }
   });
 
   test(`Auditor reads frozen provider costs without upload, mapping or freeze authority at ${width}px`, async ({ browser }) => {
-    const ids: Result = JSON.parse(readFileSync(resultFile(width), "utf8"));
+    const ids: Result = JSON.parse(readFileSync(seedFile, "utf8"));
     const session = await signIn(browser, "auditor"), page = session.page;
     try {
       await page.setViewportSize({ width, height: 900 });
@@ -283,7 +302,7 @@ for (const width of [1440, 390]) {
   });
 
   test(`Plain user cannot enter provider-cost pages or call their APIs at ${width}px`, async ({ browser }) => {
-    const ids: Result = JSON.parse(readFileSync(resultFile(width), "utf8"));
+    const ids: Result = JSON.parse(readFileSync(seedFile, "utf8"));
     const session = await signIn(browser, "blair"), page = session.page;
     try {
       await page.setViewportSize({ width, height: 900 });
