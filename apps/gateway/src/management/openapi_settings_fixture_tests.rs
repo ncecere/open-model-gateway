@@ -5,6 +5,9 @@ use super::*;
 use openapi::responses::{Captured, PositiveFixtures, capture_http};
 use sha2::{Digest, Sha256};
 
+#[path = "openapi_settings_states_tests.rs"]
+mod states;
+
 const SETTINGS: &str = "/api/v1/platform/settings";
 const ALERTS: &str = "/api/v1/platform/alerts";
 const ORIGIN: &str = "http://127.0.0.1:3000";
@@ -31,10 +34,44 @@ struct Gateway {
     base: String,
     _server: Server,
 }
+/// Which sign-in configuration the serving stack runs with.
+#[derive(Clone, Copy)]
+enum Sign {
+    Oidc,
+    OidcScim,
+    NoProvider,
+}
 impl Gateway {
     async fn start(s: Store, pool: &PgPool, rt: crate::filestore::FileStoreRuntime) -> Self {
+        Self::start_with(s, pool, rt, Sign::Oidc).await
+    }
+    async fn start_with(
+        s: Store,
+        pool: &PgPool,
+        rt: crate::filestore::FileStoreRuntime,
+        sign: Sign,
+    ) -> Self {
         let mock = crate::identity::tests::MockProvider::start(None).await;
-        let identity = mock.state(pool.clone()).await;
+        let identity = match sign {
+            Sign::Oidc => mock.state(pool.clone()).await,
+            Sign::OidcScim => mock
+                .state(pool.clone())
+                .await
+                .with_scim(
+                    crate::scim::ScimConfig::from_lookup(|name| match name {
+                        "GATEWAY_SCIM_TOKEN_ENV" => Some("CONTRACT_SCIM_TOKEN".to_owned()),
+                        "CONTRACT_SCIM_TOKEN" => {
+                            Some("scim-contract-token-0123456789abcdefghijklmnop".to_owned())
+                        }
+                        _ => None,
+                    })
+                    .unwrap(),
+                )
+                .unwrap(),
+            Sign::NoProvider => crate::identity::IdentityState::new(Store::new(pool.clone()), None)
+                .await
+                .unwrap(),
+        };
         let engine = crate::inference::Engine::new(
             std::sync::Arc::new(s.clone()),
             crate::providers::ProviderRegistry::default(),
@@ -187,6 +224,13 @@ async fn management_openapi_slice5_fixtures(pool: PgPool) {
             crate::config::Environment::Production,
         )
         .unwrap(),
+    );
+    f.s = f.s.with_secret_allowlists(
+        Default::default(),
+        crate::providers::secrets::EnvSecrets::from_lookup(
+            ["CONTRACT_SMTP_PASSWORD".to_owned()],
+            |_| None,
+        ),
     );
     let admin = browser(&pool, &f.admin).await;
     let auditor = browser(&pool, &f.auditor).await;
@@ -809,5 +853,69 @@ async fn management_openapi_slice5_fixtures(pool: PgPool) {
         g.send(&admin, "GET", &path, Value::Null).await.status,
         StatusCode::NOT_FOUND
     );
+    // Every documented branch of the settings responses, from real state.
+    let mut extra = Vec::new();
+    for name in ["admin2", "admin3", "admin4", "admin5"] {
+        let principal = user(&pool, name, "admin").await;
+        extra.push(browser(&pool, &principal).await);
+    }
+    let nomail = states::admin_without_email(&pool).await;
+    states::general_and_logo(&g, &mut observed, &admin, &auditor, &nomail).await;
+    states::privacy(&g, &mut observed, &admin).await;
+    states::email(&g, &mut observed, &admin, &extra[0], port).await;
+    states::storage(
+        &pool,
+        &f.s,
+        &mut observed,
+        &admin,
+        &auditor,
+        [&extra[1], &extra[2], &extra[3]],
+    )
+    .await;
+    let unconfigured = Gateway::start(
+        Store::new(pool.clone()),
+        &pool,
+        crate::filestore::FileStoreRuntime::memory(),
+    )
+    .await;
+    let dead = crate::audit_export::Exporter::new("http://127.0.0.1:1/ingest", vec![7; 32], true)
+        .unwrap()
+        .unwrap();
+    let broken = Gateway::start(
+        Store::new(pool.clone()).with_audit_export(std::sync::Arc::new(dead)),
+        &pool,
+        crate::filestore::FileStoreRuntime::memory(),
+    )
+    .await;
+    let live = crate::audit_export::Exporter::new(&url, vec![7; 32], true)
+        .unwrap()
+        .unwrap();
+    states::audit_export(
+        &pool,
+        &g,
+        &unconfigured,
+        &broken,
+        &mut observed,
+        &admin,
+        &auditor,
+        &extra[0],
+        live,
+    )
+    .await;
+    let scim = Gateway::start_with(
+        f.s.clone(),
+        &pool,
+        crate::filestore::FileStoreRuntime::memory(),
+        Sign::OidcScim,
+    )
+    .await;
+    let none = Gateway::start_with(
+        f.s.clone(),
+        &pool,
+        crate::filestore::FileStoreRuntime::memory(),
+        Sign::NoProvider,
+    )
+    .await;
+    states::sign_in(&pool, &g, &scim, &none, &mut observed, &auditor).await;
     observed.finish(openapi::responses::SLICE5_AREAS);
 }

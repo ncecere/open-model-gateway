@@ -390,7 +390,7 @@ fn management_openapi_coverage_microusd_properties_are_pattern_constrained_strin
 #[test]
 fn management_openapi_coverage_arbitrary_json_nodes_declare_a_type() {
     // Slices add reviewed nodes of their own, so find this one by pointer.
-    let (pointer, reason) = *quality::ARBITRARY_JSON
+    let (_, reason) = *quality::ARBITRARY_JSON
         .iter()
         .find(|(pointer, _)| {
             *pointer == "/components/schemas/IdentityNotification/properties/details"
