@@ -1,6 +1,0 @@
-# Direct pool begins bypass the READ COMMITTED baseline and can leave an
-# untracked server-side transaction when cancelled (sqlx 0.8); see `src/db.rs`.
-disallowed-methods = [
-  { path = "sqlx::Pool::begin", reason = "use crate::db::begin (cancellation-safe)" },
-  { path = "sqlx::Pool::begin_with", reason = "use crate::db::begin_with_setup (cancellation-safe)" },
-]

@@ -1,4 +1,0 @@
-/* Tabular figures stop a ticking relative time from shifting the layout. */
-.time {
-  font-variant-numeric: tabular-nums;
-}
