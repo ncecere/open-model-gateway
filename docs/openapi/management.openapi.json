@@ -90,13 +90,1019 @@
         ],
         "type": "object"
       },
-      "delete_api_v1_me_sessions_by_sessionRequest": {
-        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
-        "x-omg-schema-status": "incomplete"
+      "IdentityAdminCeilingNotification": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/IdentityNotification"
+          },
+          {
+            "properties": {
+              "details": {
+                "properties": {
+                  "workspace_name": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  }
+                },
+                "required": [
+                  "workspace_name"
+                ]
+              },
+              "kind": {
+                "const": "admission_ceiling"
+              }
+            }
+          }
+        ]
       },
+      "IdentityAdminSummaryBudgetVisibility": {
+        "description": "Administrative projection of the shared workspace-summary row: workspace-wide budgets visible.",
+        "properties": {
+          "budgets": {
+            "items": {
+              "$ref": "#/components/schemas/IdentityBudgetWindow"
+            },
+            "type": "array"
+          },
+          "role": {
+            "enum": [
+              "owner",
+              "admin"
+            ]
+          }
+        },
+        "required": [
+          "role",
+          "budgets"
+        ],
+        "type": "object"
+      },
+      "IdentityBudgetWindow": {
+        "additionalProperties": false,
+        "properties": {
+          "amount_microusd": {
+            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+          },
+          "budget_period": {
+            "$ref": "#/components/schemas/IdentityPeriod"
+          },
+          "exhausted": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "headroom_status": {
+            "enum": [
+              "known",
+              "unknown"
+            ]
+          },
+          "layer": {
+            "enum": [
+              "platform",
+              "local"
+            ]
+          },
+          "monthly_budget_microusd": {
+            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+          },
+          "pending_held_microusd": {
+            "$ref": "#/components/schemas/IdentityNullableDecimal"
+          },
+          "period": {
+            "$ref": "#/components/schemas/IdentityPeriod"
+          },
+          "remaining_microusd": {
+            "$ref": "#/components/schemas/IdentityNullableDecimal"
+          },
+          "settled_microusd": {
+            "$ref": "#/components/schemas/IdentityNullableDecimal"
+          },
+          "unknown_cost_requests": {
+            "$ref": "#/components/schemas/IdentityNullableDecimal"
+          },
+          "unknown_held_microusd": {
+            "$ref": "#/components/schemas/IdentityNullableDecimal"
+          },
+          "unresolved_usage": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "usage_visible": {
+            "const": true
+          },
+          "used_microusd": {
+            "$ref": "#/components/schemas/IdentityNullableDecimal"
+          },
+          "window_end": {
+            "$ref": "#/components/schemas/IdentityNullableTime"
+          },
+          "window_start": {
+            "$ref": "#/components/schemas/IdentityTime"
+          }
+        },
+        "required": [
+          "layer",
+          "period",
+          "amount_microusd",
+          "monthly_budget_microusd",
+          "budget_period",
+          "window_start",
+          "window_end",
+          "usage_visible",
+          "used_microusd",
+          "unresolved_usage",
+          "exhausted",
+          "settled_microusd",
+          "pending_held_microusd",
+          "unknown_held_microusd",
+          "unknown_cost_requests",
+          "remaining_microusd",
+          "headroom_status"
+        ],
+        "type": "object"
+      },
+      "IdentityCapabilities": {
+        "additionalProperties": false,
+        "properties": {
+          "delegate_models": {
+            "type": "boolean"
+          },
+          "issue_own_key": {
+            "type": "boolean"
+          },
+          "manage_keys": {
+            "type": "boolean"
+          },
+          "manage_members": {
+            "type": "boolean"
+          },
+          "manage_policy": {
+            "type": "boolean"
+          },
+          "manage_service_accounts": {
+            "type": "boolean"
+          },
+          "rename": {
+            "type": "boolean"
+          },
+          "view_all_activity": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "issue_own_key",
+          "manage_members",
+          "manage_service_accounts",
+          "manage_policy",
+          "delegate_models",
+          "view_all_activity",
+          "rename",
+          "manage_keys"
+        ],
+        "type": "object"
+      },
+      "IdentityDateWindow": {
+        "additionalProperties": false,
+        "properties": {
+          "end_date": {
+            "format": "date",
+            "type": "string"
+          },
+          "start_date": {
+            "format": "date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start_date",
+          "end_date"
+        ],
+        "type": "object"
+      },
+      "IdentityDelivery": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt_count": {
+            "type": "integer"
+          },
+          "error": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "exhausted": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "failed": {
+            "type": "integer"
+          },
+          "next_attempt_at": {
+            "$ref": "#/components/schemas/IdentityNullableTime"
+          },
+          "recipients": {
+            "type": "integer"
+          },
+          "retrying": {
+            "type": "boolean"
+          },
+          "sent": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "suppression_reason": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "waiting": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "status",
+          "recipients",
+          "sent",
+          "failed",
+          "error",
+          "attempt_count",
+          "retrying",
+          "next_attempt_at",
+          "waiting",
+          "exhausted",
+          "suppression_reason"
+        ],
+        "type": "object"
+      },
+      "IdentityExportAccessRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "decided_at": {
+            "$ref": "#/components/schemas/IdentityNullableTime"
+          },
+          "decided_by": {
+            "$ref": "#/components/schemas/IdentityNullableUuid"
+          },
+          "expires_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "requested_role": {
+            "const": "member"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "approved",
+              "denied",
+              "withdrawn",
+              "expired"
+            ]
+          },
+          "target_kind": {
+            "const": "workspace_membership"
+          },
+          "workspace_id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "workspace_name_at_request": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "workspace_id",
+          "workspace_name_at_request",
+          "target_kind",
+          "requested_role",
+          "status",
+          "reason",
+          "created_at",
+          "expires_at",
+          "decided_by",
+          "decided_at"
+        ],
+        "type": "object"
+      },
+      "IdentityExportKey": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "disabled_at": {
+            "$ref": "#/components/schemas/IdentityNullableTime"
+          },
+          "expires_at": {
+            "$ref": "#/components/schemas/IdentityNullableTime"
+          },
+          "id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "revoked_at": {
+            "$ref": "#/components/schemas/IdentityNullableTime"
+          },
+          "workspace_id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "workspace_id",
+          "created_at",
+          "expires_at",
+          "revoked_at",
+          "disabled_at"
+        ],
+        "type": "object"
+      },
+      "IdentityExportProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "disabled_at": {
+            "$ref": "#/components/schemas/IdentityNullableTime"
+          },
+          "display_name": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "email": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "first_signed_in_at": {
+            "$ref": "#/components/schemas/IdentityNullableTime"
+          },
+          "id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "last_signed_in_at": {
+            "$ref": "#/components/schemas/IdentityNullableTime"
+          },
+          "platform_role": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IdentityRole"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "display_name",
+          "created_at",
+          "first_signed_in_at",
+          "last_signed_in_at",
+          "disabled_at",
+          "platform_role"
+        ],
+        "type": "object"
+      },
+      "IdentityExportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt_number": {
+            "type": "integer"
+          },
+          "client_app": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "client_session_id": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "completed_at": {
+            "$ref": "#/components/schemas/IdentityNullableTime"
+          },
+          "cost_microusd": {
+            "$ref": "#/components/schemas/IdentityNullableDecimal"
+          },
+          "error_code": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "input_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "output_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "root_request_id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "started_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "state": {
+            "type": "string"
+          },
+          "workload_kind": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          }
+        },
+        "required": [
+          "id",
+          "root_request_id",
+          "attempt_number",
+          "started_at",
+          "completed_at",
+          "workspace_id",
+          "model",
+          "workload_kind",
+          "state",
+          "error_code",
+          "input_tokens",
+          "output_tokens",
+          "client_app",
+          "client_session_id",
+          "cost_microusd"
+        ],
+        "type": "object"
+      },
+      "IdentityFailure": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ErrorEnvelope"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "error": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "error"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "Management handler envelopes and identity middleware's actual string-valued error are distinct wire contracts."
+      },
+      "IdentityMemberSummaryBudgetVisibility": {
+        "description": "Member/redacted projection of the shared workspace-summary row: workspace-wide budgets are always null, not omitted or populated.",
+        "properties": {
+          "budgets": {
+            "type": "null"
+          },
+          "role": {
+            "enum": [
+              "member",
+              null
+            ]
+          }
+        },
+        "required": [
+          "role",
+          "budgets"
+        ],
+        "type": "object"
+      },
+      "IdentityModelRef": {
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "model_id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "public_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "model_id",
+          "public_name",
+          "display_name"
+        ],
+        "type": "object"
+      },
+      "IdentityNotification": {
+        "additionalProperties": false,
+        "properties": {
+          "builtin": {
+            "type": "boolean"
+          },
+          "cleared_email": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IdentityDelivery"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "connection": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "provider": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "provider"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "details": {
+            "description": "Stored JSON incident payload, not a serde DTO. Fields vary by producer/kind; readers do not deserialize or close this map. Monetary fields remain integer micro-USD strings. Admission-ceiling identity redaction is constrained by the separate variants below.",
+            "patternProperties": {
+              "(^|_)microusd$": {
+                "$ref": "#/components/schemas/IdentityNullableDecimal"
+              }
+            },
+            "type": "object"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IdentityDelivery"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fired_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "kind": {
+            "enum": [
+              "budget_threshold",
+              "spend_threshold",
+              "spend_spike",
+              "error_rate",
+              "provider_failing",
+              "batch_failed",
+              "batch_stalled",
+              "admission_ceiling",
+              "key_expiring",
+              "aged_unknown_hold",
+              "scim_last_admin",
+              "partitions_missing",
+              "history_orphans"
+            ]
+          },
+          "level": {
+            "type": "integer"
+          },
+          "read": {
+            "type": "boolean"
+          },
+          "resolution": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "resolved_at": {
+            "$ref": "#/components/schemas/IdentityNullableTime"
+          },
+          "rule": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "deleted": {
+                    "type": "boolean"
+                  },
+                  "id": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "scope": {
+                    "enum": [
+                      "installation",
+                      "workspace"
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "scope",
+                  "deleted"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "severity": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "firing",
+              "resolved"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "workspace": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IdentityWorkspaceRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "rule",
+          "builtin",
+          "kind",
+          "state",
+          "severity",
+          "level",
+          "summary",
+          "details",
+          "workspace",
+          "connection",
+          "fired_at",
+          "resolved_at",
+          "resolution",
+          "email",
+          "cleared_email",
+          "read"
+        ],
+        "type": "object"
+      },
+      "IdentityNullableDecimal": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "IdentityNullableString": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "IdentityNullableTime": {
+        "format": "date-time",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "IdentityNullableUuid": {
+        "format": "uuid",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "IdentityOrdinaryNotification": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/IdentityNotification"
+          },
+          {
+            "properties": {
+              "kind": {
+                "not": {
+                  "const": "admission_ceiling"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "IdentityOwnAccessRequest": {
+        "additionalProperties": false,
+        "description": "Requester-private projection: no requester_email or requester_display_name. The workspace name is the submitted snapshot, not its current discoverability/name.",
+        "properties": {
+          "created_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "decided_at": {
+            "$ref": "#/components/schemas/IdentityNullableTime"
+          },
+          "decided_by": {
+            "$ref": "#/components/schemas/IdentityNullableUuid"
+          },
+          "expires_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "membership_grant_id": {
+            "$ref": "#/components/schemas/IdentityNullableUuid"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "requested_role": {
+            "const": "member"
+          },
+          "requester": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "approved",
+              "denied",
+              "withdrawn",
+              "expired"
+            ]
+          },
+          "target_kind": {
+            "const": "workspace_membership"
+          },
+          "workspace_id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "workspace_name_at_request": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "requester",
+          "target_kind",
+          "workspace_id",
+          "workspace_name_at_request",
+          "requested_role",
+          "status",
+          "reason",
+          "created_at",
+          "expires_at",
+          "decided_by",
+          "decided_at",
+          "membership_grant_id"
+        ],
+        "type": "object"
+      },
+      "IdentityOwnUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "attempts": {
+            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+          },
+          "held_microusd": {
+            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+          },
+          "input_tokens": {
+            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+          },
+          "known_cost_microusd": {
+            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+          },
+          "output_tokens": {
+            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+          },
+          "requests": {
+            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+          },
+          "tokens": {
+            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+          },
+          "unknown_token_attempts": {
+            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+          },
+          "unresolved_attempts": {
+            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+          }
+        },
+        "required": [
+          "known_cost_microusd",
+          "held_microusd",
+          "requests",
+          "attempts",
+          "unresolved_attempts",
+          "input_tokens",
+          "output_tokens",
+          "tokens",
+          "unknown_token_attempts"
+        ],
+        "type": "object"
+      },
+      "IdentityPeriod": {
+        "enum": [
+          "day",
+          "week",
+          "month",
+          "lifetime"
+        ]
+      },
+      "IdentityPublicLogo": {
+        "additionalProperties": false,
+        "properties": {
+          "updated_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "url": {
+            "pattern": "^/api/v1/branding/logo\\?v=[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "IdentityRedactedCeilingNotification": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/IdentityNotification"
+          },
+          {
+            "properties": {
+              "details": {
+                "not": {
+                  "required": [
+                    "workspace_name"
+                  ]
+                }
+              },
+              "kind": {
+                "const": "admission_ceiling"
+              },
+              "workspace": {
+                "type": "null"
+              }
+            }
+          }
+        ],
+        "description": "Non-Admin projection: no workspace identity/name, including nested details."
+      },
+      "IdentityRevoked": {
+        "additionalProperties": false,
+        "properties": {
+          "revoked": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revoked"
+        ],
+        "type": "object"
+      },
+      "IdentityRole": {
+        "enum": [
+          "user",
+          "auditor",
+          "admin"
+        ]
+      },
+      "IdentitySession": {
+        "additionalProperties": false,
+        "properties": {
+          "client": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "current": {
+            "type": "boolean"
+          },
+          "expires_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "last_seen_at": {
+            "$ref": "#/components/schemas/IdentityNullableTime"
+          }
+        },
+        "required": [
+          "id",
+          "client",
+          "created_at",
+          "last_seen_at",
+          "expires_at",
+          "current"
+        ],
+        "type": "object"
+      },
+      "IdentityTime": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "IdentityUnsignedDecimal": {
+        "description": "Exact nonnegative integer; money fields are micro-USD, never floating point.",
+        "pattern": "^(0|[1-9][0-9]*)$",
+        "type": "string"
+      },
+      "IdentityUsagePair": {
+        "additionalProperties": false,
+        "properties": {
+          "current": {
+            "$ref": "#/components/schemas/IdentityOwnUsage"
+          },
+          "previous": {
+            "$ref": "#/components/schemas/IdentityOwnUsage"
+          }
+        },
+        "required": [
+          "current",
+          "previous"
+        ],
+        "type": "object"
+      },
+      "IdentityUuid": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "IdentityWorkspaceKind": {
+        "enum": [
+          "personal",
+          "team",
+          "project"
+        ]
+      },
+      "IdentityWorkspaceRef": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/IdentityWorkspaceKind"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "delete_api_v1_me_sessions_by_sessionRequest": false,
       "delete_api_v1_me_sessions_by_sessionResponse": {
-        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
-        "x-omg-schema-status": "incomplete"
+        "$ref": "#/components/schemas/IdentityRevoked"
       },
       "delete_api_v1_platform_admin_tokens_by_tokenRequest": {
         "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
@@ -282,125 +1288,1001 @@
         "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
         "x-omg-schema-status": "incomplete"
       },
-      "get_api_v1_access_request_targetsRequest": {
-        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
-        "x-omg-schema-status": "incomplete"
-      },
+      "get_api_v1_access_request_targetsRequest": false,
       "get_api_v1_access_request_targetsResponse": {
-        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
-        "x-omg-schema-status": "incomplete"
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "$ref": "#/components/schemas/IdentityUuid"
+                },
+                "kind": {
+                  "enum": [
+                    "team",
+                    "project"
+                  ]
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "kind"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "type": "object"
       },
-      "get_api_v1_auth_callbackRequest": {
-        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
-        "x-omg-schema-status": "incomplete"
-      },
-      "get_api_v1_auth_callbackResponse": {
-        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
-        "x-omg-schema-status": "incomplete"
-      },
-      "get_api_v1_auth_configRequest": {
-        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
-        "x-omg-schema-status": "incomplete"
-      },
+      "get_api_v1_auth_callbackRequest": false,
+      "get_api_v1_auth_callbackResponse": false,
+      "get_api_v1_auth_configRequest": false,
       "get_api_v1_auth_configResponse": {
-        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
-        "x-omg-schema-status": "incomplete"
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "installation_name": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "logo": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IdentityPublicLogo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "enabled",
+          "logo",
+          "installation_name"
+        ],
+        "type": "object"
       },
-      "get_api_v1_auth_loginRequest": {
-        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
-        "x-omg-schema-status": "incomplete"
-      },
-      "get_api_v1_auth_loginResponse": {
-        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
-        "x-omg-schema-status": "incomplete"
-      },
-      "get_api_v1_branding_logoRequest": {
-        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
-        "x-omg-schema-status": "incomplete"
-      },
+      "get_api_v1_auth_loginRequest": false,
+      "get_api_v1_auth_loginResponse": false,
+      "get_api_v1_branding_logoRequest": false,
       "get_api_v1_branding_logoResponse": {
-        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
-        "x-omg-schema-status": "incomplete"
+        "format": "binary",
+        "maxLength": 524288,
+        "minLength": 1,
+        "type": "string"
       },
-      "get_api_v1_meRequest": {
-        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
-        "x-omg-schema-status": "incomplete"
-      },
+      "get_api_v1_meRequest": false,
       "get_api_v1_meResponse": {
-        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
-        "x-omg-schema-status": "incomplete"
+        "additionalProperties": false,
+        "properties": {
+          "capabilities": {
+            "additionalProperties": false,
+            "properties": {
+              "create_workspace": {
+                "type": "boolean"
+              },
+              "platform_read": {
+                "type": "boolean"
+              },
+              "platform_write": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "platform_read",
+              "platform_write",
+              "create_workspace"
+            ],
+            "type": "object"
+          },
+          "installation": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/IdentityUuid"
+              },
+              "inference_base_url": {
+                "$ref": "#/components/schemas/IdentityNullableString"
+              },
+              "key_max_lifetime_days": {
+                "type": "integer"
+              },
+              "logo": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/IdentityPublicLogo"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "logo_url": {
+                "$ref": "#/components/schemas/IdentityNullableString"
+              },
+              "name": {
+                "type": "string"
+              },
+              "support_url": {
+                "$ref": "#/components/schemas/IdentityNullableString"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "support_url",
+              "logo_url",
+              "key_max_lifetime_days",
+              "logo",
+              "inference_base_url"
+            ],
+            "type": "object"
+          },
+          "user": {
+            "additionalProperties": false,
+            "properties": {
+              "display_name": {
+                "$ref": "#/components/schemas/IdentityNullableString"
+              },
+              "email": {
+                "type": "string"
+              },
+              "id": {
+                "$ref": "#/components/schemas/IdentityUuid"
+              },
+              "platform_role": {
+                "$ref": "#/components/schemas/IdentityRole"
+              }
+            },
+            "required": [
+              "id",
+              "email",
+              "display_name",
+              "platform_role"
+            ],
+            "type": "object"
+          },
+          "workspaces": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "capabilities": {
+                  "$ref": "#/components/schemas/IdentityCapabilities"
+                },
+                "id": {
+                  "$ref": "#/components/schemas/IdentityUuid"
+                },
+                "kind": {
+                  "$ref": "#/components/schemas/IdentityWorkspaceKind"
+                },
+                "membership_source": {
+                  "enum": [
+                    "manual",
+                    "group",
+                    "mixed",
+                    null
+                  ]
+                },
+                "name": {
+                  "type": "string"
+                },
+                "owner_user_id": {
+                  "$ref": "#/components/schemas/IdentityNullableUuid"
+                },
+                "role": {
+                  "enum": [
+                    "owner",
+                    "admin",
+                    "member",
+                    null
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "kind",
+                "owner_user_id",
+                "role",
+                "membership_source",
+                "capabilities"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "installation",
+          "user",
+          "workspaces",
+          "capabilities"
+        ],
+        "type": "object"
       },
-      "get_api_v1_me_access_requestsRequest": {
-        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
-        "x-omg-schema-status": "incomplete"
-      },
+      "get_api_v1_me_access_requestsRequest": false,
       "get_api_v1_me_access_requestsResponse": {
-        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
-        "x-omg-schema-status": "incomplete"
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/IdentityOwnAccessRequest"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "type": "object"
       },
-      "get_api_v1_me_access_requests_by_idRequest": {
-        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
-        "x-omg-schema-status": "incomplete"
-      },
+      "get_api_v1_me_access_requests_by_idRequest": false,
       "get_api_v1_me_access_requests_by_idResponse": {
-        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
-        "x-omg-schema-status": "incomplete"
+        "$ref": "#/components/schemas/IdentityOwnAccessRequest"
       },
-      "get_api_v1_me_exportRequest": {
-        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
-        "x-omg-schema-status": "incomplete"
-      },
+      "get_api_v1_me_exportRequest": false,
       "get_api_v1_me_exportResponse": {
-        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
-        "x-omg-schema-status": "incomplete"
+        "additionalProperties": false,
+        "properties": {
+          "access_requests": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "$ref": "#/components/schemas/IdentityExportAccessRequest"
+                },
+                "type": "array"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "items",
+              "truncated"
+            ],
+            "type": "object"
+          },
+          "api_keys": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "$ref": "#/components/schemas/IdentityExportKey"
+                },
+                "type": "array"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "items",
+              "truncated"
+            ],
+            "type": "object"
+          },
+          "audit": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "action": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "$ref": "#/components/schemas/IdentityUuid"
+                    },
+                    "metadata": {
+                      "description": "Stored audit JSON metadata; no fixed DTO or closed property vocabulary."
+                    },
+                    "occurred_at": {
+                      "$ref": "#/components/schemas/IdentityTime"
+                    },
+                    "resource_id": {
+                      "$ref": "#/components/schemas/IdentityNullableUuid"
+                    },
+                    "resource_type": {
+                      "type": "string"
+                    },
+                    "workspace_id": {
+                      "$ref": "#/components/schemas/IdentityNullableUuid"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "occurred_at",
+                    "action",
+                    "resource_type",
+                    "resource_id",
+                    "workspace_id",
+                    "metadata"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "items",
+              "truncated"
+            ],
+            "type": "object"
+          },
+          "files": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "content_type": {
+                      "$ref": "#/components/schemas/IdentityNullableString"
+                    },
+                    "created_at": {
+                      "$ref": "#/components/schemas/IdentityTime"
+                    },
+                    "deleted_at": {
+                      "$ref": "#/components/schemas/IdentityNullableTime"
+                    },
+                    "expires_at": {
+                      "$ref": "#/components/schemas/IdentityNullableTime"
+                    },
+                    "filename": {
+                      "$ref": "#/components/schemas/IdentityNullableString"
+                    },
+                    "id": {
+                      "$ref": "#/components/schemas/IdentityUuid"
+                    },
+                    "purpose": {
+                      "type": "string"
+                    },
+                    "size_bytes": {
+                      "type": "integer"
+                    },
+                    "workspace_id": {
+                      "$ref": "#/components/schemas/IdentityNullableUuid"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "purpose",
+                    "workspace_id",
+                    "filename",
+                    "content_type",
+                    "size_bytes",
+                    "created_at",
+                    "expires_at",
+                    "deleted_at"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "items",
+              "truncated"
+            ],
+            "type": "object"
+          },
+          "format": {
+            "const": "omg.subject-export.v1"
+          },
+          "generated_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "installation": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/IdentityUuid"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "type": "object"
+          },
+          "memberships": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "created_at": {
+                      "$ref": "#/components/schemas/IdentityTime"
+                    },
+                    "kind": {
+                      "$ref": "#/components/schemas/IdentityWorkspaceKind"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "revoked_at": {
+                      "$ref": "#/components/schemas/IdentityNullableTime"
+                    },
+                    "role": {
+                      "enum": [
+                        "owner",
+                        "admin",
+                        "member"
+                      ]
+                    },
+                    "source": {
+                      "type": "string"
+                    },
+                    "workspace_id": {
+                      "$ref": "#/components/schemas/IdentityUuid"
+                    }
+                  },
+                  "required": [
+                    "workspace_id",
+                    "name",
+                    "kind",
+                    "role",
+                    "source",
+                    "created_at",
+                    "revoked_at"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "items",
+              "truncated"
+            ],
+            "type": "object"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "platform_roles": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "created_at": {
+                      "$ref": "#/components/schemas/IdentityTime"
+                    },
+                    "revoked_at": {
+                      "$ref": "#/components/schemas/IdentityNullableTime"
+                    },
+                    "role": {
+                      "$ref": "#/components/schemas/IdentityRole"
+                    },
+                    "source": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "role",
+                    "source",
+                    "created_at",
+                    "revoked_at"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "items",
+              "truncated"
+            ],
+            "type": "object"
+          },
+          "range": {
+            "additionalProperties": false,
+            "properties": {
+              "from": {
+                "format": "date",
+                "type": "string"
+              },
+              "to": {
+                "format": "date",
+                "type": "string"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ],
+            "type": "object"
+          },
+          "requests": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "$ref": "#/components/schemas/IdentityExportRequest"
+                },
+                "type": "array"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "items",
+              "truncated"
+            ],
+            "type": "object"
+          },
+          "sessions": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "client": {
+                      "$ref": "#/components/schemas/IdentityNullableString"
+                    },
+                    "created_at": {
+                      "$ref": "#/components/schemas/IdentityTime"
+                    },
+                    "expires_at": {
+                      "$ref": "#/components/schemas/IdentityTime"
+                    },
+                    "id": {
+                      "$ref": "#/components/schemas/IdentityUuid"
+                    },
+                    "last_seen_at": {
+                      "$ref": "#/components/schemas/IdentityNullableTime"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "client",
+                    "created_at",
+                    "last_seen_at",
+                    "expires_at"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "items",
+              "truncated"
+            ],
+            "type": "object"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/IdentityExportProfile"
+          }
+        },
+        "required": [
+          "format",
+          "generated_at",
+          "installation",
+          "range",
+          "subject",
+          "platform_roles",
+          "memberships",
+          "api_keys",
+          "sessions",
+          "requests",
+          "access_requests",
+          "files",
+          "audit",
+          "notes"
+        ],
+        "type": "object"
       },
-      "get_api_v1_me_keysRequest": {
-        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
-        "x-omg-schema-status": "incomplete"
-      },
+      "get_api_v1_me_keysRequest": false,
       "get_api_v1_me_keysResponse": {
-        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
-        "x-omg-schema-status": "incomplete"
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "created_at": {
+                  "$ref": "#/components/schemas/IdentityTime"
+                },
+                "disabled_at": {
+                  "$ref": "#/components/schemas/IdentityNullableTime"
+                },
+                "expires_at": {
+                  "$ref": "#/components/schemas/IdentityNullableTime"
+                },
+                "id": {
+                  "$ref": "#/components/schemas/IdentityUuid"
+                },
+                "last_used_at": {
+                  "$ref": "#/components/schemas/IdentityNullableTime"
+                },
+                "lineage_id": {
+                  "$ref": "#/components/schemas/IdentityUuid"
+                },
+                "model_ids": {
+                  "items": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "name": {
+                  "type": "string"
+                },
+                "revoked_at": {
+                  "$ref": "#/components/schemas/IdentityNullableTime"
+                },
+                "status": {
+                  "enum": [
+                    "active",
+                    "disabled",
+                    "revoked",
+                    "expired"
+                  ]
+                },
+                "usage": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "limit_microusd": {
+                      "$ref": "#/components/schemas/IdentityNullableDecimal"
+                    },
+                    "period": {
+                      "$ref": "#/components/schemas/IdentityPeriod"
+                    },
+                    "unresolved_usage": {
+                      "type": "boolean"
+                    },
+                    "used_microusd": {
+                      "$ref": "#/components/schemas/IdentityNullableDecimal"
+                    },
+                    "window_end": {
+                      "$ref": "#/components/schemas/IdentityNullableTime"
+                    },
+                    "window_start": {
+                      "$ref": "#/components/schemas/IdentityTime"
+                    }
+                  },
+                  "required": [
+                    "period",
+                    "used_microusd",
+                    "limit_microusd",
+                    "window_start",
+                    "window_end",
+                    "unresolved_usage"
+                  ],
+                  "type": "object"
+                },
+                "workspace": {
+                  "$ref": "#/components/schemas/IdentityWorkspaceRef"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "workspace",
+                "status",
+                "created_at",
+                "expires_at",
+                "revoked_at",
+                "disabled_at",
+                "last_used_at",
+                "lineage_id",
+                "model_ids",
+                "usage"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "has_more": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "data",
+          "has_more"
+        ],
+        "type": "object"
       },
-      "get_api_v1_me_modelsRequest": {
-        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
-        "x-omg-schema-status": "incomplete"
-      },
+      "get_api_v1_me_modelsRequest": false,
       "get_api_v1_me_modelsResponse": {
-        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
-        "x-omg-schema-status": "incomplete"
+        "additionalProperties": false,
+        "properties": {
+          "models": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "display_name": {
+                  "$ref": "#/components/schemas/IdentityNullableString"
+                },
+                "model_id": {
+                  "$ref": "#/components/schemas/IdentityUuid"
+                },
+                "public_name": {
+                  "type": "string"
+                },
+                "workspace_count": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "workspaces": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "$ref": "#/components/schemas/IdentityUuid"
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 2,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "model_id",
+                "public_name",
+                "display_name",
+                "workspace_count",
+                "workspaces"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "not_serving": {
+            "items": {
+              "$ref": "#/components/schemas/IdentityModelRef"
+            },
+            "maxItems": 20,
+            "type": "array"
+          },
+          "not_serving_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "usable_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "workspaces_without_models": {
+            "items": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "models",
+          "usable_count",
+          "not_serving",
+          "not_serving_count",
+          "workspaces_without_models"
+        ],
+        "type": "object"
       },
-      "get_api_v1_me_notificationsRequest": {
-        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
-        "x-omg-schema-status": "incomplete"
-      },
+      "get_api_v1_me_notificationsRequest": false,
       "get_api_v1_me_notificationsResponse": {
-        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
-        "x-omg-schema-status": "incomplete"
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/IdentityOrdinaryNotification"
+                },
+                {
+                  "$ref": "#/components/schemas/IdentityAdminCeilingNotification"
+                },
+                {
+                  "$ref": "#/components/schemas/IdentityRedactedCeilingNotification"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "has_more": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "data",
+          "has_more"
+        ],
+        "type": "object"
       },
-      "get_api_v1_me_notifications_summaryRequest": {
-        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
-        "x-omg-schema-status": "incomplete"
-      },
+      "get_api_v1_me_notifications_summaryRequest": false,
       "get_api_v1_me_notifications_summaryResponse": {
-        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
-        "x-omg-schema-status": "incomplete"
+        "additionalProperties": false,
+        "properties": {
+          "firing": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unread": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "unread",
+          "firing"
+        ],
+        "type": "object"
       },
-      "get_api_v1_me_sessionsRequest": {
-        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
-        "x-omg-schema-status": "incomplete"
-      },
+      "get_api_v1_me_sessionsRequest": false,
       "get_api_v1_me_sessionsResponse": {
-        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
-        "x-omg-schema-status": "incomplete"
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/IdentitySession"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "type": "object"
       },
-      "get_api_v1_me_summaryRequest": {
-        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
-        "x-omg-schema-status": "incomplete"
-      },
+      "get_api_v1_me_summaryRequest": false,
       "get_api_v1_me_summaryResponse": {
-        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
-        "x-omg-schema-status": "incomplete"
+        "additionalProperties": false,
+        "properties": {
+          "basis": {
+            "const": "configured_rate_estimate"
+          },
+          "currency": {
+            "const": "USD"
+          },
+          "observed_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "period": {
+            "additionalProperties": false,
+            "properties": {
+              "current": {
+                "$ref": "#/components/schemas/IdentityDateWindow"
+              },
+              "previous": {
+                "$ref": "#/components/schemas/IdentityDateWindow"
+              }
+            },
+            "required": [
+              "current",
+              "previous"
+            ],
+            "type": "object"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/IdentityUsagePair"
+          },
+          "workspaces": {
+            "items": {
+              "additionalProperties": false,
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/IdentityAdminSummaryBudgetVisibility"
+                },
+                {
+                  "$ref": "#/components/schemas/IdentityMemberSummaryBudgetVisibility"
+                }
+              ],
+              "properties": {
+                "active_keys": {
+                  "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                },
+                "budgets": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "items": {
+                        "$ref": "#/components/schemas/IdentityBudgetWindow"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "current": {
+                  "$ref": "#/components/schemas/IdentityOwnUsage"
+                },
+                "kind": {
+                  "$ref": "#/components/schemas/IdentityWorkspaceKind"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "previous": {
+                  "$ref": "#/components/schemas/IdentityOwnUsage"
+                },
+                "role": {
+                  "enum": [
+                    "owner",
+                    "admin",
+                    "member",
+                    null
+                  ]
+                },
+                "workspace_id": {
+                  "$ref": "#/components/schemas/IdentityUuid"
+                }
+              },
+              "required": [
+                "workspace_id",
+                "name",
+                "kind",
+                "role",
+                "active_keys",
+                "current",
+                "previous",
+                "budgets"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "currency",
+          "basis",
+          "observed_at",
+          "period",
+          "totals",
+          "workspaces"
+        ],
+        "type": "object"
       },
       "get_api_v1_platform_access_requestsRequest": {
         "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
@@ -1514,53 +3396,163 @@
         "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
         "x-omg-schema-status": "incomplete"
       },
-      "post_api_v1_auth_logoutRequest": {
-        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
-        "x-omg-schema-status": "incomplete"
-      },
-      "post_api_v1_auth_logoutResponse": {
-        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
-        "x-omg-schema-status": "incomplete"
-      },
+      "post_api_v1_auth_logoutRequest": false,
+      "post_api_v1_auth_logoutResponse": false,
       "post_api_v1_invitations_acceptRequest": {
-        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
-        "x-omg-schema-status": "incomplete"
+        "description": "Serde accepts the closed object or its positional struct array [token]. Any string deserializes; the handler additionally requires 64 ASCII hexadecimal characters and a live matching invitation.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "token": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "token"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          }
+        ]
       },
       "post_api_v1_invitations_acceptResponse": {
-        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
-        "x-omg-schema-status": "incomplete"
+        "additionalProperties": false,
+        "properties": {
+          "workspace_id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          }
+        },
+        "required": [
+          "workspace_id"
+        ],
+        "type": "object"
       },
       "post_api_v1_me_access_requestsRequest": {
-        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
-        "x-omg-schema-status": "incomplete"
+        "description": "Serde accepts the closed object or positional array [workspace_id, reason, idempotency_key]. The handler also bounds/validates reason and idempotency_key and checks live discovery/membership.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "idempotency_key": {
+                "type": "string"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "workspace_id": {
+                "$ref": "#/components/schemas/IdentityUuid"
+              }
+            },
+            "required": [
+              "workspace_id",
+              "idempotency_key"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "$ref": "#/components/schemas/IdentityUuid"
+              },
+              {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          }
+        ]
       },
       "post_api_v1_me_access_requestsResponse": {
-        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
-        "x-omg-schema-status": "incomplete"
+        "$ref": "#/components/schemas/IdentityOwnAccessRequest"
       },
-      "post_api_v1_me_access_requests_by_id_withdrawRequest": {
-        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
-        "x-omg-schema-status": "incomplete"
-      },
+      "post_api_v1_me_access_requests_by_id_withdrawRequest": false,
       "post_api_v1_me_access_requests_by_id_withdrawResponse": {
-        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
-        "x-omg-schema-status": "incomplete"
+        "$ref": "#/components/schemas/IdentityOwnAccessRequest"
       },
       "post_api_v1_me_notifications_readRequest": {
-        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
-        "x-omg-schema-status": "incomplete"
+        "description": "Serde accepts the closed object or positional array [ids, all], where only trailing all may be omitted. In the object form ids may be null or omitted; all may be omitted but not null. Handler requires exactly one of all=true or a nonempty ids array of at most 200.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "all": {
+                "default": false,
+                "type": "boolean"
+              },
+              "ids": {
+                "items": {
+                  "$ref": "#/components/schemas/IdentityUuid"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 2,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/IdentityUuid"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              {
+                "default": false,
+                "type": "boolean"
+              }
+            ],
+            "type": "array"
+          }
+        ]
       },
       "post_api_v1_me_notifications_readResponse": {
-        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
-        "x-omg-schema-status": "incomplete"
+        "additionalProperties": false,
+        "properties": {
+          "marked": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "marked"
+        ],
+        "type": "object"
       },
-      "post_api_v1_me_sessions_revoke_othersRequest": {
-        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
-        "x-omg-schema-status": "incomplete"
-      },
+      "post_api_v1_me_sessions_revoke_othersRequest": false,
       "post_api_v1_me_sessions_revoke_othersResponse": {
-        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
-        "x-omg-schema-status": "incomplete"
+        "$ref": "#/components/schemas/IdentityRevoked"
       },
       "post_api_v1_platform_access_requests_by_id_approveRequest": {
         "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
@@ -2136,10 +4128,51 @@
     "/api/v1/access-request-targets": {
       "get": {
         "operationId": "get_api_v1_access_request_targets",
-        "parameters": [],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "schema": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
-          "default": {
-            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_access_request_targetsResponse"
+                }
+              }
+            },
+            "description": "Discoverable shared workspaces without the caller's existing membership"
+          },
+          "400": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/400"
+          },
+          "401": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/401"
+          },
+          "403": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/403"
+          },
+          "500": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
+          },
+          "503": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/503"
           }
         },
         "security": [
@@ -2159,11 +4192,97 @@
     },
     "/api/v1/auth/callback": {
       "get": {
+        "description": "One-use PKCE/OIDC callback. Unknown query keys are ignored. Browser refusals may redirect to sign-in without creating a session.",
         "operationId": "get_api_v1_auth_callback",
-        "parameters": [],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "state",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "code",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "error",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
-          "default": {
-            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          "303": {
+            "description": "Validated same-origin dashboard redirect, or browser denial redirect; sets or clears session/CSRF/browser cookies",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Location": {
+                "required": true,
+                "schema": {
+                  "pattern": "^/",
+                  "type": "string"
+                }
+              },
+              "Referrer-Policy": {
+                "required": true,
+                "schema": {
+                  "const": "no-referrer"
+                }
+              },
+              "Set-Cookie": {
+                "required": true,
+                "schema": {
+                  "pattern": "^omg_(session=([0-9a-f]{64})?; Path=/; Max-Age=[0-9]+; SameSite=Lax(; Secure)?; HttpOnly|csrf=([0-9a-f]{64})?; Path=/; Max-Age=[0-9]+; SameSite=Strict(; Secure)?|oidc=; Path=/; Max-Age=0; SameSite=Lax(; Secure)?; HttpOnly)$",
+                  "type": "string"
+                }
+              }
+            },
+            "x-omg-positive-cookie": "omg_session",
+            "x-omg-required-cookies": [
+              "omg_session",
+              "omg_csrf",
+              "omg_oidc"
+            ]
+          },
+          "400": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/400"
+          },
+          "401": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/401"
+          },
+          "403": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/403"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityFailure"
+                }
+              }
+            },
+            "description": "Identity link conflict"
+          },
+          "429": {
+            "$ref": "#/paths/~1api~1v1~1auth~1login/get/responses/429"
+          },
+          "500": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
+          },
+          "503": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/503"
           }
         },
         "security": [],
@@ -2182,8 +4301,29 @@
         "operationId": "get_api_v1_auth_config",
         "parameters": [],
         "responses": {
-          "default": {
-            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_auth_configResponse"
+                }
+              }
+            },
+            "description": "Public SSO configuration",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Referrer-Policy": {
+                "required": true,
+                "schema": {
+                  "const": "no-referrer"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -2200,10 +4340,90 @@
     "/api/v1/auth/login": {
       "get": {
         "operationId": "get_api_v1_auth_login",
-        "parameters": [],
+        "parameters": [
+          {
+            "description": "Optional same-origin dashboard path. Unsafe/malformed input is ignored; unknown query keys are ignored by serde.",
+            "in": "query",
+            "name": "return_to",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
-          "default": {
-            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          "303": {
+            "description": "OIDC authorization redirect; browser-binding cookie",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Location": {
+                "required": true,
+                "schema": {
+                  "format": "uri",
+                  "type": "string"
+                }
+              },
+              "Referrer-Policy": {
+                "required": true,
+                "schema": {
+                  "const": "no-referrer"
+                }
+              },
+              "Set-Cookie": {
+                "required": true,
+                "schema": {
+                  "pattern": "^omg_oidc=[0-9a-f]{64}; Path=/; Max-Age=600; SameSite=Lax(; Secure)?; HttpOnly$",
+                  "type": "string"
+                }
+              }
+            },
+            "x-omg-required-cookies": [
+              "omg_oidc"
+            ]
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityFailure"
+                }
+              }
+            },
+            "description": "Sign-in throttled",
+            "headers": {
+              "Retry-After": {
+                "required": true,
+                "schema": {
+                  "pattern": "^[1-9][0-9]*$",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityFailure"
+                }
+              }
+            },
+            "description": "SSO unavailable or pending-attempt cap reached",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "pattern": "^[1-9][0-9]*$",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -2222,8 +4442,46 @@
         "operationId": "post_api_v1_auth_logout",
         "parameters": [],
         "responses": {
-          "default": {
-            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          "204": {
+            "description": "Session revoked, authentication cookies cleared; no body",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Referrer-Policy": {
+                "required": true,
+                "schema": {
+                  "const": "no-referrer"
+                }
+              },
+              "Set-Cookie": {
+                "required": true,
+                "schema": {
+                  "pattern": "^omg_((session|oidc)=; Path=/; Max-Age=0; SameSite=Lax(; Secure)?; HttpOnly|csrf=; Path=/; Max-Age=0; SameSite=Strict(; Secure)?)$",
+                  "type": "string"
+                }
+              }
+            },
+            "x-omg-required-cookies": [
+              "omg_session",
+              "omg_csrf",
+              "omg_oidc"
+            ]
+          },
+          "400": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/400"
+          },
+          "401": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/401"
+          },
+          "403": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/403"
+          },
+          "500": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
           }
         },
         "security": [
@@ -2246,10 +4504,118 @@
     "/api/v1/branding/logo": {
       "get": {
         "operationId": "get_api_v1_branding_logo",
-        "parameters": [],
+        "parameters": [
+          {
+            "description": "Cache-busting version; not decoded by the handler",
+            "in": "query",
+            "name": "v",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-None-Match",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
-          "default": {
-            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          "200": {
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_branding_logoResponse"
+                }
+              },
+              "image/png": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_branding_logoResponse"
+                }
+              },
+              "image/webp": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_branding_logoResponse"
+                }
+              }
+            },
+            "description": "Uploaded logo bytes",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "public, max-age=300"
+                }
+              },
+              "Content-Security-Policy": {
+                "required": true,
+                "schema": {
+                  "const": "default-src 'none'"
+                }
+              },
+              "Cross-Origin-Resource-Policy": {
+                "required": true,
+                "schema": {
+                  "const": "same-origin"
+                }
+              },
+              "ETag": {
+                "required": true,
+                "schema": {
+                  "pattern": "^\"[0-9a-f]{64}\"$",
+                  "type": "string"
+                }
+              },
+              "X-Content-Type-Options": {
+                "required": true,
+                "schema": {
+                  "const": "nosniff"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Matching ETag; no body",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "public, max-age=300"
+                }
+              },
+              "Content-Security-Policy": {
+                "required": true,
+                "schema": {
+                  "const": "default-src 'none'"
+                }
+              },
+              "Cross-Origin-Resource-Policy": {
+                "required": true,
+                "schema": {
+                  "const": "same-origin"
+                }
+              },
+              "ETag": {
+                "required": true,
+                "schema": {
+                  "pattern": "^\"[0-9a-f]{64}\"$",
+                  "type": "string"
+                }
+              },
+              "X-Content-Type-Options": {
+                "required": true,
+                "schema": {
+                  "const": "nosniff"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/404"
+          },
+          "503": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/503"
           }
         },
         "security": [],
@@ -2267,9 +4633,60 @@
       "post": {
         "operationId": "post_api_v1_invitations_accept",
         "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_invitations_acceptRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
-          "default": {
-            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_invitations_acceptResponse"
+                }
+              }
+            },
+            "description": "Invitation accepted using the session's verified email"
+          },
+          "400": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/400"
+          },
+          "401": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/401"
+          },
+          "403": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/403"
+          },
+          "404": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/404"
+          },
+          "413": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "JSON body exceeds the extractor limit"
+          },
+          "415": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/415"
+          },
+          "422": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/422"
+          },
+          "500": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
+          },
+          "503": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/503"
           }
         },
         "security": [
@@ -2291,11 +4708,124 @@
     },
     "/api/v1/me": {
       "get": {
+        "description": "Only the caller's verified identity, personal workspace and shared memberships. Platform roles do not add foreign personal workspaces.",
         "operationId": "get_api_v1_me",
         "parameters": [],
         "responses": {
-          "default": {
-            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_meResponse"
+                }
+              }
+            },
+            "description": "Caller context"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityFailure"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Invalid input; query/path extraction may return text instead of a handler envelope"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityFailure"
+                }
+              }
+            },
+            "description": "Management authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityFailure"
+                }
+              }
+            },
+            "description": "Live entitlement, credential-family, CSRF, Origin or authority refusal"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not found or hidden by ownership"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Operation conflicts with current state"
+          },
+          "415": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "JSON extractor requires application/json"
+          },
+          "422": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "JSON deserialization failed"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityFailure"
+                }
+              }
+            },
+            "description": "Rate limit reached"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityFailure"
+                }
+              }
+            },
+            "description": "Internal management error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityFailure"
+                }
+              }
+            },
+            "description": "Management storage or report unavailable"
           }
         },
         "security": [
@@ -2316,10 +4846,51 @@
     "/api/v1/me/access-requests": {
       "get": {
         "operationId": "get_api_v1_me_access_requests",
-        "parameters": [],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "schema": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
-          "default": {
-            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_me_access_requestsResponse"
+                }
+              }
+            },
+            "description": "Own requests, requester-private projection"
+          },
+          "400": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/400"
+          },
+          "401": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/401"
+          },
+          "403": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/403"
+          },
+          "500": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
+          },
+          "503": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/503"
           }
         },
         "security": [
@@ -2339,9 +4910,59 @@
       "post": {
         "operationId": "post_api_v1_me_access_requests",
         "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_me_access_requestsRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
-          "default": {
-            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_me_access_requestsResponse"
+                }
+              }
+            },
+            "description": "Created or idempotently replayed own request"
+          },
+          "400": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/400"
+          },
+          "401": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/401"
+          },
+          "403": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/403"
+          },
+          "404": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/404"
+          },
+          "409": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/409"
+          },
+          "413": {
+            "$ref": "#/paths/~1api~1v1~1invitations~1accept/post/responses/413"
+          },
+          "415": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/415"
+          },
+          "422": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/422"
+          },
+          "429": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/429"
+          },
+          "500": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
+          },
+          "503": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/503"
           }
         },
         "security": [
@@ -2375,8 +4996,33 @@
           }
         ],
         "responses": {
-          "default": {
-            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_me_access_requests_by_idResponse"
+                }
+              }
+            },
+            "description": "Own request; foreign requests are hidden with 404"
+          },
+          "400": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/400"
+          },
+          "401": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/401"
+          },
+          "403": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/403"
+          },
+          "404": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/404"
+          },
+          "500": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
+          },
+          "503": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/503"
           }
         },
         "security": [
@@ -2408,8 +5054,36 @@
           }
         ],
         "responses": {
-          "default": {
-            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_me_access_requests_by_id_withdrawResponse"
+                }
+              }
+            },
+            "description": "Own pending request withdrawn"
+          },
+          "400": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/400"
+          },
+          "401": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/401"
+          },
+          "403": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/403"
+          },
+          "404": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/404"
+          },
+          "409": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/409"
+          },
+          "500": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
+          },
+          "503": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/503"
           }
         },
         "security": [
@@ -2431,11 +5105,79 @@
     },
     "/api/v1/me/export": {
       "get": {
+        "description": "Own subject export; no other user's private data or credentials. Inclusive UTC range at most 93 days, default last 30. Lists are capped and explicitly truncated.",
         "operationId": "get_api_v1_me_export",
-        "parameters": [],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from",
+            "schema": {
+              "format": "date",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "schema": {
+              "format": "date",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
-          "default": {
-            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_me_exportResponse"
+                }
+              }
+            },
+            "description": "On-demand JSON attachment, never persisted",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Content-Disposition": {
+                "required": true,
+                "schema": {
+                  "pattern": "^attachment; filename=\"omg-export-[0-9-]+\\.json\"$",
+                  "type": "string"
+                }
+              },
+              "X-OMG-Export-SHA256": {
+                "required": true,
+                "schema": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/400"
+          },
+          "401": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/401"
+          },
+          "403": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/403"
+          },
+          "404": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/404"
+          },
+          "429": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/429"
+          },
+          "500": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
+          },
+          "503": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/503"
           }
         },
         "security": [
@@ -2456,10 +5198,64 @@
     "/api/v1/me/keys": {
       "get": {
         "operationId": "get_api_v1_me_keys",
-        "parameters": [],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "enum": [
+                "all",
+                "active",
+                "disabled",
+                "revoked",
+                "expired"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "schema": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
-          "default": {
-            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_me_keysResponse"
+                }
+              }
+            },
+            "description": "Own human-key metadata in own current workspaces, never tokens"
+          },
+          "400": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/400"
+          },
+          "401": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/401"
+          },
+          "403": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/403"
+          },
+          "500": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
+          },
+          "503": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/503"
           }
         },
         "security": [
@@ -2480,10 +5276,43 @@
     "/api/v1/me/models": {
       "get": {
         "operationId": "get_api_v1_me_models",
-        "parameters": [],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 6,
+              "maximum": 50,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
-          "default": {
-            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_me_modelsResponse"
+                }
+              }
+            },
+            "description": "Own workspaces' eligible models, serving and not-serving projections"
+          },
+          "400": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/400"
+          },
+          "401": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/401"
+          },
+          "403": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/403"
+          },
+          "500": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
+          },
+          "503": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/503"
           }
         },
         "security": [
@@ -2504,10 +5333,57 @@
     "/api/v1/me/notifications": {
       "get": {
         "operationId": "get_api_v1_me_notifications",
-        "parameters": [],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "enum": [
+                "unread"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "schema": {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
-          "default": {
-            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_me_notificationsResponse"
+                }
+              }
+            },
+            "description": "Live-authorized incident feed; admission-ceiling workspace identities removed for non-Admins"
+          },
+          "400": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/400"
+          },
+          "401": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/401"
+          },
+          "403": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/403"
+          },
+          "500": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
           }
         },
         "security": [
@@ -2529,9 +5405,47 @@
       "post": {
         "operationId": "post_api_v1_me_notifications_read",
         "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_me_notifications_readRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
-          "default": {
-            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_me_notifications_readResponse"
+                }
+              }
+            },
+            "description": "Visible notifications marked read; invisible IDs ignored"
+          },
+          "400": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/400"
+          },
+          "401": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/401"
+          },
+          "403": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/403"
+          },
+          "413": {
+            "$ref": "#/paths/~1api~1v1~1invitations~1accept/post/responses/413"
+          },
+          "415": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/415"
+          },
+          "422": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/422"
+          },
+          "500": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
           }
         },
         "security": [
@@ -2556,8 +5470,24 @@
         "operationId": "get_api_v1_me_notifications_summary",
         "parameters": [],
         "responses": {
-          "default": {
-            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_me_notifications_summaryResponse"
+                }
+              }
+            },
+            "description": "Live-authorized unread/firing counts"
+          },
+          "401": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/401"
+          },
+          "403": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/403"
+          },
+          "500": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
           }
         },
         "security": [
@@ -2580,8 +5510,24 @@
         "operationId": "get_api_v1_me_sessions",
         "parameters": [],
         "responses": {
-          "default": {
-            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_me_sessionsResponse"
+                }
+              }
+            },
+            "description": "Own live sessions; no token hashes, addresses or raw user agents"
+          },
+          "401": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/401"
+          },
+          "403": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/403"
+          },
+          "500": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
           }
         },
         "security": [
@@ -2604,8 +5550,27 @@
         "operationId": "post_api_v1_me_sessions_revoke_others",
         "parameters": [],
         "responses": {
-          "default": {
-            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_me_sessions_revoke_othersResponse"
+                }
+              }
+            },
+            "description": "Other own live sessions revoked, current session retained"
+          },
+          "400": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/400"
+          },
+          "401": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/401"
+          },
+          "403": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/403"
+          },
+          "500": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
           }
         },
         "security": [
@@ -2639,8 +5604,30 @@
           }
         ],
         "responses": {
-          "default": {
-            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/delete_api_v1_me_sessions_by_sessionResponse"
+                }
+              }
+            },
+            "description": "Own live session revoked"
+          },
+          "400": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/400"
+          },
+          "401": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/401"
+          },
+          "403": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/403"
+          },
+          "404": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/404"
+          },
+          "500": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
           }
         },
         "security": [
@@ -2663,10 +5650,41 @@
     "/api/v1/me/summary": {
       "get": {
         "operationId": "get_api_v1_me_summary",
-        "parameters": [],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "totals_only",
+            "schema": {
+              "default": false,
+              "type": "boolean"
+            }
+          }
+        ],
         "responses": {
-          "default": {
-            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_me_summaryResponse"
+                }
+              }
+            },
+            "description": "Only own human-key activity; workspace budgets only for workspace administrators"
+          },
+          "400": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/400"
+          },
+          "401": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/401"
+          },
+          "403": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/403"
+          },
+          "500": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
+          },
+          "503": {
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/503"
           }
         },
         "security": [
