@@ -54,7 +54,7 @@ function ReconciliationList({ onSelect, restoreFocusId }: { onSelect: (id: strin
   const rows = q.error ? [] : q.data?.pages.flatMap(p => p.rows) ?? [];
   const periods = [...new Map(rows.map(row => [periodKey(row), reportPeriod(row)])).entries()];
   const columns: DataTableColumn<ListedReconciliation>[] = [
-    { id: "period", header: "Report period (UTC)", rowHeader: true, cell: r => <Button ref={r.id === restoreFocusId ? originButton : undefined} size="sm" variant="ghost" aria-label={`Open reconciliation ${r.id}`} onClick={() => onSelect(r.id)}>{reportPeriod(r)}</Button> },
+    { id: "period", header: "Report period (UTC)", rowHeader: true, cell: r => <Button ref={r.id === restoreFocusId ? originButton : undefined} size="sm" variant="ghost" aria-label={`Open reconciliation ${r.id}: ${reportPeriod(r)}`} onClick={() => onSelect(r.id)}>{reportPeriod(r)}</Button> },
     { id: "provider", header: "Provider", cell: r => r.report.provider === "anthropic" ? "Anthropic" : r.report.provider },
     { id: "account", header: "Provider account", cell: r => r.account_id },
     { id: "observed", header: "Frozen at", cell: r => detailTime(r.observed_at, "UTC") },

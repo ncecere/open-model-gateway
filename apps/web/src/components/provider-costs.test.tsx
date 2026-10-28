@@ -45,10 +45,12 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 describe("provider-reported cost comparison", () => {
   it("lists frozen periods/provider, opens details and goes back using only same-origin reads", async () => {
     const fetch = serve(), user = view();
-    await screen.findByRole("button", { name: "Open reconciliation frozen" });
+    const opener = await screen.findByRole("button", { name: /^Open reconciliation frozen: / });
     expect(screen.getByRole("table", { name: "Frozen reconciliations" })).toBeTruthy();
+    // WCAG 2.5.3: voice-control users can activate the visible period label.
+    expect(opener.getAttribute("aria-label")).toContain(opener.textContent);
     expect(screen.getByLabelText("Provider")).toBeTruthy(); expect(screen.getByLabelText("Report period")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "Open reconciliation frozen" }));
+    await user.click(opener);
     await screen.findByRole("table", { name: "Provider comparison lines" });
     expect(screen.getByText("aggregate-attempt-start-v1")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Back to reconciliations" }));
@@ -58,7 +60,7 @@ describe("provider-reported cost comparison", () => {
   });
   it("moves keyboard focus to the detail heading when Enter opens a reconciliation", async () => {
     serve(); const user = view();
-    const origin = await screen.findByRole("button", { name: "Open reconciliation frozen" });
+    const origin = await screen.findByRole("button", { name: /^Open reconciliation frozen: / });
     origin.focus();
     await user.keyboard("{Enter}");
     await screen.findByRole("table", { name: "Provider comparison lines" });
@@ -66,20 +68,20 @@ describe("provider-reported cost comparison", () => {
   });
   it("restores keyboard focus to the originating reconciliation after returning to the list", async () => {
     serve(); const user = view();
-    const origin = await screen.findByRole("button", { name: "Open reconciliation frozen" });
+    const origin = await screen.findByRole("button", { name: /^Open reconciliation frozen: / });
     origin.focus();
     await user.keyboard("{Enter}");
     await screen.findByRole("table", { name: "Provider comparison lines" });
     screen.getByRole("button", { name: "Back to reconciliations" }).focus();
     await user.keyboard("{Enter}");
-    const restored = await screen.findByRole("button", { name: "Open reconciliation frozen" });
+    const restored = await screen.findByRole("button", { name: /^Open reconciliation frozen: / });
     expect(document.activeElement).toBe(restored);
   });
   it("filters loaded periods honestly and pages snapshots without unsupported API filters", async () => {
     const second = { ...imported, id: "second", period_start: "2026-09-01T00:00:00Z", period_end: "2026-09-02T00:00:00Z" };
     const fetch = vi.fn().mockImplementation((url: string) => Promise.resolve(Response.json({ data: url.includes("provider-cost-imports?") ? [imported, second] : url.endsWith("offset=20") ? [] : Array.from({ length: 20 }, (_, i) => ({ ...metadata, id: `frozen-${i}`, import_id: i % 2 ? "second" : "import" })) })));
     vi.stubGlobal("fetch", fetch); const user = view();
-    await screen.findByRole("button", { name: "Open reconciliation frozen-0" });
+    await screen.findByRole("button", { name: /^Open reconciliation frozen-0: / });
     await user.selectOptions(screen.getByLabelText("Report period"), `${period.start}/${period.end}`);
     expect(within(screen.getByRole("table", { name: "Frozen reconciliations" })).getAllByRole("row")).toHaveLength(11);
     expect(screen.getByText(/Period filters apply to loaded snapshots only/)).toBeTruthy();
