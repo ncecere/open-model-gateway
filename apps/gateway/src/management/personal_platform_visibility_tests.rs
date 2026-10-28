@@ -116,21 +116,36 @@ impl Harness {
         send(&self.app, method, path, Some(&self.admin), None, body).await
     }
     /// Owner, another plain user and an inference key are refused on a platform
-    /// route; none receives a body that names the workspace.
+    /// route with the exact error envelope; the body is identical for every
+    /// persona and never names the workspace.
     async fn refused(&self, method: &str, path: &str, body: Value, ws: Uuid) {
-        for (label, session, bearer, expected) in [
-            ("owner", Some(&self.owner), None, StatusCode::FORBIDDEN),
-            ("other user", Some(&self.other), None, StatusCode::FORBIDDEN),
+        for (label, session, bearer, expected, envelope) in [
+            (
+                "owner",
+                Some(&self.owner),
+                None,
+                StatusCode::FORBIDDEN,
+                json!({"error":{"code":"403","message":"Access denied"}}),
+            ),
+            (
+                "other user",
+                Some(&self.other),
+                None,
+                StatusCode::FORBIDDEN,
+                json!({"error":{"code":"403","message":"Access denied"}}),
+            ),
             (
                 "inference key",
                 None,
                 Some(self.inference.as_str()),
                 StatusCode::UNAUTHORIZED,
+                json!({"error":"Authentication required"}),
             ),
         ] {
             let (status, reply) =
                 send(&self.app, method, path, session, bearer, body.clone()).await;
             assert_eq!(status, expected, "{method} {path} {label}: {reply}");
+            assert_eq!(reply, envelope, "{method} {path} {label}");
             assert!(!reply.to_string().contains(&ws.to_string()), "{label}");
         }
     }
@@ -176,6 +191,9 @@ async fn personal_workspace_catalog_override_is_platform_managed_and_read_back(p
     h.refused("PUT", &path, body.clone(), f.personal).await;
     let (_, v) = h.as_admin("GET", &path, Value::Null).await;
     assert_eq!(v["mode"], "inherit");
+    h.refused("DELETE", &path, Value::Null, f.personal).await;
+    let (status, _) = send(&h.app, "DELETE", &path, Some(&h.auditor), None, Value::Null).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "auditor reset");
 
     // The Admin sets the personal workspace's override and both platform roles
     // read it back, with exactly the platform-managed fields.
@@ -190,6 +208,13 @@ async fn personal_workspace_catalog_override_is_platform_managed_and_read_back(p
         assert_eq!(v["effective_catalog_ids"], json!([catalog]), "{label}");
         h.no_private("catalogs", &v);
     }
+    // Resets: refused for the Auditor and non-platform personas (override
+    // intact), allowed for the Admin, after which both roles read `inherit`.
+    h.refused("DELETE", &path, Value::Null, f.personal).await;
+    let (status, _) = send(&h.app, "DELETE", &path, Some(&h.auditor), None, Value::Null).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "auditor reset");
+    let (_, v) = h.as_admin("GET", &path, Value::Null).await;
+    assert_eq!(v["mode"], "replace", "refused resets change nothing");
     // The catalog's detail only counts personal workspaces (never lists one).
     let (_, detail) = h
         .as_admin(
@@ -203,6 +228,27 @@ async fn personal_workspace_catalog_override_is_platform_managed_and_read_back(p
         json!({"workspaces":[],"personal_count":1})
     );
     assert!(!detail.to_string().contains(&f.personal.to_string()));
+    // `own_choice` is a platform-assigned per-workspace override, not an owner
+    // choice: the Admin removes it, and the count and read-back follow.
+    let (status, _) = h.as_admin("DELETE", &path, Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "admin reset");
+    for (label, s) in [("admin", &h.admin), ("auditor", &h.auditor)] {
+        let (status, v) = send(&h.app, "GET", &path, Some(s), None, Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "{label}");
+        assert_eq!(v["mode"], "inherit", "{label}");
+        assert_eq!(v["catalog_ids"], json!([]), "{label}");
+    }
+    let (_, detail) = h
+        .as_admin(
+            "GET",
+            &format!("/api/v1/platform/catalogs/{catalog}"),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(
+        detail["own_choice"],
+        json!({"workspaces":[],"personal_count":0})
+    );
 }
 
 /// Read a personal workspace's platform policy and pin its exact field set.
@@ -269,6 +315,24 @@ async fn personal_workspace_policy_is_platform_managed_and_read_back(pool: PgPoo
         assert_eq!(v["effective"]["requests_per_minute"], 5, "{label}");
         h.no_private("policy", &v);
     }
+
+    // Resets: refused for the Auditor and non-platform personas (override
+    // intact), allowed for the Admin, after which both roles read `inherit`.
+    h.refused("DELETE", &path, Value::Null, f.personal).await;
+    let (status, _) = send(&h.app, "DELETE", &path, Some(&h.auditor), None, Value::Null).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "auditor reset");
+    assert_eq!(
+        read_policy(&h, "admin", &h.admin, &path).await["mode"],
+        "replace",
+        "refused resets change nothing"
+    );
+    let (status, _) = h.as_admin("DELETE", &path, Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "admin reset");
+    for (label, s) in [("admin", &h.admin), ("auditor", &h.auditor)] {
+        let v = read_policy(&h, label, s, &path).await;
+        assert_eq!(v["mode"], "inherit", "{label}");
+        assert_eq!(v["policy"]["requests_per_minute"], Value::Null, "{label}");
+    }
 }
 
 /// The platform cost report shows the personal workspace's identity and totals
@@ -302,6 +366,14 @@ async fn personal_workspace_row_in_platform_cost_report_is_identity_and_totals_o
                 "unresolved_attempts",
             ],
         );
+        // The seeded execution is the only one: one attempt of one root
+        // request. It has no reservation, so nothing is held or known and the
+        // attempt counts as unresolved.
+        assert_eq!(
+            row["totals"],
+            json!({"attempts":"1","root_requests":"1","held_microusd":"0","known_cost_microusd":"0","unresolved_attempts":"1"}),
+            "{label}"
+        );
         expect(
             &v["breakdowns"],
             &[
@@ -327,5 +399,133 @@ async fn personal_workspace_row_in_platform_cost_report_is_identity_and_totals_o
         h.no_private("cost report", &v);
     }
     // The owner's own cost report route is theirs; the platform route is not.
+    h.refused("GET", &path, Value::Null, f.personal).await;
+}
+
+/// Usage explore by workspace at platform scope: the personal workspace is a
+/// row of its own with its id and owner label, and its keys collapse into one
+/// anonymous row.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn personal_workspace_row_in_platform_usage_explore_is_identity_and_totals_only(
+    pool: PgPool,
+) {
+    let f = fixture(&pool).await;
+    let h = Harness::new(&pool, &f).await;
+    let today = chrono::Utc::now().date_naive();
+    let range = format!(
+        "start_date={today}&end_date={}&metric=requests",
+        today.succ_opt().unwrap()
+    );
+    let path = format!("/api/v1/platform/usage/explore?{range}&group_by=workspace");
+    for (label, s) in [("admin", &h.admin), ("auditor", &h.auditor)] {
+        let (status, v) = send(&h.app, "GET", &path, Some(s), None, Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "{label}: {v}");
+        expect(
+            &v,
+            &[
+                "scope",
+                "metric",
+                "group_by",
+                "then_by",
+                "period",
+                "basis",
+                "currency",
+                "total",
+                "rows",
+                "other",
+                "truncated",
+                "series",
+            ],
+        );
+        assert_eq!(v["scope"], "platform", "{label}");
+        let rows = v["rows"].as_array().unwrap();
+        let personal: Vec<_> = rows
+            .iter()
+            .filter(|r| r["group"]["id"] == f.personal.to_string())
+            .collect();
+        assert_eq!(personal.len(), 1, "{label}: {v}");
+        let row = personal[0];
+        expect(
+            row,
+            &[
+                "group",
+                "then",
+                "value",
+                "share",
+                "held_microusd",
+                "unresolved_attempts",
+            ],
+        );
+        assert_eq!(
+            row["group"],
+            json!({"id":f.personal.to_string(),"name":"Personal · owner@example.test"}),
+            "{label}"
+        );
+        assert_eq!(row["value"], "1", "{label}");
+        h.no_private("usage explore", &v);
+    }
+    // By key, the personal workspace's keys are one anonymous row: no key id.
+    let by_key = format!("/api/v1/platform/usage/explore?{range}&group_by=key");
+    let (status, v) = h.as_admin("GET", &by_key, Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(
+        v["rows"][0]["group"],
+        json!({"id":null,"name":"Personal workspace keys"})
+    );
+    h.no_private("usage explore by key", &v);
+    h.refused("GET", &path, Value::Null, f.personal).await;
+}
+
+/// Platform storage usage: the personal workspace row carries its id, the
+/// generic workspace name and its totals, with no purpose split.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn personal_workspace_row_in_platform_storage_usage_is_identity_and_totals_only(
+    pool: PgPool,
+) {
+    let f = fixture(&pool).await;
+    let h = Harness::new(&pool, &f).await;
+    let hour: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT date_trunc('day', now(), 'UTC') + interval '1 hour'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let gb_day = crate::filestore::usage::GB_DAY_BYTE_SECONDS;
+    sqlx::query("INSERT INTO storage_usage_hours(workspace_id,purpose,hour_start,byte_seconds,file_count) VALUES($1,'user_file',$2,$3,1)")
+        .bind(f.personal).bind(hour).bind(gb_day / 4).execute(&pool).await.unwrap();
+    let today = chrono::Utc::now().date_naive();
+    let path = format!(
+        "/api/v1/platform/usage/storage?start_date={today}&end_date={}",
+        today.succ_opt().unwrap()
+    );
+    for (label, s) in [("admin", &h.admin), ("auditor", &h.auditor)] {
+        let (status, v) = send(&h.app, "GET", &path, Some(s), None, Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "{label}: {v}");
+        let rows = v["workspaces"].as_array().unwrap();
+        let personal: Vec<_> = rows.iter().filter(|r| r["kind"] == "personal").collect();
+        assert_eq!(personal.len(), 1, "{label}: {v}");
+        let row = personal[0];
+        expect(
+            row,
+            &[
+                "workspace_id",
+                "name",
+                "kind",
+                "current_bytes",
+                "quota_bytes",
+                "by_purpose",
+                "byte_seconds",
+                "gb_days",
+            ],
+        );
+        assert_eq!(row["workspace_id"], f.personal.to_string(), "{label}");
+        // Storage carries the workspace's own generic name, not the owner label.
+        assert_eq!(row["name"], "Personal", "{label}");
+        assert_eq!(row["byte_seconds"], (gb_day / 4).to_string(), "{label}");
+        assert_eq!(row["gb_days"], "0.25", "{label}");
+        assert_eq!(row["current_bytes"], 0, "{label}");
+        assert!(row["quota_bytes"].is_i64() || row["quota_bytes"].is_null());
+        assert_eq!(row["by_purpose"], Value::Null, "{label}: totals only");
+        h.no_private("storage usage", &v);
+    }
     h.refused("GET", &path, Value::Null, f.personal).await;
 }

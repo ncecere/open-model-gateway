@@ -132,6 +132,7 @@ async fn catalog(
     Path(id): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, false).await?;
+    // `own_choice` is the platform-assigned per-workspace override, not an owner-made choice.
     // Detail lists Team/Project workspaces with an override but only counts personal ones
     // (`personal_count`), so no personal workspace is listed here. This is not a secrecy rule:
     // per-workspace overrides are platform-managed and Admins/Auditors read a personal
