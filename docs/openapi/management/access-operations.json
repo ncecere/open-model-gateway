@@ -3665,7 +3665,7 @@
             "name": "session_id",
             "in": "query",
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/AccessSessionId"
             }
           },
           {
@@ -3681,7 +3681,7 @@
             "schema": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 200,
+              "maximum": 100,
               "default": 50
             }
           }

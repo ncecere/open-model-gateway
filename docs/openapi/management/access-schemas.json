@@ -2527,8 +2527,7 @@
                         "no_enabled_route",
                         "some_routes_unavailable",
                         "not_in_catalog",
-                        "not_selected",
-                        "key_restriction"
+                        "not_selected"
                       ]
                     },
                     "layer": {
@@ -2536,8 +2535,7 @@
                         "platform",
                         "type_default",
                         "workspace_override",
-                        "workspace",
-                        "key"
+                        "workspace"
                       ]
                     },
                     "period": {
@@ -2575,13 +2573,14 @@
         "models",
         "truncated"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Workspace-scoped effective access (GET /workspaces/{ws}/access): no key is bound, so key_id is null, the key layer is the inactive stub (applies=false, null limits/budgets/catalogs/restriction), and the key layer and the key_restriction reason are never emitted. Reason layers are platform (model-level facts), type_default, workspace_override or workspace; budget reasons carry the period."
     },
     "AccessInferenceSession": {
       "type": "object",
       "properties": {
         "session_id": {
-          "type": "string"
+          "$ref": "#/components/schemas/AccessSessionId"
         },
         "workspace": {
           "$ref": "#/components/schemas/IdentityWorkspaceRef"
@@ -2626,7 +2625,9 @@
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "maxItems": 10,
+          "description": "At most the first 10 distinct model names (alphabetical); model_count is the full distinct count."
         },
         "model_count": {
           "type": "integer",
@@ -2665,6 +2666,13 @@
         "keys"
       ],
       "additionalProperties": false
+    },
+    "AccessSessionId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\s](?:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0000-\\u001f\\u007f-\\u009f\\s])?$",
+      "description": "Client session label (X-Session-Id): 1-128 characters, no control characters, no leading or trailing whitespace (inference::client::valid_session_id)."
     },
     "AccessPlatformExport": {
       "type": "object",
