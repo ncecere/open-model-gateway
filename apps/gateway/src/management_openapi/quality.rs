@@ -147,6 +147,60 @@ fn facts(
     Ok(result)
 }
 
+/// Every keyword a completed schema may use: those `schema` traverses or
+/// constrains, plus scalar assertions and annotations that admit no subschema.
+const TRAVERSED_OR_ANNOTATION: &[&str] = &[
+    "$ref",
+    "type",
+    "enum",
+    "const",
+    "format",
+    "pattern",
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "multipleOf",
+    "minLength",
+    "maxLength",
+    "minItems",
+    "maxItems",
+    "uniqueItems",
+    "minContains",
+    "maxContains",
+    "minProperties",
+    "maxProperties",
+    "required",
+    "dependentRequired",
+    "properties",
+    "patternProperties",
+    "additionalProperties",
+    "unevaluatedProperties",
+    "items",
+    "prefixItems",
+    "unevaluatedItems",
+    "additionalItems",
+    "contains",
+    "propertyNames",
+    "allOf",
+    "anyOf",
+    "oneOf",
+    "not",
+    "if",
+    "then",
+    "else",
+    "description",
+    "title",
+    "$comment",
+    "default",
+    "examples",
+    "deprecated",
+    "readOnly",
+    "writeOnly",
+    "contentMediaType",
+    "contentEncoding",
+];
+
 fn schema(
     document: &Value,
     node: &Value,
@@ -165,6 +219,15 @@ fn schema(
         !node.as_object().unwrap().is_empty(),
         "empty completed schema at {location}"
     );
+    // Allow-list: a keyword this checker does not traverse (dependentSchemas,
+    // $defs, $dynamicRef, ...) could hide a permissive branch, so it is refused
+    // rather than silently skipped. Vendor extensions carry no validation.
+    for keyword in node.as_object().unwrap().keys() {
+        ensure!(
+            keyword.starts_with("x-") || TRAVERSED_OR_ANNOTATION.contains(&keyword.as_str()),
+            "unsupported keyword {keyword} in a completed schema at {location}"
+        );
+    }
     let mut effective = inherited.clone();
     effective.merge(facts(document, node, location, &mut BTreeSet::new())?);
     ensure!(
