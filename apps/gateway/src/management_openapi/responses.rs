@@ -286,7 +286,7 @@ fn require_positives(expected: &BTreeSet<String>, observed: &BTreeSet<String>) -
 }
 
 /// Coverage area of a template: `platform/<resource>`,
-/// `workspaces/{workspace}/<resource>` (or `workspaces/{workspace}` itself, or
+/// `workspaces/{ws}/<resource>` (or `workspaces/{ws}` itself, or
 /// the `workspaces` collection), otherwise the top-level segment such as `me`.
 /// Always a contiguous substring of the template after `/api/v1/`.
 pub(crate) fn area(template: &str) -> &str {
@@ -515,7 +515,7 @@ pub(crate) fn require_known_areas(areas: &[&str]) -> Result<()> {
 }
 
 #[path = "review_tests.rs"]
-mod review_tests;
+pub(super) mod review_tests;
 
 #[cfg(test)]
 mod tests {
