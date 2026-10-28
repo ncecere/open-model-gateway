@@ -107,6 +107,10 @@ pub(super) fn compile_schema(schema: &Value) -> Result<Validator> {
     // keywords, including underneath `not` (where treating errors as false is unsafe).
     jsonschema::options()
         .with_draft(Draft::Draft202012)
+        .should_validate_formats(true)
+        // JSON UUID fields use uuid's serde parser, which also accepts compact,
+        // braced and URN forms; do not silently narrow the request boundary.
+        .with_format("uuid", |value: &str| uuid::Uuid::parse_str(value).is_ok())
         .with_retriever(local_schemas()?)
         .with_pattern_options(PatternOptions::regex().size_limit(1 << 20))
         .build(schema)
