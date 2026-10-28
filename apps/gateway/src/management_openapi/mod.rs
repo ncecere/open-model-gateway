@@ -3,6 +3,8 @@ pub(crate) mod coverage;
 mod coverage_tests;
 mod generator;
 mod hardening_tests;
+pub(crate) mod http_vectors;
+mod http_vectors_tests;
 mod middleware;
 mod money_tests;
 mod mutation_tests;
