@@ -159,6 +159,7 @@ fn management_openapi_review_304_only_registry_is_rejected() {
         bytes: axum::body::Bytes::new(),
         method: "GET".into(),
         template: Some("/api/v1/branding/logo".into()),
+        query: vec![],
     };
     let mut fixtures = PositiveFixtures::default();
     fixtures.observe(&captured);
