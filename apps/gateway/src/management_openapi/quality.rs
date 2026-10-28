@@ -6,6 +6,10 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) const ARBITRARY_JSON: &[(&str, &str)] = &[
+    (
+        "/components/schemas/MoneyProviderReconciliationSnapshot/properties/personal_activity/properties/exclusively_attributed_imported_by_category",
+        "Frozen provider_reconciliations.snapshot groups signed imported amounts by provider-supplied cost_type; arbitrary historical category labels map only to integer micro-USD strings.",
+    ),
     // alert_events.details is a stored jsonb object, not a deserialized DTO.
     // Its reviewed privacy refinements still constrain personal identities.
     (

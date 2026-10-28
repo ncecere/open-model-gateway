@@ -15,8 +15,28 @@ pub(crate) const IDENTITY_SELF_SERVICE_AREAS: &[&str] = &[
     "me",
     "access-request-targets",
 ];
-pub(crate) const AREA_GROUPS: &[(&str, &[&str])] =
-    &[("IDENTITY_SELF_SERVICE_AREAS", IDENTITY_SELF_SERVICE_AREAS)];
+pub(crate) const SLICE4_AREAS: &[&str] = &[
+    "platform/cost-centers",
+    "platform/cost-report",
+    "platform/holds",
+    "platform/overview",
+    "platform/provider-cost-imports",
+    "platform/provider-cost-mappings",
+    "platform/provider-reconciliations",
+    "platform/report-schedules",
+    "platform/usage",
+    "workspaces/{ws}/cost-report",
+    "workspaces/{ws}/cost-summary",
+    "workspaces/{ws}/costs",
+    "workspaces/{ws}/holds",
+    "workspaces/{ws}/report-schedules",
+    "workspaces/{ws}/usage",
+    "workspaces/{ws}/usage-export",
+];
+pub(crate) const AREA_GROUPS: &[(&str, &[&str])] = &[
+    ("IDENTITY_SELF_SERVICE_AREAS", IDENTITY_SELF_SERVICE_AREAS),
+    ("SLICE4_AREAS", SLICE4_AREAS),
+];
 
 /// Whether an area's schemas are complete and gated by an executed fixture group.
 pub(crate) fn completed(area: &str) -> bool {
@@ -537,7 +557,8 @@ mod tests {
         );
         assert!(super::require_known_areas(&[]).is_err());
         let mut seen = std::collections::BTreeSet::new();
-        for (_, group) in super::AREA_GROUPS {
+        for (name, group) in super::AREA_GROUPS {
+            assert!(!name.is_empty());
             assert!(!group.is_empty());
             super::require_known_areas(group).unwrap();
             for area in *group {
@@ -693,7 +714,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(count, 22);
+        assert_eq!(count, 69);
     }
     #[test]
     fn management_openapi_response_rejects_incomplete_completed_slot() {

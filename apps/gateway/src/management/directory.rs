@@ -1092,6 +1092,20 @@ struct CostCenterInput {
     name: String,
     code: String,
 }
+#[cfg(test)]
+#[test]
+fn management_openapi_money_cost_center_request_vectors() {
+    for (method, path) in [
+        ("POST", "/api/v1/platform/cost-centers"),
+        ("PATCH", "/api/v1/platform/cost-centers/{id}"),
+    ] {
+        super::openapi::requests::vectors::<CostCenterInput>(
+            method,
+            path,
+            json!({"name":"Finance","code":"FIN"}),
+        );
+    }
+}
 async fn create_cost_center(
     State(s): State<Store>,
     Extension(u): Extension<ManagementPrincipal>,

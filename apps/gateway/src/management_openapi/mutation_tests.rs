@@ -246,6 +246,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                 h.insert("content-type", "application/json".parse().unwrap());
                 h.insert("cache-control", "no-store".parse().unwrap());
                 h.insert("referrer-policy", "no-referrer".parse().unwrap());
+                h.insert("x-content-type-options", "nosniff".parse().unwrap());
                 if path.ends_with("/export") {
                     h.insert("cache-control", "no-store".parse().unwrap());
                     h.insert(
@@ -318,6 +319,49 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                         "accepted {label}: {method} {path}"
                     );
                 }
+            } else if op["responses"]["200"]["content"].get("text/csv").is_some() {
+                let scheduled = path.ends_with("/csv");
+                h.insert("content-type", "text/csv; charset=utf-8".parse().unwrap());
+                h.insert("cache-control", "no-store".parse().unwrap());
+                h.insert("x-content-type-options", "nosniff".parse().unwrap());
+                h.insert("x-export-limit", "1000".parse().unwrap());
+                h.insert("x-export-rows", "1".parse().unwrap());
+                h.insert("x-export-offset", "0".parse().unwrap());
+                h.insert(
+                    "content-disposition",
+                    if scheduled {
+                        "attachment; filename=\"scheduled-report.csv\""
+                    } else {
+                        "attachment; filename=\"usage.csv\""
+                    }
+                    .parse()
+                    .unwrap(),
+                );
+                let bytes = if scheduled {
+                    b"dimension,id,name,known_cost_microusd,\r\n".as_slice()
+                } else {
+                    b"id,root_request_id,attempt_number,\r\n".as_slice()
+                };
+                validate(&document, &method, path, StatusCode::OK, &h, bytes).unwrap();
+                let mut missing = h.clone();
+                missing.remove("content-disposition");
+                assert!(
+                    validate(&document, &method, path, StatusCode::OK, &missing, bytes).is_err()
+                );
+                let mut wrong = h.clone();
+                wrong.insert("content-disposition", "false".parse().unwrap());
+                assert!(validate(&document, &method, path, StatusCode::OK, &wrong, bytes).is_err());
+                assert!(
+                    validate(
+                        &document,
+                        &method,
+                        path,
+                        StatusCode::OK,
+                        &h,
+                        b"{\"plaintext_inference_token\":\"must-not-leak\"}"
+                    )
+                    .is_err()
+                );
             } else {
                 // These operations have no JSON representation: remove a
                 // required wire header, corrupt its type/format, and inject
@@ -459,7 +503,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
             }
         }
     }
-    assert_eq!((operations, json_operations), (22, 18));
+    assert_eq!((operations, json_operations), (69, 62));
 }
 
 #[test]

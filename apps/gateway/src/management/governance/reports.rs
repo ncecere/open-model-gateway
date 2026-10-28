@@ -623,6 +623,37 @@ pub(super) struct Reconcile {
     #[serde(default)]
     provider_cost_microusd: Option<String>,
 }
+#[cfg(test)]
+#[test]
+fn management_openapi_money_reconcile_request_vectors() {
+    super::super::openapi::requests::component_vectors::<crate::billing::BillingUsage>(
+        "MoneyBillingUsageInput",
+        serde_json::to_value(crate::billing::BillingUsage::default()).unwrap(),
+    );
+    super::super::openapi::requests::component_vectors::<crate::billing::MeterUsage>(
+        "MoneyMeterUsageInput",
+        serde_json::to_value(crate::billing::MeterUsage::default()).unwrap(),
+    );
+    // Serde preserves the strings; the real handler immediately parses these
+    // counters/money with money(). Bind that second decoding stage as well.
+    struct DecodedReconcile;
+    impl<'de> Deserialize<'de> for DecodedReconcile {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            let b = Reconcile::deserialize(d)?;
+            money(&b.input_tokens, false).map_err(|e| serde::de::Error::custom(e.1))?;
+            money(&b.output_tokens, false).map_err(|e| serde::de::Error::custom(e.1))?;
+            if let Some(v) = b.provider_cost_microusd {
+                money(&v, false).map_err(|e| serde::de::Error::custom(e.1))?;
+            }
+            Ok(Self)
+        }
+    }
+    super::super::openapi::requests::vectors::<DecodedReconcile>(
+        "POST",
+        "/api/v1/workspaces/{ws}/costs/{execution}/reconcile",
+        json!({"input_tokens":"3","output_tokens":"2","billing_usage":crate::billing::BillingUsage::default(),"evidence":"receipt:test","meter_usage":crate::billing::MeterUsage::default(),"output_image_variant":"1024x1024","provider_cost_microusd":"5"}),
+    );
+}
 pub(super) async fn reconcile(
     State(s): State<Store>,
     Extension(u): Extension<ManagementPrincipal>,

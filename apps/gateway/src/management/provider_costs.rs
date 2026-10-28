@@ -274,6 +274,29 @@ struct Reconcile {
     import_id: Uuid,
     mapping_id: Uuid,
 }
+#[cfg(test)]
+#[test]
+fn management_openapi_money_provider_request_vectors() {
+    let mapping = json!({"account_id":"account","supersedes":null,"evidence_reference":"receipt:map","bindings":[{"provider_workspace_id":"provider-workspace","connection_id":Uuid::nil(),"deployment_id":Uuid::nil(),"workspace_id":Uuid::nil(),"effective_start":"2025-08-01T00:00:00Z","effective_end":"2025-08-02T00:00:00Z","exclusive":true,"non_omg_traffic":false,"attested":true,"evidence_reference":"receipt:binding","model_mappings":[{"provider_model":"provider-model","upstream_model":"upstream-model"}]}]});
+    super::openapi::requests::component_vectors::<Binding>(
+        "MoneyProviderBinding",
+        mapping["bindings"][0].clone(),
+    );
+    super::openapi::requests::component_vectors::<ModelMapping>(
+        "MoneyProviderModelMapping",
+        mapping["bindings"][0]["model_mappings"][0].clone(),
+    );
+    super::openapi::requests::vectors::<Mapping>(
+        "POST",
+        "/api/v1/platform/provider-cost-mappings",
+        mapping,
+    );
+    super::openapi::requests::vectors::<Reconcile>(
+        "POST",
+        "/api/v1/platform/provider-reconciliations",
+        json!({"import_id":Uuid::nil(),"mapping_id":Uuid::nil()}),
+    );
+}
 async fn reconcile(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,

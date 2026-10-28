@@ -186,6 +186,45 @@ fn bounded_page(raw: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
+#[cfg(test)]
+#[test]
+fn management_openapi_money_raw_upload_request_vectors() {
+    // The real ingestion decoder is two-stage: Upload preserves RawValue,
+    // then parse deserializes each Page without losing duplicate object keys.
+    // Exercise that exact typed decoder, not Value-normalized fake input.
+    struct DecodedUpload;
+    impl<'de> Deserialize<'de> for DecodedUpload {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            let upload = Upload::deserialize(d)?;
+            for raw in upload.pages {
+                serde_json::from_str::<Page>(raw.get()).map_err(serde::de::Error::custom)?;
+            }
+            Ok(Self)
+        }
+    }
+    let upload = json!({"account_id":"account","evidence_reference":"receipt:upload","exported_at":"2025-08-03T00:00:00Z","supersedes":null,"request":{"starting_at":"2025-08-01T00:00:00Z","ending_at":"2025-08-02T00:00:00Z","bucket_width":"1d","group_by":["workspace_id","description"],"limit":31},"pages":[{"data":[{"starting_at":"2025-08-01T00:00:00Z","ending_at":"2025-08-02T00:00:00Z","results":[{"amount":"-1","currency":"USD","workspace_id":null,"description":null,"model":null,"service_tier":null,"context_window":null,"cost_type":null,"token_type":null,"inference_geo":null,"speed":null}]}],"has_more":false,"next_page":null}]});
+    super::super::openapi::requests::component_vectors::<Parameters>(
+        "MoneyProviderParameters",
+        upload["request"].clone(),
+    );
+    super::super::openapi::requests::component_vectors::<Page>(
+        "MoneyProviderPage",
+        upload["pages"][0].clone(),
+    );
+    super::super::openapi::requests::component_vectors::<Bucket>(
+        "MoneyProviderBucket",
+        upload["pages"][0]["data"][0].clone(),
+    );
+    super::super::openapi::requests::component_vectors::<Item>(
+        "MoneyProviderItem",
+        upload["pages"][0]["data"][0]["results"][0].clone(),
+    );
+    super::super::openapi::requests::vectors::<DecodedUpload>(
+        "POST",
+        "/api/v1/platform/provider-cost-imports",
+        upload,
+    );
+}
 pub(super) fn parse(b: &Upload) -> Result<Parsed, ApiError> {
     let groups: BTreeSet<&str> = b.request.group_by.iter().map(String::as_str).collect();
     if !bounded(&b.account_id, 200)

@@ -38,6 +38,22 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
         !schema.is_null(),
         "request schema must be bound to an operation"
     );
+    schema_vectors::<T>(method, template, schema, valid);
+}
+
+/// Bind independently named, recursively reachable DTOs as well as the root.
+/// This catches a newly added optional nested field even when omitted from
+/// the original root fixture.
+pub(crate) fn component_vectors<T: DeserializeOwned>(name: &str, valid: Value) {
+    schema_vectors::<T>(
+        "component",
+        name,
+        &json!({"$ref":format!("#/components/schemas/{name}")}),
+        valid,
+    );
+}
+fn schema_vectors<T: DeserializeOwned>(method: &str, template: &str, schema: &Value, valid: Value) {
+    let document = super::responses::artifact();
     let fields = Fields::default();
     let _ = T::deserialize(&fields);
     let actual: BTreeSet<_> = fields.0.borrow().iter().copied().collect();
@@ -103,11 +119,15 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
             probe[field] = wrong;
             compare(&format!("wrong-type/null {field}"), probe);
         }
-        // These DTOs have no nested object DTO. Inject one at each scalar or
-        // array-item boundary so a future nested shape cannot be silently loose.
+        // Inject unknown fields at each scalar or array-item boundary;
+        // recursively reachable object fields are also probed below.
         let mut nested = valid.clone();
         if let Some(items) = nested[field].as_array_mut() {
-            items[0] = json!({"unexpected_configuration":true});
+            if items.is_empty() {
+                items.push(json!({"unexpected_configuration":true}));
+            } else {
+                items[0] = json!({"unexpected_configuration":true});
+            }
         } else {
             nested[field] = json!({"unexpected_configuration":true});
         }
@@ -121,6 +141,55 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
         json!([]),
     ] {
         compare("wrong root type / JSON null is not omission", value);
+    }
+    // Probe recursively reachable DTO fields, not just the top-level body.
+    fn nested_probes(value: &Value, pointer: &str, out: &mut Vec<(String, Value)>) {
+        match value {
+            Value::Object(map) => {
+                if !pointer.is_empty() {
+                    let mut v = value.clone();
+                    v["unexpected_configuration"] = json!(true);
+                    out.push((pointer.to_owned(), v));
+                    for name in map.keys() {
+                        let mut v = value.clone();
+                        v.as_object_mut().unwrap().remove(name);
+                        out.push((pointer.to_owned(), v));
+                        for wrong in [
+                            Value::Null,
+                            json!(true),
+                            json!(1),
+                            json!("wrong"),
+                            json!([]),
+                            json!({}),
+                        ] {
+                            let mut v = value.clone();
+                            v[name] = wrong;
+                            out.push((pointer.to_owned(), v));
+                        }
+                    }
+                }
+                for (name, child) in map {
+                    nested_probes(
+                        child,
+                        &format!("{pointer}/{}", name.replace('~', "~0").replace('/', "~1")),
+                        out,
+                    );
+                }
+            }
+            Value::Array(items) => {
+                for (i, child) in items.iter().enumerate() {
+                    nested_probes(child, &format!("{pointer}/{i}"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut nested = Vec::new();
+    nested_probes(&valid, "", &mut nested);
+    for (pointer, value) in nested {
+        let mut probe = valid.clone();
+        *probe.pointer_mut(&pointer).unwrap() = value;
+        compare(&format!("recursive DTO boundary {pointer}"), probe);
     }
     // UUID serde deliberately accepts all these spellings. JSON Schema format
     // assertions must match that parser rather than only canonical output.

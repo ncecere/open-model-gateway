@@ -2,6 +2,7 @@
 mod generator;
 mod hardening_tests;
 mod middleware;
+mod money_tests;
 mod mutation_tests;
 mod quality;
 pub(crate) mod requests;
@@ -52,7 +53,7 @@ mod tests {
             "review route additions and update this progress baseline"
         );
         assert_eq!(
-            placeholders, 458,
+            placeholders, 364,
             "review schema completion and update this progress baseline"
         );
     }

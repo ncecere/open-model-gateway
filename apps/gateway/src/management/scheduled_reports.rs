@@ -138,6 +138,22 @@ struct Update {
     #[serde(default, deserialize_with = "present")]
     recipient_user_ids: Option<Vec<Uuid>>,
 }
+#[cfg(test)]
+#[test]
+fn management_openapi_money_schedule_request_vectors() {
+    for scope in ["/api/v1/platform", "/api/v1/workspaces/{ws}"] {
+        super::openapi::requests::vectors::<Create>(
+            "POST",
+            &format!("{scope}/report-schedules"),
+            json!({"cadence":"weekly","timezone":"UTC","delivery_time":"00:01","state":"paused","cost_center_id":Uuid::nil(),"recipient_user_ids":[Uuid::nil()]}),
+        );
+        super::openapi::requests::vectors::<Update>(
+            "PATCH",
+            &format!("{scope}/report-schedules/{{id}}"),
+            json!({"cadence":"monthly","timezone":"UTC","delivery_time":"12:01","state":"paused","recipient_user_ids":[Uuid::nil()]}),
+        );
+    }
+}
 fn validate(
     cadence: &str,
     timezone: &str,
