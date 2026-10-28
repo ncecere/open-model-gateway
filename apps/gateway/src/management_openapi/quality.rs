@@ -6,10 +6,6 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) const ARBITRARY_JSON: &[(&str, &str)] = &[
-    (
-        "/components/schemas/MoneyProviderReconciliationSnapshot/properties/personal_activity/properties/exclusively_attributed_imported_by_category",
-        "Frozen provider_reconciliations.snapshot groups signed imported amounts by provider-supplied cost_type; arbitrary historical category labels map only to integer micro-USD strings.",
-    ),
     // alert_events.details is a stored jsonb object, not a deserialized DTO.
     // Its reviewed privacy refinements still constrain personal identities.
     (
@@ -21,6 +17,10 @@ pub(super) const ARBITRARY_JSON: &[(&str, &str)] = &[
     (
         "/components/schemas/get_api_v1_me_exportResponse/properties/audit/properties/items/items/properties/metadata",
         "Stored audit_events.metadata is exported verbatim as JSON; its vocabulary depends on the audited action.",
+    ),
+    (
+        "/components/schemas/MoneyProviderReconciliationSnapshot/properties/personal_activity/properties/exclusively_attributed_imported_by_category",
+        "Frozen provider_reconciliations.snapshot groups signed imported amounts by provider-supplied cost_type; arbitrary historical category labels map only to integer micro-USD strings.",
     ),
 ];
 
@@ -384,7 +384,12 @@ fn schema(
     // Money wire values: integer micro-USD strings constrained by a pattern
     // that rejects leading zeros and `-0` (request and response alike).
     for (name, child) in node["properties"].as_object().into_iter().flatten() {
-        if money_name(name) && !decimal_rate(name) {
+        // A fixed non-numeric literal (e.g. the `unavailable` status marker
+        // `not_in_rollups`) carries no amount, so it needs no money pattern.
+        let marker = child["const"]
+            .as_str()
+            .is_some_and(|c| !c.is_empty() && !c.bytes().all(|b| b.is_ascii_digit() || b == b'-'));
+        if money_name(name) && !decimal_rate(name) && !marker {
             ensure!(
                 money(document, child, 0)? != Money::Other,
                 "money property `{name}` at {location} must be a string constrained by an integer micro-USD pattern (^(0|[1-9][0-9]*)$ or ^(0|-?[1-9][0-9]*)$), or a nullable form of one"

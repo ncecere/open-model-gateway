@@ -4,6 +4,28 @@ use super::responses::*;
 use axum::http::{HeaderMap, StatusCode};
 use serde_json::{Value, json};
 
+/// A string satisfying `pattern`: the first of a few shaped candidates (plain
+/// integer, HH:MM, hold cursor, the pattern's own literal prefix) it accepts.
+fn patterned(pattern: &Value) -> String {
+    let p = pattern.as_str().unwrap();
+    let literal: String = p
+        .trim_start_matches('^')
+        .chars()
+        .take_while(|c| !"\\^$.|?*+()[]{}".contains(*c))
+        .collect();
+    let validator = super::validation::compile_schema(&json!({"type":"string","pattern":p}))
+        .expect("pattern compiles");
+    [
+        "0".to_owned(),
+        "00:00".to_owned(),
+        "0_00000000-0000-0000-0000-000000000000".to_owned(),
+        format!("{literal}0"),
+    ]
+    .into_iter()
+    .find(|c| validator.is_valid(&Value::String(c.clone())))
+    .unwrap_or_else(|| panic!("no sample candidate satisfies a response pattern"))
+}
+
 fn sample(document: &Value, schema: &Value) -> Value {
     if let Some(r) = schema["$ref"].as_str() {
         return sample(document, document.pointer(&r[1..]).unwrap());
@@ -20,7 +42,9 @@ fn sample(document: &Value, schema: &Value) -> Value {
     let mut value = match ty {
         Some("object") => json!({}),
         Some("array") => {
-            if let Some(prefix) = schema["prefixItems"].as_array() {
+            if schema["maxItems"] == 0 {
+                json!([])
+            } else if let Some(prefix) = schema["prefixItems"].as_array() {
                 json!(
                     prefix
                         .iter()
@@ -42,7 +66,7 @@ fn sample(document: &Value, schema: &Value) -> Value {
                 .as_str()
                 .is_some_and(|p| p.contains("branding/logo")) =>
                 "/api/v1/branding/logo?v=000000000000".into(),
-            _ if schema.get("pattern").is_some() => "0".into(),
+            _ if schema.get("pattern").is_some() => patterned(&schema["pattern"]),
             _ => "fixture".into(),
         }),
         _ => json!({}), // conjunctive refinement or the reviewed stored JSON field

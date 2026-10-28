@@ -383,7 +383,7 @@
             }
           }
         },
-        "description": "Live authorization precedes every aggregate and page. Platform Admins/Auditors read totals; personal keys are never selectable by a platform key filter. Shared members see only their own human-key activity; workspace administrators see workspace-wide activity, and foreign personal details are hidden. Costs are configured-rate estimates, not invoices; known subtotals and retained held floors are not proven upper bounds. Unknown values remain null. Cost-center dimensions use admission snapshots, not current assignments.",
+        "description": "Live authorization precedes every aggregate and page. Platform Admins/Auditors read totals; personal keys are never selectable by a platform key filter. Shared members see only their own human-key activity; workspace administrators see workspace-wide activity, and foreign personal details are hidden. Costs are configured-rate estimates, not invoices; known subtotals and retained held floors are not proven upper bounds. Unknown values remain null. Cost-center dimensions use admission snapshots, not current assignments. Platform Admins and Auditors also see personal workspaces by identity (id and \"Personal \u00b7 <owner>\" name) with their usage and cost totals and platform-managed configuration; never their keys, request or execution details, prompts or owner choices.",
         "parameters": [
           {
             "name": "start_date",
@@ -459,25 +459,38 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^(succeeded|failed|cancelled|indeterminate|in_progress)(,(succeeded|failed|cancelled|indeterminate|in_progress))*$"
             },
-            "description": "Comma-separated succeeded, failed, cancelled, indeterminate, in_progress."
+            "description": "Comma-separated attempt states; duplicates are ignored."
           },
           {
             "name": "cost_center_id",
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "unallocated"
+                },
+                {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              ]
             },
-            "description": "UUID or unallocated; filters admission-time snapshot."
+            "description": "A cost center UUID or the literal unallocated."
           },
           {
             "name": "model",
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             }
           },
           {
@@ -485,7 +498,10 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             }
           },
           {
@@ -548,7 +564,7 @@
             }
           }
         },
-        "description": "Live authorization precedes every aggregate and page. Platform Admins/Auditors read totals; personal keys are never selectable by a platform key filter. Shared members see only their own human-key activity; workspace administrators see workspace-wide activity, and foreign personal details are hidden. Costs are configured-rate estimates, not invoices; known subtotals and retained held floors are not proven upper bounds. Unknown values remain null. Cost-center dimensions use admission snapshots, not current assignments.",
+        "description": "Live authorization precedes every aggregate and page. Platform Admins/Auditors read totals; personal keys are never selectable by a platform key filter. Shared members see only their own human-key activity; workspace administrators see workspace-wide activity, and foreign personal details are hidden. Costs are configured-rate estimates, not invoices; known subtotals and retained held floors are not proven upper bounds. Unknown values remain null. Cost-center dimensions use admission snapshots, not current assignments. Platform Admins and Auditors also see personal workspaces by identity (id and \"Personal \u00b7 <owner>\" name) with their usage and cost totals and platform-managed configuration; never their keys, request or execution details, prompts or owner choices.",
         "parameters": [
           {
             "name": "start_date",
@@ -620,16 +636,28 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
-            }
+              "type": "string",
+              "pattern": "^(succeeded|failed|cancelled|indeterminate|in_progress)(,(succeeded|failed|cancelled|indeterminate|in_progress))*$"
+            },
+            "description": "Comma-separated attempt states; duplicates are ignored."
           },
           {
             "name": "cost_center_id",
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
-            }
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "unallocated"
+                },
+                {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "description": "A cost center UUID or the literal unallocated."
           },
           {
             "name": "metric",
@@ -736,7 +764,7 @@
             }
           }
         },
-        "description": "Live authorization precedes every aggregate and page. Platform Admins/Auditors read totals; personal keys are never selectable by a platform key filter. Shared members see only their own human-key activity; workspace administrators see workspace-wide activity, and foreign personal details are hidden. Costs are configured-rate estimates, not invoices; known subtotals and retained held floors are not proven upper bounds. Unknown values remain null. Cost-center dimensions use admission snapshots, not current assignments.",
+        "description": "Live authorization precedes every aggregate and page. Platform Admins/Auditors read totals; personal keys are never selectable by a platform key filter. Shared members see only their own human-key activity; workspace administrators see workspace-wide activity, and foreign personal details are hidden. Costs are configured-rate estimates, not invoices; known subtotals and retained held floors are not proven upper bounds. Unknown values remain null. Cost-center dimensions use admission snapshots, not current assignments. Platform Admins and Auditors also see personal workspaces by identity (id and \"Personal \u00b7 <owner>\" name) with their usage and cost totals and platform-managed configuration; never their keys, request or execution details, prompts or owner choices.",
         "parameters": [
           {
             "name": "start_date",
@@ -808,16 +836,28 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
-            }
+              "type": "string",
+              "pattern": "^(succeeded|failed|cancelled|indeterminate|in_progress)(,(succeeded|failed|cancelled|indeterminate|in_progress))*$"
+            },
+            "description": "Comma-separated attempt states; duplicates are ignored."
           },
           {
             "name": "cost_center_id",
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
-            }
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "unallocated"
+                },
+                {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "description": "A cost center UUID or the literal unallocated."
           }
         ]
       },
@@ -1390,14 +1430,14 @@
                 "required": true,
                 "schema": {
                   "type": "string",
-                  "pattern": "^[0-9]+$"
+                  "pattern": "^(0|[1-9][0-9]*)$"
                 }
               },
               "X-Export-Rows": {
                 "required": true,
                 "schema": {
                   "type": "string",
-                  "pattern": "^[0-9]+$"
+                  "pattern": "^(0|[1-9][0-9]*)$"
                 }
               }
             },
@@ -1466,6 +1506,20 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "X-Content-Type-Options": {
+                "required": true,
+                "schema": {
+                  "const": "nosniff"
                 }
               }
             }
@@ -2281,7 +2335,9 @@
             "required": false,
             "schema": {
               "type": "string",
-              "maxLength": 57
+              "minLength": 1,
+              "maxLength": 57,
+              "pattern": "^(0|-?[1-9][0-9]{0,18})_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
             }
           }
         ]
@@ -2406,25 +2462,38 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^(succeeded|failed|cancelled|indeterminate|in_progress)(,(succeeded|failed|cancelled|indeterminate|in_progress))*$"
             },
-            "description": "Comma-separated succeeded, failed, cancelled, indeterminate, in_progress."
+            "description": "Comma-separated attempt states; duplicates are ignored."
           },
           {
             "name": "cost_center_id",
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "unallocated"
+                },
+                {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              ]
             },
-            "description": "UUID or unallocated; filters admission-time snapshot."
+            "description": "A cost center UUID or the literal unallocated."
           },
           {
             "name": "model",
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             }
           },
           {
@@ -2432,7 +2501,10 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             }
           },
           {
@@ -2617,25 +2689,38 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^(succeeded|failed|cancelled|indeterminate|in_progress)(,(succeeded|failed|cancelled|indeterminate|in_progress))*$"
             },
-            "description": "Comma-separated succeeded, failed, cancelled, indeterminate, in_progress."
+            "description": "Comma-separated attempt states; duplicates are ignored."
           },
           {
             "name": "cost_center_id",
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "unallocated"
+                },
+                {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              ]
             },
-            "description": "UUID or unallocated; filters admission-time snapshot."
+            "description": "A cost center UUID or the literal unallocated."
           },
           {
             "name": "model",
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             }
           },
           {
@@ -2643,7 +2728,10 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             }
           },
           {
@@ -2941,16 +3029,28 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
-            }
+              "type": "string",
+              "pattern": "^(succeeded|failed|cancelled|indeterminate|in_progress)(,(succeeded|failed|cancelled|indeterminate|in_progress))*$"
+            },
+            "description": "Comma-separated attempt states; duplicates are ignored."
           },
           {
             "name": "cost_center_id",
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
-            }
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "unallocated"
+                },
+                {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "description": "A cost center UUID or the literal unallocated."
           },
           {
             "name": "metric",
@@ -3129,16 +3229,28 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
-            }
+              "type": "string",
+              "pattern": "^(succeeded|failed|cancelled|indeterminate|in_progress)(,(succeeded|failed|cancelled|indeterminate|in_progress))*$"
+            },
+            "description": "Comma-separated attempt states; duplicates are ignored."
           },
           {
             "name": "cost_center_id",
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
-            }
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "unallocated"
+                },
+                {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "description": "A cost center UUID or the literal unallocated."
           }
         ]
       },
@@ -3243,21 +3355,21 @@
                 "required": true,
                 "schema": {
                   "type": "string",
-                  "pattern": "^[0-9]+$"
+                  "pattern": "^(0|[1-9][0-9]*)$"
                 }
               },
               "X-Export-Rows": {
                 "required": true,
                 "schema": {
                   "type": "string",
-                  "pattern": "^[0-9]+$"
+                  "pattern": "^(0|[1-9][0-9]*)$"
                 }
               },
               "X-Export-Offset": {
                 "required": true,
                 "schema": {
                   "type": "string",
-                  "pattern": "^[0-9]+$"
+                  "pattern": "^(0|[1-9][0-9]*)$"
                 }
               }
             },
@@ -3373,25 +3485,38 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^(succeeded|failed|cancelled|indeterminate|in_progress)(,(succeeded|failed|cancelled|indeterminate|in_progress))*$"
             },
-            "description": "Comma-separated succeeded, failed, cancelled, indeterminate, in_progress."
+            "description": "Comma-separated attempt states; duplicates are ignored."
           },
           {
             "name": "cost_center_id",
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "unallocated"
+                },
+                {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              ]
             },
-            "description": "UUID or unallocated; filters admission-time snapshot."
+            "description": "A cost center UUID or the literal unallocated."
           },
           {
             "name": "model",
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             }
           },
           {
@@ -3399,7 +3524,10 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             }
           },
           {
@@ -3503,7 +3631,9 @@
             "required": false,
             "schema": {
               "type": "string",
-              "maxLength": 57
+              "minLength": 1,
+              "maxLength": 57,
+              "pattern": "^(0|-?[1-9][0-9]{0,18})_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
             }
           }
         ]
@@ -4019,14 +4149,14 @@
                 "required": true,
                 "schema": {
                   "type": "string",
-                  "pattern": "^[0-9]+$"
+                  "pattern": "^(0|[1-9][0-9]*)$"
                 }
               },
               "X-Export-Rows": {
                 "required": true,
                 "schema": {
                   "type": "string",
-                  "pattern": "^[0-9]+$"
+                  "pattern": "^(0|[1-9][0-9]*)$"
                 }
               }
             },
@@ -4095,6 +4225,20 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "X-Content-Type-Options": {
+                "required": true,
+                "schema": {
+                  "const": "nosniff"
                 }
               }
             }
