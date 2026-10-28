@@ -43,13 +43,55 @@ fn resolved<'a>(document: &'a Value, value: &'a Value) -> Result<&'a Value> {
     Ok(value)
 }
 
+pub(super) fn validator(
+    document: &Value,
+    schema: &Value,
+) -> Result<std::sync::Arc<jsonschema::Validator>> {
+    fn compile(document: &Value, schema: &Value) -> Result<std::sync::Arc<jsonschema::Validator>> {
+        let mut root = document.clone();
+        root["$defs"] = json!({"observed":schema});
+        root["$ref"] = json!("#/$defs/observed");
+        Ok(std::sync::Arc::new(super::validation::compile_schema(
+            &root,
+        )?))
+    }
+    // Pointer identity, not value equality: mutated-document controls must
+    // always compile their own document and can never reuse a trusted result.
+    if !std::ptr::eq(document, artifact()) {
+        return compile(document, schema);
+    }
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::BTreeMap<String, std::sync::Arc<jsonschema::Validator>>>,
+    > = std::sync::OnceLock::new();
+    let key = serde_json::to_string(schema)?;
+    let mut cache = CACHE.get_or_init(Default::default).lock().unwrap();
+    if let Some(validator) = cache.get(&key) {
+        return Ok(validator.clone());
+    }
+    let validator = compile(document, schema)?;
+    cache.insert(key, validator.clone());
+    Ok(validator)
+}
+
 pub(crate) fn validate_value(document: &Value, schema: &Value, body: &Value) -> Result<()> {
-    let mut root = document.clone();
-    root["$defs"] = json!({"observed":schema});
-    root["$ref"] = json!("#/$defs/observed");
-    super::validation::compile_schema(&root)?
+    validator(document, schema)?
         .validate(body)
         .map_err(|e| anyhow::anyhow!("wire schema mismatch: {e}"))
+}
+
+fn validate_headers(document: &Value, definitions: &Value, headers: &HeaderMap) -> Result<()> {
+    for (name, header) in definitions.as_object().into_iter().flatten() {
+        let header = resolved(document, header)?;
+        let values = headers.get_all(name).iter().collect::<Vec<_>>();
+        ensure!(
+            header["required"] != true || !values.is_empty(),
+            "missing response header {name}"
+        );
+        for value in values {
+            validate_value(document, &header["schema"], &json!(value.to_str()?))?;
+        }
+    }
+    Ok(())
 }
 
 /// Exact METHOD/template, never an operation inferred from the response body.
@@ -67,17 +109,7 @@ pub(crate) fn validate(
         .get(status.as_str())
         .with_context(|| format!("undocumented status {status} for {method} {template}"))?;
     let response = resolved(document, response)?;
-    for (name, header) in response["headers"].as_object().into_iter().flatten() {
-        let header = resolved(document, header)?;
-        let values = headers.get_all(name).iter().collect::<Vec<_>>();
-        ensure!(
-            header["required"] != true || !values.is_empty(),
-            "missing response header {name}"
-        );
-        for value in values {
-            validate_value(document, &header["schema"], &json!(value.to_str()?))?;
-        }
-    }
+    validate_headers(document, &response["headers"], headers)?;
     for name in response["x-omg-required-cookies"]
         .as_array()
         .into_iter()
@@ -121,6 +153,15 @@ pub(crate) fn validate(
             );
         }
         validate_value(document, schema, &body)?;
+        for variant in response["x-omg-body-header-requirements"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
+            if validator(document, &variant["schema"])?.is_valid(&body) {
+                validate_headers(document, &variant["headers"], headers)?;
+            }
+        }
     } else if media.starts_with("text/") {
         validate_value(document, schema, &json!(std::str::from_utf8(bytes)?))?;
     } else {
@@ -135,6 +176,11 @@ pub(crate) fn validate(
         );
         if let Some(max) = schema["maxLength"].as_u64() {
             ensure!(bytes.len() as u64 <= max, "binary response too long");
+        }
+        if schema["x-omg-validate-image"] == true {
+            crate::management::branding::inspect(Some(media), bytes).map_err(|_| {
+                anyhow::anyhow!("binary image does not match its documented format and media type")
+            })?;
         }
     }
     Ok(())
@@ -185,7 +231,25 @@ fn require_complete(document: &Value, operation: &Value) -> Result<()> {
         }
         Ok(())
     }
-    walk(document, operation, &mut BTreeSet::new())
+    // Only the immutable artifact can reuse completed-operation verification;
+    // all mutated-document controls rerun reference AND anti-vacuity checks.
+    static CHECKED: std::sync::OnceLock<std::sync::Mutex<BTreeSet<String>>> =
+        std::sync::OnceLock::new();
+    if std::ptr::eq(document, artifact()) {
+        let id = operation["operationId"]
+            .as_str()
+            .context("operation ID missing")?;
+        let mut checked = CHECKED.get_or_init(Default::default).lock().unwrap();
+        if checked.contains(id) {
+            return Ok(());
+        }
+        walk(document, operation, &mut BTreeSet::new())?;
+        super::quality::operation(document, operation)?;
+        checked.insert(id.to_owned());
+        return Ok(());
+    }
+    walk(document, operation, &mut BTreeSet::new())?;
+    super::quality::operation(document, operation)
 }
 
 fn require_positives(expected: &BTreeSet<String>, observed: &BTreeSet<String>) -> Result<()> {
@@ -239,7 +303,6 @@ fn template(method: &str, path: &str) -> Result<Option<String>> {
     Ok(candidates.into_iter().next())
 }
 
-#[cfg(feature = "integration-tests")]
 pub(crate) struct Captured {
     pub status: StatusCode,
     pub headers: HeaderMap,
@@ -317,10 +380,18 @@ pub(crate) async fn checked_response(
     axum::response::Response::from_parts(parts, axum::body::Body::from(bytes))
 }
 
-fn positive(response: &Value, status: StatusCode, headers: &HeaderMap) -> bool {
-    let permitted = status.is_success()
-        || status.is_redirection()
-        || (status == StatusCode::GONE && response["x-omg-positive"] == true);
+fn positive(response: &Value, status: StatusCode, headers: &HeaderMap, bytes: &[u8]) -> bool {
+    // 304/HEAD/other bodyless replies cannot establish representation coverage.
+    // Only explicitly reviewed empty successes and OIDC redirects earn credit.
+    let represented = response.get("content").is_some() && !bytes.is_empty();
+    let permitted = (status.is_success() && represented)
+        || (status == StatusCode::NO_CONTENT
+            && bytes.is_empty()
+            && response["x-omg-positive-kind"] == "empty")
+        || (status == StatusCode::SEE_OTHER
+            && bytes.is_empty()
+            && response["x-omg-positive-kind"] == "redirect")
+        || (status == StatusCode::GONE && represented && response["x-omg-positive"] == true);
     let cookie = response["x-omg-positive-cookie"]
         .as_str()
         .is_none_or(|name| {
@@ -336,10 +407,8 @@ fn positive(response: &Value, status: StatusCode, headers: &HeaderMap) -> bool {
     permitted && cookie
 }
 
-#[cfg(feature = "integration-tests")]
 #[derive(Default)]
 pub(crate) struct PositiveFixtures(BTreeSet<String>);
-#[cfg(feature = "integration-tests")]
 impl PositiveFixtures {
     pub(crate) fn observe(&mut self, captured: &Captured) {
         let template = captured
@@ -359,7 +428,13 @@ impl PositiveFixtures {
         let response = resolved(artifact(), &op["responses"][captured.status.as_str()]).unwrap();
         // A denial (including the callback's cookie-clearing 303) never earns
         // coverage, nor does an implicit HEAD earn a GET.
-        if positive(response, captured.status, &captured.headers) && captured.method != "HEAD" {
+        if positive(
+            response,
+            captured.status,
+            &captured.headers,
+            &captured.bytes,
+        ) && captured.method != "HEAD"
+        {
             self.0.insert(format!("{} {template}", captured.method));
         }
     }
@@ -384,6 +459,9 @@ impl PositiveFixtures {
     }
 }
 
+#[path = "review_tests.rs"]
+mod review_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -392,7 +470,7 @@ mod tests {
             "x-omg-request-schema":{"$ref":"#/components/schemas/Request"},
             "x-omg-response-schema":{"$ref":"#/components/schemas/Response"},
             "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Response"}}}},
-                "403":{"description":"Denied","content":{"application/json":{"schema":{"type":"object"}}}}}
+                "403":{"description":"Denied","content":{"application/json":{"schema":{"type":"object","required":["error"],"properties":{"error":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string"},"message":{"type":"string"}},"additionalProperties":false}},"additionalProperties":false}}}}}
         }}},"components":{"schemas":{"Request":false,"Response":{"type":"object","required":["ok"],"properties":{"ok":{"const":true}},"additionalProperties":false}}}})
     }
     fn headers() -> HeaderMap {
@@ -541,31 +619,40 @@ mod tests {
     }
     #[test]
     fn management_openapi_response_denials_and_cookie_clearing_redirects_are_not_positive() {
-        let response = json!({"x-omg-positive-cookie":"omg_session"});
+        let response =
+            json!({"x-omg-positive-cookie":"omg_session","x-omg-positive-kind":"redirect"});
         let mut h = HeaderMap::new();
         h.append(
             "set-cookie",
             "omg_session=; Path=/; Max-Age=0".parse().unwrap(),
         );
-        assert!(!positive(&response, StatusCode::SEE_OTHER, &h));
+        assert!(!positive(&response, StatusCode::SEE_OTHER, &h, b""));
         assert!(!positive(
             &json!({"x-omg-positive":true}),
             StatusCode::FORBIDDEN,
-            &h
+            &h,
+            b""
         ));
-        assert!(!positive(&json!({}), StatusCode::UNAUTHORIZED, &h));
+        assert!(!positive(&json!({}), StatusCode::UNAUTHORIZED, &h, b""));
         h.append(
             "set-cookie",
             format!("omg_session={}; Path=/", "a".repeat(64))
                 .parse()
                 .unwrap(),
         );
-        assert!(positive(&response, StatusCode::SEE_OTHER, &h));
-        assert!(positive(&json!({}), StatusCode::NO_CONTENT, &h));
+        assert!(positive(&response, StatusCode::SEE_OTHER, &h, b""));
+        assert!(!positive(&json!({}), StatusCode::NO_CONTENT, &h, b""));
         assert!(positive(
-            &json!({"x-omg-positive":true}),
+            &json!({"x-omg-positive-kind":"empty"}),
+            StatusCode::NO_CONTENT,
+            &h,
+            b""
+        ));
+        assert!(positive(
+            &json!({"x-omg-positive":true,"content":{"application/json":{}}}),
             StatusCode::GONE,
-            &h
+            &h,
+            b"{\"error\":{\"code\":\"410\"}}"
         ));
     }
     #[test]

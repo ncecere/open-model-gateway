@@ -279,6 +279,89 @@ pub(crate) async fn management_openapi_auth_fixtures(
     observed.observe(&r);
 }
 
+#[tokio::test]
+async fn management_openapi_review_middleware_throttle_raw_wire() {
+    // Closed before constructing the state: a regression cannot accidentally
+    // connect to any database, even if it dispatches past the exhausted gate.
+    let pool = lazy_pool();
+    pool.close().await;
+    let state = IdentityState::new(Store::new(pool), None)
+        .await
+        .unwrap()
+        .with_admin_token_limits(1, 1);
+    state
+        .admin_token_replica_limiter
+        .check(std::time::Instant::now())
+        .unwrap();
+    let document = crate::management::openapi::responses::artifact();
+    for (path, item) in document["paths"].as_object().unwrap() {
+        if !crate::management::openapi::responses::COMPLETED_AREAS
+            .contains(&crate::management::openapi::responses::area(path))
+        {
+            continue;
+        }
+        for (method, operation) in item.as_object().unwrap() {
+            if operation["x-omg-access"] != "Browser" {
+                continue;
+            }
+            let app = Router::new()
+                .route(path, axum::routing::any(|| async { StatusCode::OK }))
+                .route_layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    authenticate_management,
+                ));
+            let concrete = path
+                .replace("{id}", &Uuid::nil().to_string())
+                .replace("{session}", &Uuid::nil().to_string());
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method(method.to_ascii_uppercase().as_str())
+                        .uri(concrete)
+                        .header(header::AUTHORIZATION, "Bearer omg_admin_unknown")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let (parts, body) = response.into_parts();
+            let bytes = axum::body::to_bytes(body, 16384).await.unwrap();
+            assert_eq!(parts.status, StatusCode::TOO_MANY_REQUESTS);
+            assert!(
+                parts.headers[header::RETRY_AFTER]
+                    .to_str()
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap()
+                    > 0
+            );
+            crate::management::openapi::responses::validate(
+                document,
+                &method.to_ascii_uppercase(),
+                path,
+                parts.status,
+                &parts.headers,
+                &bytes,
+            )
+            .unwrap();
+            let mut missing_retry = parts.headers.clone();
+            missing_retry.remove(header::RETRY_AFTER);
+            assert!(
+                crate::management::openapi::responses::validate(
+                    document,
+                    &method.to_ascii_uppercase(),
+                    path,
+                    parts.status,
+                    &missing_retry,
+                    &bytes
+                )
+                .is_err(),
+                "accepted identity throttle without Retry-After"
+            );
+        }
+    }
+}
+
 fn lazy_pool() -> sqlx::PgPool {
     sqlx::postgres::PgPoolOptions::new()
         .connect_lazy("postgres://unused:unused@127.0.0.1/unused")

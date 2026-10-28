@@ -95,8 +95,12 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
     crate::alerts::evaluate_once(&f.s).await.unwrap().unwrap();
     let (status, ceiling) = call(&f.s, &f.admin, "POST", "/api/v1/platform/alerts/rules", json!({"name":"Contract ceiling","kind":"admission_ceiling","window_minutes":5,"ceiling_requests_per_second":200,"ceiling_lock_wait_ms":250,"notify_platform_admins":true})).await;
     assert_eq!(status, StatusCode::OK);
-    sqlx::query("INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary,details) VALUES($1,$2,'admission_ceiling',$3,1,'warning',$4,'A workspace is near its admission ceiling',jsonb_build_object('workspace_name','Team'))")
+    sqlx::query("INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary,details) VALUES($1,$2,'admission_ceiling',$3,1,'warning',$4,'A workspace is near its admission ceiling',jsonb_build_object('personal',false,'workspace_name','Team'))")
         .bind(Uuid::new_v4()).bind(id(&ceiling)).bind(format!("workspace:{}",f.team)).bind(f.team).execute(&pool).await.unwrap();
+    // alerts::admission_ceiling_conditions suppresses personal references even
+    // for Admins: the stored event deliberately has no workspace_id/name.
+    sqlx::query("INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,summary,details) VALUES($1,$2,'admission_ceiling','contract-personal',1,'warning','An API key in a personal workspace is near its admission ceiling',jsonb_build_object('personal',true,'workspace_name',NULL,'workspace_kind','personal'))")
+        .bind(Uuid::new_v4()).bind(id(&ceiling)).execute(&pool).await.unwrap();
     let (status, invitation) = call(
         &f.s,
         &f.owner,
@@ -265,7 +269,7 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
             .as_array()
             .unwrap()
             .iter()
-            .find(|v| v["kind"] == "admission_ceiling")
+            .find(|v| v["kind"] == "admission_ceiling" && v["details"]["personal"] == false)
             .unwrap();
         if redacted {
             assert!(ceiling["workspace"].is_null());
@@ -274,6 +278,19 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
             assert_eq!(ceiling["workspace"]["id"], json!(f.team));
             assert_eq!(ceiling["details"]["workspace_name"], "Team");
         }
+        let personal = value["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["kind"] == "admission_ceiling" && v["details"]["personal"] == true)
+            .unwrap();
+        assert!(personal["workspace"].is_null());
+        assert!(
+            personal["details"]
+                .get("workspace_name")
+                .is_none_or(Value::is_null)
+        );
+        assert!(!personal.to_string().contains(&f.personal.to_string()));
         observed.observe(&r);
     }
     let r = send(
