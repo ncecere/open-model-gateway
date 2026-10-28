@@ -270,9 +270,8 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                     valid["error"]["code"] = json!(status.as_str());
                 }
                 let encode = |v: &Value| serde_json::to_vec(v).unwrap();
-                validate(&document, &method, path, status, &h, &encode(&valid)).unwrap_or_else(
-                    |e| panic!("positive schema control {method} {path}: {e:#}; {valid}"),
-                );
+                validate(&document, &method, path, status, &h, &encode(&valid))
+                    .unwrap_or_else(|e| panic!("positive schema control {method} {path}: {e:#}"));
                 let mut body_schema = schema;
                 loop {
                     if let Some(reference) = body_schema["$ref"].as_str() {
