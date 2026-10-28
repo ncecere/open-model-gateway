@@ -5,6 +5,7 @@ mod mutation_tests;
 mod quality;
 pub(crate) mod requests;
 pub(crate) mod responses;
+mod setup_review_tests;
 mod validation;
 
 #[cfg(test)]
@@ -51,7 +52,7 @@ mod tests {
             "review route additions and update this progress baseline"
         );
         assert_eq!(
-            placeholders, 458,
+            placeholders, 362,
             "review schema completion and update this progress baseline"
         );
     }

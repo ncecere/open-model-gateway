@@ -4,6 +4,9 @@ use super::*;
 use openapi::responses::{Captured, PositiveFixtures, capture_http};
 use sha2::{Digest, Sha256};
 
+#[path = "setup_openapi_fixtures.rs"]
+mod setup;
+
 const ORIGIN: &str = "http://127.0.0.1:3000";
 struct Server(tokio::task::JoinHandle<()>);
 impl Drop for Server {

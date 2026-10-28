@@ -45,9 +45,10 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
         !actual.is_empty(),
         "unsupported DTO deserializer: inventory explicitly"
     );
-    let component = document
-        .pointer(&schema["$ref"].as_str().unwrap()[1..])
-        .unwrap();
+    let mut component = schema;
+    while let Some(reference) = component["$ref"].as_str() {
+        component = document.pointer(&reference[1..]).unwrap();
+    }
     let object = component
         .get("properties")
         .unwrap_or(&component["oneOf"][0]["properties"]);
@@ -103,15 +104,71 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
             probe[field] = wrong;
             compare(&format!("wrong-type/null {field}"), probe);
         }
-        // These DTOs have no nested object DTO. Inject one at each scalar or
-        // array-item boundary so a future nested shape cannot be silently loose.
+        // Probe scalar and array-item boundaries as well as the recursive
+        // nested-object probes below.
         let mut nested = valid.clone();
         if let Some(items) = nested[field].as_array_mut() {
-            items[0] = json!({"unexpected_configuration":true});
+            if items.is_empty() {
+                items.push(json!({"unexpected_configuration":true}));
+            } else {
+                items[0] = json!({"unexpected_configuration":true});
+            }
         } else {
             nested[field] = json!({"unexpected_configuration":true});
         }
         compare(&format!("nested-unknown {field}"), nested);
+    }
+    // Recursively probe nested DTOs rather than replacing only their parent.
+    fn nested_objects(value: &Value, path: &str, out: &mut Vec<String>) {
+        match value {
+            Value::Object(map) => {
+                if !path.is_empty() {
+                    out.push(path.into());
+                }
+                for (key, child) in map {
+                    nested_objects(
+                        child,
+                        &format!("{path}/{}", key.replace('~', "~0").replace('/', "~1")),
+                        out,
+                    );
+                }
+            }
+            Value::Array(items) => {
+                for (i, child) in items.iter().enumerate() {
+                    nested_objects(child, &format!("{path}/{i}"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut nested = Vec::new();
+    nested_objects(&valid, "", &mut nested);
+    for path in nested {
+        let mut probe = valid.clone();
+        probe.pointer_mut(&path).unwrap()["unexpected_configuration"] = json!(true);
+        compare(&format!("recursive nested-unknown {path}"), probe);
+        for field in valid.pointer(&path).unwrap().as_object().unwrap().keys() {
+            let mut probe = valid.clone();
+            probe
+                .pointer_mut(&path)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            compare(&format!("nested omission {path}/{field}"), probe);
+            for wrong in [
+                Value::Null,
+                json!(true),
+                json!(1),
+                json!("wrong"),
+                json!([]),
+                json!({}),
+            ] {
+                let mut probe = valid.clone();
+                probe.pointer_mut(&path).unwrap()[field] = wrong;
+                compare(&format!("nested wrong-type/null {path}/{field}"), probe);
+            }
+        }
     }
     for value in [
         Value::Null,

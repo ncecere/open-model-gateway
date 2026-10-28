@@ -15,11 +15,26 @@ pub(crate) const IDENTITY_SELF_SERVICE_AREAS: &[&str] = &[
     "me",
     "access-request-targets",
 ];
-pub(crate) const AREA_GROUPS: &[&[&str]] = &[IDENTITY_SELF_SERVICE_AREAS];
+pub(crate) const SLICE3_AREAS: &[&str] = &[
+    "platform/catalog-defaults",
+    "platform/catalogs",
+    "platform/deployments",
+    "platform/model-setup",
+    "platform/models",
+    "platform/providers",
+    "workspaces/{ws}/available-models",
+    "workspaces/{ws}/catalog",
+    "workspaces/{ws}/models",
+    "workspaces/{ws}/policy",
+];
+pub(crate) const AREA_GROUPS: &[(&str, &[&str])] = &[
+    ("IDENTITY_SELF_SERVICE_AREAS", IDENTITY_SELF_SERVICE_AREAS),
+    ("SLICE3_AREAS", SLICE3_AREAS),
+];
 
 /// Whether an area's schemas are complete and gated by an executed fixture group.
 pub(crate) fn completed(area: &str) -> bool {
-    AREA_GROUPS.iter().any(|group| group.contains(&area))
+    AREA_GROUPS.iter().any(|(_, group)| group.contains(&area))
 }
 
 pub(crate) fn artifact() -> &'static Value {
@@ -514,7 +529,7 @@ mod tests {
             assert_eq!(super::area(template), want, "{template}");
         }
         let mut seen = std::collections::BTreeSet::new();
-        for group in super::AREA_GROUPS {
+        for (_, group) in super::AREA_GROUPS {
             assert!(!group.is_empty());
             for area in *group {
                 assert!(
@@ -669,7 +684,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(count, 22);
+        assert_eq!(count, 70);
     }
     #[test]
     fn management_openapi_response_rejects_incomplete_completed_slot() {

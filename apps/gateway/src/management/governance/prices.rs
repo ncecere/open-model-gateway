@@ -1,4 +1,35 @@
 use super::*;
+
+#[test]
+fn management_openapi_slice3_price_and_routing_request_vectors() {
+    use openapi::requests::vectors;
+    vectors::<Price>(
+        "POST",
+        "/api/v1/platform/deployments/{deployment}/prices",
+        json!({"input_microusd_per_million":"1","output_microusd_per_million":"2","input_token_limit":100,"output_token_limit":10,"pricing_version":1,"cache_pricing":null,"price_lines":null,"max_units":null,"batch_price_lines":null}),
+    );
+    vectors::<Price>(
+        "POST",
+        "/api/v1/platform/deployments/{deployment}/prices",
+        json!({"input_microusd_per_million":null,"output_microusd_per_million":null,"input_token_limit":100,"output_token_limit":10,"pricing_version":3,"cache_pricing":null,"price_lines":[{"meter":"input_tokens","microusd_per_batch":"123","batch":1000000,"unit_label":"/M tokens","sku_label":"Input"}],"max_units":{"requests":"1"},"batch_price_lines":null}),
+    );
+    vectors::<Price>(
+        "POST",
+        "/api/v1/platform/deployments/{deployment}/prices",
+        json!({"input_microusd_per_million":"1","output_microusd_per_million":"2","input_token_limit":100,"output_token_limit":10,"pricing_version":2,"cache_pricing":{"read":{"status":"priced","microusd_per_million":"1"},"write":{"status":"unknown"},"write_5m":{"status":"not_applicable"},"write_1h":{"status":"priced","microusd_per_million":"2"}},"price_lines":null,"max_units":null,"batch_price_lines":null}),
+    );
+    vectors::<ModelRouting>(
+        "PUT",
+        "/api/v1/platform/models/{model}/routing",
+        json!({"strategy":"priority","max_attempts":2,"allow_ambiguous_failover":false,"required_residency":null}),
+    );
+    vectors::<DeploymentRouting>(
+        "PUT",
+        "/api/v1/platform/deployments/{deployment}/routing",
+        json!({"priority":0,"weight":1,"residency":null,"failure_threshold":3,"cooldown_seconds":30}),
+    );
+}
+
 use crate::billing::v3::{MaxUnits, PriceLines, display_lines, display_summary};
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

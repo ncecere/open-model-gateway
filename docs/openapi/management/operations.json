@@ -18,40 +18,16 @@
       "scope": "settings:write",
       "token_policy": "Scope"
     },
-    "DELETE /api/v1/platform/catalogs/{id}": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "catalog:write",
-      "token_policy": "Scope"
-    },
     "DELETE /api/v1/platform/cost-centers/{id}": {
       "access": "PlatformWrite",
       "operation": {},
       "scope": "governance:write",
       "token_policy": "Scope"
     },
-    "DELETE /api/v1/platform/deployments/{id}": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "catalog:write",
-      "token_policy": "Scope"
-    },
-    "DELETE /api/v1/platform/models/{id}": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "catalog:write",
-      "token_policy": "Scope"
-    },
     "DELETE /api/v1/platform/oidc/group-mappings/{id}": {
       "access": "PlatformWrite",
       "operation": {},
       "scope": "access:write",
-      "token_policy": "Scope"
-    },
-    "DELETE /api/v1/platform/providers/{id}": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "catalog:write",
       "token_policy": "Scope"
     },
     "DELETE /api/v1/platform/settings/general/logo": {
@@ -120,12 +96,6 @@
       "scope": null,
       "token_policy": "Denied"
     },
-    "DELETE /api/v1/workspaces/{ws}/models/{model}": {
-      "access": "WorkspaceAdmin",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
-    },
     "GET /api/v1/platform/admin-tokens": {
       "access": "PlatformWrite",
       "operation": {},
@@ -180,30 +150,6 @@
       "scope": "platform:read",
       "token_policy": "Scope"
     },
-    "GET /api/v1/platform/catalog-defaults": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/catalogs": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/catalogs/{id}": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/catalogs/{id}/models": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
     "GET /api/v1/platform/cost-centers": {
       "access": "PlatformRead",
       "operation": {},
@@ -221,54 +167,6 @@
       "operation": {},
       "scope": "platform:read",
       "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/deployments": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/deployments/{deployment}/batch-scheduling": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/deployments/{deployment}/price-suggestion": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/deployments/{deployment}/prices": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/deployments/{deployment}/routing": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/deployments/{id}": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/deployments/{id}/configuration/history": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
-    },
-    "GET /api/v1/platform/deployments/{id}/configuration/history/{change}": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
     },
     "GET /api/v1/platform/holds": {
       "access": "PlatformRead",
@@ -330,36 +228,6 @@
       "scope": "platform:read",
       "token_policy": "Scope"
     },
-    "GET /api/v1/platform/models": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/models/compare": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/models/{id}": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/models/{id}/catalogs": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/models/{model}/routing": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
     "GET /api/v1/platform/oidc/group-mappings": {
       "access": "PlatformRead",
       "operation": {},
@@ -413,18 +281,6 @@
       "operation": {},
       "scope": null,
       "token_policy": "Denied"
-    },
-    "GET /api/v1/platform/providers": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/providers/{id}": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
     },
     "GET /api/v1/platform/report-schedules/{id}/runs": {
       "access": "PlatformRead",
@@ -612,12 +468,6 @@
       "scope": null,
       "token_policy": "Denied"
     },
-    "GET /api/v1/workspaces/{ws}/available-models": {
-      "access": "WorkspaceMetadata",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
     "GET /api/v1/workspaces/{ws}/batches": {
       "access": "WorkspaceMember",
       "operation": {},
@@ -629,12 +479,6 @@
       "operation": {},
       "scope": null,
       "token_policy": "Denied"
-    },
-    "GET /api/v1/workspaces/{ws}/catalog": {
-      "access": "WorkspaceMetadata",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
     },
     "GET /api/v1/workspaces/{ws}/cost-report": {
       "access": "WorkspaceMetadata",
@@ -750,24 +594,6 @@
       "scope": "platform:read",
       "token_policy": "Scope"
     },
-    "GET /api/v1/workspaces/{ws}/models": {
-      "access": "WorkspaceMetadata",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/workspaces/{ws}/models/compare": {
-      "access": "WorkspaceMember",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
-    },
-    "GET /api/v1/workspaces/{ws}/policy": {
-      "access": "WorkspaceMetadata",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
     "GET /api/v1/workspaces/{ws}/report-schedules/{id}/runs": {
       "access": "WorkspaceReportAdmin",
       "operation": {
@@ -858,40 +684,16 @@
       "scope": "settings:write",
       "token_policy": "Scope"
     },
-    "PATCH /api/v1/platform/catalogs/{id}": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "catalog:write",
-      "token_policy": "Scope"
-    },
     "PATCH /api/v1/platform/cost-centers/{id}": {
       "access": "PlatformWrite",
       "operation": {},
       "scope": "governance:write",
       "token_policy": "Scope"
     },
-    "PATCH /api/v1/platform/deployments/{id}": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "catalog:write",
-      "token_policy": "Scope"
-    },
-    "PATCH /api/v1/platform/models/{id}": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "catalog:write",
-      "token_policy": "Scope"
-    },
     "PATCH /api/v1/platform/oidc/group-mappings/{id}": {
       "access": "PlatformWrite",
       "operation": {},
       "scope": "access:write",
-      "token_policy": "Scope"
-    },
-    "PATCH /api/v1/platform/providers/{id}": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "catalog:write",
       "token_policy": "Scope"
     },
     "PATCH /api/v1/platform/users/{user}": {
@@ -948,35 +750,11 @@
       "scope": "settings:write",
       "token_policy": "Scope"
     },
-    "POST /api/v1/platform/catalogs": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "catalog:write",
-      "token_policy": "Scope"
-    },
     "POST /api/v1/platform/cost-centers": {
       "access": "PlatformWrite",
       "operation": {},
       "scope": "governance:write",
       "token_policy": "Scope"
-    },
-    "POST /api/v1/platform/deployments": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "catalog:write",
-      "token_policy": "Scope"
-    },
-    "POST /api/v1/platform/deployments/{deployment}/prices": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "catalog:write",
-      "token_policy": "Scope"
-    },
-    "POST /api/v1/platform/deployments/{id}/configuration/preview": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
     },
     "POST /api/v1/platform/legal-holds": {
       "access": "PlatformWrite",
@@ -988,18 +766,6 @@
       "access": "PlatformWrite",
       "operation": {},
       "scope": "governance:write",
-      "token_policy": "Scope"
-    },
-    "POST /api/v1/platform/model-setup": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "catalog:write",
-      "token_policy": "Scope"
-    },
-    "POST /api/v1/platform/models": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "catalog:write",
       "token_policy": "Scope"
     },
     "POST /api/v1/platform/oidc/group-mappings": {
@@ -1037,12 +803,6 @@
       "operation": {},
       "scope": null,
       "token_policy": "Denied"
-    },
-    "POST /api/v1/platform/providers": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "catalog:write",
-      "token_policy": "Scope"
     },
     "POST /api/v1/platform/settings/audit-export/test": {
       "access": "PlatformWrite",
@@ -1152,12 +912,6 @@
       "scope": null,
       "token_policy": "Denied"
     },
-    "POST /api/v1/workspaces/{ws}/models": {
-      "access": "WorkspaceAdmin",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
-    },
     "POST /api/v1/workspaces/{ws}/service-accounts": {
       "access": "WorkspaceAdmin",
       "operation": {},
@@ -1170,46 +924,10 @@
       "scope": "governance:write",
       "token_policy": "Scope"
     },
-    "PUT /api/v1/platform/catalog-defaults": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "catalog:write",
-      "token_policy": "Scope"
-    },
-    "PUT /api/v1/platform/catalogs/{id}/models": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "catalog:write",
-      "token_policy": "Scope"
-    },
-    "PUT /api/v1/platform/deployments/{deployment}/batch-scheduling": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "governance:write",
-      "token_policy": "Scope"
-    },
-    "PUT /api/v1/platform/deployments/{deployment}/routing": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "catalog:write",
-      "token_policy": "Scope"
-    },
     "PUT /api/v1/platform/installation/policy": {
       "access": "PlatformWrite",
       "operation": {},
       "scope": "governance:write",
-      "token_policy": "Scope"
-    },
-    "PUT /api/v1/platform/models/{id}/catalogs": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "catalog:write",
-      "token_policy": "Scope"
-    },
-    "PUT /api/v1/platform/models/{model}/routing": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "catalog:write",
       "token_policy": "Scope"
     },
     "PUT /api/v1/platform/settings/email": {
@@ -1274,12 +992,6 @@
     },
     "PUT /api/v1/workspaces/{ws}/keys/{key}/policy": {
       "access": "WorkspaceKey",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
-    },
-    "PUT /api/v1/workspaces/{ws}/policy": {
-      "access": "WorkspaceAdmin",
       "operation": {},
       "scope": null,
       "token_policy": "Denied"

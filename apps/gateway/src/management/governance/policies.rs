@@ -1,4 +1,36 @@
 use super::*;
+
+#[test]
+fn management_openapi_slice3_policy_request_vectors() {
+    openapi::requests::vectors::<Policy>(
+        "PUT",
+        "/api/v1/workspaces/{ws}/policy",
+        json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"concurrent_jobs":null,"storage_bytes":null,"key_issuances_per_holder":null,"key_issuances_per_workspace":null,"monthly_budget_microusd":null,"budget_period":"month","budgets":[{"period":"month","amount_microusd":"9007199254740993"}]}),
+    );
+    // Omission retains supplied fields; explicit null clears them.
+    let base = json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"budgets":[]});
+    let omitted: Policy = serde_json::from_value(base.clone()).unwrap();
+    assert!(omitted.concurrent_jobs.is_none());
+    let mut clear = base.clone();
+    clear["concurrent_jobs"] = Value::Null;
+    let clear: Policy = serde_json::from_value(clear).unwrap();
+    assert_eq!(clear.concurrent_jobs, Some(None));
+    for field in [
+        "requests_per_minute",
+        "tokens_per_minute",
+        "concurrent_requests",
+    ] {
+        let mut absent = base.clone();
+        absent.as_object_mut().unwrap().remove(field);
+        assert!(serde_json::from_value::<Policy>(absent).is_err());
+    }
+    for field in ["budgets", "budget_period"] {
+        let mut null = base.clone();
+        null[field] = Value::Null;
+        assert!(serde_json::from_value::<Policy>(null).is_err());
+    }
+}
+
 use crate::governance::{BudgetPeriod, budget_consumption};
 use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
