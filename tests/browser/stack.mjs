@@ -42,7 +42,9 @@ function gatewayEnv(databaseUrl, webhookSecret) {
     GATEWAY_OIDC_ISSUER: ISSUER_URL,
     GATEWAY_OIDC_CLIENT_ID: "gateway-local-demo",
     GATEWAY_OIDC_GROUPS_CLAIM: "groups",
-    GATEWAY_SECRET_ENV_ALLOWLIST: "",
+    // A reference only, with no credential value: disabled Anthropic connections
+    // let reconciliation acceptance seed historical scopes through real APIs.
+    GATEWAY_SECRET_ENV_ALLOWLIST: "OMG_BROWSER_UNUSED_ANTHROPIC",
     GATEWAY_LOCAL_UPSTREAMS: JSON.stringify([{ endpoint: UPSTREAM_URL, addresses: ["127.0.0.1"] }]),
     GATEWAY_ALERT_INTERVAL_SECONDS: "0",
     // Disposable loopback receiver in alert-webhooks.spec.ts; never operator credentials.
