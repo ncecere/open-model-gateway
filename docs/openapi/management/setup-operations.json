@@ -869,7 +869,18 @@
             "name": "type",
             "required": false,
             "schema": {
-              "type": "string"
+              "enum": [
+                "generation",
+                "embeddings",
+                "images",
+                "audio_transcriptions",
+                "audio_speech",
+                "rerank",
+                "systemone",
+                "realtime",
+                "videos",
+                "batches"
+              ]
             }
           },
           {
@@ -877,7 +888,9 @@
             "name": "max_input_price",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[0-9]{1,19}$",
+              "description": "Maximum cheapest input rate (micro-USD per million tokens) as decimal digits, at most 19 characters."
             }
           },
           {
@@ -885,7 +898,11 @@
             "name": "data_policy",
             "required": false,
             "schema": {
-              "type": "string"
+              "enum": [
+                "allow",
+                "deny",
+                "unknown"
+              ]
             }
           },
           {
@@ -901,7 +918,11 @@
             "name": "sort",
             "required": false,
             "schema": {
-              "type": "string"
+              "enum": [
+                "name",
+                "newest",
+                "price"
+              ]
             }
           },
           {
@@ -2471,7 +2492,7 @@
             }
           },
           "404": {
-            "description": "Hidden or missing resource",
+            "description": "Unknown deployment, or the upstream model is not in the OpenRouter public catalog",
             "content": {
               "application/json": {
                 "schema": {
@@ -2481,7 +2502,7 @@
             }
           },
           "409": {
-            "description": "Configuration conflict",
+            "description": "The connection is not an OpenRouter connection, or the upstream model ID is not a catalog slug",
             "content": {
               "application/json": {
                 "schema": {
@@ -2511,7 +2532,7 @@
             }
           }
         },
-        "description": "Live Platform Admin required even though the declared minimum boundary is PlatformRead. OpenRouter only; server fetches a public fixed-origin catalog without sending credentials. Draft needs review; publishing remains a separate immutable price POST."
+        "description": "Requires a live Platform Admin: the route's declared minimum boundary is PlatformRead (so an Auditor passes authentication and route policy), but the handler requires platform_write and answers 403 to an Auditor. OpenRouter connections only: the server then fetches a public fixed-origin catalog without sending credentials, after releasing its database transaction. Errors: 400 if the model's workload is unrecognised; 404 for an unknown deployment, or a model absent from the OpenRouter public catalog; 409 if the connection is not OpenRouter or the upstream model is not a catalog slug; 502 if the catalog fetch or its response is unavailable; 503 if management storage is unavailable. The draft needs review; publishing remains a separate immutable price POST."
       },
       "scope": "platform:read",
       "token_policy": "Scope"
@@ -3848,7 +3869,18 @@
             "name": "type",
             "required": false,
             "schema": {
-              "type": "string"
+              "enum": [
+                "generation",
+                "embeddings",
+                "images",
+                "audio_transcriptions",
+                "audio_speech",
+                "rerank",
+                "systemone",
+                "realtime",
+                "videos",
+                "batches"
+              ]
             }
           },
           {
@@ -3856,7 +3888,11 @@
             "name": "sort",
             "required": false,
             "schema": {
-              "type": "string"
+              "enum": [
+                "name",
+                "newest",
+                "price"
+              ]
             }
           }
         ]

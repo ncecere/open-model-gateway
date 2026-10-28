@@ -651,7 +651,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Omission retains endpoint; explicit null clears. Replacement is Bedrock only. Local HTTP approval comes from server-controlled GATEWAY_LOCAL_UPSTREAMS, never client approval fields."
+              "description": "Omission keeps the endpoint; explicit null clears it (regional endpoint). Endpoint updates are Bedrock only: any endpoint member, including an explicit null, on a non-Bedrock connection is refused with 400. The schema cannot express this because the provider kind is stored, not in the body. Local HTTP approval comes from server-controlled GATEWAY_LOCAL_UPSTREAMS, never client approval fields."
             }
           },
           "required": [
@@ -705,7 +705,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Omission retains endpoint; explicit null clears. Replacement is Bedrock only. Local HTTP approval comes from server-controlled GATEWAY_LOCAL_UPSTREAMS, never client approval fields."
+              "description": "Omission keeps the endpoint; explicit null clears it (regional endpoint). Endpoint updates are Bedrock only: any endpoint member, including an explicit null, on a non-Bedrock connection is refused with 400. The schema cannot express this because the provider kind is stored, not in the body. Local HTTP approval comes from server-controlled GATEWAY_LOCAL_UPSTREAMS, never client approval fields."
             }
           ],
           "minItems": 4,
@@ -713,7 +713,7 @@
           "items": false
         }
       ],
-      "description": "Closed serde object or existing positional struct array in declared field order. Handler semantic validation is additional. enabled is required. Omitted/null credential_ref keeps the reference; AWS options require a restated role reference. Omitted endpoint keeps it, null clears; endpoint updates are Bedrock only. Local approval cannot be supplied by a client."
+      "description": "Closed serde object or existing positional struct array in declared field order. Handler semantic validation is additional. enabled is required. Omitted/null credential_ref keeps the reference; AWS options require a restated role reference. Omitted endpoint keeps it, null clears; any endpoint member, including null, on a non-Bedrock connection is refused with 400. Local approval cannot be supplied by a client."
     },
     "SetupModelInput": {
       "oneOf": [
@@ -7588,7 +7588,9 @@
             "input_microusd_per_million": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^[0-9]{1,19}$",
+                  "description": "Decimal digits only, at most 19 characters (the handler's parse into a signed 64-bit integer rejects larger values). A rate in micro-USD per million tokens."
                 },
                 {
                   "type": "null"
@@ -7598,7 +7600,9 @@
             "output_microusd_per_million": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^[0-9]{1,19}$",
+                  "description": "Decimal digits only, at most 19 characters (the handler's parse into a signed 64-bit integer rejects larger values). A rate in micro-USD per million tokens."
                 },
                 {
                   "type": "null"
@@ -14648,7 +14652,9 @@
             {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^[0-9]{1,19}$",
+                  "description": "Decimal digits only, at most 19 characters (the handler's parse into a signed 64-bit integer rejects larger values). A rate in micro-USD per million tokens."
                 },
                 {
                   "type": "null"
@@ -14658,7 +14664,9 @@
             {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^[0-9]{1,19}$",
+                  "description": "Decimal digits only, at most 19 characters (the handler's parse into a signed 64-bit integer rejects larger values). A rate in micro-USD per million tokens."
                 },
                 {
                   "type": "null"
@@ -22163,12 +22171,15 @@
           "type": "object",
           "properties": {
             "strategy": {
-              "type": "string"
+              "enum": [
+                "priority",
+                "weighted"
+              ]
             },
             "max_attempts": {
               "type": "integer",
-              "minimum": -2147483648,
-              "maximum": 2147483647
+              "minimum": 1,
+              "maximum": 3
             },
             "allow_ambiguous_failover": {
               "type": "boolean"
@@ -22196,12 +22207,15 @@
           "type": "array",
           "prefixItems": [
             {
-              "type": "string"
+              "enum": [
+                "priority",
+                "weighted"
+              ]
             },
             {
               "type": "integer",
-              "minimum": -2147483648,
-              "maximum": 2147483647
+              "minimum": 1,
+              "maximum": 3
             },
             {
               "type": "boolean"
@@ -22236,8 +22250,8 @@
             },
             "weight": {
               "type": "integer",
-              "minimum": -2147483648,
-              "maximum": 2147483647
+              "minimum": 1,
+              "maximum": 1000
             },
             "residency": {
               "anyOf": [
@@ -22251,13 +22265,13 @@
             },
             "failure_threshold": {
               "type": "integer",
-              "minimum": -2147483648,
+              "minimum": 1,
               "maximum": 2147483647
             },
             "cooldown_seconds": {
               "type": "integer",
-              "minimum": -2147483648,
-              "maximum": 2147483647
+              "minimum": 1,
+              "maximum": 3600
             }
           },
           "required": [
@@ -22279,8 +22293,8 @@
             },
             {
               "type": "integer",
-              "minimum": -2147483648,
-              "maximum": 2147483647
+              "minimum": 1,
+              "maximum": 1000
             },
             {
               "anyOf": [
@@ -22294,13 +22308,13 @@
             },
             {
               "type": "integer",
-              "minimum": -2147483648,
+              "minimum": 1,
               "maximum": 2147483647
             },
             {
               "type": "integer",
-              "minimum": -2147483648,
-              "maximum": 2147483647
+              "minimum": 1,
+              "maximum": 3600
             }
           ],
           "minItems": 5,
@@ -23187,7 +23201,9 @@
               "type": "string"
             },
             "amount_microusd": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,18})$",
+              "description": "Canonical integer micro-USD string of at most 19 digits. The handler additionally accepts leading zeros and rejects values above the signed 64-bit maximum."
             }
           },
           "required": [
@@ -23203,7 +23219,9 @@
               "type": "string"
             },
             {
-              "type": "string"
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,18})$",
+              "description": "Canonical integer micro-USD string of at most 19 digits. The handler additionally accepts leading zeros and rejects values above the signed 64-bit maximum."
             }
           ],
           "minItems": 2,
@@ -23305,7 +23323,9 @@
             "monthly_budget_microusd": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
+                  "description": "Canonical integer micro-USD string of at most 19 digits. The handler additionally accepts leading zeros and rejects values above the signed 64-bit maximum."
                 },
                 {
                   "type": "null"
@@ -23419,7 +23439,9 @@
             {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
+                  "description": "Canonical integer micro-USD string of at most 19 digits. The handler additionally accepts leading zeros and rejects values above the signed 64-bit maximum."
                 },
                 {
                   "type": "null"
@@ -23531,16 +23553,7 @@
           ]
         },
         "monthly_budget_microusd": {
-          "anyOf": [
-            {
-              "type": "string",
-              "pattern": "^[0-9]+$",
-              "description": "Exact nonnegative integer decimal string. Monetary fields are micro-USD, never floating-point JSON numbers."
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/components/schemas/IdentityNullableDecimal"
         },
         "budget_period": {
           "enum": [
@@ -23564,9 +23577,7 @@
                 ]
               },
               "amount_microusd": {
-                "type": "string",
-                "pattern": "^[0-9]+$",
-                "description": "Exact nonnegative integer decimal string. Monetary fields are micro-USD, never floating-point JSON numbers."
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
               }
             },
             "required": [
@@ -24023,7 +24034,7 @@
             {
               "type": "string",
               "pattern": "^[0-9]+$",
-              "description": "Exact nonnegative integer decimal string. Monetary fields are micro-USD, never floating-point JSON numbers."
+              "description": "Configuration revision: a nonnegative integer counter as a decimal string. Not a monetary amount."
             },
             {
               "type": "null"
@@ -24097,7 +24108,7 @@
             "revision": {
               "type": "string",
               "pattern": "^[0-9]+$",
-              "description": "Exact nonnegative integer decimal string. Monetary fields are micro-USD, never floating-point JSON numbers."
+              "description": "Configuration revision: a nonnegative integer counter as a decimal string. Not a monetary amount."
             },
             "after": {
               "type": "object",

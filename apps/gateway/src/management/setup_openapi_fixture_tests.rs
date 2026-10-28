@@ -80,7 +80,11 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         Default::default(),
     )
     .unwrap();
-    let catalog_app = axum::Router::new().route("/models", axum::routing::get(|| async { Json(json!({"data":[{"id":"contract/model","context_length":8192,"top_provider":{"max_completion_tokens":1024},"pricing":{"prompt":"0.000000123","completion":"0.000000456"}}]})) }));
+    // `contract/model` lists endpoints (the endpoint-priced branch);
+    // `contract/catalog-only` has none, so the catalog's top-provider price is used.
+    let catalog_app = axum::Router::new()
+        .route("/models", axum::routing::get(|| async { Json(json!({"data":[{"id":"contract/model","context_length":8192,"top_provider":{"max_completion_tokens":1024},"pricing":{"prompt":"0.000000123","completion":"0.000000456"}},{"id":"contract/catalog-only","context_length":8192,"top_provider":{"max_completion_tokens":1024},"pricing":{"prompt":"0.000000123","completion":"0.000000456"}}]})) }))
+        .route("/models/contract/model/endpoints", axum::routing::get(|| async { Json(json!({"data":{"id":"contract/model","endpoints":[{"provider_name":"Contract Cheap","status":0,"pricing":{"prompt":"0.000000123","completion":"0.000000456"}},{"provider_name":"Contract Dear","status":0,"pricing":{"prompt":"0.000000246","completion":"0.000000912"}}]}})) }));
     let (catalog_url, catalog_task) = governance::suggestion::tests::mock(catalog_app).await;
     let _catalog_server = Server(catalog_task);
     let catalog = std::sync::Arc::new(governance::suggestion::OpenRouterCatalog::for_test(
@@ -112,6 +116,29 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         )
         .await);
     let provider = id(&j.request("POST", "/api/v1/platform/providers", Some(json!({"name":"Contract reference","provider":"openrouter","credential_ref":"env:CONTRACT_REFERENCE","enabled":true}))).await);
+    // Identity-bearing provider kinds: Bedrock default and role identities (non-null
+    // `aws_auth`), created through the real route. A named AWS profile needs a
+    // server allowlist and a credential-less (`none`) local endpoint needs a
+    // process-level GATEWAY_LOCAL_UPSTREAMS approval; the test process sets
+    // neither, so those two connections are inserted directly (the same way the
+    // batch-scheduling tests seed local routes).
+    let bedrock_default = id(&j.request("POST", "/api/v1/platform/providers", Some(json!({"name":"Contract Bedrock","provider":"bedrock","credential_ref":"aws:default","endpoint":null,"region":"us-east-1","enabled":false}))).await);
+    j.request("POST", "/api/v1/platform/providers", Some(json!({"name":"Contract Bedrock role","provider":"bedrock","credential_ref":"aws:role:arn:aws:iam::123456789012:role/gateway/bedrock-invoke","aws_external_id":"tenant-ext-42","aws_session_name":"gateway.contract","endpoint":null,"region":"us-east-1","enabled":false}))).await;
+    for (name, provider, reference, endpoint, region) in [
+        ("Contract profile", "bedrock", "aws:profile:contract", None, Some("us-east-1")),
+        ("Contract local", "ollama", "none", Some("http://10.0.0.5:11434/v1"), None),
+    ] {
+        sqlx::query("INSERT INTO provider_connections(id,name,provider,credential_ref,endpoint,region,enabled) VALUES($6,$1,$2,$3,$4,$5,false)")
+            .bind(name)
+            .bind(provider)
+            .bind(reference)
+            .bind(endpoint)
+            .bind(region)
+            .bind(Uuid::new_v4())
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
     let model = id(&j.request("POST", "/api/v1/platform/models", Some(json!({"public_name":"contract/model","display_name":"Contract model","enabled":true}))).await);
     let deployment = id(&j.request("POST", "/api/v1/platform/deployments", Some(json!({"model_id":model,"provider_connection_id":provider,"upstream_model":"contract/model","enabled":true}))).await);
     j.request(
@@ -234,6 +261,31 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         let value = j.request("GET", &path, None).await;
         assert!(!value.to_string().contains(&f.personal.to_string()));
     }
+    // Optional-parameter coverage: every documented query parameter in a positive request.
+    // The OpenRouter route's data policy is the configured one; the two picker
+    // exclusions name workspaces/catalogs the model is not yet part of.
+    let policy_now = crate::providers::openrouter::DataCollection::configured().as_str();
+    let nested = j.request("GET", &format!("/api/v1/platform/models?limit=5&offset=0&q=contract&enabled=true&provider_connection_id={provider}&type=generation&max_input_price=9007199254740993&data_policy={policy_now}&include_deprecated=true&sort=name&not_in_catalog={}&not_direct_in={}", Uuid::new_v4(), Uuid::new_v4()), None).await;
+    assert!(!nested.to_string().contains(&f.personal.to_string()));
+    for sort in ["newest", "price"] {
+        j.request("GET", &format!("/api/v1/platform/models?sort={sort}"), None).await;
+    }
+    j.request("GET", "/api/v1/platform/providers?limit=10&offset=0&q=contract&enabled=false", None).await;
+    j.request("GET", &format!("/api/v1/platform/deployments/{deployment}/prices?limit=2&offset=1"), None).await;
+    // The price suggestion has two real branches: priced from a concrete
+    // endpoint, and from the catalog's top provider when no endpoint list exists.
+    let catalog_only = id(&j.request("POST", "/api/v1/platform/deployments", Some(json!({"model_id":model,"provider_connection_id":provider,"upstream_model":"contract/catalog-only","enabled":true}))).await);
+    let from_catalog = j.request("GET", &format!("/api/v1/platform/deployments/{catalog_only}/price-suggestion"), None).await;
+    assert_eq!(from_catalog["endpoint"]["selection"], "catalog");
+    let from_endpoint = j.request("GET", &format!("/api/v1/platform/deployments/{deployment}/price-suggestion"), None).await;
+    assert_eq!(from_endpoint["endpoint"]["selection"], "cheapest");
+    // PlatformRead is the declared boundary, but the handler needs platform_write.
+    let r = send(&j.client, &j.base, Some(&auditor), "GET", &format!("/api/v1/platform/deployments/{deployment}/price-suggestion"), None).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    // An explicit endpoint null is an endpoint update: Bedrock clears it; any other kind is refused.
+    j.request("PATCH", &format!("/api/v1/platform/providers/{bedrock_default}"), Some(json!({"enabled":false,"endpoint":null}))).await;
+    let r = send(&j.client, &j.base, Some(&admin), "PATCH", &format!("/api/v1/platform/providers/{provider}"), Some(json!({"enabled":true,"endpoint":null}))).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
     let history = j
         .request(
             "GET",
@@ -263,6 +315,18 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     )
     .await;
     for suffix in ["models", "available-models", "catalog", "policy"] {
+        j.request(
+            "GET",
+            &format!("/api/v1/workspaces/{}/{suffix}", f.team),
+            None,
+        )
+        .await;
+    }
+    for suffix in [
+        "models?limit=5&offset=0&q=contract",
+        "available-models?limit=5&offset=0&q=contract",
+        "catalog?limit=5&offset=0&q=contract&type=generation&sort=price",
+    ] {
         j.request(
             "GET",
             &format!("/api/v1/workspaces/{}/{suffix}", f.team),
@@ -427,6 +491,12 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         .await;
         assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
     }
+    j.request(
+        "DELETE",
+        &format!("/api/v1/platform/deployments/{catalog_only}"),
+        None,
+    )
+    .await;
     j.request(
         "DELETE",
         &format!("/api/v1/platform/deployments/{deployment}"),
