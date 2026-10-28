@@ -95,11 +95,11 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
     crate::alerts::evaluate_once(&f.s).await.unwrap().unwrap();
     let (status, ceiling) = call(&f.s, &f.admin, "POST", "/api/v1/platform/alerts/rules", json!({"name":"Contract ceiling","kind":"admission_ceiling","window_minutes":5,"ceiling_requests_per_second":200,"ceiling_lock_wait_ms":250,"notify_platform_admins":true})).await;
     assert_eq!(status, StatusCode::OK);
-    sqlx::query("INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary,details) VALUES($1,$2,'admission_ceiling',$3,1,'warning',$4,'A workspace is near its admission ceiling',jsonb_build_object('personal',false,'workspace_name','Team'))")
+    sqlx::query("INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary,details) VALUES($1,$2,'admission_ceiling',$3,1,'warning',$4,'A workspace is near its admission ceiling',jsonb_build_object('scope','workspace','personal',false,'workspace_name','Team','workspace_kind','team','window_minutes',5,'admissions',60000,'admissions_per_second','200.0','by_rate',true,'by_lock_wait',false,'threshold_requests_per_second',200,'lock_wait_p95_at_least_ms',NULL,'threshold_lock_wait_ms',250))")
         .bind(Uuid::new_v4()).bind(id(&ceiling)).bind(format!("workspace:{}",f.team)).bind(f.team).execute(&pool).await.unwrap();
     // alerts::admission_ceiling_conditions suppresses personal references even
     // for Admins: the stored event deliberately has no workspace_id/name.
-    sqlx::query("INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,summary,details) VALUES($1,$2,'admission_ceiling','contract-personal',1,'warning','An API key in a personal workspace is near its admission ceiling',jsonb_build_object('personal',true,'workspace_name',NULL,'workspace_kind','personal'))")
+    sqlx::query("INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,summary,details) VALUES($1,$2,'admission_ceiling','contract-personal',1,'warning','An API key in a personal workspace is near its admission ceiling',jsonb_build_object('scope','key','personal',true,'workspace_name',NULL,'workspace_kind','personal','window_minutes',5,'admissions',60000,'admissions_per_second','200.0','by_rate',true,'by_lock_wait',false,'threshold_requests_per_second',200,'lock_wait_p95_at_least_ms',NULL,'threshold_lock_wait_ms',250))")
         .bind(Uuid::new_v4()).bind(id(&ceiling)).execute(&pool).await.unwrap();
     let (status, invitation) = call(
         &f.s,
@@ -431,7 +431,5 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
     )
     .await;
     assert_eq!(r.status, StatusCode::PAYLOAD_TOO_LARGE);
-    for area in openapi::responses::IDENTITY_SELF_SERVICE_AREAS {
-        observed.finish(&[area]);
-    }
+    observed.finish(openapi::responses::IDENTITY_SELF_SERVICE_AREAS);
 }
