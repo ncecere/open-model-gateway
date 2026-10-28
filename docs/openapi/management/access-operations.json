@@ -296,7 +296,7 @@
     "GET /api/v1/platform/users/{user}/export": {
       "access": "PlatformRead",
       "operation": {
-        "description": "Platform-visible subject export only: shared membership and audit, never personal workspace, keys, sessions or requests. No date query is accepted/decoded by this route.",
+        "description": "Platform-visible subject export only: shared membership and audit, never personal workspace, keys, sessions or requests. Query parameters are ignored; this route does not decode or apply a date range.",
         "responses": {
           "200": {
             "description": "Successful handler representation",

@@ -17737,7 +17737,7 @@
     },
     "/api/v1/platform/users/{user}/export": {
       "get": {
-        "description": "Platform-visible subject export only: shared membership and audit, never personal workspace, keys, sessions or requests. No date query is accepted/decoded by this route.",
+        "description": "Platform-visible subject export only: shared membership and audit, never personal workspace, keys, sessions or requests. Query parameters are ignored; this route does not decode or apply a date range.",
         "operationId": "get_api_v1_platform_users_by_user_export",
         "parameters": [
           {
