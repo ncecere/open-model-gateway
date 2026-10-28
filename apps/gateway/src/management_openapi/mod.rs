@@ -10,6 +10,7 @@ pub(crate) mod requests;
 pub(crate) mod responses;
 mod setup_review_tests;
 mod validation;
+mod wiring_tests;
 
 #[cfg(test)]
 mod tests {
