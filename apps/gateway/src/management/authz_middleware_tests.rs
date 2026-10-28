@@ -2,6 +2,24 @@
 use super::*;
 use axum::routing::{MethodFilter, MethodRouter, any, on};
 
+// This matrix intentionally mounts synthetic 204 stubs, including routes
+// behind middleware they never use in production. Preserve its independent
+// status table, but never treat stub outcomes as real-handler contracts or
+// positive fixtures (e.g. anonymous auth/config deliberately answers 401 here).
+async fn request(
+    app: &Router,
+    method: &str,
+    path: &str,
+    session: Option<&Session>,
+    bearer: Option<&str>,
+    csrf: bool,
+    origin: &str,
+) -> StatusCode {
+    super::raw_request(app, method, path, session, bearer, csrf, origin)
+        .await
+        .status()
+}
+
 #[derive(Clone, Copy, Debug)]
 #[repr(usize)]
 enum Actor {

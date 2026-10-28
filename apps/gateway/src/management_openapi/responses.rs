@@ -203,10 +203,12 @@ pub(crate) fn area(template: &str) -> &str {
 }
 
 /// Resolve a concrete request only at capture sites; validation itself requires
-/// the exact template. Ambiguous matches are errors, not first-match wins.
+/// the exact template. Match Axum's static-before-parameter precedence (for
+/// example /platform/models/compare versus /platform/models/{id}); equally
+/// specific ambiguous declarations are errors, not first-match wins.
 fn template(method: &str, path: &str) -> Result<Option<String>> {
     let path = path.split('?').next().unwrap();
-    let candidates = artifact()["paths"]
+    let mut candidates = artifact()["paths"]
         .as_object()
         .unwrap()
         .iter()
@@ -222,7 +224,18 @@ fn template(method: &str, path: &str) -> Result<Option<String>> {
         })
         .map(|(p, _)| p.clone())
         .collect::<Vec<_>>();
-    ensure!(candidates.len() <= 1, "ambiguous operation template");
+    let specificity = |path: &str| {
+        path.split('/')
+            .map(|s| !s.starts_with('{'))
+            .collect::<Vec<_>>()
+    };
+    candidates.sort_by_key(|path| std::cmp::Reverse(specificity(path)));
+    if candidates.len() > 1 {
+        ensure!(
+            specificity(&candidates[0]) != specificity(&candidates[1]),
+            "ambiguous operation template"
+        );
+    }
     Ok(candidates.into_iter().next())
 }
 
@@ -485,6 +498,12 @@ mod tests {
         assert_eq!(
             template("GET", "/api/v1/me?x=1").unwrap().as_deref(),
             Some("/api/v1/me")
+        );
+        assert_eq!(
+            template("GET", "/api/v1/platform/models/compare")
+                .unwrap()
+                .as_deref(),
+            Some("/api/v1/platform/models/compare")
         );
         check(
             "GET",
