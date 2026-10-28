@@ -9,6 +9,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { test } from "node:test";
+import { parseAllDocuments } from "yaml";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const chart = join(root, "deploy/helm/open-model-gateway");
@@ -652,6 +653,19 @@ test("SCIM #60 standalone bootstrap uses only owner refs, supported commands and
   assert.match(job, /args: \["wait-for-database", "--schema", "--timeout-seconds", "600"\]/);
   assert.match(job, /args: \["provision-user", "--email", "omg-scim60-bootstrap@bitop.invalid", "--platform-admin"\]/);
   assert.deepEqual([...job.matchAll(/^\s+image: (.+)$/gm)].map(m => m[1]), [scim60Image, scim60Image]);
+  // Parsed, style-independent oracle: exact workload containers and every image key anywhere.
+  const parsed = parseAllDocuments(job).map(d => { assert.deepEqual(d.errors, []); return d.toJS(); });
+  assert.equal(parsed.length, 1);
+  const spec = parsed[0].spec.template.spec;
+  assert.deepEqual(Object.keys(spec).filter(k => /containers$/i.test(k)).sort(), ["containers", "initContainers"]);
+  assert.deepEqual(spec.initContainers.map(c => [c.name, c.image]), [["wait-for-schema", scim60Image]]);
+  assert.deepEqual(spec.containers.map(c => [c.name, c.image]), [["provision-bootstrap-admin", scim60Image]]);
+  const images = [];
+  (function walk(v) {
+    if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) { if (k === "image") images.push(x); walk(x); }
+  })(parsed[0]);
+  assert.deepEqual(images, [scim60Image, scim60Image]);
   assertScim60RoleRefs(job, "OMG_DB_MIGRATOR", "omg-scim60-migrator-role", 2);
   assert.equal([...job.matchAll(/value: "postgres:\/\/\$\(OMG_DB_MIGRATOR_USERNAME\):\$\(OMG_DB_MIGRATOR_PASSWORD\)@omg-scim60-db-rw:5432\/omg_scim60"/g)].length, 2);
   assert.doesNotMatch(job, /configMapRef|envFrom:|secretRef:|runtime-role|OIDC|SCIM_TOKEN|pooler|helm\.sh\/hook|ttlSecondsAfterFinished|args: \["(?:serve|migrate|grants)"/);
