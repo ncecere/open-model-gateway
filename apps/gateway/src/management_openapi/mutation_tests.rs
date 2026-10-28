@@ -90,7 +90,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
     let mut operations = 0;
     let mut json_operations = 0;
     for (path, item) in document["paths"].as_object().unwrap() {
-        if !COMPLETED_AREAS.contains(&area(path)) {
+        if !completed(area(path)) {
             continue;
         }
         for (method, op) in item.as_object().unwrap() {

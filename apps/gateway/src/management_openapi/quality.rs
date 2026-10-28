@@ -267,7 +267,7 @@ pub(super) fn completed(document: &Value) -> Result<()> {
         }
     }
     for (path, item) in document["paths"].as_object().context("paths missing")? {
-        if super::responses::COMPLETED_AREAS.contains(&super::responses::area(path)) {
+        if super::responses::completed(super::responses::area(path)) {
             for op in item.as_object().context("operation map missing")?.values() {
                 operation(document, op)?;
             }
