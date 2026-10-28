@@ -54,6 +54,8 @@ fn reference<'a>(document: &'a Value, node: &Value) -> Result<(&'a Value, String
 struct Facts {
     bounded: bool,
     object: bool,
+    array: bool,
+    items: bool,
     closed: bool,
     required: bool,
     arbitrary: bool,
@@ -63,6 +65,8 @@ impl Facts {
     fn merge(&mut self, other: Self) {
         self.bounded |= other.bounded;
         self.object |= other.object;
+        self.array |= other.array;
+        self.items |= other.items;
         self.closed |= other.closed;
         self.required |= other.required;
         self.arbitrary |= other.arbitrary;
@@ -88,6 +92,16 @@ fn facts(
                 .is_some_and(|a| a.iter().any(|v| v == "object"))
             || node.get("properties").is_some()
             || node.get("required").is_some(),
+        array: node["type"] == "array"
+            || node["type"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|v| v == "array"))
+            || node.get("items").is_some()
+            || node.get("prefixItems").is_some()
+            || node.get("contains").is_some(),
+        // The item schema itself is checked recursively below, with a fresh
+        // domain: the enclosing array/object cannot constrain its elements.
+        items: node.get("items").is_some(),
         closed: node["additionalProperties"] == false,
         required: node["required"].is_array(),
         arbitrary: arbitrary(location, node),
@@ -172,6 +186,25 @@ fn schema(
             "completed object must explicitly declare required fields at {location}"
         );
     }
+    if effective.array && !effective.arbitrary {
+        ensure!(
+            effective.items,
+            "completed array must constrain items at {location}"
+        );
+    }
+    // Even typed wildcard values admit arbitrary property *names*. The exact
+    // reviewed stored-JSON pointer, not inherited facts or a copied comment,
+    // must authorize these maps. The notification monetary pattern is covered
+    // by its existing details entry in ARBITRARY_JSON.
+    ensure!(
+        arbitrary(location, node)
+            || (node["patternProperties"]
+                .as_object()
+                .is_none_or(|m| m.values().all(|v| v == false))
+                && !node["additionalProperties"].is_object()
+                && !node["unevaluatedProperties"].is_object()),
+        "wildcard maps require a reviewed ARBITRARY_JSON pointer at {location}"
+    );
     if node.get("$ref").is_some() {
         let (target, pointer) = reference(document, node)?;
         if seen.insert(pointer.clone()) {
@@ -217,6 +250,8 @@ fn schema(
         "items",
         "additionalProperties",
         "unevaluatedProperties",
+        "unevaluatedItems",
+        "additionalItems",
         "contains",
         "propertyNames",
     ] {

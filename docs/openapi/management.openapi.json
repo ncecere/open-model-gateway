@@ -4432,6 +4432,78 @@
         ],
         "type": "object"
       },
+      "IdentityCeilingDetails": {
+        "additionalProperties": false,
+        "description": "Exact alerts::ceiling_conditions producer fields and wire types. workspace_name is nullable for personal events and omitted by non-Admin redaction; every other producer field is required. No workspace id, nested workspace or owner identity is permitted.",
+        "properties": {
+          "admissions": {
+            "type": "integer"
+          },
+          "admissions_per_second": {
+            "pattern": "^[0-9]+\\.[0-9]$",
+            "type": "string"
+          },
+          "by_lock_wait": {
+            "type": "boolean"
+          },
+          "by_rate": {
+            "type": "boolean"
+          },
+          "lock_wait_p95_at_least_ms": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "personal": {
+            "type": "boolean"
+          },
+          "scope": {
+            "enum": [
+              "workspace",
+              "key"
+            ]
+          },
+          "threshold_lock_wait_ms": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "threshold_requests_per_second": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "window_minutes": {
+            "type": "integer"
+          },
+          "workspace_kind": {
+            "$ref": "#/components/schemas/IdentityWorkspaceKind"
+          },
+          "workspace_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "scope",
+          "personal",
+          "workspace_kind",
+          "window_minutes",
+          "admissions",
+          "admissions_per_second",
+          "by_rate",
+          "by_lock_wait",
+          "threshold_requests_per_second",
+          "lock_wait_p95_at_least_ms",
+          "threshold_lock_wait_ms"
+        ],
+        "type": "object"
+      },
       "IdentityDateWindow": {
         "additionalProperties": false,
         "properties": {
@@ -4782,6 +4854,16 @@
       },
       "IdentityNotification": {
         "additionalProperties": false,
+        "if": {
+          "properties": {
+            "kind": {
+              "const": "admission_ceiling"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
         "properties": {
           "builtin": {
             "type": "boolean"
@@ -4954,6 +5036,13 @@
           "cleared_email",
           "read"
         ],
+        "then": {
+          "properties": {
+            "details": {
+              "$ref": "#/components/schemas/IdentityCeilingDetails"
+            }
+          }
+        },
         "type": "object"
       },
       "IdentityNullableDecimal": {
