@@ -840,7 +840,8 @@ async fn admission_ceiling_rules_and_scope_names_are_for_platform_admins(pool: P
         StatusCode::BAD_REQUEST
     );
     // An incident naming a team: Platform Admins see the workspace, Auditors do not.
-    sqlx::query("INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary,details) VALUES($1,$2,'admission_ceiling',$3,1,'warning',$4,'A workspace is near its admission ceiling',jsonb_build_object('scope','workspace','personal',false,'workspace_name','Team'))")
+    // Producer-shaped details (alerts.rs ceiling producer): the contract closes them.
+    sqlx::query("INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary,details) VALUES($1,$2,'admission_ceiling',$3,1,'warning',$4,'A workspace is near its admission ceiling',jsonb_build_object('scope','workspace','personal',false,'workspace_name','Team','workspace_kind','team','window_minutes',5,'admissions',1000,'admissions_per_second','3.3','by_rate',true,'by_lock_wait',false,'threshold_requests_per_second',3,'lock_wait_p95_at_least_ms',NULL::integer,'threshold_lock_wait_ms',NULL::integer))")
         .bind(Uuid::new_v4()).bind(rule).bind(format!("workspace:{}", f.team)).bind(f.team).execute(&pool).await.unwrap();
     let events = |user: &BrowserPrincipal| {
         let user = user.clone();
