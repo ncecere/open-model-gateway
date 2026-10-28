@@ -1,4 +1,6 @@
 //! Test-only management contract: no runtime endpoint or production dependency.
+pub(crate) mod coverage;
+mod coverage_tests;
 mod generator;
 mod hardening_tests;
 mod middleware;

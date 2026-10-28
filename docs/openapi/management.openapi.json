@@ -8397,7 +8397,8 @@
                     },
                     "metadata": {
                       "$comment": "Stored audit_events.metadata is exported verbatim as JSON; its vocabulary depends on the audited action.",
-                      "description": "Stored audit JSON metadata; no fixed DTO or closed property vocabulary."
+                      "description": "Stored audit JSON metadata; no fixed DTO or closed property vocabulary.",
+                      "type": "object"
                     },
                     "occurred_at": {
                       "$ref": "#/components/schemas/IdentityTime"
