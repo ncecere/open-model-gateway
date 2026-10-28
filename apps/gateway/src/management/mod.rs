@@ -24,7 +24,7 @@ mod members;
 mod models_ux;
 #[cfg(test)]
 #[path = "../management_openapi/mod.rs"]
-mod openapi;
+pub(crate) mod openapi;
 mod provider_costs;
 mod requests;
 pub(crate) mod resources;

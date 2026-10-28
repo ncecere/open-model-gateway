@@ -199,11 +199,10 @@ async fn call(
         )
         .await
         .unwrap();
-    let status = response.status();
-    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let captured = openapi::responses::capture(method, path, response).await;
     (
-        status,
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        captured.status,
+        serde_json::from_slice(&captured.bytes).unwrap_or(Value::Null),
     )
 }
 #[sqlx::test(migrations = "./enterprise_migrations")]

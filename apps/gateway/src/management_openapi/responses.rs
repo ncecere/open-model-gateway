@@ -1,0 +1,499 @@
+//! Raw-wire contract checks. Never infer an empty body from a failed JSON decode.
+use std::collections::BTreeSet;
+
+use anyhow::{Context, Result, ensure};
+use axum::http::{HeaderMap, StatusCode};
+use serde_json::{Value, json};
+
+// Enabled only when the area's schemas AND executed fixture suite land together.
+pub(crate) const COMPLETED_AREAS: &[&str] = &[];
+
+pub(crate) fn artifact() -> &'static Value {
+    static DOCUMENT: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+    DOCUMENT.get_or_init(|| {
+        serde_json::from_str(include_str!(
+            "../../../../docs/openapi/management.openapi.json"
+        ))
+        .unwrap()
+    })
+}
+
+fn operation<'a>(document: &'a Value, method: &str, template: &str) -> Result<&'a Value> {
+    let method = if method == "HEAD" {
+        "get".into()
+    } else {
+        method.to_ascii_lowercase()
+    };
+    document["paths"][template]
+        .get(&method)
+        .with_context(|| format!("undocumented operation {method} {template}"))
+}
+
+fn resolved<'a>(document: &'a Value, value: &'a Value) -> Result<&'a Value> {
+    if let Some(reference) = value.get("$ref") {
+        let reference = reference.as_str().context("reference must be a string")?;
+        ensure!(reference.starts_with("#/"), "external reference refused");
+        return document
+            .pointer(&reference[1..])
+            .context("unresolved reference");
+    }
+    Ok(value)
+}
+
+pub(crate) fn validate_value(document: &Value, schema: &Value, body: &Value) -> Result<()> {
+    let mut root = document.clone();
+    root["$defs"] = json!({"observed":schema});
+    root["$ref"] = json!("#/$defs/observed");
+    super::validation::compile_schema(&root)?
+        .validate(body)
+        .map_err(|e| anyhow::anyhow!("wire schema mismatch: {e}"))
+}
+
+/// Exact METHOD/template, never an operation inferred from the response body.
+pub(crate) fn validate(
+    document: &Value,
+    method: &str,
+    template: &str,
+    status: StatusCode,
+    headers: &HeaderMap,
+    bytes: &[u8],
+) -> Result<()> {
+    let op = operation(document, method, template)?;
+    require_complete(document, op)?;
+    let response = op["responses"]
+        .get(status.as_str())
+        .with_context(|| format!("undocumented status {status} for {method} {template}"))?;
+    let response = resolved(document, response)?;
+    for (name, header) in response["headers"].as_object().into_iter().flatten() {
+        let header = resolved(document, header)?;
+        let values = headers.get_all(name).iter().collect::<Vec<_>>();
+        ensure!(
+            header["required"] != true || !values.is_empty(),
+            "missing response header {name}"
+        );
+        for value in values {
+            validate_value(document, &header["schema"], &json!(value.to_str()?))?;
+        }
+    }
+    for name in response["x-omg-required-cookies"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        let prefix = format!(
+            "{}=",
+            name.as_str().context("cookie name must be a string")?
+        );
+        ensure!(
+            headers
+                .get_all("set-cookie")
+                .iter()
+                .any(|v| v.to_str().is_ok_and(|v| v.starts_with(&prefix))),
+            "missing response cookie {prefix}"
+        );
+    }
+    if method == "HEAD" {
+        ensure!(bytes.is_empty(), "implicit HEAD must have no body");
+        // HEAD carries GET's representation headers, but no representation bytes.
+        if response.get("content").is_some() {
+            media_schema(response, headers)?;
+        }
+        return Ok(());
+    }
+    if response.get("content").is_none() {
+        ensure!(
+            bytes.is_empty(),
+            "documented empty response contained bytes (JSON null is not empty)"
+        );
+        return Ok(());
+    }
+    let (media, schema) = media_schema(response, headers)?;
+    ensure!(!bytes.is_empty(), "documented representation is empty");
+    if media == "application/json" || media.ends_with("+json") {
+        let body: Value = serde_json::from_slice(bytes).context("response is not JSON")?;
+        if let Some(error) = body.get("error").filter(|v| v.is_object()) {
+            ensure!(
+                error["code"] == status.as_str(),
+                "error envelope code differs from HTTP status"
+            );
+        }
+        validate_value(document, schema, &body)?;
+    } else if media.starts_with("text/") {
+        validate_value(document, schema, &json!(std::str::from_utf8(bytes)?))?;
+    } else {
+        let schema = resolved(document, schema)?;
+        ensure!(
+            schema["type"] == "string" && schema["format"] == "binary",
+            "binary response needs an explicit binary schema"
+        );
+        ensure!(
+            bytes.len() as u64 >= schema["minLength"].as_u64().unwrap_or(0),
+            "binary response too short"
+        );
+        if let Some(max) = schema["maxLength"].as_u64() {
+            ensure!(bytes.len() as u64 <= max, "binary response too long");
+        }
+    }
+    Ok(())
+}
+
+fn media_schema<'a>(response: &'a Value, headers: &HeaderMap) -> Result<(&'a str, &'a Value)> {
+    let media = headers
+        .get("content-type")
+        .context("missing content-type")?
+        .to_str()?
+        .split(';')
+        .next()
+        .unwrap()
+        .trim();
+    let content = response["content"]
+        .as_object()
+        .context("content must be an object")?;
+    let (name, value) = content
+        .get_key_value(media)
+        .with_context(|| format!("undocumented content-type {media}"))?;
+    Ok((name, value.get("schema").context("media schema missing")?))
+}
+
+fn require_complete(document: &Value, operation: &Value) -> Result<()> {
+    fn walk(document: &Value, value: &Value, seen: &mut BTreeSet<String>) -> Result<()> {
+        ensure!(
+            value["x-omg-schema-status"] != "incomplete",
+            "completed operation references an incomplete schema"
+        );
+        if let Some(reference) = value.get("$ref").and_then(Value::as_str)
+            && seen.insert(reference.to_owned())
+        {
+            walk(document, resolved(document, value)?, seen)?;
+        }
+        match value {
+            Value::Object(map) => {
+                for child in map.values() {
+                    walk(document, child, seen)?;
+                }
+            }
+            Value::Array(values) => {
+                for child in values {
+                    walk(document, child, seen)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    walk(document, operation, &mut BTreeSet::new())
+}
+
+fn require_positives(expected: &BTreeSet<String>, observed: &BTreeSet<String>) -> Result<()> {
+    ensure!(
+        expected == observed,
+        "positive fixture inventory differs: missing {:?}; extra {:?}",
+        expected.difference(observed).collect::<Vec<_>>(),
+        observed.difference(expected).collect::<Vec<_>>()
+    );
+    Ok(())
+}
+
+pub(crate) fn area(template: &str) -> &str {
+    template.split('/').nth(3).unwrap_or("")
+}
+
+/// Resolve a concrete request only at capture sites; validation itself requires
+/// the exact template. Ambiguous matches are errors, not first-match wins.
+fn template(method: &str, path: &str) -> Result<Option<String>> {
+    let path = path.split('?').next().unwrap();
+    let candidates = artifact()["paths"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(template, item)| {
+            let verb = if method == "HEAD" {
+                "get".into()
+            } else {
+                method.to_ascii_lowercase()
+            };
+            let a = template.split('/').collect::<Vec<_>>();
+            let b = path.split('/').collect::<Vec<_>>();
+            item.get(verb).is_some()
+                && a.len() == b.len()
+                && a.iter()
+                    .zip(b)
+                    .all(|(a, b)| (a.starts_with('{') && a.ends_with('}')) || *a == b)
+        })
+        .map(|(p, _)| p.clone())
+        .collect::<Vec<_>>();
+    ensure!(candidates.len() <= 1, "ambiguous operation template");
+    Ok(candidates.into_iter().next())
+}
+
+#[cfg(feature = "integration-tests")]
+pub(crate) struct Captured {
+    pub status: StatusCode,
+    pub headers: HeaderMap,
+    pub bytes: axum::body::Bytes,
+    method: String,
+    template: Option<String>,
+}
+
+#[cfg(feature = "integration-tests")]
+pub(crate) async fn capture(
+    method: &str,
+    path: &str,
+    response: axum::response::Response,
+) -> Captured {
+    let (parts, body) = response.into_parts();
+    let bytes = axum::body::to_bytes(body, 64 * 1024 * 1024).await.unwrap();
+    check(method, path, parts.status, &parts.headers, &bytes)
+        .unwrap_or_else(|e| panic!("{method} {path}: {e:#}"));
+    Captured {
+        status: parts.status,
+        headers: parts.headers,
+        bytes,
+        method: method.into(),
+        template: template(method, path).unwrap(),
+    }
+}
+
+pub(crate) fn check(
+    method: &str,
+    path: &str,
+    status: StatusCode,
+    headers: &HeaderMap,
+    bytes: &[u8],
+) -> Result<()> {
+    if let Some(template) = template(method, path)?
+        && COMPLETED_AREAS.contains(&area(&template))
+    {
+        validate(artifact(), method, &template, status, headers, bytes)?;
+    }
+    Ok(())
+}
+
+/// Preserve response extensions as well as the raw representation for callers
+/// that still need to inspect redirect/cookie or cache metadata.
+#[cfg(feature = "integration-tests")]
+pub(crate) async fn checked_response(
+    method: &str,
+    path: &str,
+    response: axum::response::Response,
+) -> axum::response::Response {
+    let (parts, body) = response.into_parts();
+    let bytes = axum::body::to_bytes(body, 64 * 1024 * 1024).await.unwrap();
+    check(method, path, parts.status, &parts.headers, &bytes)
+        .unwrap_or_else(|e| panic!("{method} {path}: {e:#}"));
+    axum::response::Response::from_parts(parts, axum::body::Body::from(bytes))
+}
+
+#[cfg(feature = "integration-tests")]
+#[derive(Default)]
+pub(crate) struct PositiveFixtures(BTreeSet<String>);
+#[cfg(feature = "integration-tests")]
+impl PositiveFixtures {
+    pub(crate) fn observe(&mut self, captured: &Captured) {
+        let template = captured
+            .template
+            .as_deref()
+            .expect("fixture operation must be documented");
+        validate(
+            artifact(),
+            &captured.method,
+            template,
+            captured.status,
+            &captured.headers,
+            &captured.bytes,
+        )
+        .unwrap();
+        let op = operation(artifact(), &captured.method, template).unwrap();
+        let positive = captured.status.is_success()
+            || captured.status.is_redirection()
+            || op["responses"][captured.status.as_str()]["x-omg-positive"] == true;
+        // A denial never earns coverage, nor does an implicit HEAD earn a GET.
+        if positive && captured.method != "HEAD" {
+            self.0.insert(format!("{} {template}", captured.method));
+        }
+    }
+    pub(crate) fn finish(&self, areas: &[&str]) {
+        let mut expected = BTreeSet::new();
+        for (path, item) in artifact()["paths"].as_object().unwrap() {
+            if areas.contains(&area(path)) {
+                for (method, op) in item.as_object().unwrap() {
+                    require_complete(artifact(), op).unwrap();
+                    expected.insert(format!("{} {path}", method.to_ascii_uppercase()));
+                }
+            }
+        }
+        assert!(!expected.is_empty(), "empty completed-area inventory");
+        let observed = self
+            .0
+            .iter()
+            .filter(|key| areas.contains(&area(key.split_once(' ').unwrap().1)))
+            .cloned()
+            .collect();
+        require_positives(&expected, &observed).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn document() -> Value {
+        json!({"paths":{"/api/v1/me":{"get":{
+            "x-omg-request-schema":{"$ref":"#/components/schemas/Request"},
+            "x-omg-response-schema":{"$ref":"#/components/schemas/Response"},
+            "responses":{"200":{"description":"OK","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Response"}}}},
+                "403":{"description":"Denied","content":{"application/json":{"schema":{"type":"object"}}}}}
+        }}},"components":{"schemas":{"Request":false,"Response":{"type":"object","required":["ok"],"properties":{"ok":{"const":true}},"additionalProperties":false}}}})
+    }
+    fn headers() -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert("content-type", "application/json".parse().unwrap());
+        h
+    }
+    #[test]
+    fn management_openapi_response_positive_and_wire_controls() {
+        let good = document();
+        validate(
+            &good,
+            "GET",
+            "/api/v1/me",
+            StatusCode::OK,
+            &headers(),
+            b"{\"ok\":true}",
+        )
+        .unwrap();
+        validate(&good, "HEAD", "/api/v1/me", StatusCode::OK, &headers(), b"").unwrap();
+        assert!(
+            validate(
+                &good,
+                "POST",
+                "/api/v1/me",
+                StatusCode::OK,
+                &headers(),
+                b"{\"ok\":true}"
+            )
+            .is_err()
+        );
+        assert!(
+            validate(
+                &good,
+                "GET",
+                "/api/v1/me",
+                StatusCode::OK,
+                &HeaderMap::new(),
+                b"{\"ok\":true}"
+            )
+            .is_err()
+        );
+        let mut d = good.clone();
+        d["paths"]["/api/v1/me"]["get"]["responses"]["204"] = json!({"description":"Empty"});
+        validate(
+            &d,
+            "GET",
+            "/api/v1/me",
+            StatusCode::NO_CONTENT,
+            &HeaderMap::new(),
+            b"",
+        )
+        .unwrap();
+        assert!(
+            validate(
+                &d,
+                "GET",
+                "/api/v1/me",
+                StatusCode::NO_CONTENT,
+                &headers(),
+                b"null"
+            )
+            .is_err()
+        );
+        d["paths"]["/api/v1/me"]["get"]["responses"]["200"]["headers"] =
+            json!({"ETag":{"required":true,"schema":{"const":"abc"}}});
+        assert!(
+            validate(
+                &d,
+                "GET",
+                "/api/v1/me",
+                StatusCode::OK,
+                &headers(),
+                b"{\"ok\":true}"
+            )
+            .is_err()
+        );
+        let mut h = headers();
+        h.insert("etag", "abc".parse().unwrap());
+        validate(
+            &d,
+            "GET",
+            "/api/v1/me",
+            StatusCode::OK,
+            &h,
+            b"{\"ok\":true}",
+        )
+        .unwrap();
+        for (media, schema, body) in [
+            ("text/plain", json!({"const":"hello"}), b"hello".as_slice()),
+            (
+                "image/png",
+                json!({"type":"string","format":"binary","minLength":2}),
+                b"\x89PNG".as_slice(),
+            ),
+        ] {
+            d["paths"]["/api/v1/me"]["get"]["responses"]["200"] =
+                json!({"description":"Representation","content":{media:{"schema":schema}}});
+            h.insert("content-type", media.parse().unwrap());
+            validate(&d, "GET", "/api/v1/me", StatusCode::OK, &h, body).unwrap();
+            assert!(validate(&d, "GET", "/api/v1/me", StatusCode::OK, &h, b"").is_err());
+        }
+        assert_eq!(
+            template("GET", "/api/v1/me?x=1").unwrap().as_deref(),
+            Some("/api/v1/me")
+        );
+        check(
+            "GET",
+            "/api/v1/platform/not-declared",
+            StatusCode::NOT_FOUND,
+            &HeaderMap::new(),
+            b"",
+        )
+        .unwrap();
+        let observed = BTreeSet::from(["GET /api/v1/me".into()]);
+        require_positives(&observed, &observed).unwrap();
+    }
+    #[test]
+    fn management_openapi_response_rejects_incomplete_completed_slot() {
+        let mut d = document();
+        d["components"]["schemas"]["Request"] = json!({"x-omg-schema-status":"incomplete"});
+        assert!(require_complete(&d, &d["paths"]["/api/v1/me"]["get"]).is_err());
+    }
+    #[test]
+    fn management_openapi_response_requires_executed_positive_fixture() {
+        assert!(
+            require_positives(&BTreeSet::from(["GET /api/v1/me".into()]), &BTreeSet::new())
+                .is_err()
+        );
+    }
+    #[test]
+    fn management_openapi_response_rejects_status_body_mismatch() {
+        for (status, body) in [
+            (StatusCode::CREATED, b"{\"ok\":true}".as_slice()),
+            (StatusCode::OK, b"null".as_slice()),
+            (StatusCode::OK, b"".as_slice()),
+        ] {
+            assert!(validate(&document(), "GET", "/api/v1/me", status, &headers(), body).is_err());
+        }
+    }
+    #[test]
+    fn management_openapi_response_rejects_envelope_code_mismatch() {
+        assert!(
+            validate(
+                &document(),
+                "GET",
+                "/api/v1/me",
+                StatusCode::FORBIDDEN,
+                &headers(),
+                b"{\"error\":{\"code\":\"401\",\"message\":\"Denied\"}}"
+            )
+            .is_err()
+        );
+    }
+}
