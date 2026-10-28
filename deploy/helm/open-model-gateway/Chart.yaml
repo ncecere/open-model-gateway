@@ -2,8 +2,8 @@ apiVersion: v2
 name: open-model-gateway
 description: Single-enterprise model gateway (Rust API + optional SPA) with an explicit migration Job, optional CloudNativePG database/pooler, and a loadtest profile for P8 scale certification.
 type: application
-version: 0.9.1
-appVersion: "0.9.1"
+version: 0.9.2
+appVersion: "0.9.2"
 kubeVersion: ">=1.29.0-0"
 home: https://github.com/ncecere/open-model-gateway
 sources:
