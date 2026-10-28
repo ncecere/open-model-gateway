@@ -71,6 +71,38 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
         assert_eq!(contract, actual, "{method} {template}: {label}: {value}");
     };
     compare("positive", valid.clone());
+    // Preserve every nested object's positive fields before adding the probe:
+    // replacing it with a missing-field object cannot prove deny_unknown_fields.
+    fn object_pointers(value: &Value, at: &str, out: &mut Vec<String>) {
+        match value {
+            Value::Object(map) => {
+                out.push(at.into());
+                for (key, value) in map {
+                    object_pointers(
+                        value,
+                        &format!("{at}/{}", key.replace('~', "~0").replace('/', "~1")),
+                        out,
+                    );
+                }
+            }
+            Value::Array(items) => {
+                for (i, value) in items.iter().enumerate() {
+                    object_pointers(value, &format!("{at}/{i}"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut pointers = Vec::new();
+    object_pointers(&valid, "", &mut pointers);
+    for pointer in pointers {
+        let mut probe = valid.clone();
+        probe.pointer_mut(&pointer).unwrap()["unexpected_configuration"] = json!(true);
+        compare(
+            &format!("nested unknown preserving valid fields {pointer}"),
+            probe,
+        );
+    }
     let positional = fields
         .0
         .borrow()
@@ -103,11 +135,15 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
             probe[field] = wrong;
             compare(&format!("wrong-type/null {field}"), probe);
         }
-        // These DTOs have no nested object DTO. Inject one at each scalar or
-        // array-item boundary so a future nested shape cannot be silently loose.
+        // Also probe scalar/array-item boundaries. The deeper object probes
+        // above retain valid nested DTO fields while checking unknown fields.
         let mut nested = valid.clone();
         if let Some(items) = nested[field].as_array_mut() {
-            items[0] = json!({"unexpected_configuration":true});
+            if let Some(item) = items.first_mut() {
+                *item = json!({"unexpected_configuration":true});
+            } else {
+                items.push(json!({"unexpected_configuration":true}));
+            }
         } else {
             nested[field] = json!({"unexpected_configuration":true});
         }

@@ -6,6 +6,14 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) const ARBITRARY_JSON: &[(&str, &str)] = &[
+    (
+        "/components/schemas/S6WorkspaceAudit/properties/metadata",
+        "Stored audit_events.metadata is returned verbatim as JSON; its vocabulary depends on the audited action.",
+    ),
+    (
+        "/components/schemas/S6PlatformAudit/properties/metadata",
+        "Stored audit_events.metadata is returned verbatim as JSON; its vocabulary depends on the audited action.",
+    ),
     // alert_events.details is a stored jsonb object, not a deserialized DTO.
     // Its reviewed privacy refinements still constrain personal identities.
     (

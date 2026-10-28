@@ -1,6 +1,37 @@
 use super::*;
 use crate::auth::NewApiKey;
 
+#[cfg(test)]
+#[test]
+fn management_openapi_slice6_key_request_vectors() {
+    use super::openapi::requests::vectors;
+    vectors::<NewKey>(
+        "POST",
+        "/api/v1/workspaces/{ws}/keys",
+        json!({"name":"contract","expires_in_days":30,"service_account_id":Uuid::nil(),"model_ids":[Uuid::nil()],"requests_per_minute":12,"tokens_per_minute":24,"concurrent_requests":2,"concurrent_jobs":1,"budgets":[{"period":"month","amount_microusd":"9007199254740993"}]}),
+    );
+    vectors::<Expiry>(
+        "POST",
+        "/api/v1/workspaces/{ws}/keys/{key}/rotate",
+        json!({"expires_in_days":30}),
+    );
+    vectors::<KeyUpdate>(
+        "PATCH",
+        "/api/v1/workspaces/{ws}/keys/{key}",
+        json!({"disabled":true}),
+    );
+    vectors::<Name>(
+        "POST",
+        "/api/v1/workspaces/{ws}/service-accounts",
+        json!({"name":"contract"}),
+    );
+    vectors::<Disabled>(
+        "PATCH",
+        "/api/v1/workspaces/{ws}/service-accounts/{id}",
+        json!({"disabled":true}),
+    );
+}
+
 pub(in crate::management) mod issuance;
 pub(in crate::management) use issuance::key_issuance;
 

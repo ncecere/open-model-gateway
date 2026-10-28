@@ -48,6 +48,16 @@ pub(super) struct Policy {
     #[serde(default, deserialize_with = "present")]
     budgets: Option<Vec<BudgetInput>>,
 }
+#[cfg(test)]
+#[test]
+fn management_openapi_slice6_key_policy_request_vectors() {
+    super::super::openapi::requests::vectors::<Policy>(
+        "PUT",
+        "/api/v1/workspaces/{ws}/keys/{key}/policy",
+        json!({"requests_per_minute":null,"tokens_per_minute":30,"concurrent_requests":2,"concurrent_jobs":null,"storage_bytes":null,"key_issuances_per_holder":null,"key_issuances_per_workspace":null,"monthly_budget_microusd":null,"budget_period":"month","budgets":[{"period":"month","amount_microusd":"9007199254740993"}]}),
+    );
+}
+
 fn present<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
