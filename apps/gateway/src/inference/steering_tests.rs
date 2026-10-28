@@ -13,7 +13,7 @@
 use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use axum::{
@@ -77,22 +77,52 @@ impl Hit {
     }
 }
 
+/// A one-shot barrier after admission, before the real upstream rejection.
+struct UpstreamPause {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Semaphore,
+}
+impl UpstreamPause {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Semaphore::new(0),
+        })
+    }
+}
+
+#[derive(Clone)]
+struct UpstreamState {
+    hits: Arc<Mutex<Vec<Hit>>>,
+    pause: Arc<Mutex<Option<Arc<UpstreamPause>>>>,
+}
+
 /// A mock upstream that records every request it receives.
 struct Upstream {
     addr: SocketAddr,
     hits: Arc<Mutex<Vec<Hit>>>,
+    pause: Arc<Mutex<Option<Arc<UpstreamPause>>>>,
     task: tokio::task::JoinHandle<()>,
 }
 impl Upstream {
     async fn start() -> Self {
         let hits: Arc<Mutex<Vec<Hit>>> = Arc::default();
-        let app = Router::new().fallback(record).with_state(hits.clone());
+        let pause = Arc::default();
+        let app = Router::new().fallback(record).with_state(UpstreamState {
+            hits: hits.clone(),
+            pause: Arc::clone(&pause),
+        });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let task = tokio::spawn(async move {
             let _ = axum::serve(listener, app).await;
         });
-        Self { addr, hits, task }
+        Self {
+            addr,
+            hits,
+            pause,
+            task,
+        }
     }
     fn authority(&self) -> String {
         format!("127.0.0.1:{}", self.addr.port())
@@ -109,7 +139,7 @@ impl Drop for Upstream {
         self.task.abort();
     }
 }
-async fn record(State(hits): State<Arc<Mutex<Vec<Hit>>>>, request: Request) -> Response {
+async fn record(State(state): State<UpstreamState>, request: Request) -> Response {
     let (parts, body) = request.into_parts();
     let body = to_bytes(body, 8 << 20).await.unwrap_or_default();
     let target = parts
@@ -128,12 +158,17 @@ async fn record(State(hits): State<Arc<Mutex<Vec<Hit>>>>, request: Request) -> R
         .collect();
     headers.sort();
     let chat = target.ends_with("/chat/completions");
-    hits.lock().unwrap().push(Hit {
+    state.hits.lock().unwrap().push(Hit {
         method: parts.method.to_string(),
         target,
         headers,
         body: String::from_utf8_lossy(&body).into_owned(),
     });
+    let pause = state.pause.lock().unwrap().take();
+    if let Some(pause) = pause {
+        pause.entered.notify_one();
+        pause.release.acquire().await.unwrap().forget();
+    }
     if chat {
         return (
             StatusCode::OK,
@@ -274,10 +309,17 @@ async fn connection(pool: &PgPool, provider: &str, endpoint: Option<&str>) -> Uu
 /// The routes: one model per protocol, on the adapter that serves it.
 /// (public name, client path, protocol, provider, upstream model, price)
 async fn world(provided: PgPool) -> World {
+    world_with_pool_options(provided, sqlx::postgres::PgPoolOptions::new()).await
+}
+
+async fn world_with_pool_options(
+    provided: PgPool,
+    options: sqlx::postgres::PgPoolOptions,
+) -> World {
     // These callers use fresh databases, without session SETs or pool callbacks.
     // Keep their connection options, but not SQLx's shared parent capacity or
     // short test-pool idle expiry. Open connections only as needed, up to five.
-    let pool = sqlx::postgres::PgPoolOptions::new()
+    let pool = options
         .max_connections(5)
         .min_connections(0)
         .connect_with((*provided.connect_options()).clone())
@@ -2346,4 +2388,272 @@ async fn names_outside_the_management_charset_keep_resolving(pool: PgPool) {
     }
     drop(store);
     w.close().await;
+}
+
+// #370: isolate native settlement failures from an otherwise unchanged rejection.
+#[derive(Clone, Copy, Debug)]
+enum SettlementFault {
+    PoolExhaustion,
+    LockTimeout,
+    StatementTimeout,
+    BackendTermination,
+    FinalizationDeadline,
+}
+
+async fn rejection_fault_signature(pool: PgPool, fault: SettlementFault) {
+    use crate::db::diagnostics::{Outcome, SqlxKind, Stage};
+    use sqlx::Connection;
+
+    // A shorter acquisition bound distinguishes pool timeout from the unchanged
+    // three-second finalizer. The other hypotheses retain SQLx's default bound.
+    let options = sqlx::postgres::PgPoolOptions::new();
+    let options = if matches!(fault, SettlementFault::PoolExhaustion) {
+        options.acquire_timeout(Duration::from_secs(1))
+    } else {
+        options
+    };
+    let w = world_with_pool_options(pool.clone(), options).await;
+    let t = targets()
+        .into_iter()
+        .find(|t| t.label == "rerank/sglang")
+        .unwrap();
+    let body = (t.body)(t.model);
+    let clean = control(
+        &w,
+        t.label,
+        json_request(&w.keys.personal_key.token, t.path, &t.base(), &body),
+    )
+    .await;
+    assert_eq!(
+        (clean.status, clean.reason.as_str()),
+        (400, "upstream_rejected")
+    );
+    let headers = [t.base(), vec![("openai-beta".into(), "attacker=v1".into())]].concat();
+    // Same header and request, no fault: also prove the unmodified 400 surface
+    // and all transport/security assertions before introducing the barrier.
+    expect(
+        &w,
+        t.label,
+        "openai-beta unfaulted",
+        json_request(&w.keys.personal_key.token, t.path, &headers, &body),
+        Forwarded,
+        &clean,
+        Compare::Equal,
+    )
+    .await;
+    let pause = UpstreamPause::new();
+    *w.approved.pause.lock().unwrap() = Some(pause.clone());
+    let app = w.app.clone();
+    let request = json_request(&w.keys.personal_key.token, t.path, &headers, &body);
+    let response = tokio::spawn(async move { send_observed(&app, request).await });
+    tokio::time::timeout(Duration::from_secs(3), pause.entered.notified())
+        .await
+        .expect("request reached approved upstream after admission");
+
+    // This is the world's entire five-connection pool, never SQLx's shared
+    // parent pool. Keep all leases until the response for the exhaustion case.
+    let mut held = Vec::new();
+    for _ in 0..5 {
+        held.push(w.pool.acquire().await.unwrap());
+    }
+    assert_eq!(w.pool.size(), 5);
+    assert_eq!(w.pool.num_idle(), 0);
+    let setting = match fault {
+        SettlementFault::LockTimeout => Some("SET lock_timeout = '1s'"),
+        SettlementFault::StatementTimeout => Some("SET statement_timeout = '1s'"),
+        _ => None,
+    };
+    if let Some(setting) = setting {
+        for connection in &mut held {
+            sqlx::query(setting)
+                .execute(&mut **connection)
+                .await
+                .unwrap();
+        }
+    }
+    if !matches!(fault, SettlementFault::PoolExhaustion) {
+        held.clear();
+    }
+
+    let mut blocker = None;
+    let mut blocker_pid = None;
+    if matches!(fault, SettlementFault::StatementTimeout) {
+        // The trigger cannot affect INSERT/admission. The settlement UPDATE
+        // enters real pg_sleep; PostgreSQL, not a synthetic Rust error, cancels it.
+        sqlx::raw_sql("CREATE FUNCTION steering370_sleep() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(10); RETURN NEW; END $$; CREATE TRIGGER steering370_sleep BEFORE UPDATE ON governance_reservations FOR EACH ROW EXECUTE FUNCTION steering370_sleep()")
+            .execute(&pool).await.unwrap();
+    } else if !matches!(fault, SettlementFault::PoolExhaustion) {
+        // Direct connection: its lease cannot consume the world's capacity.
+        let mut connection = sqlx::PgConnection::connect_with(&pool.connect_options())
+            .await
+            .unwrap();
+        sqlx::query("BEGIN").execute(&mut connection).await.unwrap();
+        blocker_pid = Some(
+            sqlx::query_scalar::<_, i32>("SELECT pg_backend_pid()")
+                .fetch_one(&mut connection)
+                .await
+                .unwrap(),
+        );
+        let reservations = sqlx::query_scalar::<_, Uuid>(
+            "SELECT execution_id FROM governance_reservations WHERE state='pending' FOR UPDATE",
+        )
+        .fetch_all(&mut connection)
+        .await
+        .unwrap();
+        assert_eq!(reservations.len(), 1, "only the paused attempt is pending");
+        blocker = Some(connection);
+    }
+    pause.release.add_permits(1);
+    if matches!(
+        fault,
+        SettlementFault::BackendTermination | SettlementFault::FinalizationDeadline
+    ) {
+        let pid = blocked_settlement(&pool, blocker_pid.unwrap()).await;
+        if matches!(fault, SettlementFault::BackendTermination) {
+            assert!(
+                sqlx::query_scalar::<_, bool>("SELECT pg_terminate_backend($1)")
+                    .bind(pid)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+            );
+        }
+    }
+    let observed = tokio::time::timeout(Duration::from_secs(6), response)
+        .await
+        .expect("unchanged three-second finalizer must bound settlement")
+        .unwrap();
+    drop(held);
+    if let Some(mut connection) = blocker {
+        sqlx::query("ROLLBACK")
+            .execute(&mut connection)
+            .await
+            .unwrap();
+        connection.close().await.unwrap();
+    }
+    let hits = w.approved.take();
+    assert_eq!(hits.len(), 1);
+    assert_clean(
+        t.label,
+        "openai-beta settlement fault",
+        &hits[0],
+        &clean.hit,
+        &w,
+    );
+    assert_eq!(hits[0].body, clean.hit.body);
+    assert_no_attacker(&w, t.label, "openai-beta settlement fault");
+    assert_eq!(
+        (observed.status.as_u16(), reason(&observed.text)),
+        (503, "accounting_unavailable".into()),
+        "{fault:?}"
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&observed.text).unwrap(),
+        json!({"error": {"message": "Inference accounting is unavailable", "type": "accounting_unavailable", "param": null, "code": "accounting_unavailable"}})
+    );
+    let snapshot = observed.database;
+    assert!(!snapshot.unavailable);
+    assert_eq!(snapshot.pending, 0);
+    assert_eq!(snapshot.dropped, 0);
+    let expected = match fault {
+        SettlementFault::PoolExhaustion => (
+            Stage::PoolAcquireAndBegin,
+            Outcome::Error,
+            Some(SqlxKind::PoolTimedOut),
+            None,
+        ),
+        SettlementFault::LockTimeout => (
+            Stage::GovernanceStorage,
+            Outcome::Error,
+            Some(SqlxKind::Database),
+            Some("55P03"),
+        ),
+        SettlementFault::StatementTimeout => (
+            Stage::GovernanceStorage,
+            Outcome::Error,
+            Some(SqlxKind::Database),
+            Some("57014"),
+        ),
+        SettlementFault::BackendTermination => (
+            Stage::GovernanceStorage,
+            Outcome::Error,
+            Some(SqlxKind::Database),
+            Some("57P01"),
+        ),
+        SettlementFault::FinalizationDeadline => {
+            (Stage::ExplicitSettlement, Outcome::Timeout, None, None)
+        }
+    };
+    let failures: Vec<_> = snapshot
+        .events
+        .iter()
+        .filter(|e| e.outcome == Outcome::Error || e.outcome == Outcome::Timeout)
+        .map(|e| (e.stage, e.outcome, e.sqlx_error, e.sqlstate.as_deref()))
+        .collect();
+    let mut wanted = vec![expected];
+    if matches!(fault, SettlementFault::PoolExhaustion) {
+        // governance::storage also observes the begin error on propagation.
+        wanted.push((
+            Stage::GovernanceStorage,
+            Outcome::Error,
+            Some(SqlxKind::PoolTimedOut),
+            None,
+        ));
+    }
+    if !matches!(fault, SettlementFault::FinalizationDeadline) {
+        wanted.push((Stage::ExplicitSettlement, Outcome::Error, None, None));
+    }
+    assert_eq!(failures, wanted, "{fault:?}: {snapshot:?}");
+    let settlement = snapshot
+        .events
+        .iter()
+        .find(|e| e.stage == Stage::ExplicitSettlement)
+        .unwrap();
+    if matches!(fault, SettlementFault::FinalizationDeadline) {
+        assert!(
+            settlement.duration_ns >= 3_000_000_000,
+            "the real finalization deadline elapsed"
+        );
+    }
+    eprintln!(
+        "{fault:?}: {}ms; {failures:?}",
+        observed.elapsed_ns / 1_000_000
+    );
+    w.close().await;
+}
+
+/// Identify the actual settlement backend, not an idle or admission connection.
+async fn blocked_settlement(pool: &PgPool, blocker: i32) -> i32 {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let pids = sqlx::query_scalar::<_, i32>("SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND $1 = ANY(pg_blocking_pids(pid)) AND query LIKE 'SELECT r.workspace_id,%FOR UPDATE OF r'")
+                .bind(blocker).fetch_all(pool).await.unwrap();
+            if !pids.is_empty() {
+                assert_eq!(pids.len(), 1, "one settlement backend is blocked");
+                return pids[0];
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }).await.expect("settlement reached the held reservation lock")
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn settlement_fault_pool_exhaustion_reports_pool_timed_out(pool: PgPool) {
+    rejection_fault_signature(pool, SettlementFault::PoolExhaustion).await;
+}
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn settlement_fault_lock_timeout_reports_55p03(pool: PgPool) {
+    rejection_fault_signature(pool, SettlementFault::LockTimeout).await;
+}
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn settlement_fault_statement_timeout_reports_57014(pool: PgPool) {
+    rejection_fault_signature(pool, SettlementFault::StatementTimeout).await;
+}
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn settlement_fault_backend_termination_reports_57p01(pool: PgPool) {
+    rejection_fault_signature(pool, SettlementFault::BackendTermination).await;
+}
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn settlement_fault_finalization_deadline_reports_explicit_timeout(pool: PgPool) {
+    rejection_fault_signature(pool, SettlementFault::FinalizationDeadline).await;
 }
