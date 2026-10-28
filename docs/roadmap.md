@@ -213,7 +213,7 @@ Effort is relative: **S** = narrow change; **M** = several components plus tests
 - [x] Selected (phase 4) — partly done: Usage & costs overview/explore/by-workspace, cost centers and CSV exports exist; read-only per-period budget headroom is implemented (v0.8.0); scheduled cost reports (#102) — configuration, bounded generation, link-only email delivery, authorized report UI and aggregate CSV — shipped in v0.9.0; provider-reported cost reconciliation (#48) adds its Anthropic-only dashboard in unreleased scope; additional provider formats remain follow-up #393
 - **Value:** answer which authorized workloads are driving spend and how the current period compares with the previous one.
 - **Scope / done:** explicit date ranges, model/workspace/service-account breakdowns, trend charts, budget headroom and consistent exports. Optional cost-center tags should not become authorization inputs. Label any forecast as an estimate and surface incomplete usage.
-- **Guardrails:** current UTC-month costs and bounded CSV already exist. Extend them without inventing zero-cost rows, changing pinned prices or exposing private workspace details. Decide aggregate personal-use reporting separately before implementing it.
+- **Guardrails:** current UTC-month costs and bounded CSV already exist. Extend them without inventing zero-cost rows, changing pinned prices or exposing private workspace details. Aggregate personal-use reporting is decided (#400): totals with the workspace identity, see [platform administration](platform-administration.md#ownership).
 
 ### R14 — Self-service access requests and onboarding templates · P2 · M–L
 
@@ -271,7 +271,7 @@ Effort is relative: **S** = narrow change; **M** = several components plus tests
 
 1. **Deployment target:** private pilot or public service? Single host or managed cloud? Expected tenants, peak concurrency and recovery objectives determine operational scope.
 2. **Financial purpose:** internal visibility/allocation (R13), provider-invoice matching (R19), or external customer billing? Customer invoices/payment collection are a separate **XL** product requiring billing accounts, credits/refunds, tax/currency policy, payment integration and reconciliation. Do not turn current estimates directly into invoices.
-3. **Privacy and retention:** what aggregate reporting is permitted for personal consumption, who receives notifications, and what must be retained? Keep existing owner-private boundaries unless an explicit reviewed policy says otherwise.
+3. **Privacy and retention:** what aggregate reporting is permitted for personal consumption, who receives notifications, and what must be retained? Keep existing owner-private boundaries unless an explicit reviewed policy says otherwise; #400 allows Admin/Auditor to see a personal workspace's identity, totals and platform-managed configuration.
 4. **Automation trust:** who may approve access, edit key restrictions and issue machine-management credentials? These are different powers, not synonyms for “admin.”
 5. **Consumer demand:** which provider/server versions and new API features are needed by real applications? That decides R09/R20 sequencing.
 

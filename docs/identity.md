@@ -42,7 +42,7 @@ Admin › Settings › Sign-in shows the number of cached keys, the last refresh
 
 Platform grants are `user`, `auditor`, and `admin`; Auditor/Admin include User access. A verified identity with no active platform grant cannot access the platform and receives no personal workspace. Workspace membership alone is not platform entitlement.
 
-A platform role does not open a personal workspace. Admins and Auditors see a personal workspace's id and owner label with its totals and platform-managed configuration (policy/limits, catalog overrides), never its keys, requests, sessions, file contents or the owner's own choices; see [platform administration](platform-administration.md#ownership).
+A platform role does not open a personal workspace. Admins and Auditors see a personal workspace's id (the cost report and usage explore also an owner label) with its totals and platform-managed configuration (policy/limits, catalog overrides), never its keys, requests, sessions, file contents or the owner's own choices; see [platform administration](platform-administration.md#ownership).
 
 Platform Admins provision manual grants and generic issuer/group mappings through [management](management-api.md). Group targets are a platform role or a Team/Project `admin`/`member` membership; group ownership is not supported. Manual/bootstrap platform grants and manual workspace membership survive removal of an independent group grant. Multiple sources are not overwritten by a single effective role.
 

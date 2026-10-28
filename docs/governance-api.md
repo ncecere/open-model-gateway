@@ -1,6 +1,6 @@
 # Governance API
 
-All paths below are under `/api/v1`, authenticated by browser session. Mutations require exact Origin/CSRF. Platform reads allow Admin/Auditor; writes require Admin unless a workspace/key tightening operation permits scoped authority. Personal keys and request details remain owner-private. A personal workspace's id and owner label, its totals and its platform-managed configuration (`/platform/workspaces/{ws}/policy` and `/catalogs`) are visible to Admin/Auditor; see [platform administration](platform-administration.md#ownership).
+All paths below are under `/api/v1`, authenticated by browser session. Mutations require exact Origin/CSRF. Platform reads allow Admin/Auditor; writes require Admin unless a workspace/key tightening operation permits scoped authority. Personal keys and request details remain owner-private. A personal workspace's id (the cost report and usage explore also an owner label), its totals and its platform-managed configuration (`/platform/workspaces/{ws}/policy` and `/catalogs`) are visible to Admin/Auditor; see [platform administration](platform-administration.md#ownership).
 
 Money and financial aggregate/token counts are decimal **strings**; unknown measurements are `null`, never zero. Limit fields, pagination and attempt numbers remain JSON numbers. USD values are exact integer micro-USD. Configured rates are estimates, not invoices.
 

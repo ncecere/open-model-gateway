@@ -97,7 +97,7 @@ Tighten-only local/key rules are per period: a child budget for period P may not
 
 ### Personal workspace visibility
 
-A personal workspace is owner-private, with one defined exception. Platform Admins and Auditors may see its identity (id and owner label), its usage, cost and storage totals and its platform-managed configuration (workspace policy and limits, catalog overrides). They never see its keys, request or execution details, prompts or responses, sessions, file contents or owner-made choices. Provider-cost reconciliation keeps its identity-free personal subset as a deliberately stricter view. Personal limits are platform-controlled (type default plus an optional per-workspace override); the owner cannot change them. See [platform administration](platform-administration.md#ownership).
+A personal workspace is owner-private, with one defined exception. Platform Admins and Auditors may see its identity (the workspace id; the cost report and usage explore also show an owner label, storage usage only the generic name `Personal`), its usage, cost and storage totals and its platform-managed configuration (workspace policy and limits, catalog overrides). They never see its keys, request or execution details, prompts or responses, sessions, file contents or owner-made choices. Provider-cost reconciliation keeps its identity-free personal subset as a deliberately stricter view. Personal limits are platform-controlled (type default plus an optional per-workspace override); the owner cannot change them. See [platform administration](platform-administration.md#ownership).
 
 ### Scoped admission lock order
 
