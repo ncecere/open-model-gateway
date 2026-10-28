@@ -1,5 +1,6 @@
 //! Test-only management contract: no runtime endpoint or production dependency.
 mod generator;
+pub(crate) mod requests;
 pub(crate) mod responses;
 mod validation;
 
@@ -47,7 +48,7 @@ mod tests {
             "review route additions and update this progress baseline"
         );
         assert_eq!(
-            placeholders, 502,
+            placeholders, 458,
             "review schema completion and update this progress baseline"
         );
     }

@@ -6,7 +6,13 @@ use axum::http::{HeaderMap, StatusCode};
 use serde_json::{Value, json};
 
 // Enabled only when the area's schemas AND executed fixture suite land together.
-pub(crate) const COMPLETED_AREAS: &[&str] = &[];
+pub(crate) const COMPLETED_AREAS: &[&str] = &[
+    "auth",
+    "branding",
+    "invitations",
+    "me",
+    "access-request-targets",
+];
 
 pub(crate) fn artifact() -> &'static Value {
     static DOCUMENT: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
@@ -19,13 +25,10 @@ pub(crate) fn artifact() -> &'static Value {
 }
 
 fn operation<'a>(document: &'a Value, method: &str, template: &str) -> Result<&'a Value> {
-    let method = if method == "HEAD" {
-        "get".into()
-    } else {
-        method.to_ascii_lowercase()
-    };
-    document["paths"][template]
-        .get(&method)
+    let verb = method.to_ascii_lowercase();
+    let item = &document["paths"][template];
+    item.get(&verb)
+        .or_else(|| (method == "HEAD").then(|| item.get("get")).flatten())
         .with_context(|| format!("undocumented operation {method} {template}"))
 }
 
@@ -145,12 +148,13 @@ fn media_schema<'a>(response: &'a Value, headers: &HeaderMap) -> Result<(&'a str
         .split(';')
         .next()
         .unwrap()
-        .trim();
+        .trim()
+        .to_ascii_lowercase();
     let content = response["content"]
         .as_object()
         .context("content must be an object")?;
     let (name, value) = content
-        .get_key_value(media)
+        .get_key_value(media.as_str())
         .with_context(|| format!("undocumented content-type {media}"))?;
     Ok((name, value.get("schema").context("media schema missing")?))
 }
@@ -207,14 +211,10 @@ fn template(method: &str, path: &str) -> Result<Option<String>> {
         .unwrap()
         .iter()
         .filter(|(template, item)| {
-            let verb = if method == "HEAD" {
-                "get".into()
-            } else {
-                method.to_ascii_lowercase()
-            };
+            let verb = method.to_ascii_lowercase();
             let a = template.split('/').collect::<Vec<_>>();
             let b = path.split('/').collect::<Vec<_>>();
-            item.get(verb).is_some()
+            (item.get(verb).is_some() || (method == "HEAD" && item.get("get").is_some()))
                 && a.len() == b.len()
                 && a.iter()
                     .zip(b)
@@ -269,6 +269,26 @@ pub(crate) fn check(
     Ok(())
 }
 
+#[cfg(feature = "integration-tests")]
+pub(crate) async fn capture_http(
+    method: &str,
+    path: &str,
+    response: reqwest::Response,
+) -> Captured {
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = response.bytes().await.unwrap();
+    check(method, path, status, &headers, &bytes)
+        .unwrap_or_else(|e| panic!("{method} {path}: {e:#}"));
+    Captured {
+        status,
+        headers,
+        bytes,
+        method: method.into(),
+        template: template(method, path).unwrap(),
+    }
+}
+
 /// Preserve response extensions as well as the raw representation for callers
 /// that still need to inspect redirect/cookie or cache metadata.
 #[cfg(feature = "integration-tests")]
@@ -282,6 +302,25 @@ pub(crate) async fn checked_response(
     check(method, path, parts.status, &parts.headers, &bytes)
         .unwrap_or_else(|e| panic!("{method} {path}: {e:#}"));
     axum::response::Response::from_parts(parts, axum::body::Body::from(bytes))
+}
+
+fn positive(response: &Value, status: StatusCode, headers: &HeaderMap) -> bool {
+    let permitted = status.is_success()
+        || status.is_redirection()
+        || (status == StatusCode::GONE && response["x-omg-positive"] == true);
+    let cookie = response["x-omg-positive-cookie"]
+        .as_str()
+        .is_none_or(|name| {
+            let prefix = format!("{name}=");
+            headers.get_all("set-cookie").iter().any(|h| {
+                h.to_str().is_ok_and(|h| {
+                    h.strip_prefix(&prefix)
+                        .and_then(|v| v.split(';').next())
+                        .is_some_and(|v| v.len() == 64 && v.bytes().all(|b| b.is_ascii_hexdigit()))
+                })
+            })
+        });
+    permitted && cookie
 }
 
 #[cfg(feature = "integration-tests")]
@@ -304,11 +343,10 @@ impl PositiveFixtures {
         )
         .unwrap();
         let op = operation(artifact(), &captured.method, template).unwrap();
-        let positive = captured.status.is_success()
-            || captured.status.is_redirection()
-            || op["responses"][captured.status.as_str()]["x-omg-positive"] == true;
-        // A denial never earns coverage, nor does an implicit HEAD earn a GET.
-        if positive && captured.method != "HEAD" {
+        let response = resolved(artifact(), &op["responses"][captured.status.as_str()]).unwrap();
+        // A denial (including the callback's cookie-clearing 303) never earns
+        // coverage, nor does an implicit HEAD earn a GET.
+        if positive(response, captured.status, &captured.headers) && captured.method != "HEAD" {
             self.0.insert(format!("{} {template}", captured.method));
         }
     }
@@ -460,10 +498,56 @@ mod tests {
         require_positives(&observed, &observed).unwrap();
     }
     #[test]
+    fn management_openapi_completed_areas_have_no_incomplete_references() {
+        let mut count = 0;
+        for (path, item) in artifact()["paths"].as_object().unwrap() {
+            if COMPLETED_AREAS.contains(&area(path)) {
+                for op in item.as_object().unwrap().values() {
+                    require_complete(artifact(), op).unwrap();
+                    assert!(
+                        op["responses"].get("default").is_none(),
+                        "completed operation needs exact statuses"
+                    );
+                    count += 1;
+                }
+            }
+        }
+        assert_eq!(count, 22);
+    }
+    #[test]
     fn management_openapi_response_rejects_incomplete_completed_slot() {
         let mut d = document();
         d["components"]["schemas"]["Request"] = json!({"x-omg-schema-status":"incomplete"});
         assert!(require_complete(&d, &d["paths"]["/api/v1/me"]["get"]).is_err());
+    }
+    #[test]
+    fn management_openapi_response_denials_and_cookie_clearing_redirects_are_not_positive() {
+        let response = json!({"x-omg-positive-cookie":"omg_session"});
+        let mut h = HeaderMap::new();
+        h.append(
+            "set-cookie",
+            "omg_session=; Path=/; Max-Age=0".parse().unwrap(),
+        );
+        assert!(!positive(&response, StatusCode::SEE_OTHER, &h));
+        assert!(!positive(
+            &json!({"x-omg-positive":true}),
+            StatusCode::FORBIDDEN,
+            &h
+        ));
+        assert!(!positive(&json!({}), StatusCode::UNAUTHORIZED, &h));
+        h.append(
+            "set-cookie",
+            format!("omg_session={}; Path=/", "a".repeat(64))
+                .parse()
+                .unwrap(),
+        );
+        assert!(positive(&response, StatusCode::SEE_OTHER, &h));
+        assert!(positive(&json!({}), StatusCode::NO_CONTENT, &h));
+        assert!(positive(
+            &json!({"x-omg-positive":true}),
+            StatusCode::GONE,
+            &h
+        ));
     }
     #[test]
     fn management_openapi_response_requires_executed_positive_fixture() {

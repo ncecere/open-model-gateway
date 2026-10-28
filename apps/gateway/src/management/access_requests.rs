@@ -66,6 +66,16 @@ struct Submission {
     reason: Option<String>,
     idempotency_key: String,
 }
+#[cfg(test)]
+#[test]
+fn management_openapi_submission_request_vectors() {
+    super::openapi::requests::vectors::<Submission>(
+        "POST",
+        "/api/v1/me/access-requests",
+        json!({"workspace_id":Uuid::nil(),"reason":"Join team","idempotency_key":"vector"}),
+    );
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Discoverable {
