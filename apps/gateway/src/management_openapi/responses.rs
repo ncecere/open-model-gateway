@@ -98,10 +98,80 @@ pub(super) fn validator(
     Ok(validator)
 }
 
+/// Every `jsonschema` error kind. A failure is named by one of these static
+/// strings, never by the validator's own text or payload.
+const ERROR_KINDS: &[&str] = &[
+    "AdditionalItems",
+    "AdditionalProperties",
+    "AnyOf",
+    "BacktrackLimitExceeded",
+    "RegexEngineFailure",
+    "Constant",
+    "Contains",
+    "ContentEncoding",
+    "ContentMediaType",
+    "Custom",
+    "Enum",
+    "ExclusiveMaximum",
+    "ExclusiveMinimum",
+    "FalseSchema",
+    "Format",
+    "FromUtf8",
+    "MaxItems",
+    "Maximum",
+    "MaxLength",
+    "MaxProperties",
+    "MinItems",
+    "Minimum",
+    "MinLength",
+    "MinProperties",
+    "MultipleOf",
+    "Not",
+    "OneOfMultipleValid",
+    "OneOfNotValid",
+    "Pattern",
+    "PropertyNames",
+    "Required",
+    "Type",
+    "UnevaluatedItems",
+    "UnevaluatedProperties",
+    "UniqueItems",
+    "Referencing",
+];
+
+/// Describe a schema violation WITHOUT any instance value: only the error kind
+/// (a static name), the instance JSON pointer and the schema pointer. The
+/// validator's own `Display` embeds the offending instance (tokens, emails,
+/// identifiers from real responses) and must never reach a panic or log.
+pub(crate) fn describe(error: &jsonschema::ValidationError<'_>) -> String {
+    let debug = format!("{:?}", error.kind());
+    let name = debug
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .next()
+        .unwrap_or_default();
+    let kind = ERROR_KINDS
+        .iter()
+        .copied()
+        .find(|kind| *kind == name)
+        .unwrap_or("Other");
+    let pointer = |location: String| {
+        if location.is_empty() {
+            "(root)".to_owned()
+        } else {
+            location
+        }
+    };
+    format!(
+        "wire schema mismatch: kind {kind} at instance {} (schema {})",
+        pointer(error.instance_path().to_string()),
+        pointer(error.schema_path().to_string())
+    )
+}
+
 pub(crate) fn validate_value(document: &Value, schema: &Value, body: &Value) -> Result<()> {
     validator(document, schema)?
         .validate(body)
-        .map_err(|e| anyhow::anyhow!("wire schema mismatch: {e}"))
+        .map_err(|e| anyhow::anyhow!(describe(&e)))
 }
 
 fn validate_headers(document: &Value, definitions: &Value, headers: &HeaderMap) -> Result<()> {
@@ -113,7 +183,12 @@ fn validate_headers(document: &Value, definitions: &Value, headers: &HeaderMap) 
             "missing response header {name}"
         );
         for value in values {
-            validate_value(document, &header["schema"], &json!(value.to_str()?))?;
+            // Never echo the header value: only its name and the violated schema.
+            let value = value
+                .to_str()
+                .map_err(|_| anyhow::anyhow!("response header {name} is not visible ASCII"))?;
+            validate_value(document, &header["schema"], &json!(value))
+                .with_context(|| format!("response header {name}"))?;
         }
     }
     Ok(())
@@ -170,7 +245,8 @@ pub(crate) fn validate(
     let (media, schema) = media_schema(response, headers)?;
     ensure!(!bytes.is_empty(), "documented representation is empty");
     if media == "application/json" || media.ends_with("+json") {
-        let body: Value = serde_json::from_slice(bytes).context("response is not JSON")?;
+        let body: Value = serde_json::from_slice(bytes)
+            .map_err(|e| anyhow::anyhow!("response is not JSON ({:?})", e.classify()))?;
         if let Some(error) = body.get("error").filter(|v| v.is_object()) {
             ensure!(
                 error["code"] == status.as_str(),
@@ -188,7 +264,9 @@ pub(crate) fn validate(
             }
         }
     } else if media.starts_with("text/") {
-        validate_value(document, schema, &json!(std::str::from_utf8(bytes)?))?;
+        let text = std::str::from_utf8(bytes)
+            .map_err(|_| anyhow::anyhow!("text response is not UTF-8"))?;
+        validate_value(document, schema, &json!(text))?;
     } else {
         let schema = resolved(document, schema)?;
         ensure!(
@@ -215,7 +293,8 @@ fn media_schema<'a>(response: &'a Value, headers: &HeaderMap) -> Result<(&'a str
     let media = headers
         .get("content-type")
         .context("missing content-type")?
-        .to_str()?
+        .to_str()
+        .map_err(|_| anyhow::anyhow!("content-type is not visible ASCII"))?
         .split(';')
         .next()
         .unwrap()
@@ -226,7 +305,7 @@ fn media_schema<'a>(response: &'a Value, headers: &HeaderMap) -> Result<(&'a str
         .context("content must be an object")?;
     let (name, value) = content
         .get_key_value(media.as_str())
-        .with_context(|| format!("undocumented content-type {media}"))?;
+        .context("undocumented response content-type")?;
     Ok((name, value.get("schema").context("media schema missing")?))
 }
 
@@ -360,8 +439,7 @@ pub(crate) async fn capture(
 ) -> Captured {
     let (parts, body) = response.into_parts();
     let bytes = axum::body::to_bytes(body, 64 * 1024 * 1024).await.unwrap();
-    check(method, path, parts.status, &parts.headers, &bytes)
-        .unwrap_or_else(|e| panic!("{method} {path}: {e:#}"));
+    check(method, path, parts.status, &parts.headers, &bytes).unwrap_or_else(|e| refuse(e));
     Captured {
         status: parts.status,
         headers: parts.headers,
@@ -393,9 +471,17 @@ pub(crate) fn check(
     if let Some(template) = template(method, path)?
         && completed(area(&template))
     {
-        validate(artifact(), method, &template, status, headers, bytes)?;
+        // The TEMPLATE, never the concrete path (it can carry user/workspace ids).
+        validate(artifact(), method, &template, status, headers, bytes)
+            .with_context(|| format!("{method} {template} (status {})", status.as_u16()))?;
     }
     Ok(())
+}
+
+/// Panic with the already-sanitized contract error (method, template, status,
+/// kind and JSON pointers) and nothing captured from the exchange.
+pub(crate) fn refuse(error: anyhow::Error) -> ! {
+    panic!("contract check failed: {error:#}")
 }
 
 #[cfg(feature = "integration-tests")]
@@ -407,8 +493,7 @@ pub(crate) async fn capture_http(
     let status = response.status();
     let headers = response.headers().clone();
     let bytes = response.bytes().await.unwrap();
-    check(method, path, status, &headers, &bytes)
-        .unwrap_or_else(|e| panic!("{method} {path}: {e:#}"));
+    check(method, path, status, &headers, &bytes).unwrap_or_else(|e| refuse(e));
     Captured {
         status,
         headers,
@@ -428,8 +513,7 @@ pub(crate) async fn checked_response(
 ) -> axum::response::Response {
     let (parts, body) = response.into_parts();
     let bytes = axum::body::to_bytes(body, 64 * 1024 * 1024).await.unwrap();
-    check(method, path, parts.status, &parts.headers, &bytes)
-        .unwrap_or_else(|e| panic!("{method} {path}: {e:#}"));
+    check(method, path, parts.status, &parts.headers, &bytes).unwrap_or_else(|e| refuse(e));
     axum::response::Response::from_parts(parts, axum::body::Body::from(bytes))
 }
 
@@ -476,7 +560,13 @@ impl PositiveFixtures {
             &captured.headers,
             &captured.bytes,
         )
-        .unwrap();
+        .unwrap_or_else(|e| {
+            refuse(e.context(format!(
+                "{} {template} (status {})",
+                captured.method,
+                captured.status.as_u16()
+            )))
+        });
         let op = operation(artifact(), &captured.method, template).unwrap();
         let response = resolved(artifact(), &op["responses"][captured.status.as_str()]).unwrap();
         // A denial (including the callback's cookie-clearing 303) never earns

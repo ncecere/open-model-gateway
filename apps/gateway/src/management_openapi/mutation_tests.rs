@@ -271,9 +271,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                     &h,
                     &encode(&valid),
                 )
-                .unwrap_or_else(|e| {
-                    panic!("positive schema control {method} {path}: {e:#}; {valid}")
-                });
+                .unwrap_or_else(|e| panic!("positive schema control {method} {path}: {e:#}"));
                 let mut body_schema = schema;
                 loop {
                     if let Some(reference) = body_schema["$ref"].as_str() {
