@@ -149,6 +149,136 @@ impl MockProvider {
             .unwrap()
     }
 }
+#[cfg(feature = "integration-tests")]
+pub(crate) async fn management_openapi_auth_fixtures(
+    pool: &sqlx::PgPool,
+    observed: &mut crate::management::openapi::responses::PositiveFixtures,
+) {
+    use crate::management::openapi::responses::capture;
+    let mock = MockProvider::start(None).await;
+    let identity = mock.state(pool.clone()).await;
+    sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES($1,$2,'entitled','platform','user')")
+        .bind(Uuid::new_v4()).bind(&mock.issuer).execute(pool).await.unwrap();
+    let engine = crate::inference::Engine::new(
+        std::sync::Arc::new(identity.store.clone()),
+        crate::providers::ProviderRegistry::default(),
+        crate::inference::EngineLimits::default(),
+    )
+    .unwrap();
+    let app = crate::http::router_with_identity(identity.store.clone(), None, engine, identity);
+    let request = |path: &str| Request::builder().uri(path).body(Body::empty()).unwrap();
+    let r = capture(
+        "GET",
+        "/api/v1/auth/config",
+        app.clone()
+            .oneshot(request("/api/v1/auth/config"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&r.bytes).unwrap()["enabled"],
+        true
+    );
+    observed.observe(&r);
+    let r = capture(
+        "GET",
+        "/api/v1/auth/login",
+        app.clone()
+            .oneshot(request("/api/v1/auth/login"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::SEE_OTHER);
+    let url = Url::parse(r.headers[header::LOCATION].to_str().unwrap()).unwrap();
+    let params: HashMap<_, _> = url
+        .query_pairs()
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect();
+    mock.claims.lock().unwrap()["nonce"] = json!(params["nonce"]);
+    let cookie = |headers: &HeaderMap, name: &str| {
+        headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .find_map(|h| {
+                let (key, value) = h
+                    .to_str()
+                    .unwrap()
+                    .split(';')
+                    .next()
+                    .unwrap()
+                    .split_once('=')?;
+                (key == name).then(|| value.to_owned())
+            })
+            .unwrap()
+    };
+    let browser = cookie(&r.headers, BROWSER);
+    observed.observe(&r);
+    let path = format!("/api/v1/auth/callback?state={}&code=good", params["state"]);
+    let r = capture(
+        "GET",
+        &path,
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&path)
+                    .header(header::COOKIE, format!("{BROWSER}={browser}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::SEE_OTHER);
+    assert_eq!(r.headers[header::LOCATION], "/");
+    let session = cookie(&r.headers, SESSION);
+    let csrf = cookie(&r.headers, CSRF);
+    assert!(is_token(&session));
+    assert!(is_token(&csrf));
+    observed.observe(&r);
+    // Real replay refusal; it cannot earn callback coverage.
+    let r = capture(
+        "GET",
+        &path,
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&path)
+                    .header(header::COOKIE, format!("{BROWSER}={browser}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    observed.observe(&r);
+    let r = capture(
+        "POST",
+        "/api/v1/auth/logout",
+        app.oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/logout")
+                .header(header::COOKIE, format!("{SESSION}={session}"))
+                .header("origin", "http://127.0.0.1:3000")
+                .header("x-csrf-token", csrf)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap(),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT);
+    assert!(r.bytes.is_empty());
+    observed.observe(&r);
+}
+
 fn lazy_pool() -> sqlx::PgPool {
     sqlx::postgres::PgPoolOptions::new()
         .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
@@ -1226,6 +1356,8 @@ mod database {
             .oneshot(Request::builder().uri(login).body(Body::empty()).unwrap())
             .await
             .unwrap();
+        let response =
+            crate::management::openapi::responses::checked_response("GET", login, response).await;
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
         let url = Url::parse(response.headers()[header::LOCATION].to_str().unwrap()).unwrap();
         let params: HashMap<_, _> = url
@@ -1251,6 +1383,12 @@ mod database {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let response = crate::management::openapi::responses::checked_response(
+            "GET",
+            "/api/v1/auth/callback",
+            response,
+        )
+        .await;
         (
             response_cookie(&response, SESSION),
             response_cookie(&response, CSRF),
