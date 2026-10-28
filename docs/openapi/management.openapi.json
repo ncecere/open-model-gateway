@@ -1270,66 +1270,15 @@
         "type": "object"
       },
       "AccessMapping": {
-        "additionalProperties": false,
-        "properties": {
-          "created_at": {
-            "$ref": "#/components/schemas/IdentityTime"
+        "description": "Two closed variants mirroring the oidc_group_mappings CHECK constraint (0001_enterprise.sql): target_kind platform requires platform_role and no workspace fields; target_kind workspace requires workspace_id and workspace_role and no platform_role.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/AccessPlatformMapping"
           },
-          "enabled": {
-            "type": "boolean"
-          },
-          "group_value": {
-            "type": "string"
-          },
-          "id": {
-            "$ref": "#/components/schemas/IdentityUuid"
-          },
-          "issuer": {
-            "type": "string"
-          },
-          "platform_role": {
-            "$ref": "#/components/schemas/IdentityNullableString"
-          },
-          "target_kind": {
-            "type": "string"
-          },
-          "workspace_id": {
-            "$ref": "#/components/schemas/IdentityNullableUuid"
-          },
-          "workspace_kind": {
-            "anyOf": [
-              {
-                "enum": [
-                  "team",
-                  "project"
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "workspace_name": {
-            "$ref": "#/components/schemas/IdentityNullableString"
-          },
-          "workspace_role": {
-            "$ref": "#/components/schemas/IdentityNullableString"
+          {
+            "$ref": "#/components/schemas/AccessWorkspaceMapping"
           }
-        },
-        "required": [
-          "issuer",
-          "group_value",
-          "target_kind",
-          "platform_role",
-          "workspace_id",
-          "workspace_role",
-          "enabled",
-          "id",
-          "created_at",
-          "workspace_name",
-          "workspace_kind"
-        ],
-        "type": "object"
+        ]
       },
       "AccessMappingExistingPreview": {
         "additionalProperties": false,
@@ -2508,6 +2457,59 @@
           "access_requests",
           "audit",
           "notes"
+        ],
+        "type": "object"
+      },
+      "AccessPlatformMapping": {
+        "additionalProperties": false,
+        "description": "A platform-role group mapping: platform_role set, every workspace field null.",
+        "properties": {
+          "created_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "group_value": {
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "platform_role": {
+            "$ref": "#/components/schemas/IdentityRole"
+          },
+          "target_kind": {
+            "const": "platform"
+          },
+          "workspace_id": {
+            "type": "null"
+          },
+          "workspace_kind": {
+            "type": "null"
+          },
+          "workspace_name": {
+            "type": "null"
+          },
+          "workspace_role": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "issuer",
+          "group_value",
+          "target_kind",
+          "platform_role",
+          "workspace_id",
+          "workspace_role",
+          "enabled",
+          "id",
+          "created_at",
+          "workspace_name",
+          "workspace_kind"
         ],
         "type": "object"
       },
@@ -4032,6 +4034,65 @@
             "$ref": "#/components/schemas/AccessPersonalContext"
           }
         ]
+      },
+      "AccessWorkspaceMapping": {
+        "additionalProperties": false,
+        "description": "A Team or Project workspace-role group mapping: workspace_id, workspace_role (admin or member) and the live workspace name and kind set, platform_role null.",
+        "properties": {
+          "created_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "group_value": {
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "platform_role": {
+            "type": "null"
+          },
+          "target_kind": {
+            "const": "workspace"
+          },
+          "workspace_id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "workspace_kind": {
+            "enum": [
+              "team",
+              "project"
+            ]
+          },
+          "workspace_name": {
+            "type": "string"
+          },
+          "workspace_role": {
+            "enum": [
+              "admin",
+              "member"
+            ]
+          }
+        },
+        "required": [
+          "issuer",
+          "group_value",
+          "target_kind",
+          "platform_role",
+          "workspace_id",
+          "workspace_role",
+          "enabled",
+          "id",
+          "created_at",
+          "workspace_name",
+          "workspace_kind"
+        ],
+        "type": "object"
       },
       "AccessWorkspaceUpdate": {
         "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies.",

@@ -1043,66 +1043,15 @@
       "additionalProperties": false
     },
     "AccessMapping": {
-      "type": "object",
-      "properties": {
-        "issuer": {
-          "type": "string"
+      "oneOf": [
+        {
+          "$ref": "#/components/schemas/AccessPlatformMapping"
         },
-        "group_value": {
-          "type": "string"
-        },
-        "target_kind": {
-          "type": "string"
-        },
-        "platform_role": {
-          "$ref": "#/components/schemas/IdentityNullableString"
-        },
-        "workspace_id": {
-          "$ref": "#/components/schemas/IdentityNullableUuid"
-        },
-        "workspace_role": {
-          "$ref": "#/components/schemas/IdentityNullableString"
-        },
-        "enabled": {
-          "type": "boolean"
-        },
-        "id": {
-          "$ref": "#/components/schemas/IdentityUuid"
-        },
-        "created_at": {
-          "$ref": "#/components/schemas/IdentityTime"
-        },
-        "workspace_name": {
-          "$ref": "#/components/schemas/IdentityNullableString"
-        },
-        "workspace_kind": {
-          "anyOf": [
-            {
-              "enum": [
-                "team",
-                "project"
-              ]
-            },
-            {
-              "type": "null"
-            }
-          ]
+        {
+          "$ref": "#/components/schemas/AccessWorkspaceMapping"
         }
-      },
-      "required": [
-        "issuer",
-        "group_value",
-        "target_kind",
-        "platform_role",
-        "workspace_id",
-        "workspace_role",
-        "enabled",
-        "id",
-        "created_at",
-        "workspace_name",
-        "workspace_kind"
       ],
-      "additionalProperties": false
+      "description": "Two closed variants mirroring the oidc_group_mappings CHECK constraint (0001_enterprise.sql): target_kind platform requires platform_role and no workspace fields; target_kind workspace requires workspace_id and workspace_role and no platform_role."
     },
     "AccessMappingPreview": {
       "type": "object",
@@ -3880,6 +3829,118 @@
     "get_api_v1_workspaces_by_ws_sessions_by_sessionRequest": false,
     "get_api_v1_workspaces_by_ws_sessions_by_sessionResponse": {
       "$ref": "#/components/schemas/AccessInferenceSession"
+    },
+    "AccessPlatformMapping": {
+      "type": "object",
+      "properties": {
+        "issuer": {
+          "type": "string"
+        },
+        "group_value": {
+          "type": "string"
+        },
+        "target_kind": {
+          "const": "platform"
+        },
+        "platform_role": {
+          "$ref": "#/components/schemas/IdentityRole"
+        },
+        "workspace_id": {
+          "type": "null"
+        },
+        "workspace_role": {
+          "type": "null"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "workspace_name": {
+          "type": "null"
+        },
+        "workspace_kind": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "issuer",
+        "group_value",
+        "target_kind",
+        "platform_role",
+        "workspace_id",
+        "workspace_role",
+        "enabled",
+        "id",
+        "created_at",
+        "workspace_name",
+        "workspace_kind"
+      ],
+      "additionalProperties": false,
+      "description": "A platform-role group mapping: platform_role set, every workspace field null."
+    },
+    "AccessWorkspaceMapping": {
+      "type": "object",
+      "properties": {
+        "issuer": {
+          "type": "string"
+        },
+        "group_value": {
+          "type": "string"
+        },
+        "target_kind": {
+          "const": "workspace"
+        },
+        "platform_role": {
+          "type": "null"
+        },
+        "workspace_id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "workspace_role": {
+          "enum": [
+            "admin",
+            "member"
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "workspace_name": {
+          "type": "string"
+        },
+        "workspace_kind": {
+          "enum": [
+            "team",
+            "project"
+          ]
+        }
+      },
+      "required": [
+        "issuer",
+        "group_value",
+        "target_kind",
+        "platform_role",
+        "workspace_id",
+        "workspace_role",
+        "enabled",
+        "id",
+        "created_at",
+        "workspace_name",
+        "workspace_kind"
+      ],
+      "additionalProperties": false,
+      "description": "A Team or Project workspace-role group mapping: workspace_id, workspace_role (admin or member) and the live workspace name and kind set, platform_role null."
     }
   }
 }

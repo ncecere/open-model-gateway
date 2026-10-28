@@ -6,10 +6,6 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) const ARBITRARY_JSON: &[(&str, &str)] = &[
-    (
-        "/components/schemas/AccessPlatformExport/properties/audit/properties/items/items/properties/metadata",
-        "Stored audit_events.metadata is exported verbatim as JSON; its vocabulary depends on the audited action.",
-    ),
     // alert_events.details is a stored jsonb object, not a deserialized DTO.
     // Its reviewed privacy refinements still constrain personal identities.
     (
@@ -20,6 +16,11 @@ pub(super) const ARBITRARY_JSON: &[(&str, &str)] = &[
     // inventing its keys would misdescribe historical records and new actions.
     (
         "/components/schemas/get_api_v1_me_exportResponse/properties/audit/properties/items/items/properties/metadata",
+        "Stored audit_events.metadata is exported verbatim as JSON; its vocabulary depends on the audited action.",
+    ),
+    // The platform subject export (slice 2) is the same stored audit value.
+    (
+        "/components/schemas/AccessPlatformExport/properties/audit/properties/items/items/properties/metadata",
         "Stored audit_events.metadata is exported verbatim as JSON; its vocabulary depends on the audited action.",
     ),
 ];
