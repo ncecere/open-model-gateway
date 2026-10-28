@@ -20,6 +20,113 @@ pub(super) const ARBITRARY_JSON: &[(&str, &str)] = &[
     ),
 ];
 
+/// Decimal RATE fields that legitimately carry fractions, so the integer
+/// micro-USD string rule does not apply. `*suffix` entries match a name suffix.
+/// Every addition needs review and a justification: an amount that is merely
+/// inconvenient to constrain does not belong here.
+pub(super) const DECIMAL_RATES: &[(&str, &str)] = &[
+    (
+        "conversion_residual_microusd",
+        "Fractional micro-USD remainder of a decimal currency conversion; a rate-like decimal, not a whole-micro-USD amount.",
+    ),
+    (
+        "*_per_million",
+        "Price rates are decimal micro-USD per million tokens (they may carry fractions); they are rates, not integer amounts.",
+    ),
+];
+
+fn money_name(name: &str) -> bool {
+    name.ends_with("_microusd") || name.contains("_microusd_")
+}
+fn decimal_rate(name: &str) -> bool {
+    DECIMAL_RATES
+        .iter()
+        .any(|(entry, _)| match entry.strip_prefix('*') {
+            Some(suffix) => name.ends_with(suffix),
+            None => *entry == name,
+        })
+}
+#[derive(PartialEq)]
+enum Money {
+    Amount,
+    Null,
+    Other,
+}
+/// Integer micro-USD wire strings: unsigned `^(0|[1-9][0-9]*)$` or signed
+/// `^(0|-?[1-9][0-9]*)$`. Probes reject leading zeros, `-0`, signs, fractions,
+/// exponents and whitespace, so `.*`, `^[0-9]+$` or `^-?(0|[1-9][0-9]*)$` fail.
+fn money_pattern(pattern: &Value) -> bool {
+    let Some(pattern) = pattern.as_str().filter(|p| !p.is_empty()) else {
+        return false;
+    };
+    let Ok(validator) =
+        super::validation::compile_schema(&serde_json::json!({"type":"string","pattern":pattern}))
+    else {
+        return false;
+    };
+    let accepts = |v: &str| validator.is_valid(&Value::String(v.to_owned()));
+    let mut ok = ["0", "1", "10", "9007199254740993"]
+        .iter()
+        .all(|v| accepts(v))
+        && ![
+            "", "abc", "1.5", "1e6", " 1", "1 ", "01", "007", "-0", "-00", "+1", "0x1", "1_0", "
+1",
+        ]
+        .iter()
+        .any(|v| accepts(v));
+    if accepts("-1") {
+        ok = ok
+            && accepts("-10")
+            && accepts("-9007199254740993")
+            && !["-01", "--1", "-", "-1.5"].iter().any(|v| accepts(v));
+    }
+    ok
+}
+fn money(document: &Value, node: &Value, depth: usize) -> Result<Money> {
+    ensure!(depth < 16, "money schema reference chain too deep");
+    if node.get("$ref").is_some() {
+        let (target, _) = reference(document, node)?;
+        return money(document, target, depth + 1);
+    }
+    if node["type"] == "null" || node.get("const") == Some(&Value::Null) {
+        return Ok(Money::Null);
+    }
+    for keyword in ["anyOf", "oneOf"] {
+        if let Some(branches) = node[keyword].as_array() {
+            let kinds = branches
+                .iter()
+                .map(|b| money(document, b, depth + 1))
+                .collect::<Result<Vec<_>>>()?;
+            return Ok(if kinds.is_empty() || kinds.contains(&Money::Other) {
+                Money::Other
+            } else if kinds.contains(&Money::Amount) {
+                Money::Amount
+            } else {
+                Money::Null
+            });
+        }
+    }
+    if let Some(all) = node["allOf"].as_array() {
+        let mut found = false;
+        for child in all {
+            found |= money(document, child, depth + 1)? == Money::Amount;
+        }
+        return Ok(if found { Money::Amount } else { Money::Other });
+    }
+    let kinds = match &node["type"] {
+        Value::String(t) => vec![t.as_str()],
+        Value::Array(all) => all.iter().filter_map(Value::as_str).collect(),
+        _ => vec![],
+    };
+    let string_or_null =
+        kinds.contains(&"string") && kinds.iter().all(|k| ["string", "null"].contains(k));
+    Ok(if string_or_null && money_pattern(&node["pattern"]) {
+        Money::Amount
+    } else {
+        Money::Other
+    })
+}
+
 fn arbitrary(location: &str, node: &Value) -> bool {
     ARBITRARY_JSON
         .iter()
@@ -55,6 +162,8 @@ struct Facts {
     closed: bool,
     required: bool,
     arbitrary: bool,
+    /// Set only by a oneOf/anyOf parent for its direct branches.
+    branch: bool,
     properties: BTreeMap<String, Facts>,
 }
 impl Facts {
@@ -228,8 +337,56 @@ fn schema(
             "unsupported keyword {keyword} in a completed schema at {location}"
         );
     }
+    let in_branch = inherited.branch;
     let mut effective = inherited.clone();
+    effective.branch = false;
     effective.merge(facts(document, node, location, &mut BTreeSet::new())?);
+    // Coverage exemptions are reviewed claims: each needs a real reason and the
+    // right kind of node, or it would silently excuse unrelated schemas.
+    if let Some(value) = node.get(super::coverage::MAY_BE_EMPTY) {
+        ensure!(
+            value.as_str().is_some_and(|r| !r.trim().is_empty()),
+            "{} needs a non-empty reason at {location}",
+            super::coverage::MAY_BE_EMPTY
+        );
+        ensure!(
+            node["type"] == "array"
+                || node["type"]
+                    .as_array()
+                    .is_some_and(|t| t.iter().any(|v| v == "array")),
+            "{} is only valid on an array schema at {location}",
+            super::coverage::MAY_BE_EMPTY
+        );
+    }
+    if let Some(value) = node.get(super::coverage::UNOBSERVED_BRANCH) {
+        ensure!(
+            value.as_str().is_some_and(|r| !r.trim().is_empty()),
+            "{} needs a non-empty reason at {location}",
+            super::coverage::UNOBSERVED_BRANCH
+        );
+        ensure!(
+            in_branch || super::coverage::nullable(node),
+            "{} is only valid on a oneOf/anyOf branch or a nullable node at {location}",
+            super::coverage::UNOBSERVED_BRANCH
+        );
+    }
+    // Reviewed arbitrary JSON still declares its JSON type (e.g. "object").
+    if arbitrary(location, node) {
+        ensure!(
+            node["type"].is_string() || node["type"].as_array().is_some_and(|t| !t.is_empty()),
+            "arbitrary stored JSON must declare a type at {location}"
+        );
+    }
+    // Money wire values: integer micro-USD strings constrained by a pattern
+    // that rejects leading zeros and `-0` (request and response alike).
+    for (name, child) in node["properties"].as_object().into_iter().flatten() {
+        if money_name(name) && !decimal_rate(name) {
+            ensure!(
+                money(document, child, 0)? != Money::Other,
+                "money property `{name}` at {location} must be a string constrained by an integer micro-USD pattern (^(0|[1-9][0-9]*)$ or ^(0|-?[1-9][0-9]*)$), or a nullable form of one"
+            );
+        }
+    }
     ensure!(
         effective.bounded || effective.arbitrary,
         "unbounded completed schema at {location}"
@@ -272,11 +429,12 @@ fn schema(
     }
     for keyword in ["allOf", "anyOf", "oneOf", "prefixItems"] {
         for (i, child) in node[keyword].as_array().into_iter().flatten().enumerate() {
-            let context = if keyword == "prefixItems" {
+            let mut context = if keyword == "prefixItems" {
                 Facts::default()
             } else {
                 effective.clone()
             };
+            context.branch = matches!(keyword, "anyOf" | "oneOf");
             // Even a conjunctive/union branch may never be {} or true.
             schema(
                 document,
