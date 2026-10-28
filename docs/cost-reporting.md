@@ -2,7 +2,7 @@
 
 Reports answer “what configured-rate activity can I see for this UTC period?” They are live estimates, not provider invoices, complete billing guarantees or frozen financial statements. Unknown charges and conservative holds are separate from settled cost.
 
-For the separate browser-session API that imports Anthropic Cost Report JSON and freezes aggregate comparisons, see [provider-reported cost reconciliation](provider-cost-reconciliation.md). It does not rewrite these estimates or establish a verified invoice.
+For the separate **Admin → Usage & costs → Provider reconciliation** dashboard and browser-session API, see [provider-reported cost reconciliation](provider-cost-reconciliation.md). Platform Admins upload Anthropic Cost Report JSON, attest mappings and freeze aggregate comparisons; Admins and Auditors read the frozen results. This Anthropic-only, USD-only workflow does not rewrite these estimates, change holds or establish a verified invoice. OpenAI Costs export support is follow-up #393.
 
 ## Scheduled reports
 
