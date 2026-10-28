@@ -363,20 +363,25 @@ for (const width of [1440, 390]) {
   for (const stage of ["upload", "mapping", "freeze"] as const) {
     test(`Mid-session Admin demotion refuses ${stage}, removes writes and persists nothing at ${width}px`, async ({ browser }, info) => {
       const operator = await signIn(browser, "operator"), actor = await signIn(browser, "alex"), page = actor.page;
-      let roles: string | undefined;
+      let roles: string | undefined, active: (() => Promise<string[]>) | undefined, initial: string[] | undefined;
       const added: string[] = [];
       try {
         await page.setViewportSize({ width, height: 900 });
         const me = await read(page, "/me");
         roles = `/platform/users/${me.user.id}/roles`;
-        // Provision both grants in this test; no prior test's promotion or
-        // inferred group membership is needed. Operator stays the safety Admin.
-        // Record active manual grants first so cleanup restores alex exactly.
-        const prior = new Set(((await read(operator.page, `/platform/users/${me.user.id}`)).role_grants as { role: string; source: string; revoked_at: string | null }[])
-          .filter(g => g.source === "manual" && g.revoked_at === null).map(g => g.role));
+        // Active grants of every source. DELETE revokes a role across sources,
+        // so this test only touches roles alex holds from NO source beforehand,
+        // and cleanup must restore the exact initial role/source set.
+        active = async () => ((await read(operator.page, `/platform/users/${me.user.id}`)).role_grants as { role: string; source: string; revoked_at: string | null }[])
+          .filter(g => g.revoked_at === null).map(g => `${g.role}:${g.source}`).sort();
+        initial = await active();
+        const held = (role: string) => initial!.some(g => g.startsWith(`${role}:`));
+        expect(held("admin"), "alex must start without Admin authority from any source").toBe(false);
+        // Operator stays the safety Admin; alex gets Admin only from this test.
         for (const role of ["user", "admin"]) {
+          if (held(role)) continue;
           expect((await api(operator.page, "POST", roles, { role })).status()).toBe(200);
-          if (!prior.has(role)) added.push(role);
+          added.push(role);
         }
         const account = `demotion-${stage}-${width}-${randomUUID()}`;
         const report = JSON.parse(readFileSync(path.resolve("tests/browser/fixtures/anthropic-upload.json"), "utf8"));
@@ -423,10 +428,16 @@ for (const width of [1440, 390]) {
         expect(await contentState(providerTables), "403 must not append evidence, bindings or snapshots").toEqual(before);
         await check(page, `User ${width} after ${stage} demotion`);
       } finally {
-        // Revoke only grants this test added (admin first), so later specs see
-        // alex's original platform-role provenance.
-        try { if (roles) for (const role of [...added].reverse()) expect((await api(operator.page, "DELETE", `${roles}/${role}`)).status()).toBe(200); }
-        finally { await actor.context.close(); await operator.context.close(); }
+        // Revoke only roles this test added (admin first; demotion may already
+        // have removed it), then prove alex's role/source set is exactly restored.
+        try {
+          if (roles && active && initial) {
+            for (const role of [...added].reverse()) {
+              if ((await active()).some(g => g.startsWith(`${role}:`))) expect((await api(operator.page, "DELETE", `${roles}/${role}`)).status()).toBe(200);
+            }
+            expect(await active(), "alex's active platform-role grants must equal the initial set").toEqual(initial);
+          }
+        } finally { await actor.context.close(); await operator.context.close(); }
       }
     });
   }

@@ -22,7 +22,7 @@ The dashboard follows Grounded's Bitop UI and Workspace/Admin composition, with 
 - **Provider-reported cost reconciliation:** Admin › Usage & costs › Provider reconciliation; Admins upload Anthropic Cost Report JSON, attest mappings and freeze comparisons, Auditors read only. Signed charges, unknown variance, separate holds and identity-free personal totals; no financial-history rewrite or verified invoice. Anthropic/USD only; OpenAI Costs export is follow-up #393 ([workflow](docs/provider-cost-reconciliation.md)).
 - **Checks:** Rust unit/integration tests on real PostgreSQL, mock-provider and SDK contracts, Vitest, and a Playwright journey with axe accessibility scans for every persona ([verification](docs/verification.md), [accessibility](docs/accessibility.md)).
 
-**Planned, not implemented:** an OpenRouter video adapter (video has no supported provider: OpenAI shut down the Sora 2 models and the Videos API on 2026-09-24), video remix/edits/references, native batches beyond OpenAI and Anthropic, image edits and vision input, token-by-token Responses/Messages streaming, active health probes, alert-webhook UI, OpenAI Costs export support (#393). See [roadmap](docs/roadmap.md).
+**Planned, not implemented:** an OpenRouter video adapter (video has no supported provider: OpenAI shut down the Sora 2 models and the Videos API on 2026-09-24), video remix/edits/references, native batches beyond OpenAI and Anthropic, image edits and vision input, token-by-token Responses/Messages streaming, active health probes, OpenAI Costs export support (#393). See [roadmap](docs/roadmap.md).
 
 ## Local account picker
 
