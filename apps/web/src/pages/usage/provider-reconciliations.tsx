@@ -1,7 +1,7 @@
 /* Admin/Auditor read-only frozen comparisons (#48, PR 1). No financial writes,
  * attribution, allocation, or variance computation happens in the browser.
  */
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import type { Session } from "../../lib/api";
 import { permissions } from "../../lib/permissions";
@@ -25,24 +25,36 @@ export function ProviderReconciliations(props: Props) {
 function ComparisonView({ record, onSelect }: Props) {
   const [local, setLocal] = useState(record);
   const selected = onSelect ? record : local;
-  const select = (next?: string) => onSelect ? onSelect(next) : setLocal(next);
+  const origin = useRef<string | undefined>(undefined);
+  const select = (next?: string) => {
+    if (next) origin.current = next;
+    if (onSelect) onSelect(next); else setLocal(next);
+  };
   return <Stack gap={4} className={s.view}>
     <Heading title="Provider-reported cost reconciliation" description="Anthropic · Read-only" />
     <InfoBanner title="Read-only">Frozen provider-reported charges against configured-rate estimates. Not a verified invoice or a complete payable balance. Priority Tier costs are not supplied. No estimates or holds are changed here.</InfoBanner>
-    {selected ? <><div><Button variant="ghost" size="sm" onClick={() => select()}>Back to reconciliations</Button></div><Detail key={selected} id={selected} /></> : <ReconciliationList onSelect={select} />}
+    {selected ? <><div><Button variant="ghost" size="sm" onClick={() => select()}>Back to reconciliations</Button></div><Detail key={selected} id={selected} /></> : <ReconciliationList onSelect={select} restoreFocusId={origin.current} />}
   </Stack>;
 }
 const periodKey = (r: ListedReconciliation) => `${r.report.period_start}/${r.report.period_end}`;
 const reportPeriod = (r: ListedReconciliation) => utcPeriod(r.report.period_start.slice(0, 10), r.report.period_end.slice(0, 10));
-function ReconciliationList({ onSelect }: { onSelect: (id: string) => void }) {
+function ReconciliationList({ onSelect, restoreFocusId }: { onSelect: (id: string) => void; restoreFocusId?: string }) {
+  const originButton = useRef<HTMLButtonElement>(null);
+  const restored = useRef(false);
   const scope = useApiScope(), [period, setPeriod] = useState("");
   const q = useInfiniteQuery({ queryKey: ["api", scope, reconciliationPath, "period-metadata"], initialPageParam: 0, retry: false,
     queryFn: ({ pageParam, signal }) => readReconciliationPage(pageParam, signal), getNextPageParam: page => page.next });
+  useEffect(() => {
+    if (!restored.current && originButton.current) {
+      originButton.current.focus({ preventScroll: true });
+      restored.current = true;
+    }
+  }, [q.data, restoreFocusId]);
   // Any refusal hides cached financial/metadata rows, including a failed next page.
   const rows = q.error ? [] : q.data?.pages.flatMap(p => p.rows) ?? [];
   const periods = [...new Map(rows.map(row => [periodKey(row), reportPeriod(row)])).entries()];
   const columns: DataTableColumn<ListedReconciliation>[] = [
-    { id: "period", header: "Report period (UTC)", rowHeader: true, cell: r => <Button size="sm" variant="ghost" aria-label={`Open reconciliation ${r.id}`} onClick={() => onSelect(r.id)}>{reportPeriod(r)}</Button> },
+    { id: "period", header: "Report period (UTC)", rowHeader: true, cell: r => <Button ref={r.id === restoreFocusId ? originButton : undefined} size="sm" variant="ghost" aria-label={`Open reconciliation ${r.id}`} onClick={() => onSelect(r.id)}>{reportPeriod(r)}</Button> },
     { id: "provider", header: "Provider", cell: r => r.report.provider === "anthropic" ? "Anthropic" : r.report.provider },
     { id: "account", header: "Provider account", cell: r => r.account_id },
     { id: "observed", header: "Frozen at", cell: r => detailTime(r.observed_at, "UTC") },
@@ -61,10 +73,15 @@ function ReconciliationList({ onSelect }: { onSelect: (id: string) => void }) {
 }
 function Detail({ id }: { id: string }) {
   const scope = useApiScope();
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => { heading.current?.focus({ preventScroll: true }); }, []);
   const q = useQuery({ queryKey: ["api", scope, `${reconciliationPath}/${encodeURIComponent(id)}`], queryFn: ({ signal }) => readReconciliation(id, signal), retry: false });
-  if (q.error) return <ErrorNotice error={q.error} retry={() => void q.refetch()} />;
-  if (!q.data) return <p role="status">Loading frozen comparison…</p>;
-  return <SnapshotView reconciliation={q.data} />;
+  return <Stack gap={4}>
+    <h2 ref={heading} tabIndex={-1}>Reconciliation {id}</h2>
+    {q.error ? <ErrorNotice error={q.error} retry={() => void q.refetch()} />
+      : !q.data ? <p role="status">Loading frozen comparison…</p>
+      : <SnapshotView reconciliation={q.data} />}
+  </Stack>;
 }
 function Totals({ totals, label }: { totals: EstimateTotals; label: string }) {
   return <StatTileGrid label={label} columns={3}>

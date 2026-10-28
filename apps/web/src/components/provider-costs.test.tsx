@@ -11,15 +11,21 @@ import { admin, auditor, member, session, testClient } from "../lib/test-fixture
 
 const base = "/api/v1/platform/provider-reconciliations";
 const totals = { settled_estimate_microusd: "9007199254740993", held_floor_microusd: "123", holds_upper_bound_microusd: null, attempts: "4", unresolved_attempts: "1", unbounded_holds: "1", complete: false };
+// matching.rs: complete requires zero unresolved attempts (and no archived detail).
+// Fully settled attempts have no held floor or unbounded holds; variance is actual − settled.
+const matchedTotals = { ...totals, settled_estimate_microusd: "1000001", held_floor_microusd: "0", unresolved_attempts: "0", unbounded_holds: "0", complete: true };
 const period = { start: "2026-10-01T00:00:00Z", end: "2026-10-02T00:00:00Z" };
 const metadata = { id: "frozen", account_id: "account", import_id: "import", mapping_id: "mapping", observed_at: "2026-10-03T00:00:00Z" };
 const imported = { id: "import", provider: "anthropic", period_start: period.start, period_end: period.end };
 const personal = { estimates: totals, exclusively_attributed_imported_microusd: "-100", exclusively_attributed_imported_by_category: { credit: "-100" }, reasons: ["incomplete_estimate"] };
-const snapshot = { name: "provider-reported cost reconciliation", verified_invoice: false, complete: false, import_id: "import", mapping_id: "mapping", query_version: "aggregate-attempt-start-v1", observed_at: metadata.observed_at, period, imported_microusd: "-9007199254740993", estimates: totals, personal_activity: personal, mapping_provenance: [], category_coverage: [{ category: "credits", status: "supplied" }, { category: "taxes", status: "not_supplied" }], rows: [
+const snapshot = { name: "provider-reported cost reconciliation", verified_invoice: false, complete: false, import_id: "import", mapping_id: "mapping", query_version: "aggregate-attempt-start-v1", observed_at: metadata.observed_at, period, imported_microusd: "-9007199254740993", estimates: totals, personal_activity: personal, mapping_provenance: [
+  { provider_workspace_id: "exclusive", workspace_id: "team", connection_id: "connection-exclusive", effective_start: period.start, effective_end: period.end, evidence_reference: "attestation-exclusive", exclusive: true, non_omg_traffic: false },
+  { provider_workspace_id: "provider-shared", workspace_id: null, connection_id: "connection-shared", effective_start: period.start, effective_end: period.end, evidence_reference: "attestation-shared", exclusive: false, non_omg_traffic: true },
+], category_coverage: [{ category: "credits", status: "supplied" }, { category: "taxes", status: "not_supplied" }], rows: [
   { day: period.start, provider_workspace_id: null, model: "claude-example", service_tier: "standard", category: "tokens", workspace_id: "team", imported_microusd: "1000000", variance_microusd: null, workspace_estimates: [{ workspace_id: "team", totals }], unresolved_coverage: totals, reasons: ["incomplete_estimate", "timing_basis"] },
   { day: period.start, provider_workspace_id: "provider-shared", model: "claude-example", service_tier: "standard", category: "tokens", workspace_id: null, imported_microusd: "1000000", variance_microusd: null, workspace_estimates: [{ workspace_id: "team", totals }], unresolved_coverage: totals, reasons: ["ambiguous_scope", "shared_unallocated"] },
   { day: period.start, workspace_id: "team", model: "estimate-model", service_tier: null, imported_microusd: null, variance_microusd: null, estimate: totals, reasons: ["estimate_only"] },
-  { day: period.start, provider_workspace_id: "exclusive", model: "matched-model", service_tier: "standard", category: "tokens", workspace_id: "team", imported_microusd: "1000000", variance_microusd: "-1", workspace_estimates: [{ workspace_id: "team", totals: { ...totals, complete: true } }], reasons: ["timing_basis"] },
+  { day: period.start, provider_workspace_id: "exclusive", model: "matched-model", service_tier: "standard", category: "tokens", workspace_id: "team", imported_microusd: "1000000", variance_microusd: (1000000n - BigInt(matchedTotals.settled_estimate_microusd)).toString(), workspace_estimates: [{ workspace_id: "team", totals: matchedTotals }], reasons: ["timing_basis"] },
   ...["credit", "discount", "web_search", "unknown_fee"].map(category => ({ day: period.start, provider_workspace_id: null, model: null, service_tier: null, category, workspace_id: null, imported_microusd: "-2", variance_microusd: null, workspace_estimates: [], reasons: ["provider_only", "unsupported_category"] })),
 ] };
 function serve(options: { denied?: boolean; empty?: boolean; unsafePersonal?: boolean } = {}) {
@@ -49,6 +55,25 @@ describe("provider-reported cost comparison", () => {
     await screen.findByRole("table", { name: "Frozen reconciliations" });
     expect(fetch.mock.calls.every(([url, init]) => url.startsWith("/api/v1/platform/") && (!init.method || init.method === "GET"))).toBe(true);
     expect(fetch.mock.calls.some(([url]) => /\/lines|provider-cost-mappings|\/provider-cost-imports\//.test(url))).toBe(false);
+  });
+  it("moves keyboard focus to the detail heading when Enter opens a reconciliation", async () => {
+    serve(); const user = view();
+    const origin = await screen.findByRole("button", { name: "Open reconciliation frozen" });
+    origin.focus();
+    await user.keyboard("{Enter}");
+    await screen.findByRole("table", { name: "Provider comparison lines" });
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Reconciliation frozen" }));
+  });
+  it("restores keyboard focus to the originating reconciliation after returning to the list", async () => {
+    serve(); const user = view();
+    const origin = await screen.findByRole("button", { name: "Open reconciliation frozen" });
+    origin.focus();
+    await user.keyboard("{Enter}");
+    await screen.findByRole("table", { name: "Provider comparison lines" });
+    screen.getByRole("button", { name: "Back to reconciliations" }).focus();
+    await user.keyboard("{Enter}");
+    const restored = await screen.findByRole("button", { name: "Open reconciliation frozen" });
+    expect(document.activeElement).toBe(restored);
   });
   it("filters loaded periods honestly and pages snapshots without unsupported API filters", async () => {
     const second = { ...imported, id: "second", period_start: "2026-09-01T00:00:00Z", period_end: "2026-09-02T00:00:00Z" };
@@ -95,6 +120,23 @@ describe("provider-reported cost comparison", () => {
     expect(within(ambiguous).getAllByRole("cell")[5].textContent).toBe("Unknown");
     expect(screen.getByText("-$9,007,199,254.740993")).toBeTruthy();
     expect(screen.getByText(/Filters change displayed lines only/)).toBeTruthy();
+  });
+  it("renders frozen exclusive and shared mapping provenance without inferring allocation", async () => {
+    serve(); const user = view(auditor, "frozen");
+    await screen.findByRole("tab", { name: "Source & provenance" });
+    await user.click(screen.getByRole("tab", { name: "Source & provenance" }));
+    const table = screen.getByRole("table", { name: "Frozen mapping provenance (shared scopes only)" });
+    const rows = within(table).getAllByRole("row");
+    expect(rows).toHaveLength(3);
+    expect(rows[1].textContent).toContain("connection-exclusive");
+    expect(rows[1].textContent).toContain("team");
+    expect(within(rows[1]).getByText("Exclusive")).toBeTruthy();
+    expect(rows[1].textContent).toContain(`${period.start} – ${period.end}`);
+    expect(rows[1].textContent).toContain("attestation-exclusive");
+    expect(rows[2].textContent).toContain("provider-shared");
+    expect(rows[2].textContent).toContain("connection-shared");
+    expect(within(rows[2]).getAllByText("Shared / unallocated")).toHaveLength(2);
+    expect(rows[2].textContent).toContain("attestation-shared");
   });
   it("combines personal totals without identities, models or drilldowns", async () => {
     // This is the frozen backend projection (matching.rs), not a workspace directory object.
