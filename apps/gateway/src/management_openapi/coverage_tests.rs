@@ -552,3 +552,42 @@ fn management_openapi_coverage_decimal_rate_exemptions_are_reviewed() {
         );
     }
 }
+
+// 5. A query parameter that can never ride a positive request (the handler
+// always refuses a request that carries it) is exempt ONLY with a reason.
+#[test]
+fn management_openapi_coverage_unobservable_query_parameter_needs_a_reason() {
+    let exempt = |reason: Value| {
+        let mut parameter = query("error");
+        parameter["x-omg-unobserved-parameter"] = reason;
+        doc(
+            op(
+                json!({"type":"object","required":[],"additionalProperties":false,"properties":{}}),
+                json!([query("state"), parameter]),
+            ),
+            json!({}),
+        )
+    };
+    let document = exempt(json!("the callback always refuses an `error` response"));
+    // Exempt for `error` only: the other parameter is still required.
+    let gap = message(run(&document, &[json!({})], &[]));
+    assert!(gap.contains("state") && !gap.contains("error"), "{gap}");
+    run(&document, &[json!({})], &[&["state"]]).unwrap();
+    // An empty reason excuses nothing, and quality.rs refuses it outright.
+    for bad in [json!(""), json!("  "), json!(true)] {
+        let document = exempt(bad.clone());
+        assert!(
+            message(run(&document, &[json!({})], &[&["state"]])).contains("error"),
+            "{bad}"
+        );
+        let operation = &document["paths"]["/api/v1/x"]["get"];
+        assert!(quality::operation(&document, operation).is_err(), "{bad}");
+    }
+    // Only a query parameter may claim it.
+    let mut document = exempt(json!("reviewed reason"));
+    document["paths"]["/api/v1/x"]["get"]["parameters"] = json!([{
+        "in":"header","name":"x-probe","schema":{"type":"string"},
+        "x-omg-unobserved-parameter":"reviewed reason"}]);
+    let operation = &document["paths"]["/api/v1/x"]["get"];
+    assert!(quality::operation(&document, operation).is_err());
+}
