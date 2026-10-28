@@ -12,6 +12,8 @@
 import { useId } from "react";
 import { ArrowLeftRight } from "lucide-react";
 import { ScheduledReports } from "../scheduled-reports";
+import { ProviderReconciliations } from "./provider-reconciliations";
+import { permissions } from "../../lib/permissions";
 import { canReadReports } from "../../lib/scheduled-reports";
 import type { Session, Workspace } from "../../lib/api";
 import { platformPath } from "../../lib/api";
@@ -32,8 +34,8 @@ import { PageHeader } from "../../components/ui/page-header/page-header";
 import s from "../shared.module.css";
 import u from "./usage.module.css";
 
-type Tab = "overview" | "explore" | "records" | "holds" | "scheduled-reports";
-const tabOf = (tab?: string): Tab | "chart" => tab === "explore" || tab === "records" || tab === "holds" || tab === "chart" || tab === "scheduled-reports" ? tab : "overview";
+type Tab = "overview" | "explore" | "records" | "holds" | "scheduled-reports" | "provider-reconciliation";
+const tabOf = (tab?: string): Tab | "chart" => tab === "explore" || tab === "records" || tab === "holds" || tab === "chart" || tab === "scheduled-reports" || tab === "provider-reconciliation" ? tab : "overview";
 
 export function Costs({ session, workspace }: { session: Session; workspace: Workspace }) { return <UsageCosts session={session} workspace={workspace} />; }
 export function PlatformCosts({ session }: { session: Session }) { return <UsageCosts session={session} />; }
@@ -45,7 +47,7 @@ export function UsageCosts({ session, workspace }: { session: Session; workspace
   const workspaceFilter = workspace ? undefined : nav.search.workspace_id;
   // One inline filter bar for every tab and the chart page (URL-backed; Records adds the accounting state).
   // Holds has no period or filters: it fetches none of their option lists.
-  const timeless = tab === "holds" || tab === "scheduled-reports";
+  const timeless = tab === "holds" || tab === "scheduled-reports" || tab === "provider-reconciliation";
   const periodData = timeless ? undefined : period;
   const options = useFilterOptions(workspace, ctx, periodData, workspaceFilter, nav.search.key_id, nav.search.model_id, !timeless);
   // Workspace scope: the cost center is a fact about the page (the platform assigns it), not a filter.
@@ -53,7 +55,7 @@ export function UsageCosts({ session, workspace }: { session: Session; workspace
   // One plain line that wraps like text (separate "· …" spans started wrapped lines with a dot on a phone).
   const scopeText = [scopeLine(workspace), period && periodLabel(period), centerFact].filter(Boolean).join(" · ");
   // Holds are not period-bound (the queue has no filters): its subtitle names who the list covers, never a period.
-  const header = (title: string) => <Heading title={title} description={timeless ? holdsScopeText(workspace) : scopeText} />;
+  const header = (title: string) => <Heading title={title} description={tab === "provider-reconciliation" ? "Frozen Anthropic provider-reported costs · Admin/Auditor read-only" : timeless ? holdsScopeText(workspace) : scopeText} />;
   const periodControl = <PeriodControl key={`${period?.start_date}-${period?.end_date}-${period?.preset}`} period={period} navigate={nav.navigate} />;
   // Admin: narrow every tab to one workspace (a leading toolbar control with its own chip).
   const scoped = !workspace && session.capabilities.platform_read && !!period, spaces = useWorkspaceScope(periodData, scoped && !timeless);
@@ -72,14 +74,15 @@ export function UsageCosts({ session, workspace }: { session: Session; workspace
   }
   return <Stack gap={6} className={s.page}>
     {header("Usage & costs")}
-    <Tabs value={tab} onValueChange={v => nav.navigate({ tab: v === "overview" ? undefined : String(v), metric: undefined })}>
+    <Tabs value={tab} onValueChange={v => nav.navigate({ tab: v === "overview" ? undefined : String(v), metric: undefined, record: undefined })}>
       <Stack gap={6}>
       <div className={u.views}>
-        <TabsList variant="pills" overflow="scroll" aria-label="Usage & costs views" aria-describedby={scrollHintId}><Tab value="overview">Overview</Tab><Tab value="explore">Explore</Tab><Tab value="records">{workspace ? "Cost records" : "By workspace"}</Tab><Tab value="holds">Holds</Tab>{canReadReports(session, workspace) && <Tab value="scheduled-reports">Scheduled reports</Tab>}</TabsList>
+        <TabsList variant="pills" overflow="scroll" aria-label="Usage & costs views" aria-describedby={scrollHintId}><Tab value="overview">Overview</Tab><Tab value="explore">Explore</Tab><Tab value="records">{workspace ? "Cost records" : "By workspace"}</Tab><Tab value="holds">Holds</Tab>{canReadReports(session, workspace) && <Tab value="scheduled-reports">Scheduled reports</Tab>}{!workspace && permissions(session).platformRead && <Tab value="provider-reconciliation">Provider reconciliation</Tab>}</TabsList>
         <p id={scrollHintId} className={u.scrollHint}><ArrowLeftRight aria-hidden />Scroll for more views, or use the Left and Right arrow keys.</p>
       </div>
       {!timeless && filters}
       {tab === "scheduled-reports" && <TabsPanel value="scheduled-reports"><SectionHeadings><ScheduledReports session={session} workspace={workspace} /></SectionHeadings></TabsPanel>}
+      {tab === "provider-reconciliation" && <TabsPanel value="provider-reconciliation"><SectionHeadings>{workspace ? <ErrorNotice error={new Error("Provider reconciliation is available only in Admin Usage & costs.")} /> : <ProviderReconciliations session={session} record={nav.search.record} onSelect={record => nav.navigate({ record })} />}</SectionHeadings></TabsPanel>}
       <TabsPanel value="holds"><HoldsTab session={session} workspace={workspace} /></TabsPanel>
       {timeless ? null : invalid || !period ? <ErrorNotice error={invalid} /> : <>
       <TabsPanel value="overview"><UsageOverviewTab workspace={workspace} ctx={ctx} period={period} nav={nav} workspaceFilter={workspaceFilter} accounting={showsAccounting(workspace) || session.capabilities.platform_read} /></TabsPanel>
