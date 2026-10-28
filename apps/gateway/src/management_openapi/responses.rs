@@ -53,7 +53,11 @@ pub(crate) fn artifact() -> &'static Value {
     })
 }
 
-fn operation<'a>(document: &'a Value, method: &str, template: &str) -> Result<&'a Value> {
+pub(super) fn operation<'a>(
+    document: &'a Value,
+    method: &str,
+    template: &str,
+) -> Result<&'a Value> {
     let verb = method.to_ascii_lowercase();
     let item = &document["paths"][template];
     item.get(&verb)
@@ -431,8 +435,23 @@ pub(crate) struct Captured {
     pub status: StatusCode,
     pub headers: HeaderMap,
     pub bytes: axum::body::Bytes,
-    method: String,
-    template: Option<String>,
+    pub(super) method: String,
+    pub(super) template: Option<String>,
+    /// Query parameter NAMES of the request (never their values).
+    pub(super) query: Vec<String>,
+}
+
+/// Names (not values) of the query parameters in a request target.
+fn query_names(path: &str) -> Vec<String> {
+    path.split_once('?')
+        .map(|(_, query)| {
+            query
+                .split('&')
+                .filter(|pair| !pair.is_empty())
+                .map(|pair| pair.split('=').next().unwrap_or_default().to_owned())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(feature = "integration-tests")]
@@ -450,6 +469,7 @@ pub(crate) async fn capture(
         bytes,
         method: method.into(),
         template: template(method, path).unwrap(),
+        query: query_names(path),
     }
 }
 
@@ -492,6 +512,7 @@ pub(crate) async fn capture_http(
         bytes,
         method: method.into(),
         template: template(method, path).unwrap(),
+        query: query_names(path),
     }
 }
 
@@ -536,16 +557,78 @@ fn positive(response: &Value, status: StatusCode, headers: &HeaderMap, bytes: &[
     permitted && cookie
 }
 
+fn json_media(headers: &HeaderMap) -> bool {
+    headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| {
+            v.split(';')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_lowercase()
+        })
+        .is_some_and(|media| media == "application/json" || media.ends_with("+json"))
+}
+
+/// What real handlers were seen to do. Positive observations earn operation,
+/// query-parameter, array-population and union-branch coverage; executed HTTP
+/// boundary vectors are recorded per operation exactly like positives.
 #[derive(Default)]
-pub(crate) struct PositiveFixtures(BTreeSet<String>);
+pub(crate) struct PositiveFixtures {
+    operations: BTreeSet<String>,
+    coverage: super::coverage::Observed,
+    vectors: std::collections::BTreeMap<String, BTreeSet<&'static str>>,
+}
 impl PositiveFixtures {
+    /// Record that every HTTP boundary vector of `kind` (`query` or `body`)
+    /// for the exact operation ran and matched the handler.
+    pub(super) fn record_vectors(&mut self, method: &str, template: &str, kind: &'static str) {
+        self.vectors
+            .entry(format!("{method} {template}"))
+            .or_default()
+            .insert(kind);
+    }
+    /// Coverage and vector gaps for the given `METHOD template` operations.
+    pub(super) fn check_contract_coverage(
+        &self,
+        document: &Value,
+        expected: &BTreeSet<String>,
+    ) -> Result<()> {
+        let mut failures = Vec::new();
+        for key in expected {
+            let (method, template) = key.split_once(' ').context("operation key")?;
+            let op = operation(document, method, template)?;
+            if let Err(error) = self.coverage.check(document, key, op) {
+                failures.push(format!("{error:#}"));
+            }
+            let ran = self.vectors.get(key);
+            let has = |kind: &str| ran.is_some_and(|ran| ran.contains(kind));
+            if !super::coverage::documented_queries(document, op)?.is_empty() && !has("query") {
+                failures.push(format!(
+                    "{key}: documented query parameters have no executed HTTP boundary vectors (call vectors::query_vectors)"
+                ));
+            }
+            if op.get("requestBody").is_some() && !has("body") {
+                failures.push(format!(
+                    "{key}: the request body has no executed HTTP boundary vectors (call vectors::body_vectors_http)"
+                ));
+            }
+        }
+        ensure!(failures.is_empty(), "{}", failures.join("\n"));
+        Ok(())
+    }
     pub(crate) fn observe(&mut self, captured: &Captured) {
+        self.observe_in(artifact(), captured);
+    }
+    /// `observe` against an explicit document (synthetic documents in controls).
+    pub(super) fn observe_in(&mut self, document: &Value, captured: &Captured) {
         let template = captured
             .template
             .as_deref()
             .expect("fixture operation must be documented");
         validate(
-            artifact(),
+            document,
             &captured.method,
             template,
             captured.status,
@@ -559,8 +642,8 @@ impl PositiveFixtures {
                 captured.status.as_u16()
             )))
         });
-        let op = operation(artifact(), &captured.method, template).unwrap();
-        let response = resolved(artifact(), &op["responses"][captured.status.as_str()]).unwrap();
+        let op = operation(document, &captured.method, template).unwrap();
+        let response = resolved(document, &op["responses"][captured.status.as_str()]).unwrap();
         // A denial (including the callback's cookie-clearing 303) never earns
         // coverage, nor does an implicit HEAD earn a GET.
         if positive(
@@ -570,7 +653,17 @@ impl PositiveFixtures {
             &captured.bytes,
         ) && captured.method != "HEAD"
         {
-            self.0.insert(format!("{} {template}", captured.method));
+            let key = format!("{} {template}", captured.method);
+            self.operations.insert(key.clone());
+            self.coverage.observe_query(&key, &captured.query);
+            if captured.status.is_success()
+                && json_media(&captured.headers)
+                && let Ok(body) = serde_json::from_slice::<Value>(&captured.bytes)
+            {
+                self.coverage
+                    .observe_body(document, &key, op, captured.status.as_u16(), &body)
+                    .unwrap_or_else(|e| refuse(e.context(key.clone())));
+            }
         }
     }
     pub(crate) fn finish(&self, areas: &[&str]) {
@@ -586,12 +679,14 @@ impl PositiveFixtures {
         }
         assert!(!expected.is_empty(), "empty completed-area inventory");
         let observed = self
-            .0
+            .operations
             .iter()
             .filter(|key| areas.contains(&area(key.split_once(' ').unwrap().1)))
             .cloned()
             .collect();
-        require_positives(&expected, &observed).unwrap();
+        require_positives(&expected, &observed).unwrap_or_else(|e| refuse(e));
+        self.check_contract_coverage(artifact(), &expected)
+            .unwrap_or_else(|e| refuse(e));
     }
 }
 
