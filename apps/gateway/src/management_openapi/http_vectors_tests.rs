@@ -102,6 +102,7 @@ async fn run(app: &Router, document: &Value) -> anyhow::Result<Vec<Captured>> {
         document,
         "GET",
         TEMPLATE,
+        &[],
         &async || ((), base()),
         &async |_: &(), query: String| {
             let request = Request::builder()
@@ -121,7 +122,7 @@ fn message(result: anyhow::Result<Vec<Captured>>) -> String {
 fn management_openapi_http_vectors_query_cases_cover_the_boundaries() {
     let document = query_document();
     let operation = &document["paths"][TEMPLATE]["get"];
-    let cases = query_cases(&document, operation, &base()).unwrap();
+    let cases = query_cases(&document, operation, &base(), &[]).unwrap();
     let find = |param: &str, kind: &str| {
         cases
             .iter()
@@ -160,10 +161,10 @@ fn management_openapi_http_vectors_query_cases_cover_the_boundaries() {
             .any(|c| c.edit == Edit::Set("4243".into()))
     );
     // A base that omits a documented parameter, or adds an undocumented one, is refused.
-    assert!(query_cases(&document, operation, &base()[..2]).is_err());
+    assert!(query_cases(&document, operation, &base()[..2], &[]).is_err());
     let mut extra = base();
     extra.push(("surprise".into(), "1".into()));
-    assert!(query_cases(&document, operation, &extra).is_err());
+    assert!(query_cases(&document, operation, &extra, &[]).is_err());
 }
 
 #[tokio::test]
@@ -229,6 +230,7 @@ async fn management_openapi_http_vectors_unexpected_statuses_and_other_operation
         &document,
         "GET",
         TEMPLATE,
+        &[],
         &async || ((), base()),
         &async |_: &(), _query: String| {
             let request = Request::builder()
@@ -396,4 +398,27 @@ async fn management_openapi_http_vectors_body_disagreement_fails_without_values(
         "{text}"
     );
     assert!(!text.contains("deadbeef") && !text.contains("11"), "{text}");
+}
+
+#[test]
+fn management_openapi_http_vectors_seeds_cover_parameters_absent_from_the_base() {
+    let document = json!({"openapi":"3.1.0","paths":{TEMPLATE:{"get":{"parameters":[
+        parameter("state", true, json!({"type":"string","pattern":"^[0-9a-f]{4}$"})),
+        parameter("error", false, json!({"type":"string","maxLength":6})),
+    ],"responses":{"200":{"description":"ok"}}}}},"components":{"schemas":{}}});
+    let operation = &document["paths"][TEMPLATE]["get"];
+    let base = vec![("state".to_owned(), "abcd".to_owned())];
+    let seed = vec![("error".to_owned(), "denied".to_owned())];
+    // Without a seed the optional parameter has no valid value to derive from.
+    assert!(query_cases(&document, operation, &base, &[]).is_err());
+    let cases = query_cases(&document, operation, &base, &seed).unwrap();
+    let error: Vec<_> = cases.iter().filter(|c| c.param == "error").collect();
+    assert!(error.iter().any(|c| c.kind == "maxLength+1" && !c.accept));
+    // The baseline never carried `error`, so there is nothing to omit.
+    assert!(error.iter().all(|c| c.kind != "omitted"));
+    assert!(
+        cases
+            .iter()
+            .any(|c| c.param == "state" && c.kind == "omitted" && !c.accept)
+    );
 }

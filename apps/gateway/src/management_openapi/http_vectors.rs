@@ -365,11 +365,14 @@ fn query_parameters<'a>(
     Ok(out)
 }
 
-/// Every query vector of an operation, given one VALID value per parameter.
+/// Every query vector of an operation. `base` is one VALID request; `seeds` give a
+/// valid value for documented OPTIONAL parameters the base request does not carry
+/// (a vector for such a parameter ADDS it to the base request).
 pub(super) fn query_cases(
     document: &Value,
     operation: &Value,
     base: &[(String, String)],
+    seeds: &[(String, String)],
 ) -> Result<Vec<QueryCase>> {
     let parameters = query_parameters(document, operation)?;
     ensure!(
@@ -380,9 +383,10 @@ pub(super) fn query_cases(
     for (name, required, schema) in &parameters {
         let raw = base
             .iter()
+            .chain(seeds)
             .find(|(n, _)| n == name)
             .map(|(_, v)| v.as_str())
-            .context("the valid base request must carry every documented query parameter")?;
+            .context("every documented query parameter needs a valid base or seed value")?;
         let mut nodes = Vec::new();
         let kinds = {
             applicable(document, schema, &json!(raw), &mut nodes, 0)?;
@@ -393,12 +397,14 @@ pub(super) fn query_cases(
             "the valid base value of a query parameter must satisfy its schema"
         );
         let mut seen = BTreeSet::from([raw.to_owned()]);
-        out.push(QueryCase {
-            param: name.clone(),
-            kind: "omitted",
-            edit: Edit::Omit,
-            accept: !required,
-        });
+        if base.iter().any(|(n, _)| n == name) {
+            out.push(QueryCase {
+                param: name.clone(),
+                kind: "omitted",
+                edit: Edit::Omit,
+                accept: !required,
+            });
+        }
         for (kind, value) in scalar_mutations(document, schema, &nodes, &coerce(&kinds, raw), true)?
         {
             let raw = render(&value);
@@ -413,7 +419,7 @@ pub(super) fn query_cases(
             }
         }
     }
-    for name in base.iter().map(|(n, _)| n) {
+    for name in base.iter().chain(seeds).map(|(n, _)| n) {
         ensure!(
             parameters.iter().any(|(p, ..)| p == name),
             "the valid base request carries an undocumented query parameter"
@@ -472,12 +478,13 @@ pub(super) async fn run_query<C>(
     document: &Value,
     method: &str,
     template: &str,
+    seeds: &[(String, String)],
     fresh: &impl AsyncFn() -> (C, Vec<(String, String)>),
     send: &impl AsyncFn(&C, String) -> Probe,
 ) -> Result<Vec<Captured>> {
     let operation = responses::operation(document, method, template)?;
     let (_, base) = fresh().await;
-    let cases = query_cases(document, operation, &base)?;
+    let cases = query_cases(document, operation, &base, seeds)?;
     let mut exchanges = Vec::new();
     // The all-valid request is the positive control for every other vector.
     let mut plan: Vec<(Option<&QueryCase>, &str, String, bool)> =
@@ -491,8 +498,12 @@ pub(super) async fn run_query<C>(
         if let Some(case) = case {
             pairs.retain(|(name, _)| !(name == &case.param && matches!(case.edit, Edit::Omit)));
             if let Edit::Set(raw) = &case.edit {
-                for pair in pairs.iter_mut().filter(|(name, _)| name == &case.param) {
-                    pair.1 = raw.clone();
+                if pairs.iter().any(|(name, _)| name == &case.param) {
+                    for pair in pairs.iter_mut().filter(|(name, _)| name == &case.param) {
+                        pair.1 = raw.clone();
+                    }
+                } else {
+                    pairs.push((case.param.clone(), raw.clone()));
                 }
             }
         }
@@ -515,23 +526,40 @@ pub(super) async fn run_query<C>(
 
 /// Query boundary vectors for one operation over real HTTP.
 ///
-/// `fresh` yields, per request, a context and a VALID value for every documented
-/// query parameter (a login attempt for a callback, for example); `send` issues
-/// the request target's query string and returns the captured exchange.
+/// `fresh` yields, per request, a context and a VALID request (a login attempt
+/// for a callback, for example); `seeds` give valid values for documented
+/// optional parameters that request does not carry; `send` issues the request
+/// target's query string and returns the exchange with the handler's verdict.
 pub(crate) async fn query_vectors<C>(
     fixtures: &mut PositiveFixtures,
     method: &str,
     template: &str,
+    seeds: &[(&str, &str)],
     fresh: impl AsyncFn() -> (C, Vec<(String, String)>),
     send: impl AsyncFn(&C, String) -> Probe,
 ) {
-    let exchanges = run_query(responses::artifact(), method, template, &fresh, &send)
-        .await
-        .unwrap_or_else(|e| responses::refuse(e));
+    let seeds = own(seeds);
+    let exchanges = run_query(
+        responses::artifact(),
+        method,
+        template,
+        &seeds,
+        &fresh,
+        &send,
+    )
+    .await
+    .unwrap_or_else(|e| responses::refuse(e));
     for exchange in &exchanges {
         fixtures.observe(exchange);
     }
     fixtures.record_vectors(method, template, "query");
+}
+
+fn own(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+    pairs
+        .iter()
+        .map(|(n, v)| ((*n).to_owned(), (*v).to_owned()))
+        .collect()
 }
 
 /// [`query_vectors`] for operations whose valid request is a fixed query.
@@ -542,14 +570,12 @@ pub(crate) async fn query_vectors_fixed(
     base: &[(&str, &str)],
     send: impl AsyncFn(String) -> Captured,
 ) {
-    let base: Vec<(String, String)> = base
-        .iter()
-        .map(|(n, v)| ((*n).to_owned(), (*v).to_owned()))
-        .collect();
+    let base = own(base);
     query_vectors(
         fixtures,
         method,
         template,
+        &[],
         async || ((), base.clone()),
         async |_: &(), query| Probe::from(send(query).await),
     )

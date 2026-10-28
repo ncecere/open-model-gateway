@@ -1260,10 +1260,7 @@
                 "type": "null"
               },
               "role": {
-                "enum": [
-                  "member",
-                  null
-                ]
+                "const": "member"
               }
             }
           }
@@ -1785,8 +1782,7 @@
             "enum": [
               "owner",
               "admin",
-              "member",
-              null
+              "member"
             ]
           },
           "workspace_id": {
@@ -2282,8 +2278,7 @@
                   "enum": [
                     "manual",
                     "group",
-                    "mixed",
-                    null
+                    "mixed"
                   ]
                 },
                 "name": {
@@ -2296,8 +2291,7 @@
                   "enum": [
                     "owner",
                     "admin",
-                    "member",
-                    null
+                    "member"
                   ]
                 }
               },
@@ -4159,12 +4153,13 @@
       "post_api_v1_auth_logoutRequest": false,
       "post_api_v1_auth_logoutResponse": false,
       "post_api_v1_invitations_acceptRequest": {
-        "description": "Serde accepts the closed object or its positional struct array [token]. Any string deserializes; the handler additionally requires 64 ASCII hexadecimal characters and a live matching invitation.",
+        "description": "Serde accepts the closed object or its positional struct array [token]. The handler refuses any token that is not exactly 64 ASCII hexadecimal characters with 400 before looking for a live matching invitation, so the schema carries that rule (checked against the real handler by the HTTP boundary vectors).",
         "oneOf": [
           {
             "additionalProperties": false,
             "properties": {
               "token": {
+                "pattern": "^[0-9a-fA-F]{64}$",
                 "type": "string"
               }
             },
@@ -4179,6 +4174,7 @@
             "minItems": 1,
             "prefixItems": [
               {
+                "pattern": "^[0-9a-fA-F]{64}$",
                 "type": "string"
               }
             ],
@@ -4199,15 +4195,18 @@
         "type": "object"
       },
       "post_api_v1_me_access_requestsRequest": {
-        "description": "Serde accepts the closed object or positional array [workspace_id, reason, idempotency_key]. The handler also bounds/validates reason and idempotency_key and checks live discovery/membership.",
+        "description": "Serde accepts the closed object or positional array [workspace_id, reason, idempotency_key]. The handler refuses (400) an idempotency_key that is not 1 to 128 printable ASCII characters and a reason longer than 1000 characters or containing a control character, so the schema carries those rules; live discovery, membership and replay checks remain handler semantics.",
         "oneOf": [
           {
             "additionalProperties": false,
             "properties": {
               "idempotency_key": {
+                "pattern": "^[!-~]{1,128}$",
                 "type": "string"
               },
               "reason": {
+                "maxLength": 1000,
+                "pattern": "^[^\\p{Cc}]*$",
                 "type": [
                   "string",
                   "null"
@@ -4232,12 +4231,15 @@
                 "$ref": "#/components/schemas/IdentityUuid"
               },
               {
+                "maxLength": 1000,
+                "pattern": "^[^\\p{Cc}]*$",
                 "type": [
                   "string",
                   "null"
                 ]
               },
               {
+                "pattern": "^[!-~]{1,128}$",
                 "type": "string"
               }
             ],
@@ -4253,10 +4255,41 @@
         "$ref": "#/components/schemas/IdentityOwnAccessRequest"
       },
       "post_api_v1_me_notifications_readRequest": {
-        "description": "Serde accepts the closed object or positional array [ids, all], where only trailing all may be omitted. In the object form ids may be null or omitted; all may be omitted but not null. Handler requires exactly one of all=true or a nonempty ids array of at most 200.",
+        "description": "Serde accepts the closed object or the positional array [ids, all], where only trailing all may be omitted. The handler refuses (400) unless EXACTLY ONE of all=true or a non-empty ids array of at most 200 is given; the schema carries that rule in both forms.",
         "oneOf": [
           {
             "additionalProperties": false,
+            "oneOf": [
+              {
+                "properties": {
+                  "all": {
+                    "const": true
+                  },
+                  "ids": {
+                    "type": "null"
+                  }
+                },
+                "required": [
+                  "all"
+                ]
+              },
+              {
+                "properties": {
+                  "all": {
+                    "const": false
+                  },
+                  "ids": {
+                    "items": {
+                      "$ref": "#/components/schemas/IdentityUuid"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "ids"
+                ]
+              }
+            ],
             "properties": {
               "all": {
                 "default": false,
@@ -4266,6 +4299,8 @@
                 "items": {
                   "$ref": "#/components/schemas/IdentityUuid"
                 },
+                "maxItems": 200,
+                "minItems": 1,
                 "type": [
                   "array",
                   "null"
@@ -4279,11 +4314,39 @@
             "items": false,
             "maxItems": 2,
             "minItems": 1,
+            "oneOf": [
+              {
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "const": true
+                  }
+                ]
+              },
+              {
+                "prefixItems": [
+                  {
+                    "items": {
+                      "$ref": "#/components/schemas/IdentityUuid"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "const": false
+                  }
+                ]
+              }
+            ],
             "prefixItems": [
               {
                 "items": {
                   "$ref": "#/components/schemas/IdentityUuid"
                 },
+                "maxItems": 200,
+                "minItems": 1,
                 "type": [
                   "array",
                   "null"
