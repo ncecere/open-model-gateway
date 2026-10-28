@@ -53,11 +53,14 @@ async fn request(
     if let Some(b) = bearer {
         req = req.header("authorization", format!("Bearer {b}"));
     }
-    app.clone()
+    let response = app
+        .clone()
         .oneshot(req.body(Body::from("{}")).unwrap())
         .await
-        .unwrap()
-        .status()
+        .unwrap();
+    openapi::responses::capture(method, path, response)
+        .await
+        .status
 }
 
 /// Every declared workspace route must hide a foreign personal workspace just
@@ -118,9 +121,8 @@ async fn every_workspace_route_hides_foreign_personal_like_unknown(pool: PgPool)
                         )
                         .await
                         .unwrap();
-                    let status = response.status();
-                    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
-                    replies.push((status, body));
+                    let captured = openapi::responses::capture(method, path, response).await;
+                    replies.push((captured.status, captured.bytes));
                 }
                 // Compare the complete body, not only its keys: a distinguishing
                 // message or reason would leave the existence oracle intact.

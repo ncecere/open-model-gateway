@@ -1,5 +1,6 @@
 //! Test-only management contract: no runtime endpoint or production dependency.
 mod generator;
+pub(crate) mod responses;
 mod validation;
 
 #[cfg(test)]
