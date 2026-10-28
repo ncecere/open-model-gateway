@@ -364,13 +364,20 @@ for (const width of [1440, 390]) {
     test(`Mid-session Admin demotion refuses ${stage}, removes writes and persists nothing at ${width}px`, async ({ browser }, info) => {
       const operator = await signIn(browser, "operator"), actor = await signIn(browser, "alex"), page = actor.page;
       let roles: string | undefined;
+      const added: string[] = [];
       try {
         await page.setViewportSize({ width, height: 900 });
         const me = await read(page, "/me");
         roles = `/platform/users/${me.user.id}/roles`;
         // Provision both grants in this test; no prior test's promotion or
         // inferred group membership is needed. Operator stays the safety Admin.
-        for (const role of ["user", "admin"]) expect((await api(operator.page, "POST", roles, { role })).status()).toBe(200);
+        // Record active manual grants first so cleanup restores alex exactly.
+        const prior = new Set(((await read(operator.page, `/platform/users/${me.user.id}`)).role_grants as { role: string; source: string; revoked_at: string | null }[])
+          .filter(g => g.source === "manual" && g.revoked_at === null).map(g => g.role));
+        for (const role of ["user", "admin"]) {
+          expect((await api(operator.page, "POST", roles, { role })).status()).toBe(200);
+          if (!prior.has(role)) added.push(role);
+        }
         const account = `demotion-${stage}-${width}-${randomUUID()}`;
         const report = JSON.parse(readFileSync(path.resolve("tests/browser/fixtures/anthropic-upload.json"), "utf8"));
         report.account_id = account;
@@ -416,7 +423,9 @@ for (const width of [1440, 390]) {
         expect(await contentState(providerTables), "403 must not append evidence, bindings or snapshots").toEqual(before);
         await check(page, `User ${width} after ${stage} demotion`);
       } finally {
-        try { if (roles) expect((await api(operator.page, "DELETE", `${roles}/admin`)).status()).toBe(200); }
+        // Revoke only grants this test added (admin first), so later specs see
+        // alex's original platform-role provenance.
+        try { if (roles) for (const role of [...added].reverse()) expect((await api(operator.page, "DELETE", `${roles}/${role}`)).status()).toBe(200); }
         finally { await actor.context.close(); await operator.context.close(); }
       }
     });
