@@ -186,6 +186,25 @@ test("CNPG explicit synchronous replication renders only the native PostgreSQL s
   }
 });
 
+test("CNPG synchronous count validation matches the CNPG 1.30.1 webhook exactly (#391)", () => {
+  // internal/webhook/v1/cluster_webhook.go:941-959: number < instances + standbyNamesPre + standbyNamesPost,
+  // for EVERY method/dataDurability combination.
+  assertHelmRefuses(synchronousArgs({ method: "first", number: 3, dataDurability: "required", failoverQuorum: false }),
+    /number must be less than instances plus the external standby names/);
+  assertHelmRefuses(synchronousArgs({ method: "any", number: 3, dataDurability: "preferred", failoverQuorum: false }),
+    /number must be less than instances plus the external standby names/);
+  // Upstream-valid: 3 instances + one external standby name allow number 3 (3 < 4).
+  const [cluster] = docsOfKind(helmTemplate(synchronousArgs(
+    { method: "any", number: 3, dataDurability: "required", failoverQuorum: false, standbyNamesPost: ["remote-a"] })), "Cluster");
+  assert.match(cluster, /^      number: 3$/m);
+});
+
+test("CNPG legacy defaults render byte-identically to main (#391)", () => {
+  const [defaults] = docsOfKind(helmTemplate(profiles.cnpg), "Cluster");
+  assert.match(defaults, /^  imageName: .*\n  minSyncReplicas: 1\n  maxSyncReplicas: 1\n  smartShutdownTimeout:/m);
+  assert.doesNotMatch(defaults, /Preserve the legacy|#391/);
+});
+
 test("CNPG legacy defaults and explicit legacy values remain unchanged (#391)", () => {
   const [defaults] = docsOfKind(helmTemplate(profiles.cnpg), "Cluster");
   assert.match(defaults, /^  instances: 2$/m);
@@ -232,10 +251,10 @@ test("CNPG synchronous schema is strict about fields, enums, counts and list typ
   for (const config of invalid) assertHelmRefuses(synchronousArgs(config), /synchronous/);
 });
 
-test("CNPG required quorum count must fit instances minus one (#391)", () => {
+test("CNPG required quorum count must be below the instance count without external names (#391)", () => {
   for (const [instances, number] of [[1, 1], [2, 2], [3, 3], [3, 4]]) {
     assertHelmRefuses(synchronousArgs({ ...requiredSync, number }, ["--set", `cnpg.cluster.instances=${instances}`]),
-      /cnpg\.cluster\.synchronous\.number.*instances.*1/);
+      /cnpg\.cluster\.synchronous\.number must be less than instances plus the external standby names/);
   }
   // A two-instance required policy is valid but blocks writes after promotion
   // until a standby returns; do not forbid the operator's explicit trade-off.

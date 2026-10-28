@@ -154,8 +154,13 @@ the template supplies legacy `1/1` as before. Avoid carrying old computed defaul
 clear inherited legacy keys with `--set cnpg.cluster.minSyncReplicas=null --set cnpg.cluster.maxSyncReplicas=null`.
 Review `helm template` output: only the new stanza should remain. No database reset, initdb,
 or migration is needed for this replication-policy change; rollout is an operator decision.
+**Transition window:** CNPG applies the change by configuration reload and temporarily resets its
+quorum metadata while doing so, so automatic failover is unavailable until the new configuration
+is applied on every instance. Roll out in a quiet period, then verify on the primary that
+`synchronous_standby_names` reflects the new policy and the standbys report `sync_state` quorum/sync
+before relying on it or running a failover drill.
 The schema requires all four scalar fields and validates their types/enums; the template
-rejects `any`/`required` with `number > instances - 1`. Optional `standbyNamesPre` and
+mirrors CNPG's webhook and rejects `number >= instances + standbyNamesPre + standbyNamesPost`. Optional `standbyNamesPre` and
 `standbyNamesPost` are lists of external application names; CNPG forbids nonempty lists with
 `preferred`, and quorum failover requires `number` greater than their combined length.
 
