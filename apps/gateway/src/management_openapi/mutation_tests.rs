@@ -55,14 +55,13 @@ fn sample(document: &Value, schema: &Value) -> Value {
             // positive integer or a two-decimal rate).
             _ if schema.get("pattern").is_some() => {
                 let pattern = schema["pattern"].clone();
-                let accepts = |candidate: &&str| {
+                let accepts = |candidate: &str| {
                     super::validation::compile_schema(&json!({"type":"string","pattern":pattern}))
                         .is_ok_and(|v| v.is_valid(&json!(candidate)))
                 };
                 ["0", "1", "0.00", "1.00"]
-                    .iter()
-                    .find(accepts)
-                    .copied()
+                    .into_iter()
+                    .find(|candidate| accepts(candidate))
                     .unwrap_or("0")
                     .into()
             }
