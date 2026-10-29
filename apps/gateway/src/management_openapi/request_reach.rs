@@ -186,37 +186,54 @@ pub(super) fn declared(document: &Value, schema: &Value) -> Result<BTreeMap<Stri
     Ok(out)
 }
 
+/// What a reach computation may claim: with `walked`, only the instance
+/// locations (JSON pointers, `""` for the root) a vector walk really mutated.
+struct Ctx<'a> {
+    document: &'a Value,
+    walked: Option<&'a BTreeSet<String>>,
+}
+impl Ctx<'_> {
+    fn counts(&self, at: &str) -> bool {
+        self.walked.is_none_or(|walked| walked.contains(at))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn visit(
-    document: &Value,
+    ctx: &Ctx,
     child: &Value,
     key: String,
     instance: &Value,
+    at: &str,
     out: &mut BTreeSet<String>,
     stack: &mut Vec<(String, String)>,
     depth: usize,
 ) -> Result<()> {
-    if !child.is_object() {
+    if !child.is_object() || !ctx.counts(at) {
         return Ok(());
     }
     out.insert(key.clone());
-    reach(document, child, instance, &key, out, stack, depth + 1)
+    reach(ctx, child, instance, &key, at, out, stack, depth + 1)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn reach(
-    document: &Value,
+    ctx: &Ctx,
     node: &Value,
     instance: &Value,
     key: &str,
+    at: &str,
     out: &mut BTreeSet<String>,
     stack: &mut Vec<(String, String)>,
     depth: usize,
 ) -> Result<()> {
+    let document = ctx.document;
     ensure!(depth < 48, "request body nesting too deep");
     if let Some((target, pointer)) = follow(document, node)? {
         let frame = (pointer, key.to_owned());
         if !stack.contains(&frame) {
             stack.push(frame);
-            let walked = reach(document, target, instance, key, out, stack, depth + 1);
+            let walked = reach(ctx, target, instance, key, at, out, stack, depth + 1);
             stack.pop();
             walked?;
         }
@@ -228,10 +245,11 @@ fn reach(
         for (i, arm) in node[keyword].as_array().into_iter().flatten().enumerate() {
             if arm.is_object() && matches(arm)? {
                 visit(
-                    document,
+                    ctx,
                     arm,
                     format!("{key}/{keyword}/{i}"),
                     instance,
+                    at,
                     out,
                     stack,
                     depth,
@@ -241,10 +259,11 @@ fn reach(
     }
     for (i, arm) in node["allOf"].as_array().into_iter().flatten().enumerate() {
         reach(
-            document,
+            ctx,
             arm,
             instance,
             &format!("{key}/allOf/{i}"),
+            at,
             out,
             stack,
             depth + 1,
@@ -254,10 +273,11 @@ fn reach(
         let keyword = if matches(condition)? { "then" } else { "else" };
         if let Some(branch) = node.get(keyword).filter(|b| b.is_object()) {
             reach(
-                document,
+                ctx,
                 branch,
                 instance,
                 &format!("{key}/{keyword}"),
+                at,
                 out,
                 stack,
                 depth + 1,
@@ -272,12 +292,14 @@ fn reach(
             .flatten()
             .collect();
         for (name, value) in object {
+            let child_at = format!("{at}/{name}");
             if let Some(child) = properties.and_then(|p| p.get(name)) {
                 visit(
-                    document,
+                    ctx,
                     child,
                     format!("{key}/properties/{}", segment(name)),
                     value,
+                    &child_at,
                     out,
                     stack,
                     depth,
@@ -288,10 +310,11 @@ fn reach(
                 if pattern_matches(pattern, name)? {
                     selected = true;
                     visit(
-                        document,
+                        ctx,
                         child,
                         format!("{key}/patternProperties/{}", segment(pattern)),
                         value,
+                        &child_at,
                         out,
                         stack,
                         depth,
@@ -300,10 +323,11 @@ fn reach(
             }
             if !selected && let Some(child) = node.get("additionalProperties") {
                 visit(
-                    document,
+                    ctx,
                     child,
                     format!("{key}/additionalProperties"),
                     value,
+                    &child_at,
                     out,
                     stack,
                     depth,
@@ -321,10 +345,11 @@ fn reach(
         {
             if let Some(value) = array.get(i) {
                 visit(
-                    document,
+                    ctx,
                     child,
                     format!("{key}/prefixItems/{i}"),
                     value,
+                    &format!("{at}/{i}"),
                     out,
                     stack,
                     depth,
@@ -332,12 +357,13 @@ fn reach(
             }
         }
         if let Some(child) = node.get("items") {
-            for value in array.iter().skip(prefix) {
+            for (i, value) in array.iter().enumerate().skip(prefix) {
                 visit(
-                    document,
+                    ctx,
                     child,
                     format!("{key}/items"),
                     value,
+                    &format!("{at}/{i}"),
                     out,
                     stack,
                     depth,
@@ -354,8 +380,30 @@ pub(super) fn reached(
     schema: &Value,
     instance: &Value,
 ) -> Result<BTreeSet<String>> {
+    let ctx = Ctx {
+        document,
+        walked: None,
+    };
     let mut out = BTreeSet::new();
-    reach(document, schema, instance, "", &mut out, &mut Vec::new(), 0)?;
+    reach(&ctx, schema, instance, "", "", &mut out, &mut Vec::new(), 0)?;
+    Ok(out)
+}
+
+/// The declared locations of `instance` that a vector walk really MUTATED:
+/// `walked` are the JSON pointers (`""` for the root) the walk generated
+/// vectors for. A location the body merely contains is not reached.
+pub(super) fn reached_by_walk(
+    document: &Value,
+    schema: &Value,
+    instance: &Value,
+    walked: &BTreeSet<String>,
+) -> Result<BTreeSet<String>> {
+    let ctx = Ctx {
+        document,
+        walked: Some(walked),
+    };
+    let mut out = BTreeSet::new();
+    reach(&ctx, schema, instance, "", "", &mut out, &mut Vec::new(), 0)?;
     Ok(out)
 }
 

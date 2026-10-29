@@ -1684,3 +1684,123 @@ async fn management_openapi_http_vectors_a_looser_cap_behind_a_stricter_allof_fa
         "{text}"
     );
 }
+
+// ----- round 3: reach means MUTATED ----
+
+fn arm_object(name: &str, max: u64) -> Value {
+    json!({"type":"object","required":[name],"additionalProperties":false,
+        "properties":{name:{"type":"string","maxLength":max}}})
+}
+fn two_arms() -> Value {
+    body_only(json!({"type":"array","minItems":1,"maxItems":4,
+        "items":{"oneOf":[arm_object("a", 3), arm_object("b", 5)]}}))
+}
+fn arms_ok(items: &Vec<Value>, b_cap: usize) -> bool {
+    (1..=4).contains(&items.len())
+        && items.iter().all(|item| {
+            let Some(map) = item.as_object().filter(|m| m.len() == 1) else {
+                return false;
+            };
+            match (map.get("a"), map.get("b")) {
+                (Some(Value::String(a)), None) => a.chars().count() <= 3,
+                (None, Some(Value::String(b))) => b.chars().count() <= b_cap,
+                _ => false,
+            }
+        })
+}
+fn arms_exact(items: &Vec<Value>) -> bool {
+    arms_ok(items, 5)
+}
+fn arms_loose_b(items: &Vec<Value>) -> bool {
+    arms_ok(items, 4)
+}
+
+#[tokio::test]
+async fn management_openapi_http_vectors_every_arm_of_an_items_union_is_mutated() {
+    let document = two_arms();
+    let valid = json!([{"a":"x"},{"b":"y"}]);
+    // The second element takes the other arm: its field is mutated too.
+    let cases = cases_of(&document, &valid, &[]).unwrap();
+    assert!(has(&cases, "/1/b", "maxLength+1", false, |_| true));
+    assert!(has(&cases, "/0/a", "maxLength+1", false, |_| true));
+    let reached = reach_of(&document, &valid, &[]);
+    assert!(unreached_paths(&document, &reached).is_empty());
+    run_judged(
+        &judge::<Vec<Value>>(arms_exact),
+        &document,
+        valid.clone(),
+        &[],
+    )
+    .await
+    .unwrap();
+    // RED: a handler capping the second arm's field at 4 (the schema says 5).
+    let text = message(run_judged(&judge::<Vec<Value>>(arms_loose_b), &document, valid, &[]).await);
+    assert!(
+        text.contains("/1/b") && text.contains("schema accepts but handler refuses"),
+        "{text}"
+    );
+}
+
+fn conditional() -> Value {
+    body_only(
+        json!({"type":"object","required":["x"],"additionalProperties":false,"properties":{
+        "mode":{"enum":["lax","strict"]},"x":{"type":"string","maxLength":100}},
+        "if":{"required":["mode"],"properties":{"mode":{"const":"strict"}}},
+        "then":{"properties":{"x":{"maxLength":2}}}}),
+    )
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Conditional {
+    x: String,
+    /// Absent is the empty string: a JSON null is refused like any wrong type.
+    #[serde(default)]
+    mode: String,
+}
+fn strict_cap(limit: usize, b: &Conditional) -> bool {
+    let strict = b.mode == "strict";
+    ["", "lax", "strict"].contains(&b.mode.as_str())
+        && b.x.chars().count() <= if strict { limit } else { 100 }
+}
+fn strict_cap_2(b: &Conditional) -> bool {
+    strict_cap(2, b)
+}
+fn strict_cap_5(b: &Conditional) -> bool {
+    strict_cap(5, b)
+}
+
+#[tokio::test]
+async fn management_openapi_http_vectors_a_seeded_base_is_walked_in_full() {
+    let document = conditional();
+    let valid = json!({"x":"ab"});
+    let seeds = vec![("/mode".to_owned(), json!("strict"))];
+    // Reached only through the `/mode` seed, the conditional arm constrains `x`.
+    let cases = cases_of(&document, &valid, &[("/mode", json!("strict"))]).unwrap();
+    assert!(has(&cases, "/x", "maxLength+1", false, |b| {
+        b["mode"] == json!("strict") && b["x"].as_str().is_some_and(|x| x.len() == 3)
+    }));
+    run_judged(
+        &judge::<Conditional>(strict_cap_2),
+        &document,
+        valid.clone(),
+        &seeds,
+    )
+    .await
+    .unwrap();
+    // RED: the strict cap on `x` is 5 in the handler, 2 in the schema.
+    let text = message(
+        run_judged(
+            &judge::<Conditional>(strict_cap_5),
+            &document,
+            valid,
+            &seeds,
+        )
+        .await,
+    );
+    assert!(
+        text.contains("/x")
+            && text.contains("maxLength+1")
+            && text.contains("schema refuses but handler accepts"),
+        "{text}"
+    );
+}

@@ -1129,6 +1129,15 @@ fn set(root: &Value, path: &[Step], new: Option<Value>) -> Value {
     }
     out
 }
+/// The JSON pointer of `path` (`""` for the root).
+fn raw_pointer(path: &[Step]) -> String {
+    path.iter()
+        .map(|step| match step {
+            Step::Key(name) => format!("/{name}"),
+            Step::Index(i) => format!("/{i}"),
+        })
+        .collect()
+}
 fn pointer(path: &[Step]) -> String {
     if path.is_empty() {
         return "(root)".into();
@@ -1157,11 +1166,14 @@ struct Walk<'a> {
     candidates: std::collections::BTreeMap<String, Vec<Value>>,
     candidates_used: BTreeSet<String>,
     seen: BTreeSet<String>,
+    /// Bases already walked from their root (a seed is walked once per base).
+    bases: BTreeSet<String>,
     out: Vec<BodyCase>,
     notes: Notes,
-    /// Declared request locations (schema paths) the valid body and every
-    /// seeded base carry, see `request_reach`.
-    reached: BTreeSet<String>,
+    /// Every base body a walk started from (the valid body and each seeded
+    /// base) with the instance locations (JSON pointers, `""` for the root) the
+    /// walk generated vectors for: what `request_reach` may claim as reached.
+    walked: std::collections::BTreeMap<String, (Value, BTreeSet<String>)>,
 }
 impl Walk<'_> {
     fn push(&mut self, path: &[Step], kind: &'static str, new: Option<Value>) -> Result<()> {
@@ -1182,28 +1194,32 @@ impl Walk<'_> {
         Ok(())
     }
     /// The caller's seed for an absent declared location: send it ADDED to the
-    /// valid body, then walk the seeded value like any other.
-    fn seeded(&mut self, child: &Value, path: &mut Vec<Step>) -> Result<()> {
+    /// valid body, then walk the WHOLE seeded body from its root (a seed such as
+    /// `/mode` changes which conditional arms and union branches constrain the
+    /// siblings, so the siblings must be mutated in the seeded base too).
+    fn seeded(&mut self, path: &mut Vec<Step>) -> Result<()> {
         let at = pointer(path);
         let Some(seed) = self.seeds.get(&at).cloned() else {
             return Ok(());
         };
         self.used.insert(at);
         self.push(path, "optional added", Some(seed.clone()))?;
-        let base = set(&self.valid_body, path, Some(seed.clone()));
-        // The seeded base is walked too: whatever it carries is reached.
-        self.reached.extend(request_reach::reached(
-            self.document,
-            self.root_schema,
-            &base,
-        )?);
-        let saved = std::mem::replace(&mut self.valid_body, base);
-        let walked = self.walk(child, &seed, path);
-        self.valid_body = saved;
-        walked
+        let base = set(&self.valid_body, path, Some(seed));
+        if self.bases.insert(serde_json::to_string(&base)?) {
+            let saved = std::mem::replace(&mut self.valid_body, base.clone());
+            let walked = self.walk(self.root_schema, &base, &mut Vec::new());
+            self.valid_body = saved;
+            walked?;
+        }
+        Ok(())
     }
     fn walk(&mut self, schema: &Value, value: &Value, path: &mut Vec<Step>) -> Result<()> {
         ensure!(path.len() < 12, "request body nesting too deep");
+        self.walked
+            .entry(serde_json::to_string(&self.valid_body)?)
+            .or_insert_with(|| (self.valid_body.clone(), BTreeSet::new()))
+            .1
+            .insert(raw_pointer(path));
         let mut nodes = Vec::new();
         applicable(self.document, schema, value, &mut nodes, 0)?;
         let here = pointer(path);
@@ -1262,9 +1278,9 @@ impl Walk<'_> {
                     .filter(|name| !map.contains_key(*name))
                     .collect();
                 for name in absent {
-                    if let Some(child_schema) = child_schema(&nodes, name) {
+                    if child_schema(&nodes, name).is_some() {
                         path.push(Step::Key(name.clone()));
-                        self.seeded(&child_schema, path)?;
+                        self.seeded(path)?;
                         path.pop();
                     }
                 }
@@ -1298,21 +1314,29 @@ impl Walk<'_> {
                     self.notes.settle(&pointer(path), &dropped, &sent, exempt);
                 }
                 self.push(path, "empty array", Some(json!([])))?;
-                // Every positional index (a homogeneous `items` schema: the first).
+                // Every positional index, and one element of each distinct
+                // signature (the union arms and conditional branches it matches)
+                // of the homogeneous `items` tail: a second element that takes
+                // another arm is a different location and must be mutated too.
+                let mut signatures = BTreeSet::new();
                 for (i, item) in items.iter().enumerate() {
-                    if let Some(item_schema) = index_schema(&nodes, i) {
-                        path.push(Step::Index(i));
-                        self.walk(&item_schema, item, path)?;
-                        path.pop();
+                    let Some(item_schema) = element_schema(&nodes, i) else {
+                        continue;
+                    };
+                    if !positional(&nodes, i) {
+                        let signature = request_reach::reached(self.document, &item_schema, item)?;
+                        if !signatures.insert(signature) {
+                            continue;
+                        }
                     }
+                    path.push(Step::Index(i));
+                    self.walk(&item_schema, item, path)?;
+                    path.pop();
                 }
                 // The next positional item, when the caller seeded it.
-                let next = items.len();
-                if positional(&nodes, next)
-                    && let Some(item_schema) = index_schema(&nodes, next)
-                {
-                    path.push(Step::Index(next));
-                    self.seeded(&item_schema, path)?;
+                if positional(&nodes, items.len()) {
+                    path.push(Step::Index(items.len()));
+                    self.seeded(path)?;
                     path.pop();
                 }
             }
@@ -1376,7 +1400,9 @@ fn positional(nodes: &[&Value], index: usize) -> bool {
         .iter()
         .any(|node| node["prefixItems"].get(index).is_some())
 }
-fn index_schema(nodes: &[&Value], index: usize) -> Option<Value> {
+/// The schema every element at `index` must satisfy: a positional schema, else
+/// the tail `items` schema.
+fn element_schema(nodes: &[&Value], index: usize) -> Option<Value> {
     if positional(nodes, index) {
         return combine(
             nodes
@@ -1385,30 +1411,6 @@ fn index_schema(nodes: &[&Value], index: usize) -> Option<Value> {
                 .cloned()
                 .collect(),
         );
-    }
-    // A homogeneous `items` schema (the tail after any `prefixItems`) is walked at
-    // its first element only.
-    if index == tail_start(nodes) {
-        return nodes
-            .iter()
-            .find_map(|node| node.get("items").filter(|v| v.is_object()))
-            .cloned();
-    }
-    None
-}
-/// The first index `items` governs: after every positional schema.
-fn tail_start(nodes: &[&Value]) -> usize {
-    nodes
-        .iter()
-        .filter_map(|node| node["prefixItems"].as_array().map(Vec::len))
-        .max()
-        .unwrap_or(0)
-}
-/// The schema every element at `index` must satisfy (a positional schema, else
-/// the tail `items` schema): unlike [`index_schema`], for ANY index.
-fn element_schema(nodes: &[&Value], index: usize) -> Option<Value> {
-    if positional(nodes, index) {
-        return index_schema(nodes, index);
     }
     if index >= tail_start(nodes) {
         return combine(
@@ -1420,6 +1422,14 @@ fn element_schema(nodes: &[&Value], index: usize) -> Option<Value> {
         );
     }
     None
+}
+/// The first index `items` governs: after every positional schema.
+fn tail_start(nodes: &[&Value]) -> usize {
+    nodes
+        .iter()
+        .filter_map(|node| node["prefixItems"].as_array().map(Vec::len))
+        .max()
+        .unwrap_or(0)
 }
 
 fn body_schema(operation: &Value) -> Result<&Value> {
@@ -1478,9 +1488,10 @@ pub(super) fn body_plan(
         ),
         candidates_used: BTreeSet::new(),
         seen: BTreeSet::new(),
+        bases: BTreeSet::from([serde_json::to_string(valid_body)?]),
         out: Vec::new(),
         notes: Notes::default(),
-        reached: request_reach::reached(document, schema, valid_body)?,
+        walked: std::collections::BTreeMap::new(),
     };
     walk.walk(schema, valid_body, &mut Vec::new())?;
     for (at, _) in seeds {
@@ -1496,10 +1507,18 @@ pub(super) fn body_plan(
         );
     }
     walk.notes.check()?;
+    // Reach is what the walk MUTATED, base by base: a location the body merely
+    // contains (but the walk never generated a vector for) is not reached.
+    let mut reached = BTreeSet::new();
+    for (base, paths) in walk.walked.values() {
+        reached.extend(request_reach::reached_by_walk(
+            document, schema, base, paths,
+        )?);
+    }
     Ok(BodyPlan {
         cases: walk.out,
         notes: walk.notes,
-        reached: walk.reached,
+        reached,
     })
 }
 
