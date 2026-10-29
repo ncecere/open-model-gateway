@@ -582,8 +582,45 @@ fn json_media(headers: &HeaderMap) -> bool {
         .is_some_and(|media| media == "application/json" || media.ends_with("+json"))
 }
 
-/// Reviewed excuse, on a non-JSON `requestBody`, from JSON-derived boundary vectors.
+/// Reviewed excuse, on a multipart or binary `requestBody`, from JSON-derived boundary vectors.
 pub(crate) const NO_BOUNDARY_VECTORS: &str = "x-omg-no-boundary-vectors";
+
+/// A media type no JSON-derived vector can encode: a multipart form or a binary
+/// payload. Parameters (`; boundary=...`) are ignored; `application/json` in any
+/// spelling (`; charset=utf-8`, `+json`, case) and text never qualify.
+fn non_json_media(media: &str) -> bool {
+    let base = media
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    base.starts_with("multipart/")
+        || base == "application/octet-stream"
+        || ["image/", "audio/", "video/"]
+            .iter()
+            .any(|prefix| base.starts_with(prefix))
+}
+
+/// A reason that explains something: at least 40 characters and five words of
+/// three or more letters, none of them a placeholder.
+fn substantive_reason(reason: &str) -> bool {
+    let reason = reason.trim();
+    let words: Vec<String> = reason
+        .split_whitespace()
+        .map(|w| {
+            w.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_ascii_lowercase()
+        })
+        .filter(|w| w.chars().count() >= 3)
+        .collect();
+    let distinct: BTreeSet<&String> = words.iter().collect();
+    reason.chars().count() >= 40
+        && distinct.len() >= 5
+        && !words
+            .iter()
+            .any(|w| matches!(w.as_str(), "todo" | "tbd" | "fixme" | "placeholder"))
+}
 
 /// What real handlers were seen to do. Positive observations earn operation,
 /// query-parameter, array-population and union-branch coverage; executed HTTP
@@ -623,22 +660,27 @@ impl PositiveFixtures {
                     "{key}: documented query parameters have no executed HTTP boundary vectors (call http_vectors::query_vectors)"
                 ));
             }
-            if let Some(body) = op.get("requestBody") {
-                // JSON-derived vectors cannot decide a non-JSON body (multipart
-                // parts read by a streaming parser): only a reviewed reason on
-                // that body excuses them. A JSON body always owes its vectors.
-                let json = body["content"]
-                    .as_object()
-                    .is_some_and(|c| c.contains_key("application/json"));
-                let excuse = body.get(NO_BOUNDARY_VECTORS);
+            if let Some(declared) = op.get("requestBody") {
+                // JSON-derived vectors cannot decide a body made only of
+                // multipart forms or binary payloads: a reviewed, substantive
+                // reason on that body excuses them. Any other body (JSON in
+                // any spelling, text, an empty list) owes its vectors, also
+                // when it is a `$ref` to a shared request body.
+                let body = resolved(document, declared)?;
+                let excusable = body["content"].as_object().is_some_and(|content| {
+                    !content.is_empty() && content.keys().all(|media| non_json_media(media))
+                });
+                let excuse = declared
+                    .get(NO_BOUNDARY_VECTORS)
+                    .or(body.get(NO_BOUNDARY_VECTORS));
                 if let Some(reason) = excuse
-                    && (json || !reason.as_str().is_some_and(|r| !r.trim().is_empty()))
+                    && (!excusable || !reason.as_str().is_some_and(substantive_reason))
                 {
                     failures.push(format!(
-                        "{key}: {NO_BOUNDARY_VECTORS} needs a reason and is valid only on a non-JSON request body"
+                        "{key}: {NO_BOUNDARY_VECTORS} needs a substantive reason (at least 40 characters of real words) and is valid only when every request media type is multipart or binary"
                     ));
                 }
-                if !has("body") && (json || excuse.is_none()) {
+                if !has("body") && (!excusable || excuse.is_none()) {
                     failures.push(format!(
                         "{key}: the request body has no executed HTTP boundary vectors (call http_vectors::body_vectors_http)"
                     ));

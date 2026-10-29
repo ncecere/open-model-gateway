@@ -75,9 +75,11 @@ pub(super) fn agrees(refined: bool, contract: bool, serde: bool) -> bool {
     contract == serde || (refined && !contract)
 }
 
-/// The positive control of an operation (a request the handler accepts).
-pub(super) fn positive_agrees(refined: bool, contract: bool, serde: bool) -> bool {
-    agrees(refined, contract, serde)
+/// The positive control of an operation (a request the handler accepts): both
+/// the DTO and the contract must accept it. A reviewed refinement relaxes only
+/// boundary vectors (`agrees`), never this.
+pub(super) fn positive_agrees(_refined: bool, contract: bool, serde: bool) -> bool {
+    contract && serde
 }
 
 pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: Value) {
