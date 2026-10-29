@@ -753,6 +753,18 @@
                     "type": "string",
                     "maxLength": 32,
                     "pattern": "^[a-z]{2}(?:-[a-z]+)+-[0-9]{1,2}$"
+                  },
+                  "endpoint": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^https://[a-z0-9.-]+(?::[0-9]{1,5})?/?$",
+                        "description": "A canonical HTTPS origin without credentials, path, query or fragment (canonical_endpoint); Bedrock endpoints must also be allowlisted by the server (GATEWAY_BEDROCK_ENDPOINT_ALLOWLIST, not expressible here)."
+                      }
+                    ]
                   }
                 },
                 "allOf": [
@@ -936,8 +948,10 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints.",
-                  "minLength": 1
+                  "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints. Shape: none, an env: reference, or an aws:default / aws:profile:NAME / aws:role:ARN reference (the union over every provider kind; the stored kind and the server allowlists decide the rest).",
+                  "minLength": 1,
+                  "maxLength": 2057,
+                  "pattern": "^(?:none|env:[A-Z_][A-Z0-9_]*|aws:(?:default|profile:[A-Za-z0-9_.+][A-Za-z0-9_.+-]{0,63}|role:arn:(?:aws|aws-[a-z]+(?:-[a-z]+)*):iam::[0-9]{12}:role/(?:[A-Za-z0-9_+=,.@-]+/)*[A-Za-z0-9_+=,.@-]{1,64}))$"
                 },
                 {
                   "type": "null"
@@ -947,7 +961,9 @@
             "aws_external_id": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_+=,.@:/-]{2,1224}$",
+                  "description": "STS ExternalId: 2-1224 characters of letters, digits and _+=,.@:/- (valid_external_id). Only with a restated aws:role: reference on a Bedrock connection."
                 },
                 {
                   "type": "null"
@@ -957,7 +973,9 @@
             "aws_session_name": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_+=,.@-]{2,64}$",
+                  "description": "STS RoleSessionName: 2-64 characters of letters, digits and _+=,.@- (valid_session_name). Only with a restated aws:role: reference on a Bedrock connection."
                 },
                 {
                   "type": "null"
@@ -967,7 +985,9 @@
             "endpoint": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^https://[a-z0-9.-]+(?::[0-9]{1,5})?/?$",
+                  "description": "A canonical HTTPS origin without credentials, path, query or fragment (canonical_endpoint); Bedrock endpoints must also be allowlisted by the server (GATEWAY_BEDROCK_ENDPOINT_ALLOWLIST, not expressible here)."
                 },
                 {
                   "type": "null"
@@ -1030,8 +1050,10 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints.",
-                  "minLength": 1
+                  "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints. Shape: none, an env: reference, or an aws:default / aws:profile:NAME / aws:role:ARN reference (the union over every provider kind; the stored kind and the server allowlists decide the rest).",
+                  "minLength": 1,
+                  "maxLength": 2057,
+                  "pattern": "^(?:none|env:[A-Z_][A-Z0-9_]*|aws:(?:default|profile:[A-Za-z0-9_.+][A-Za-z0-9_.+-]{0,63}|role:arn:(?:aws|aws-[a-z]+(?:-[a-z]+)*):iam::[0-9]{12}:role/(?:[A-Za-z0-9_+=,.@-]+/)*[A-Za-z0-9_+=,.@-]{1,64}))$"
                 },
                 {
                   "type": "null"
@@ -1041,7 +1063,9 @@
             {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_+=,.@:/-]{2,1224}$",
+                  "description": "STS ExternalId: 2-1224 characters of letters, digits and _+=,.@:/- (valid_external_id). Only with a restated aws:role: reference on a Bedrock connection."
                 },
                 {
                   "type": "null"
@@ -1051,7 +1075,9 @@
             {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_+=,.@-]{2,64}$",
+                  "description": "STS RoleSessionName: 2-64 characters of letters, digits and _+=,.@- (valid_session_name). Only with a restated aws:role: reference on a Bedrock connection."
                 },
                 {
                   "type": "null"
@@ -1061,7 +1087,9 @@
             {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^https://[a-z0-9.-]+(?::[0-9]{1,5})?/?$",
+                  "description": "A canonical HTTPS origin without credentials, path, query or fragment (canonical_endpoint); Bedrock endpoints must also be allowlisted by the server (GATEWAY_BEDROCK_ENDPOINT_ALLOWLIST, not expressible here)."
                 },
                 {
                   "type": "null"
