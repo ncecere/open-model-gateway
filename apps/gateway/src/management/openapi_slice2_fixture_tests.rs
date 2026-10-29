@@ -49,7 +49,7 @@ fn pairs(values: &[(&str, &str)]) -> Vec<(String, String)> {
 struct Client {
     http: reqwest::Client,
     base: String,
-    observed: RefCell<PositiveFixtures>,
+    observed: tokio::sync::Mutex<PositiveFixtures>,
     failures: RefCell<Vec<String>>,
 }
 impl Client {
@@ -97,7 +97,7 @@ impl Client {
             expected.as_u16(),
             "{method}: unexpected status"
         );
-        self.observed.borrow_mut().observe(&r);
+        self.observed.lock().await.observe(&r);
         serde_json::from_slice(&r.bytes).unwrap_or(Value::Null)
     }
     async fn send(
@@ -299,7 +299,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             .build()
             .unwrap(),
         base,
-        observed: RefCell::new(PositiveFixtures::default()),
+        observed: tokio::sync::Mutex::new(PositiveFixtures::default()),
         failures: RefCell::new(Vec::new()),
     };
     let c = &c;
@@ -1542,7 +1542,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
     // is recorded and reported with the rest, never printed with a value.
     let page_base = || pairs(&[("limit", "50"), ("offset", "0")]);
     {
-        let mut o = c.observed.borrow_mut();
+        let mut o = c.observed.lock().await;
         c.guarded(
             "GET /platform/users",
             query_vectors_fixed(
@@ -1769,7 +1769,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
     macro_rules! body {
         ($label:expr, $method:expr, $template:expr, $who:expr, $path:expr, $valid:expr) => {{
             let path: String = $path;
-            let mut o = c.observed.borrow_mut();
+            let mut o = c.observed.lock().await;
             c.guarded(
                 $label,
                 body_vectors_http(&mut o, $method, $template, $valid, async |body| {
@@ -1971,8 +1971,9 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
 
     let mut failures = c.failures.borrow().clone();
     // The coverage gates last: they judge every positive and vector set above.
+    let observed = c.observed.lock().await;
     let gates = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        c.observed.borrow().finish(SLICE2_AREAS);
+        observed.finish(SLICE2_AREAS);
     }));
     if let Err(panic) = gates {
         failures.push(
