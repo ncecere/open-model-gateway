@@ -136,6 +136,23 @@ fn applicable<'a>(
 fn first<'a>(nodes: &[&'a Value], key: &str) -> Option<&'a Value> {
     nodes.iter().find_map(|node| node.get(key))
 }
+/// EVERY distinct value of a bound across the applicable nodes (the base
+/// schema and each active `allOf`/`then`/union arm may state a different one):
+/// the strictest alone would leave a looser handler cap unprobed.
+fn distinct_i64(nodes: &[&Value], key: &str) -> Vec<i64> {
+    let all: BTreeSet<i64> = nodes
+        .iter()
+        .filter_map(|node| node.get(key).and_then(Value::as_i64))
+        .collect();
+    all.into_iter().collect()
+}
+fn distinct_u64(nodes: &[&Value], key: &str) -> Vec<u64> {
+    let all: BTreeSet<u64> = nodes
+        .iter()
+        .filter_map(|node| node.get(key).and_then(Value::as_u64))
+        .collect();
+    all.into_iter().collect()
+}
 fn types<'a>(nodes: &[&'a Value]) -> BTreeSet<&'a str> {
     let mut out = BTreeSet::new();
     for node in nodes {
@@ -529,23 +546,22 @@ fn scalar_mutations(
             out.push(("enum member", member.clone()));
         }
     }
-    // Numeric bounds, each side and its neighbour.
-    let number = |key: &str| first(nodes, key).and_then(Value::as_i64);
+    // Numeric bounds (every distinct one), each side and its neighbour.
     if kinds.contains("integer") || kinds.contains("number") {
         let mut push = |kind: &'static str, n: i64| out.push((kind, json!(n)));
-        if let Some(min) = number("minimum") {
+        for min in distinct_i64(nodes, "minimum") {
             push("minimum", min);
             push("minimum-1", min.saturating_sub(1));
         }
-        if let Some(max) = number("maximum") {
+        for max in distinct_i64(nodes, "maximum") {
             push("maximum", max);
             push("maximum+1", max.saturating_add(1));
         }
-        if let Some(min) = number("exclusiveMinimum") {
+        for min in distinct_i64(nodes, "exclusiveMinimum") {
             push("exclusiveMinimum", min);
             push("exclusiveMinimum+1", min.saturating_add(1));
         }
-        if let Some(max) = number("exclusiveMaximum") {
+        for max in distinct_i64(nodes, "exclusiveMaximum") {
             push("exclusiveMaximum", max);
             push("exclusiveMaximum-1", max.saturating_sub(1));
         }
@@ -556,7 +572,7 @@ fn scalar_mutations(
     // String bounds are derived from the VALID value so the alphabet stays valid.
     if kinds.contains("string") {
         let seed = value.as_str().unwrap_or("a");
-        if let Some(min) = first(nodes, "minLength").and_then(Value::as_u64) {
+        for min in distinct_u64(nodes, "minLength") {
             if min <= LONGEST {
                 out.push(("minLength", json!(repeat_to(seed, min as usize))));
                 if min > 0 {
@@ -566,7 +582,7 @@ fn scalar_mutations(
                 dropped.extend(["minLength", "minLength-1"]);
             }
         }
-        if let Some(max) = first(nodes, "maxLength").and_then(Value::as_u64) {
+        for max in distinct_u64(nodes, "maxLength") {
             if max < LONGEST {
                 out.push(("maxLength", json!(repeat_to(seed, max as usize))));
                 out.push(("maxLength+1", json!(repeat_to(seed, max as usize + 1))));
@@ -587,12 +603,9 @@ fn scalar_mutations(
                 dropped.extend(["multibyte maxLength", "multibyte maxLength+1"]);
             }
         }
-        // A reviewed byte limit: multibyte values at and just over it.
-        if let Some(limit) = nodes
-            .iter()
-            .filter_map(|node| node.get(MAX_BYTES).and_then(Value::as_u64))
-            .min()
-        {
+        // A reviewed byte limit (every distinct one): multibyte values at and
+        // just over it.
+        for limit in distinct_u64(nodes, MAX_BYTES) {
             if limit < LONGEST {
                 for glyph in ["\u{e9}", "\u{2713}", "\u{1F600}"] {
                     let fit = limit as usize / glyph.len();
@@ -1259,16 +1272,18 @@ impl Walk<'_> {
             Value::Array(items) => {
                 let element = items.first();
                 if let Some(first) = element {
-                    let min = first_u64(&nodes, "minItems");
-                    let max = first_u64(&nodes, "maxItems");
                     let mut dropped = Vec::new();
                     let mut sent = Vec::new();
-                    for (kind, length) in [
-                        ("minItems", min),
-                        ("minItems-1", min.and_then(|n| n.checked_sub(1))),
-                        ("maxItems", max),
-                        ("maxItems+1", max.map(|n| n + 1)),
-                    ] {
+                    let mut lengths: Vec<(&'static str, Option<u64>)> = Vec::new();
+                    for min in distinct_u64(&nodes, "minItems") {
+                        lengths.push(("minItems", Some(min)));
+                        lengths.push(("minItems-1", min.checked_sub(1)));
+                    }
+                    for max in distinct_u64(&nodes, "maxItems") {
+                        lengths.push(("maxItems", Some(max)));
+                        lengths.push(("maxItems+1", Some(max + 1)));
+                    }
+                    for (kind, length) in lengths {
                         match length {
                             Some(length) if length <= MAX_ITEMS => {
                                 sent.push(kind);
@@ -1305,9 +1320,6 @@ impl Walk<'_> {
         }
         Ok(())
     }
-}
-fn first_u64(nodes: &[&Value], key: &str) -> Option<u64> {
-    first(nodes, key).and_then(Value::as_u64)
 }
 /// All schemas a property or item must satisfy, as one `allOf` when several
 /// (the base object and the matching union/conditional arms each constrain it).

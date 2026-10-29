@@ -1583,3 +1583,104 @@ fn management_openapi_http_vectors_annotations_beside_a_ref_take_effect() {
         |text: &str| super::http_vectors::accepts(&document, &schema, &json!(text)).unwrap();
     assert!(accepts("ab") && !accepts("\u{e9}\u{e9}\u{e9}"));
 }
+
+// ----- round 3: every distinct bound is probed ----
+
+/// Each property states one bound on the base schema and a STRICTER one through
+/// an active `allOf` member (a `then` arm or union arm composes the same way).
+fn stacked_bounds() -> Value {
+    body_only(
+        json!({"type":"object","required":["x"],"additionalProperties":false,"properties":{
+        "x":{"type":"string","minLength":1,"maxLength":100,"allOf":[{"minLength":2},{"maxLength":3}]},
+        "n":{"type":"integer","minimum":0,"maximum":100,"exclusiveMinimum":-5,"exclusiveMaximum":200,
+             "allOf":[{"minimum":2},{"maximum":5},{"exclusiveMinimum":1},{"exclusiveMaximum":50}]},
+        "xs":{"type":"array","minItems":1,"maxItems":10,"items":{"type":"string","maxLength":2},
+             "allOf":[{"minItems":2},{"maxItems":3}]}}}),
+    )
+}
+
+#[test]
+fn management_openapi_http_vectors_probe_every_distinct_bound() {
+    let cases = cases_of(
+        &stacked_bounds(),
+        &json!({"x":"ab","n":3,"xs":["a","b"]}),
+        &[],
+    )
+    .unwrap();
+    let length_of = |b: &Value, name: &str| b[name].as_str().map(str::len);
+    // The base bound and the stricter allOf bound each get their own vectors.
+    for (kind, length) in [
+        ("maxLength", 100),
+        ("maxLength+1", 101),
+        ("maxLength", 3),
+        ("maxLength+1", 4),
+        ("minLength", 1),
+    ] {
+        assert!(
+            cases.iter().any(|c| c.pointer == "/x"
+                && c.kind == kind
+                && length_of(&c.body, "x") == Some(length)),
+            "{kind} {length} is not a vector"
+        );
+    }
+    let number = |kind: &str, value: i64| {
+        cases
+            .iter()
+            .any(|c| c.pointer == "/n" && c.kind == kind && c.body["n"] == json!(value))
+    };
+    for (kind, value) in [
+        ("maximum", 100),
+        ("maximum", 5),
+        ("maximum+1", 6),
+        ("minimum", 0),
+        ("minimum-1", 1),
+        ("exclusiveMinimum", -5),
+        ("exclusiveMaximum", 50),
+        ("exclusiveMaximum", 200),
+    ] {
+        assert!(number(kind, value), "{kind} {value} is not a vector");
+    }
+    let items = |kind: &str, length: usize| {
+        cases.iter().any(|c| {
+            c.pointer == "/xs"
+                && c.kind == kind
+                && c.body["xs"].as_array().map(Vec::len) == Some(length)
+        })
+    };
+    for (kind, length) in [
+        ("maxItems", 10),
+        ("maxItems", 3),
+        ("maxItems+1", 4),
+        ("minItems", 1),
+    ] {
+        assert!(items(kind, length), "{kind} {length} is not a vector");
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Stacked {
+    x: String,
+}
+#[tokio::test]
+async fn management_openapi_http_vectors_a_looser_cap_behind_a_stricter_allof_fails() {
+    // Base `maxLength: 100`, plus a stricter active `maxLength: 2`.
+    let document = body_only(
+        json!({"type":"object","required":["x"],"additionalProperties":false,"properties":{
+        "x":{"type":"string","minLength":1,"maxLength":100,"allOf":[{"maxLength":2}]}}}),
+    );
+    let valid = json!({"x":"ab"});
+    let exact = |b: &Stacked| (1..=2).contains(&b.x.chars().count());
+    let loose = |b: &Stacked| (1..=5).contains(&b.x.chars().count());
+    run_judged(&judge::<Stacked>(exact), &document, valid.clone(), &[])
+        .await
+        .unwrap();
+    // RED: a handler capped at 5 is looser than the active maxLength: 2.
+    let text = message(run_judged(&judge::<Stacked>(loose), &document, valid, &[]).await);
+    assert!(
+        text.contains("maxLength+1")
+            && text.contains("/x")
+            && text.contains("schema refuses but handler accepts"),
+        "{text}"
+    );
+}
