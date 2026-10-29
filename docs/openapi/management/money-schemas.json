@@ -4977,7 +4977,11 @@
               "non_omg_traffic": {
                 "const": false
               }
-            }
+            },
+            "required": [
+              "workspace_id",
+              "non_omg_traffic"
+            ]
           },
           "description": "An exclusive binding names its owning workspace and carries no non-OMG traffic (create_mapping refuses exclusive bindings without a workspace or with non_omg_traffic)."
         },

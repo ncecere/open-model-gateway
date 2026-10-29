@@ -230,19 +230,22 @@ fn management_openapi_money_raw_upload_request_vectors() {
         }
         page.data.iter().try_for_each(bucket_ok)
     }
+    fn parameters_ok(p: &Parameters) -> bool {
+        let groups: BTreeSet<&str> = p.group_by.iter().map(String::as_str).collect();
+        (1..=31).contains(&p.limit)
+            && p.bucket_width == "1d"
+            && p.group_by.len() == 2
+            && groups == BTreeSet::from(["description", "workspace_id"])
+            && timestamp(&p.starting_at).is_ok()
+            && timestamp(&p.ending_at).is_ok()
+    }
     struct DecodedParameters;
     impl<'de> Deserialize<'de> for DecodedParameters {
         fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
             let p = Parameters::deserialize(d)?;
-            let groups: BTreeSet<&str> = p.group_by.iter().map(String::as_str).collect();
-            ((1..=31).contains(&p.limit)
-                && p.bucket_width == "1d"
-                && p.group_by.len() == 2
-                && groups == BTreeSet::from(["description", "workspace_id"])
-                && timestamp(&p.starting_at).is_ok()
-                && timestamp(&p.ending_at).is_ok())
-            .then_some(Self)
-            .ok_or_else(|| serde::de::Error::custom("parameters"))
+            parameters_ok(&p)
+                .then_some(Self)
+                .ok_or_else(|| serde::de::Error::custom("parameters"))
         }
     }
     struct DecodedItem;
@@ -274,7 +277,7 @@ fn management_openapi_money_raw_upload_request_vectors() {
     impl<'de> Deserialize<'de> for DecodedUpload {
         fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
             let upload = Upload::deserialize(d)?;
-            ((1..=31).contains(&upload.request.limit)
+            (parameters_ok(&upload.request)
                 && bounded(&upload.account_id, 200)
                 && bounded(&upload.evidence_reference, 256)
                 && timestamp(&upload.exported_at).is_ok()
