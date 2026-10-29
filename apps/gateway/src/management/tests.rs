@@ -54,6 +54,8 @@ mod key_issuance_tests;
 mod key_safety_tests;
 #[path = "keys/tests.rs"]
 mod key_tests;
+#[path = "list_search_control_tests.rs"]
+mod list_search_control_tests;
 #[path = "legal_holds_tests.rs"]
 mod legal_holds_tests;
 #[path = "me_models_tests.rs"]
