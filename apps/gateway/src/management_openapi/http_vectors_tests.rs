@@ -207,6 +207,30 @@ async fn management_openapi_http_vectors_query_handler_looser_than_schema_fails(
     );
 }
 
+/// One run reports EVERY disagreement (fixture authors otherwise fix one per
+/// full build), still naming only operation, kind, location and status.
+#[tokio::test]
+async fn management_openapi_http_vectors_report_every_disagreement() {
+    let document = query_document();
+    let sloppy = Handler {
+        max: i64::MAX,
+        pattern: false,
+        ..EXACT
+    };
+    let text = message(run(&query_app(sloppy), &document).await);
+    assert!(
+        text.contains("maximum+1") && text.contains("pattern violation"),
+        "{text}"
+    );
+    assert!(text.lines().count() >= 2, "{text}");
+    assert!(!text.contains("4243"), "{text}");
+    let text = message(run_bodies(&body_app(false, 99), &body_document()).await);
+    assert!(
+        text.contains("pattern violation") && text.contains("maximum+1"),
+        "{text}"
+    );
+}
+
 #[tokio::test]
 async fn management_openapi_http_vectors_query_handler_stricter_than_schema_fails() {
     let document = query_document();
