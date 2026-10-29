@@ -97,3 +97,80 @@ async fn list_search_ordinary_queries_still_match(pool: PgPool) {
     assert_eq!(status, StatusCode::OK, "{found}");
     assert_eq!(found["data"].as_array().unwrap().len(), 1, "{found}");
 }
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn file_list_search_refuses_control_characters(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let path = format!("/api/v1/workspaces/{}/files", f.team);
+    let mut wrong = Vec::new();
+    for q in ["%00", "%07", "a%0Ab", "a%00", "a%C2%85b"] {
+        let (status, _) = call(
+            &f.s,
+            &f.owner,
+            "GET",
+            &format!("{path}?search={q}"),
+            Value::Null,
+        )
+        .await;
+        if status != StatusCode::BAD_REQUEST {
+            wrong.push(format!("files search={q}: {status}"));
+        }
+    }
+    // Ordinary, blank and 120-character searches are unchanged; 121 is refused.
+    for (q, expected) in [
+        ("report".to_owned(), StatusCode::OK),
+        ("%20".to_owned(), StatusCode::OK),
+        ("x".repeat(120), StatusCode::OK),
+        ("x".repeat(121), StatusCode::BAD_REQUEST),
+    ] {
+        let (status, _) = call(
+            &f.s,
+            &f.owner,
+            "GET",
+            &format!("{path}?search={q}"),
+            Value::Null,
+        )
+        .await;
+        if status != expected {
+            wrong.push(format!("files search length {}: {status}", q.len()));
+        }
+    }
+    assert!(wrong.is_empty(), "files search:\n{}", wrong.join("\n"));
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn list_search_edge_inputs(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let mut wrong = Vec::new();
+    for (path, who) in lists(&f) {
+        // An inner C1 control (NEL) is a control character too. (A lone NEL is
+        // Unicode whitespace, so the trimming search() reads it as no filter.)
+        let (status, _) = call(&f.s, who, "GET", &format!("{path}?q=a%C2%85b"), Value::Null).await;
+        if status != StatusCode::BAD_REQUEST {
+            wrong.push(format!("{path} C1: {status}"));
+        }
+        // Invalid UTF-8 decodes to U+FFFD (not a control character): never a 5xx.
+        for q in ["%C0%80", "%ED%A0%80", "%FF"] {
+            let (status, _) = call(&f.s, who, "GET", &format!("{path}?q={q}"), Value::Null).await;
+            if status != StatusCode::OK {
+                wrong.push(format!("{path} q={q}: {status}"));
+            }
+        }
+    }
+    // search() trims first: surrounding whitespace (even a newline) is not a
+    // control character inside the query, and a newline alone means no filter.
+    for path in [
+        "/api/v1/platform/providers",
+        "/api/v1/platform/deployments",
+        "/api/v1/platform/models",
+    ] {
+        for q in ["%0A", "%0Aabc%0A", "%09abc"] {
+            let (status, _) =
+                call(&f.s, &f.admin, "GET", &format!("{path}?q={q}"), Value::Null).await;
+            if status != StatusCode::OK {
+                wrong.push(format!("{path} trimmed q={q}: {status}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "edge inputs:\n{}", wrong.join("\n"));
+}
