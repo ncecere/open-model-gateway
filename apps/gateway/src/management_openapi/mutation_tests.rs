@@ -569,3 +569,27 @@ fn management_openapi_review_only_immutable_artifact_validators_are_cached() {
     assert!(fresh.is_valid(&json!("mutated")));
     assert!(!a.is_valid(&json!("mutated")));
 }
+
+/// The sampler's positive control is only as good as its candidates: the
+/// patterns the completed responses use are satisfied by a sampled value, and a
+/// pattern no candidate satisfies falls back to "0" and fails the control, so
+/// an unsatisfiable sample is never mistaken for a valid one.
+#[test]
+fn management_openapi_sampler_control_for_pattern_strings() {
+    let document = json!({});
+    for pattern in ["^[1-9][0-9]*$", "^(0|[1-9][0-9]*)\\.[0-9]{2}$"] {
+        let schema = json!({"type":"string","pattern":pattern});
+        let sampled = sample(&document, &schema);
+        assert!(
+            validate_value(&document, &schema, &sampled).is_ok(),
+            "the sample for pattern {pattern} is not accepted by it"
+        );
+    }
+    let schema = json!({"type":"string","pattern":"^[a-z]+$"});
+    let sampled = sample(&document, &schema);
+    assert_eq!(sampled, json!("0"), "the fallback sample changed");
+    assert!(
+        validate_value(&document, &schema, &sampled).is_err(),
+        "an unsatisfiable pattern passed the positive control"
+    );
+}

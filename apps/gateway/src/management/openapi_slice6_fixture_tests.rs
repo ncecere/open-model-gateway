@@ -182,8 +182,9 @@ fn same_verdict(label: &str, schema_accepts: bool, handler: bool, expressible: b
         );
     }
 }
+/// The contract's verdict and the handler's for one request body.
 #[allow(clippy::too_many_arguments)]
-async fn body_vector(
+async fn body_outcome(
     w: &Wire,
     b: &Browser,
     method: &str,
@@ -191,8 +192,7 @@ async fn body_vector(
     path: &str,
     label: &str,
     body: Value,
-    expressible: bool,
-) {
+) -> (bool, bool) {
     let schema_accepts = openapi::responses::validate_value(
         openapi::responses::artifact(),
         request_schema(method, template),
@@ -200,15 +200,11 @@ async fn body_vector(
     )
     .is_ok();
     let r = raw(&w.client, &w.base, b, method, path, Some(body)).await;
-    same_verdict(
-        label,
-        schema_accepts,
-        handler_accepts(&r, label),
-        expressible,
-    );
+    (schema_accepts, handler_accepts(&r, label))
 }
+/// The contract's verdict and the handler's for one query value.
 #[allow(clippy::too_many_arguments)]
-async fn query_vector(
+async fn query_outcome(
     w: &Wire,
     b: &Browser,
     template: &str,
@@ -216,8 +212,7 @@ async fn query_vector(
     name: &str,
     label: &str,
     value: &str,
-    expressible: bool,
-) {
+) -> (bool, bool) {
     let schema_accepts = openapi::responses::validate_value(
         openapi::responses::artifact(),
         query_schema(template, name),
@@ -233,11 +228,74 @@ async fn query_vector(
         None,
     )
     .await;
-    same_verdict(
+    (schema_accepts, handler_accepts(&r, label))
+}
+/// A documented divergence in the other direction: the contract refuses a
+/// value the handler accepts (the contract is deliberately canonical).
+fn stricter_verdict(label: &str, (schema_accepts, handler): (bool, bool)) {
+    assert!(
+        !schema_accepts && handler,
+        "vector {label}: the documented stricter-schema gap changed"
+    );
+}
+#[allow(clippy::too_many_arguments)]
+async fn body_vector(
+    w: &Wire,
+    b: &Browser,
+    method: &str,
+    template: &str,
+    path: &str,
+    label: &str,
+    body: Value,
+    expressible: bool,
+) {
+    let (schema_accepts, handler) = body_outcome(w, b, method, template, path, label, body).await;
+    same_verdict(label, schema_accepts, handler, expressible);
+}
+/// The schema refuses what the handler accepts (documented).
+#[allow(clippy::too_many_arguments)]
+async fn body_vector_stricter(
+    w: &Wire,
+    b: &Browser,
+    method: &str,
+    template: &str,
+    path: &str,
+    label: &str,
+    body: Value,
+) {
+    stricter_verdict(
         label,
-        schema_accepts,
-        handler_accepts(&r, label),
-        expressible,
+        body_outcome(w, b, method, template, path, label, body).await,
+    );
+}
+#[allow(clippy::too_many_arguments)]
+async fn query_vector(
+    w: &Wire,
+    b: &Browser,
+    template: &str,
+    path: &str,
+    name: &str,
+    label: &str,
+    value: &str,
+    expressible: bool,
+) {
+    let (schema_accepts, handler) = query_outcome(w, b, template, path, name, label, value).await;
+    same_verdict(label, schema_accepts, handler, expressible);
+}
+/// The schema refuses what the handler accepts (documented).
+#[allow(clippy::too_many_arguments)]
+async fn query_vector_stricter(
+    w: &Wire,
+    b: &Browser,
+    template: &str,
+    path: &str,
+    name: &str,
+    label: &str,
+    value: &str,
+) {
+    stricter_verdict(
+        label,
+        query_outcome(w, b, template, path, name, label, value).await,
     );
 }
 struct Wire {
@@ -2550,6 +2608,11 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
         ("seconds 2592001", "2592001", bad),
         ("seconds 99999999999999999999", "99999999999999999999", bad),
         ("seconds padded", " 3600 ", ok),
+        ("seconds no-break space", "\u{a0}3600", ok),
+        ("seconds next line", "\u{85}3600\u{85}", ok),
+        ("seconds ideographic space", "3600\u{3000}", ok),
+        ("seconds byte order mark", "\u{feff}3600", bad),
+        ("seconds interior space", "36 00", bad),
         ("seconds plus and zeros", "+03600", ok),
         ("seconds zero", "0", bad),
         ("seconds negative", "-3600", bad),
@@ -2583,6 +2646,31 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
             );
         }
     }
+    // The schema cannot see file content: a batch file that is not JSONL and a
+    // vision file that is not an image are accepted by the contract and refused
+    // by the handler's first-bytes check (upload.rs sniff), a documented gap.
+    for (label, purpose) in [
+        ("batch content not JSONL", "batch"),
+        ("vision content not an image", "vision"),
+    ] {
+        let r = upload(
+            &mut w,
+            &owner,
+            &uploadpath,
+            &[("purpose", purpose)],
+            Some(text),
+            true,
+        )
+        .await;
+        assert_eq!(r.status, bad, "upload case {label}");
+        let schema_accepts = openapi::responses::validate_value(
+            openapi::responses::artifact(),
+            &upload_schema,
+            &json!({"purpose":purpose,"file":"x"}),
+        )
+        .is_ok();
+        same_verdict(label, schema_accepts, r.status.is_success(), false);
+    }
     // The storage quota answers 413 for an input the schema accepts. The
     // per-file cap (`GATEWAY_FILES_MAX_BYTES`, a process-wide setting) is
     // unit-tested in `filestore/api_tests.rs`.
@@ -2597,9 +2685,10 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
     )
     .await;
     assert_eq!(refused.status, StatusCode::PAYLOAD_TOO_LARGE);
-    assert_eq!(
-        serde_json::from_slice::<Value>(&refused.bytes).unwrap()["error"]["reason"],
-        "storage_quota_exceeded"
+    assert!(
+        serde_json::from_slice::<Value>(&refused.bytes).unwrap()["error"]["reason"]
+            == "storage_quota_exceeded",
+        "the storage quota refusal names its reason"
     );
     // Request rules the derived vectors cannot reach: each is sent over HTTP and
     // the contract's verdict is compared with the handler's. `false` marks a
@@ -2646,6 +2735,18 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
         )
         .await;
     }
+    // Canonical form only: the handler parses digits (`governance::money`), so a
+    // leading zero is accepted ("007" is 7) where the schema refuses it.
+    body_vector_stricter(
+        &w,
+        &owner,
+        "POST",
+        keys_template,
+        &keys_path,
+        "money leading zeros",
+        key_body(json!({"budgets":[{"period":"month","amount_microusd":"007"}]})),
+    )
+    .await;
     let repeated =
         json!([{"period":"month","amount_microusd":"1"},{"period":"month","amount_microusd":"2"}]);
     body_vector(
@@ -2722,10 +2823,41 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
         ("allowlist v6 network", "2001:db8::/32", true),
         ("allowlist host bits", "10.0.0.1/8", false),
         ("allowlist mapped v6", "::ffff:102:304", false),
+        ("allowlist mapped v6 dotted", "::ffff:1.2.3.4", true),
+        (
+            "allowlist zero-padded prefix",
+            "1.2.3.4/0000000000000000000000000000000000000000000000000000000000000032",
+            true,
+        ),
+        ("allowlist plus prefix", "1.2.3.4/+32", true),
     ] {
         let body = json!({"name":"vector","scopes":["platform:read"],"expires_in_days":30,"ip_allowlist":[entry]});
         body_vector(&w, &admin, "POST", tokens, tokens, label, body, expressible).await;
     }
+    // The handler accepts IPv6 with an embedded dotted-quad tail (stored as
+    // ::102:304/128); the schema's pattern refuses it.
+    body_vector_stricter(
+        &w,
+        &admin,
+        "POST",
+        tokens,
+        tokens,
+        "allowlist embedded dotted quad",
+        json!({"name":"vector","scopes":["platform:read"],"expires_in_days":30,"ip_allowlist":["::1.2.3.4"]}),
+    )
+    .await;
+    // Duplicates are compared after canonicalization, which uniqueItems cannot.
+    body_vector(
+        &w,
+        &admin,
+        "POST",
+        tokens,
+        tokens,
+        "allowlist duplicate after canonicalization",
+        json!({"name":"vector","scopes":["platform:read"],"expires_in_days":30,"ip_allowlist":["1.2.3.4","1.2.3.4/32"]}),
+        false,
+    )
+    .await;
     // String query parameters.
     let requests = "/api/v1/platform/logs/requests";
     let sessions = "/api/v1/platform/logs/sessions";
@@ -2761,6 +2893,33 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
         ("cursor odd hex", format!("1_{uuid}_616"), true),
         ("cursor even hex", format!("1_{uuid}_6162"), true),
         ("cursor not utf-8", format!("1_{uuid}_ff"), false),
+        // Documented gaps: the schema accepts what the handler refuses.
+        (
+            "cursor micros above i64",
+            format!("9223372036854775808_{uuid}_6162"),
+            false,
+        ),
+        (
+            "cursor micros above chrono",
+            format!("9000000000000000000_{uuid}_6162"),
+            false,
+        ),
+        (
+            "cursor session leading space",
+            format!("1_{uuid}_20"),
+            false,
+        ),
+        ("cursor session control", format!("1_{uuid}_01"), false),
+        (
+            "cursor session 129 characters",
+            format!("1_{uuid}_{}", "61".repeat(129)),
+            false,
+        ),
+        (
+            "cursor session 128 characters",
+            format!("1_{uuid}_{}", "61".repeat(128)),
+            true,
+        ),
     ] {
         query_vector(
             &w,
@@ -2774,10 +2933,36 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
         )
         .await;
     }
+    // The handler also accepts other spellings of the workspace UUID, which
+    // the schema's hyphenated form refuses.
+    let hyphenless = uuid.replace('-', "");
+    for (label, value) in [
+        ("cursor hyphenless uuid", format!("1_{hyphenless}_6162")),
+        ("cursor braced uuid", format!("1_{{{uuid}}}_6162")),
+        ("cursor urn uuid", format!("1_urn:uuid:{uuid}_6162")),
+    ] {
+        query_vector_stricter(
+            &w,
+            &admin,
+            "/api/v1/platform/logs/sessions",
+            sessions,
+            "cursor",
+            label,
+            &value,
+        )
+        .await;
+    }
     for (label, value) in [
         ("keys q control", "a\u{1}b"),
         ("keys q nul", "abc\u{0}"),
         ("keys q padded", " \n abc\t"),
+        ("keys q space and 200", &format!(" {}", "a".repeat(200))),
+        (
+            "keys q no-break space and 200",
+            &format!("\u{a0}{}\u{a0}", "a".repeat(200)),
+        ),
+        ("keys q long padding", &format!("{}a", " ".repeat(300))),
+        ("keys q interior tab", "a\tb"),
         ("keys q 200", &"a".repeat(200)),
         ("keys q 201", &"a".repeat(201)),
     ] {

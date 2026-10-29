@@ -411,3 +411,26 @@ fn management_openapi_slice6_patterns_are_portable() {
         assert_eq!(matched, c.is_control(), "code point {}", c as u32);
     }
 }
+
+/// A known budget window is exact: no unresolved usage and no unknown hold
+/// (`read_budget_report` reports a zero unknown count only when every counter
+/// is zero).
+#[test]
+fn management_openapi_slice6_known_budget_window_is_exact() {
+    let schema = json!({"$ref":"#/components/schemas/S6KnownBudgetWindow"});
+    let known = json!({"layer":"key","period":"month","amount_microusd":"100","monthly_budget_microusd":"100","budget_period":"month","window_start":"2026-10-01T00:00:00Z","window_end":"2026-11-01T00:00:00Z","usage_visible":true,"used_microusd":"7","unresolved_usage":false,"exhausted":false,"settled_microusd":"5","pending_held_microusd":"2","unknown_held_microusd":"0","unknown_cost_requests":"0","remaining_microusd":"93","headroom_status":"known"});
+    assert!(validate_value(artifact(), &schema, &known).is_ok());
+    for (field, value) in [
+        ("unresolved_usage", json!(true)),
+        ("unknown_held_microusd", json!("1")),
+        ("unknown_cost_requests", json!("1")),
+        ("remaining_microusd", Value::Null),
+    ] {
+        let mut window = known.clone();
+        window[field] = value;
+        assert!(
+            validate_value(artifact(), &schema, &window).is_err(),
+            "a known window accepted a contradictory {field}"
+        );
+    }
+}
