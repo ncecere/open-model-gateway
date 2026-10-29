@@ -2299,3 +2299,21 @@ fn management_openapi_http_vectors_pattern_length_boundaries_past_the_cap_are_de
     )
     .unwrap();
 }
+
+// ----- round 3: a sibling member's `items` governs positional indices too ----
+
+#[test]
+fn management_openapi_http_vectors_a_siblings_items_govern_positional_indices() {
+    let document = body_only(json!({"type":"array","allOf":[
+        {"prefixItems":[{"type":"string"}]},
+        {"items":{"type":"string","maxLength":2}}]}));
+    let cases = cases_of(&document, &json!(["ab"]), &[]).unwrap();
+    // RED: position 0 is positional in one member, but the other member's
+    // `items` constrains it as well, so its maxLength must be probed there.
+    assert!(has(&cases, "/0", "maxLength+1", false, |b| b[0]
+        .as_str()
+        .is_some_and(|s| s.len() == 3)));
+    // The oracle agrees (and checks byte limits through the same schema).
+    let schema = body_schema_of(&document);
+    assert!(!super::http_vectors::accepts(&document, schema, &json!(["abc"])).unwrap());
+}

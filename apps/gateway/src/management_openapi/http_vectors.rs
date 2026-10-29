@@ -2091,28 +2091,22 @@ fn distinct_variants(
     }
     Ok((found.len() >= need).then_some(found))
 }
-/// The schema every element at `index` must satisfy: a positional schema, else
-/// the tail `items` schema.
+/// The schema every element at `index` must satisfy: for EACH applicable node,
+/// its positional schema at `index` when it has one, else its homogeneous
+/// `items` (a sibling `allOf` member's `items` governs a position another
+/// member's `prefixItems` also covers).
 fn element_schema(nodes: &[&Value], index: usize) -> Option<Value> {
-    if positional(nodes, index) {
-        return combine(
-            nodes
-                .iter()
-                .filter_map(|node| node["prefixItems"].get(index))
-                .cloned()
-                .collect(),
-        );
-    }
-    if index >= tail_start(nodes) {
-        return combine(
-            nodes
-                .iter()
-                .filter_map(|node| node.get("items").filter(|v| v.is_object()))
-                .cloned()
-                .collect(),
-        );
-    }
-    None
+    combine(
+        nodes
+            .iter()
+            .filter_map(
+                |node| match node["prefixItems"].as_array().and_then(|p| p.get(index)) {
+                    Some(positional) => Some(positional.clone()),
+                    None => node.get("items").filter(|v| v.is_object()).cloned(),
+                },
+            )
+            .collect(),
+    )
 }
 /// The first index `items` governs: after every positional schema.
 fn tail_start(nodes: &[&Value]) -> usize {
