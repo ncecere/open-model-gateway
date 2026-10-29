@@ -813,8 +813,8 @@ impl Vx<'_> {
         keys: &[&str],
         prepare: impl AsyncFn() -> (String, Value),
     ) {
-        let mut cases: Vec<(String, Box<dyn Fn(Vec<Value>) -> Vec<Value>>)> =
-            vec![("valid".into(), Box::new(|a| a))];
+        type Mutation = Box<dyn Fn(Vec<Value>) -> Vec<Value>>;
+        let mut cases: Vec<(String, Mutation)> = vec![("valid".into(), Box::new(|a| a))];
         for index in 0..keys.len() {
             cases.push((
                 format!("wrong value at position {index}"),
