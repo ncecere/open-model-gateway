@@ -969,3 +969,125 @@ async fn event_rate_and_message_size_caps_close_with_an_error(pool: PgPool) {
         "oversized events never reach upstream"
     );
 }
+
+/// How a client trips a cap while a response is in flight.
+#[derive(Clone, Copy)]
+enum Trip {
+    Rate,
+    Frame,
+    Fragments,
+}
+
+/// A cap refusal on a served gateway while upstream work is in flight: the
+/// client is told the exact close code and reason, the upstream socket is
+/// closed, and nothing is fabricated: the session fails (never succeeds), the
+/// request keeps its hold as unknown cost and no settlement is written.
+async fn cap_closes_an_in_flight_session(pool: PgPool, trip: Trip) {
+    use tungstenite::protocol::frame::{
+        Frame,
+        coding::{Data, OpCode},
+    };
+    let (limits, code, reason, error_code) = match trip {
+        Trip::Rate => (
+            RealtimeLimits {
+                max_events_per_second: 1,
+                ..RealtimeLimits::default()
+            },
+            1008,
+            "rate_limit_error",
+            "rate_limit_error",
+        ),
+        Trip::Frame | Trip::Fragments => (
+            RealtimeLimits {
+                max_message_bytes: 1024,
+                ..RealtimeLimits::default()
+            },
+            1009,
+            "message_too_big",
+            "invalid_request_error",
+        ),
+    };
+    let g = gateway(pool, Init::Safe, vec![Reply::Hang], limits).await;
+    let mut client = g.connect().await;
+    opened(&mut client).await;
+    send(&mut client, json!({"type":"response.create"})).await;
+    until(&mut client, "response.created").await;
+    assert!(
+        !g.mock.shared.closed.load(Ordering::SeqCst),
+        "upstream is open while the response is in flight"
+    );
+    match trip {
+        Trip::Rate => {
+            for _ in 0..4 {
+                send(&mut client, json!({"type":"input_audio_buffer.clear"})).await;
+            }
+        }
+        Trip::Frame => {
+            let _ = client
+                .send(Message::Text(
+                    json!({"type":"input_audio_buffer.append","audio":"A".repeat(4096)})
+                        .to_string()
+                        .into(),
+                ))
+                .await;
+        }
+        Trip::Fragments => {
+            // Each frame fits the cap; the assembled message does not.
+            for (opcode, last) in [(Data::Text, false), (Data::Continue, true)] {
+                let frame = Frame::message(vec![b'x'; 600], OpCode::Data(opcode), last);
+                let _ = client.send(Message::Frame(frame)).await;
+            }
+        }
+    }
+    let error = until(&mut client, "error").await;
+    assert_eq!(error["error"]["code"], reason);
+    let close = next(&mut client).await;
+    assert_eq!(close["code"], code, "{close}");
+    assert_eq!(close["reason"], reason, "{close}");
+    assert!(
+        g.mock.shared.wait_closed().await,
+        "the cap refusal closes the upstream socket"
+    );
+    let row = g.finished().await;
+    assert_eq!(row["state"], "failed");
+    assert_eq!(row["error_code"], error_code);
+    assert_eq!(row["finish_reason"], "error", "never a clean stop");
+    // Unknown usage retains the hold; nothing is settled or counted as zero.
+    assert_eq!(row["reservation"], "unknown");
+    assert_eq!(row["held"], hold(expected_bounds(&g, &[])[0], 1000));
+    let id = row["id"].as_str().unwrap();
+    let responses = g.responses(id).await;
+    assert_eq!(
+        (responses.len(), responses[0]["state"].as_str()),
+        (1, Some("unknown"))
+    );
+    assert!(responses[0]["actual"].is_null(), "{responses:?}");
+    assert!(
+        g.ledger(id).await.iter().all(|(kind, _)| kind != "settlement"),
+        "no settlement is fabricated"
+    );
+    // Neither the oversized bytes nor the excess events reached upstream.
+    assert!(
+        g.mock
+            .shared
+            .received_of("input_audio_buffer.append")
+            .is_empty()
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn the_event_rate_cap_cancels_an_in_flight_session_and_keeps_the_hold(pool: PgPool) {
+    cap_closes_an_in_flight_session(pool, Trip::Rate).await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn an_oversized_frame_cancels_an_in_flight_session_and_keeps_the_hold(pool: PgPool) {
+    cap_closes_an_in_flight_session(pool, Trip::Frame).await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn an_oversized_fragmented_message_cancels_an_in_flight_session_and_keeps_the_hold(
+    pool: PgPool,
+) {
+    cap_closes_an_in_flight_session(pool, Trip::Fragments).await;
+}
