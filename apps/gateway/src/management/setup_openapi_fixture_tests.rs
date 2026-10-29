@@ -1,5 +1,6 @@
 //! Slice 3's executed, raw-wire registry: a real gateway and disposable PostgreSQL.
 use super::*;
+use openapi::http_vectors::{self, Probe};
 use openapi::responses::SLICE3_AREAS;
 
 struct Journey<'a> {
@@ -155,6 +156,75 @@ async fn price_views<'a>(
     )
     .await;
     j.actor = saved;
+}
+/// The handler's verdict by status, except that a 400 whose machine reason is
+/// one of `domain` refuses schema-valid input for a reason the schema cannot
+/// express (live policy parents, stored state, server configuration): the
+/// request got past input validation. Status alone cannot tell the two apart.
+fn judged(captured: openapi::responses::Captured, domain: &[&str]) -> Probe {
+    let domain_refusal = captured.status == StatusCode::BAD_REQUEST
+        && serde_json::from_slice::<Value>(&captured.bytes)
+            .ok()
+            .and_then(|v| v["error"]["reason"].as_str().map(|r| domain.contains(&r)))
+            .unwrap_or(false);
+    if domain_refusal {
+        Probe::decided(captured, true)
+    } else {
+        Probe::from(captured)
+    }
+}
+/// Query boundary vectors for one operation: every documented parameter in the base.
+async fn query_set(
+    j: &mut Journey<'_>,
+    who: &Browser,
+    template: &str,
+    path: &str,
+    base: &[(&str, &str)],
+) {
+    let (client, root) = (j.client.clone(), j.base.clone());
+    http_vectors::query_vectors_fixed(
+        &mut j.observed,
+        "GET",
+        template,
+        base,
+        async |query: String| {
+            send(
+                &client,
+                &root,
+                Some(who),
+                "GET",
+                &format!("{path}?{query}"),
+                None,
+            )
+            .await
+        },
+    )
+    .await;
+}
+/// Body boundary vectors for one operation with a fixed target.
+async fn body_set(
+    j: &mut Journey<'_>,
+    who: &Browser,
+    method: &str,
+    template: &str,
+    path: &str,
+    valid: Value,
+    domain: &[&str],
+) {
+    let (client, root) = (j.client.clone(), j.base.clone());
+    http_vectors::body_vectors_http(
+        &mut j.observed,
+        method,
+        template,
+        valid,
+        async |body: Value| {
+            judged(
+                send(&client, &root, Some(who), method, path, Some(body)).await,
+                domain,
+            )
+        },
+    )
+    .await;
 }
 /// A telemetry attempt exactly as the engine records it: the execution row with
 /// its timings and the governance reservation (settled with an actual cost, or
@@ -1155,6 +1225,291 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         .await;
         assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
     }
+    // HTTP boundary vectors: every documented query parameter and JSON request
+    // body, each compared with the real handler over loopback. Targets that a
+    // request consumes (catalog, model, route, workspace policy) are dedicated
+    // ones created here; state-replacing operations run last.
+    let vcat = id(&j
+        .request(
+            "POST",
+            "/api/v1/platform/catalogs",
+            Some(json!({"name":"Vector catalog"})),
+        )
+        .await);
+    let vmodel = id(&j.request("POST", "/api/v1/platform/models", Some(json!({"public_name":"vector/target","display_name":"Vector target","enabled":true}))).await);
+    let vprov = id(&j.request("POST", "/api/v1/platform/providers", Some(json!({"name":"Vector connection","provider":"openrouter","credential_ref":"env:CONTRACT_REFERENCE","enabled":true}))).await);
+    let vdep = id(&j.request("POST", "/api/v1/platform/deployments", Some(json!({"model_id":vmodel,"provider_connection_id":vprov,"upstream_model":"vector/upstream","enabled":true}))).await);
+    let (a, o) = (&admin, &owner);
+    let (model_s, second_s, cat_s, prov_s) = (
+        model.to_string(),
+        second.to_string(),
+        cat.to_string(),
+        provider.to_string(),
+    );
+    let policy_s = policy_now;
+    let ids = format!("{model_s},{second_s}");
+    query_set(
+        &mut j,
+        a,
+        "/api/v1/platform/catalogs",
+        "/api/v1/platform/catalogs",
+        &[("limit", "5"), ("offset", "0"), ("q", "contract")],
+    )
+    .await;
+    query_set(
+        &mut j,
+        a,
+        "/api/v1/platform/catalogs/{id}/models",
+        &format!("/api/v1/platform/catalogs/{cat}/models"),
+        &[("limit", "5"), ("offset", "0")],
+    )
+    .await;
+    query_set(
+        &mut j,
+        a,
+        "/api/v1/platform/deployments",
+        "/api/v1/platform/deployments",
+        &[
+            ("limit", "5"),
+            ("offset", "0"),
+            ("q", "contract"),
+            ("enabled", "true"),
+            ("model_id", &model_s),
+            ("provider_connection_id", &prov_s),
+        ],
+    )
+    .await;
+    query_set(
+        &mut j,
+        a,
+        "/api/v1/platform/deployments/{deployment}/prices",
+        &format!("/api/v1/platform/deployments/{deployment}/prices"),
+        &[("limit", "2"), ("offset", "0")],
+    )
+    .await;
+    let page = j.request("GET", &format!("{history}?limit=1"), None).await;
+    let cursor = page["next_cursor"]
+        .as_str()
+        .unwrap_or("0_00000000-0000-0000-0000-000000000000")
+        .to_owned();
+    query_set(
+        &mut j,
+        a,
+        "/api/v1/platform/deployments/{id}/configuration/history",
+        &history,
+        &[("limit", "1"), ("cursor", &cursor)],
+    )
+    .await;
+    let (unp_s, nd_s) = (Uuid::new_v4().to_string(), Uuid::new_v4().to_string());
+    query_set(
+        &mut j,
+        a,
+        "/api/v1/platform/models",
+        "/api/v1/platform/models",
+        &[
+            ("limit", "5"),
+            ("offset", "0"),
+            ("q", "contract"),
+            ("enabled", "true"),
+            ("provider_connection_id", &prov_s),
+            ("type", "generation"),
+            ("max_input_price", "9007199254740993"),
+            ("data_policy", policy_s),
+            ("include_deprecated", "true"),
+            ("sort", "name"),
+            ("not_in_catalog", &unp_s),
+            ("not_direct_in", &nd_s),
+        ],
+    )
+    .await;
+    query_set(
+        &mut j,
+        a,
+        "/api/v1/platform/models/compare",
+        "/api/v1/platform/models/compare",
+        &[("ids", &ids)],
+    )
+    .await;
+    query_set(
+        &mut j,
+        a,
+        "/api/v1/platform/providers",
+        "/api/v1/platform/providers",
+        &[
+            ("limit", "10"),
+            ("offset", "0"),
+            ("q", "contract"),
+            ("enabled", "true"),
+        ],
+    )
+    .await;
+    let team = f.team;
+    query_set(
+        &mut j,
+        o,
+        "/api/v1/workspaces/{ws}/available-models",
+        &format!("/api/v1/workspaces/{team}/available-models"),
+        &[("limit", "5"), ("offset", "0"), ("q", "contract")],
+    )
+    .await;
+    query_set(
+        &mut j,
+        o,
+        "/api/v1/workspaces/{ws}/catalog",
+        &format!("/api/v1/workspaces/{team}/catalog"),
+        &[
+            ("limit", "5"),
+            ("offset", "0"),
+            ("q", "contract"),
+            ("type", "generation"),
+            ("sort", "name"),
+        ],
+    )
+    .await;
+    query_set(
+        &mut j,
+        o,
+        "/api/v1/workspaces/{ws}/models",
+        &format!("/api/v1/workspaces/{team}/models"),
+        &[("limit", "5"), ("offset", "0"), ("q", "contract")],
+    )
+    .await;
+    query_set(
+        &mut j,
+        o,
+        "/api/v1/workspaces/{ws}/models/compare",
+        &format!("/api/v1/workspaces/{team}/models/compare"),
+        &[("ids", &ids)],
+    )
+    .await;
+    let catalog_body = json!({"name":"Vector catalog","description":"A catalog"});
+    body_set(
+        &mut j,
+        a,
+        "POST",
+        "/api/v1/platform/catalogs",
+        "/api/v1/platform/catalogs",
+        catalog_body.clone(),
+        &[],
+    )
+    .await;
+    body_set(
+        &mut j,
+        a,
+        "PATCH",
+        "/api/v1/platform/catalogs/{id}",
+        &format!("/api/v1/platform/catalogs/{vcat}"),
+        catalog_body,
+        &[],
+    )
+    .await;
+    body_set(
+        &mut j,
+        a,
+        "PUT",
+        "/api/v1/platform/catalogs/{id}/models",
+        &format!("/api/v1/platform/catalogs/{vcat}/models"),
+        json!({"model_ids":[vmodel]}),
+        &[],
+    )
+    .await;
+    body_set(
+        &mut j,
+        a,
+        "PUT",
+        "/api/v1/platform/models/{id}/catalogs",
+        &format!("/api/v1/platform/models/{vmodel}/catalogs"),
+        json!({"catalog_ids":[vcat]}),
+        &[],
+    )
+    .await;
+    body_set(&mut j, a, "POST", "/api/v1/platform/models", "/api/v1/platform/models", json!({"public_name":"vector/created","display_name":"Vector created","description":"A model","enabled":true,"supported_protocols":["chat_completions"]}), &[]).await;
+    body_set(&mut j, a, "PATCH", "/api/v1/platform/models/{id}", &format!("/api/v1/platform/models/{vmodel}"), json!({"public_name":"vector/target","display_name":"Vector target","description":"A model","enabled":true,"supported_protocols":["chat_completions"]}), &["route_unsupported_capability"]).await;
+    body_set(&mut j, a, "POST", "/api/v1/platform/providers", "/api/v1/platform/providers", json!({"name":"Vector provider","provider":"openrouter","credential_ref":"env:CONTRACT_REFERENCE","endpoint":null,"region":null,"enabled":false,"aws_external_id":null,"aws_session_name":null}), &[]).await;
+    body_set(&mut j, a, "PATCH", "/api/v1/platform/providers/{id}", &format!("/api/v1/platform/providers/{vprov}"), json!({"enabled":true,"credential_ref":"env:CONTRACT_REFERENCE","aws_external_id":null,"aws_session_name":null}), &[]).await;
+    body_set(&mut j, a, "POST", "/api/v1/platform/deployments", "/api/v1/platform/deployments", json!({"model_id":vmodel,"provider_connection_id":vprov,"upstream_model":"vector/upstream","enabled":false}), &["route_unsupported_capability"]).await;
+    body_set(
+        &mut j,
+        a,
+        "PATCH",
+        "/api/v1/platform/deployments/{id}",
+        &format!("/api/v1/platform/deployments/{vdep}"),
+        json!({"enabled":true}),
+        &[],
+    )
+    .await;
+    body_set(
+        &mut j,
+        a,
+        "POST",
+        "/api/v1/platform/deployments/{deployment}/prices",
+        &format!("/api/v1/platform/deployments/{vdep}/prices"),
+        v3_price(),
+        &["price_meters_incomplete"],
+    )
+    .await;
+    body_set(&mut j, a, "PUT", "/api/v1/platform/deployments/{deployment}/routing", &format!("/api/v1/platform/deployments/{vdep}/routing"), json!({"priority":1,"weight":2,"residency":"eu","failure_threshold":3,"cooldown_seconds":30}), &[]).await;
+    body_set(&mut j, a, "PUT", "/api/v1/platform/models/{model}/routing", &format!("/api/v1/platform/models/{vmodel}/routing"), json!({"strategy":"priority","max_attempts":2,"allow_ambiguous_failover":false,"required_residency":"eu"}), &[]).await;
+    body_set(&mut j, a, "PUT", "/api/v1/platform/deployments/{deployment}/batch-scheduling", &format!("/api/v1/platform/deployments/{vdep}/batch-scheduling"), json!({"max_concurrency":3,"yield_live_threshold":5,"window":{"timezone":"UTC","days":["mon","fri"],"start":"23:00","end":"06:00"}}), &[]).await;
+    body_set(
+        &mut j,
+        a,
+        "POST",
+        "/api/v1/platform/deployments/{id}/configuration/preview",
+        &format!("/api/v1/platform/deployments/{vdep}/configuration/preview"),
+        json!({"enabled":false}),
+        &[],
+    )
+    .await;
+    body_set(&mut j, a, "POST", "/api/v1/platform/model-setup", "/api/v1/platform/model-setup", json!({"model":{"public_name":"vector/setup","display_name":"Vector setup","description":"A model","enabled":true,"supported_protocols":["chat_completions"]},"route":{"provider_connection_id":vprov,"upstream_model":"vector/setup","enabled":false},"price":null,"catalog_ids":[vcat]}), &["route_unsupported_capability"]).await;
+    body_set(
+        &mut j,
+        o,
+        "POST",
+        "/api/v1/workspaces/{ws}/models",
+        &format!("/api/v1/workspaces/{team}/models"),
+        json!({"model_id":second}),
+        &[],
+    )
+    .await;
+    {
+        // A fresh team per request: the policy PUT is tighten-only against stored values.
+        let (client, root) = (j.client.clone(), j.base.clone());
+        let pool = &pool;
+        let owner_id = f.owner.user_id;
+        http_vectors::body_vectors_http(
+            &mut j.observed,
+            "PUT",
+            "/api/v1/workspaces/{ws}/policy",
+            policy.clone(),
+            async |body: Value| {
+                let ws = workspace(pool, "Vector workspace", "team", owner_id).await;
+                judged(
+                    send(
+                        &client,
+                        &root,
+                        Some(o),
+                        "PUT",
+                        &format!("/api/v1/workspaces/{ws}/policy"),
+                        Some(body),
+                    )
+                    .await,
+                    &["exceeds_parent_rate", "exceeds_parent_budget"],
+                )
+            },
+        )
+        .await;
+    }
+    body_set(
+        &mut j,
+        a,
+        "PUT",
+        "/api/v1/platform/catalog-defaults",
+        "/api/v1/platform/catalog-defaults",
+        json!({"personal":[cat],"team":[cat],"project":[cat]}),
+        &[],
+    )
+    .await;
     j.request(
         "DELETE",
         &format!("/api/v1/platform/deployments/{catalog_only}"),
