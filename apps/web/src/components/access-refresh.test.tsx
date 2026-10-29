@@ -9,6 +9,10 @@ import { abortRequests, api, type Session } from "../lib/api";
 import { admin, auditor, testClient } from "../lib/test-fixtures";
 import { adminTokensPath } from "../pages/admin-tokens";
 
+// Larger than SETTLE plus setup, so a stalled settle fails on its assertion
+// rather than on vitest's 5 s default test timeout (#402).
+vi.setConfig({ testTimeout: 15_000 });
+
 const clients: ReturnType<typeof testClient>[] = [];
 const unexpected: string[] = [];
 const mePath = "/api/v1/me", modelsPath = "/api/v1/platform/models";
@@ -129,10 +133,11 @@ async function setup({ policy = "deny", refuseOnce = false, freezeRefresh = fals
   };
 }
 type View = Awaited<ReturnType<typeof setup>>;
-// The first test in this file also pays the dashboard router's cold start
-// (module evaluation and lazy routes); with the whole suite on parallel workers
-// beside other CPU work that first render can exceed waitFor's 1 s default
-// (#402). An explicit bound keeps every assertion below exact.
+// Whichever test runs first in this file also pays the dashboard's first mount
+// (first Home and Base UI render, JIT warm-up); with the whole suite on parallel
+// workers beside other CPU work that render can exceed waitFor's 1 s default
+// (#402). An explicit bound keeps every assertion below exact; the file's test
+// timeout (above) stays larger, so a real failure still reports the assertion.
 const SETTLE = { timeout: 5000 };
 async function stableDenied(view: View, probes: number) {
   await waitFor(() => {
