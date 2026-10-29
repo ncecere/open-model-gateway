@@ -310,6 +310,26 @@ fn management_openapi_invitation_and_notification_request_vectors() {
     );
 }
 
+/// RED control: a reviewed refinement may make the contract STRICTER than serde
+/// for probes, but the contract may never refuse the valid (positive) body. A
+/// name with a control character deserializes but the contract refuses it.
+#[test]
+#[should_panic(expected = "positive: contract refuses the valid body")]
+fn management_openapi_request_vectors_refuse_a_contract_that_rejects_the_positive_body() {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[allow(dead_code)]
+    struct Catalog {
+        name: String,
+        description: Option<String>,
+    }
+    vectors::<Catalog>(
+        "POST",
+        "/api/v1/platform/catalogs",
+        json!({"name":"\u{1}name","description":null}),
+    );
+}
+
 #[test]
 fn management_openapi_request_refinements_are_reviewed_and_one_directional() {
     assert!(agrees(false, true, true) && agrees(false, false, false));
