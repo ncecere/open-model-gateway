@@ -1265,14 +1265,30 @@ fn assert_no_attacker(world: &World, label: &str, case: &str) {
 async fn steering_world_dispatch_is_independent_of_the_provided_pool(pool: PgPool) {
     // No SQLx parent: exhausting this pool cannot consume the shared test pool's
     // capacity or starve unrelated fixtures running alongside this regression.
+    //
+    // Setting the pool up is not what this test measures. `connect_with` and the
+    // idle-connection ping in `acquire` each have to finish inside the pool's
+    // acquire timeout, so a 100 ms bound made them race the server under load
+    // (#412, PoolTimedOut before any dispatch ran). The bound here is generous
+    // and only turns a regression, where dispatch waits on this pool, into a
+    // failure instead of a hang.
     let provided = sqlx::postgres::PgPoolOptions::new()
         .max_connections(1)
-        .acquire_timeout(std::time::Duration::from_millis(100))
+        .acquire_timeout(std::time::Duration::from_secs(10))
         .connect_with((*pool.connect_options()).clone())
         .await
         .unwrap();
     let w = world(provided.clone()).await;
     let held = provided.acquire().await.unwrap();
+    // The strict bound belongs here: with the only connection held, a second
+    // acquire can never succeed, so timing out is load-independent proof that
+    // the pool is exhausted while the dispatch below runs.
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), provided.acquire())
+            .await
+            .is_err(),
+        "the provided pool must be exhausted while the dispatch runs"
+    );
     let (status, text) = send(
         &w.app,
         json_request(
