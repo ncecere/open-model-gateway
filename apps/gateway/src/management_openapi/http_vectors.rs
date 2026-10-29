@@ -199,6 +199,7 @@ pub(super) const PATTERN_BOUNDARIES: &str = "x-omg-pattern-boundaries";
 /// Vector kinds that decide whether the handler enforces a declared length or
 /// item bound. If NONE of a kind can be sent for a location the run fails.
 const DECISIVE: &[&str] = &[
+    "pattern length",
     "minLength",
     "minLength-1",
     "maxLength",
@@ -377,7 +378,11 @@ fn simple_bounds(pattern: &str) -> Option<(usize, Option<usize>)> {
 /// Candidates around a pattern: shape violations, control characters,
 /// multibyte values and, for simple repetition patterns, the length boundaries
 /// m-1, m, n and n+1 built from the characters of the valid seed.
-fn pattern_candidates(pattern: &str, seed: &str, dropped: &mut Vec<String>) -> Vec<String> {
+pub(super) fn pattern_candidates(
+    pattern: &str,
+    seed: &str,
+    dropped: &mut Vec<String>,
+) -> (Vec<String>, Vec<(usize, String)>) {
     let mut replaced = seed.chars();
     replaced.next();
     let mut out = vec![
@@ -400,17 +405,21 @@ fn pattern_candidates(pattern: &str, seed: &str, dropped: &mut Vec<String>) -> V
         out.push(glyph.to_owned());
         out.push(format!("{seed}{glyph}"));
     }
+    // The derived length boundaries are DECISIVE for the pattern: each is
+    // labelled by its length, so one unsendable boundary is never excused by
+    // another that was sent.
+    let mut lengths = Vec::new();
     if let Some((min, max)) = simple_bounds(pattern) {
-        let lengths = [min.checked_sub(1), Some(min), max, max.map(|n| n + 1)];
-        for length in lengths.into_iter().flatten() {
+        let wanted = [min.checked_sub(1), Some(min), max, max.map(|n| n + 1)];
+        for length in wanted.into_iter().flatten() {
             if (length as u64) <= LONGEST {
-                out.push(repeat_to(seed, length));
+                lengths.push((length, repeat_to(seed, length)));
             } else {
-                dropped.push("pattern length".to_owned());
+                dropped.push(format!("pattern length@{length}"));
             }
         }
     }
-    out
+    (out, lengths)
 }
 
 // ---------------------------------------------------------------------------
@@ -844,6 +853,8 @@ struct Mutations {
     /// The location has a pattern with no derivable length bounds, no reviewed
     /// [`PATTERN_BOUNDARIES`] and no supplied candidates.
     needs_candidates: bool,
+    /// [`PATTERN_BOUNDARIES`] is present but nothing needs it any more.
+    stale_pattern_boundaries: bool,
 }
 
 /// Every `const` value and `enum` member a schema declares, including those of
@@ -891,6 +902,7 @@ fn scalar_mutations(
     let mut evidence = Evidence::default();
     let mut dropped: Vec<String> = Vec::new();
     let mut needs_candidates = false;
+    let mut stale_pattern_boundaries = false;
     let kinds = types(nodes);
     if !query {
         for wrong in [
@@ -1014,7 +1026,30 @@ fn scalar_mutations(
                     node.get(MAX_BYTES).is_some() || node.get(PATTERN_BOUNDARIES).is_some()
                 });
             needs_candidates = !bounded && candidates == 0;
-            for candidate in pattern_candidates(pattern, seed, &mut dropped) {
+            // The reviewed reason is for a pattern whose bounds cannot be
+            // derived and for which no candidates are supplied; once the
+            // pattern, a maxLength/maxBytes or candidates cover it, it is stale.
+            let own = simple_bounds(pattern).is_some()
+                || !distinct_u64(nodes, "maxLength").is_empty()
+                || nodes.iter().any(|node| node.get(MAX_BYTES).is_some());
+            stale_pattern_boundaries = nodes
+                .iter()
+                .any(|node| node.get(PATTERN_BOUNDARIES).is_some())
+                && (own || candidates > 0);
+            let (shapes, lengths) = pattern_candidates(pattern, seed, &mut dropped);
+            for (length, candidate) in lengths {
+                let kind = if accepts(document, schema, &json!(candidate))? {
+                    "pattern candidate"
+                } else {
+                    "pattern violation"
+                };
+                evidence.labelled.push((
+                    format!("pattern length@{length}"),
+                    kind,
+                    json!(candidate),
+                ));
+            }
+            for candidate in shapes {
                 // Genuine violations are the pattern-violation vectors; the rest
                 // (multibyte text, say) must be accepted by both sides.
                 let kind = if accepts(document, schema, &json!(candidate))? {
@@ -1049,6 +1084,7 @@ fn scalar_mutations(
         labelled: evidence.labelled,
         dropped,
         needs_candidates,
+        stale_pattern_boundaries,
     })
 }
 
@@ -1225,6 +1261,11 @@ pub(super) fn query_plan(
                 "query parameter {name}: the pattern has no derivable length bounds; supply boundary candidates or annotate it with {PATTERN_BOUNDARIES}"
             ));
         }
+        if mutations.stale_pattern_boundaries {
+            notes.problems.push(format!(
+                "query parameter {name}: {PATTERN_BOUNDARIES} is stale: the pattern, a maxLength or the supplied candidates already cover its boundaries; delete it"
+            ));
+        }
         if !supplied.is_empty() {
             let verdicts = supplied
                 .iter()
@@ -1272,7 +1313,13 @@ pub(super) fn query_plan(
             }
         }
         let exempt = *unsendable;
+        let before = notes.exempt;
         notes.settle(name, &dropped, &sent, exempt);
+        if exempt && notes.exempt == before {
+            notes.problems.push(format!(
+                "query parameter {name}: {UNSENDABLE} is stale: every decisive vector of this parameter can be sent; delete it"
+            ));
+        }
     }
     for name in base.iter().chain(seeds).map(|(n, _)| n) {
         ensure!(
@@ -1569,6 +1616,8 @@ struct Walk<'a> {
     seen: BTreeSet<String>,
     /// Bases already walked from their root (a seed is walked once per base).
     bases: BTreeSet<String>,
+    /// Locations carrying [`UNSENDABLE`]: was the reason used by any walk?
+    exempt_used: std::collections::BTreeMap<String, bool>,
     out: Vec<BodyCase>,
     notes: Notes,
     /// Every base body a walk started from (the valid body and each seeded
@@ -1614,6 +1663,18 @@ impl Walk<'_> {
         }
         Ok(())
     }
+    /// [`Notes::settle`] that also records whether a reviewed
+    /// [`UNSENDABLE`] reason was actually USED at this location (a decisive
+    /// vector really was unsendable): an unused one is stale.
+    fn settle_at(&mut self, here: &str, dropped: &[String], sent: &[&str], exempt: bool) {
+        let before = self.notes.exempt;
+        self.notes.settle(here, dropped, sent, exempt);
+        if exempt {
+            let used = self.exempt_used.entry(here.to_owned()).or_insert(false);
+            *used |= self.notes.exempt > before;
+        }
+    }
+
     /// The array a vector sends with `length` elements: the valid array's own
     /// elements first, then per-position values (a seeded positional value) or,
     /// for the homogeneous tail, copies of a valid tail element (DISTINCT ones
@@ -1756,8 +1817,8 @@ impl Walk<'_> {
             .map(|(label, ..)| label.as_str())
             .collect();
         let exempt = nodes.iter().any(|node| node.get(UNSENDABLE).is_some());
-        self.notes
-            .settle(&pointer(path), &evidence.dropped, &sent, exempt);
+        let here = pointer(path);
+        self.settle_at(&here, &evidence.dropped, &sent, exempt);
         for (_, kind, value) in evidence.labelled {
             self.push(path, kind, Some(value))?;
         }
@@ -1781,6 +1842,11 @@ impl Walk<'_> {
                 "{here}: the pattern has no derivable length bounds; supply boundary candidates or annotate it with {PATTERN_BOUNDARIES}"
             ));
         }
+        if mutations.stale_pattern_boundaries {
+            self.notes.problems.push(format!(
+                "{here}: {PATTERN_BOUNDARIES} is stale: the pattern, a maxLength or the supplied candidates already cover its boundaries; delete it"
+            ));
+        }
         let sent: Vec<&str> = mutations
             .vectors
             .iter()
@@ -1788,7 +1854,10 @@ impl Walk<'_> {
             .chain(mutations.labelled.iter().map(|(label, ..)| label.as_str()))
             .collect();
         let exempt = nodes.iter().any(|node| node.get(UNSENDABLE).is_some());
-        self.notes.settle(&here, &mutations.dropped, &sent, exempt);
+        if exempt {
+            self.exempt_used.entry(here.clone()).or_insert(false);
+        }
+        self.settle_at(&here, &mutations.dropped, &sent, exempt);
         // Decisive kinds first: a body sent twice keeps the first kind's name.
         for (_, kind, new) in mutations.labelled {
             self.push(path, kind, Some(new))?;
@@ -2111,6 +2180,7 @@ pub(super) fn body_plan(
         candidates_used: BTreeSet::new(),
         seen: BTreeSet::new(),
         bases: BTreeSet::from([serde_json::to_string(valid_body)?]),
+        exempt_used: std::collections::BTreeMap::new(),
         out: Vec::new(),
         notes: Notes::default(),
         walked: std::collections::BTreeMap::new(),
@@ -2127,6 +2197,13 @@ pub(super) fn body_plan(
             walk.candidates_used.contains(at),
             "candidate at {at} names no walked location"
         );
+    }
+    for (location, used) in &walk.exempt_used {
+        if !used {
+            walk.notes.problems.push(format!(
+                "{location}: {UNSENDABLE} is stale: every decisive vector of this location can be sent; delete it"
+            ));
+        }
     }
     walk.notes.check()?;
     // Reach is what the walk MUTATED, base by base: a location the body merely

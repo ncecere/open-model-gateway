@@ -1032,8 +1032,9 @@ fn management_openapi_http_vectors_an_unsendable_decisive_body_vector_fails() {
 fn management_openapi_http_vectors_non_decisive_drops_are_counted_not_silent() {
     use super::http_vectors::Notes;
     let mut notes = Notes::default();
-    // A pattern boundary past the cap is counted, never a failure.
-    notes.settle("/big", &["pattern length"], &[] as &[&str], false);
+    // A non-decisive candidate past the cap is counted, never a failure (a
+    // pattern's derived LENGTH boundaries are decisive, see below).
+    notes.settle("/big", &["pattern violation"], &[] as &[&str], false);
     assert_eq!((notes.minor, notes.exempt, notes.unsent.len()), (1, 0, 0));
     notes.check().unwrap();
     // A decisive kind that was sent in another variant is only counted.
@@ -2186,4 +2187,115 @@ fn management_openapi_http_vectors_query_candidates_must_straddle_too() {
     );
     assert!(text.contains("straddle"), "{text}");
     plan(&[("n", "111111111111111"), ("n", sixteen.as_str())]).unwrap();
+}
+
+// ----- round 3: stale reviewed exemptions, decisive pattern lengths ----
+
+#[test]
+fn management_openapi_http_vectors_a_stale_unsendable_boundary_is_refused() {
+    // The boundary CAN be sent, so the reviewed reason is dead weight.
+    let stale = json!({"type":"string","maxLength":9000,"x-omg-unsendable-boundary":REASON});
+    let text = format!("{:#}", unsendable_body(stale, json!("abc")).unwrap_err());
+    assert!(
+        text.contains("stale")
+            && text.contains("/big")
+            && text.contains("x-omg-unsendable-boundary"),
+        "{text}"
+    );
+    // An array location likewise.
+    let stale = json!({"type":"array","maxItems":3,"items":{"type":"string"},
+        "x-omg-unsendable-boundary":REASON});
+    let text = format!("{:#}", unsendable_body(stale, json!(["a"])).unwrap_err());
+    assert!(text.contains("stale") && text.contains("/big"), "{text}");
+    // A query parameter likewise.
+    let text = format!(
+        "{:#}",
+        code_cases(json!({"type":"string","maxLength":9000}), true).unwrap_err()
+    );
+    assert!(text.contains("stale") && text.contains("code"), "{text}");
+    // Needed ones still pass.
+    let needed = json!({"type":"string","maxLength":150_000,"x-omg-unsendable-boundary":REASON});
+    unsendable_body(needed, json!("abc")).unwrap();
+}
+
+#[test]
+fn management_openapi_http_vectors_a_stale_pattern_boundaries_reason_is_refused() {
+    let reason = "The cap is exercised by the handler's own unit tests.";
+    let plan = |extra: Value, candidates: &[(&str, Value)]| {
+        let mut extra = extra;
+        extra["x-omg-pattern-boundaries"] = json!(reason);
+        let document = unbounded_pattern(extra);
+        let candidates: Vec<(String, Value)> = candidates
+            .iter()
+            .map(|(p, v)| ((*p).to_owned(), v.clone()))
+            .collect();
+        super::http_vectors::body_plan(
+            &document,
+            &document["paths"][TEMPLATE]["post"],
+            &json!({"n":"15"}),
+            &[],
+            &candidates,
+        )
+        .map(|_| ())
+    };
+    // Needed: nothing else bounds the pattern.
+    plan(json!({}), &[]).unwrap();
+    // Stale: a maxLength, a byte limit or supplied candidates now cover it.
+    for (label, extra, candidates) in [
+        ("maxLength", json!({"maxLength":15}), vec![]),
+        ("max bytes", json!({"x-omg-max-bytes":15}), vec![]),
+        (
+            "candidates",
+            json!({}),
+            vec![("/n", json!("1".repeat(15))), ("/n", json!("1".repeat(16)))],
+        ),
+    ] {
+        let text = format!("{:#}", plan(extra, &candidates).unwrap_err());
+        assert!(
+            text.contains("stale")
+                && text.contains("/n")
+                && text.contains("x-omg-pattern-boundaries"),
+            "{label}: {text}"
+        );
+    }
+}
+
+#[test]
+fn management_openapi_http_vectors_pattern_length_boundaries_past_the_cap_are_decisive() {
+    use super::http_vectors::Notes;
+    // A derived pattern boundary the harness cannot send is a DECISIVE drop: it
+    // used to be only counted.
+    let mut notes = Notes::default();
+    notes.settle("/big", &["pattern length@100001"], &[] as &[&str], false);
+    let text = format!("{:#}", notes.check().unwrap_err());
+    assert!(text.contains("pattern length@100001 at /big"), "{text}");
+    // A reviewed reason excuses it; one that WAS sent does not need it.
+    let mut notes = Notes::default();
+    notes.settle("/big", &["pattern length@100001"], &[] as &[&str], true);
+    notes.check().unwrap();
+    let mut notes = Notes::default();
+    notes.settle(
+        "/big",
+        &["pattern length@100001"],
+        &["pattern length@100001"],
+        false,
+    );
+    notes.check().unwrap();
+    // The derivation itself reports the unsendable lengths of a huge pattern
+    // (no regex is compiled here), by length.
+    let mut dropped = Vec::new();
+    let (_, lengths) =
+        super::http_vectors::pattern_candidates("^[a-z]{100001}$", "abc", &mut dropped);
+    assert!(
+        dropped.contains(&"pattern length@100001".to_owned()),
+        "{dropped:?}"
+    );
+    assert!(dropped.contains(&"pattern length@100002".to_owned()));
+    assert!(lengths.iter().any(|(n, _)| *n == 100_000));
+    // Boundaries that can be sent never need the annotation.
+    unsendable_body(
+        json!({"type":"string","pattern":"^[a-z]{1,8}$"}),
+        json!("abc"),
+    )
+    .unwrap();
 }
