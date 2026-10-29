@@ -1110,13 +1110,22 @@
       },
       "IdentityExportProfile": {
         "additionalProperties": false,
-        "description": "Profile of the signed-in person. Every export sits behind a verified browser session (identity.rs verify_session joins effective_platform_roles and requires users.disabled_at and cleaned_at to be NULL), and the only session writer (identity.rs callback) stores first/last_signed_in_at in the same statement, so platform_role and both sign-in times are never null and disabled_at is always null. email is nulled only by account cleanup (lifecycle.rs), which subject_export PROFILE excludes.",
+        "description": "Profile of the signed-in person. Every export sits behind a verified browser session, and the only session writer (identity.rs callback) stores first/last_signed_in_at in the same statement, so both sign-in times are never null. disabled_at and platform_role stay NULLABLE: verify_session (identity.rs:1442) checks them in its own pool statement, and subject_export reads PROFILE (subject_export.rs:147) later in a separate snapshot after recording the audit event (:174-175), so a disable or role revocation in between is observable as a non-null disabled_at or a null platform_role. email is nulled only by account cleanup (lifecycle.rs), which subject_export PROFILE excludes.",
         "properties": {
           "created_at": {
             "$ref": "#/components/schemas/IdentityTime"
           },
           "disabled_at": {
-            "type": "null"
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "format": "date-time",
+                "type": "string",
+                "x-omg-unobserved-branch": "The request is authenticated by verify_session (identity.rs:1442, a pool statement requiring users.disabled_at IS NULL) and the profile is read later in a separate snapshot (subject_export.rs:175 and :147), so only an administrator disabling the person in that window yields a timestamp; a test cannot interleave the two statements."
+              }
+            ]
           },
           "display_name": {
             "$ref": "#/components/schemas/IdentityNullableString"
@@ -1134,7 +1143,15 @@
             "$ref": "#/components/schemas/IdentityTime"
           },
           "platform_role": {
-            "$ref": "#/components/schemas/IdentityRole"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IdentityRole"
+              },
+              {
+                "type": "null",
+                "x-omg-unobserved-branch": "verify_session (identity.rs:1442) joins effective_platform_roles, but PROFILE (subject_export.rs:147) reads the role in a later snapshot, so a role revoked in that window yields null; a test cannot interleave the two statements."
+              }
+            ]
           }
         },
         "required": [
@@ -1337,10 +1354,10 @@
           },
           "details": {
             "$comment": "Stored alert_events.details is an arbitrary producer-specific JSON object; monetary and identity refinements remain enforced.",
-            "description": "Stored JSON incident payload, not a serde DTO. Fields vary by producer/kind; readers do not deserialize or close this map. Monetary fields remain integer micro-USD strings. Admission-ceiling identity redaction is constrained by the separate variants below.",
+            "description": "Stored JSON incident payload, not a serde DTO. Fields vary by producer/kind; readers do not deserialize or close this map. Every *_microusd value is a non-null integer micro-USD string: each alerts.rs producer (budget_condition, spend threshold, spend spike) writes `x.to_string()` and never null (unknown cost is reported in unknown_cost_requests), and an incident is only created when used exceeds a positive threshold. Admission-ceiling identity redaction is constrained by the separate variants below.",
             "patternProperties": {
               "(^|_)microusd$": {
-                "$ref": "#/components/schemas/IdentityNullableDecimal"
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
               }
             },
             "type": "object"
@@ -1741,6 +1758,11 @@
           "current"
         ],
         "type": "object"
+      },
+      "IdentitySignedDecimal": {
+        "description": "Exact integer micro-USD that may be negative: governance totals::read returns settled+held with no non-negativity guard, so drifted accounting can report a negative string.",
+        "pattern": "^(0|-?[1-9][0-9]*)$",
+        "type": "string"
       },
       "IdentitySummaryWorkspace": {
         "additionalProperties": false,
@@ -2838,7 +2860,7 @@
                       "type": "boolean"
                     },
                     "used_microusd": {
-                      "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                      "$ref": "#/components/schemas/IdentitySignedDecimal"
                     },
                     "window_end": {
                       "$ref": "#/components/schemas/IdentityNullableTime"
@@ -4263,7 +4285,7 @@
               },
               "reason": {
                 "maxLength": 1000,
-                "pattern": "^[^\\p{Cc}]*$",
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$",
                 "type": [
                   "string",
                   "null"
@@ -4289,7 +4311,7 @@
               },
               {
                 "maxLength": 1000,
-                "pattern": "^[^\\p{Cc}]*$",
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$",
                 "type": [
                   "string",
                   "null"
@@ -5096,14 +5118,15 @@
             }
           },
           {
-            "description": "The authorization code. A callback without a non-empty code of at most 8192 bytes is refused 400 (after consuming the attempt), so only a request carrying one can succeed.",
+            "description": "The authorization code. A callback without a non-empty code of at most 8192 BYTES (UTF-8, identity.rs callback `code.len() <= 8192`) is refused 400 after consuming the attempt, so only a request carrying one can succeed. maxLength (characters) is only a necessary bound; the exact limit is the reviewed x-omg-max-bytes, which the HTTP vectors send multibyte values around.",
             "in": "query",
             "name": "code",
             "required": true,
             "schema": {
               "maxLength": 8192,
               "minLength": 1,
-              "type": "string"
+              "type": "string",
+              "x-omg-max-bytes": 8192
             }
           },
           {
