@@ -57,14 +57,59 @@ pub(crate) const SEMANTIC_REFINEMENTS: &[(&str, &str, &str, &[&str])] = &[
 ];
 
 /// May the contract's verdict differ from serde's? Equal always passes; a
-/// stricter contract passes only for a vector that touches a reviewed refined
-/// pointer; a looser contract (accepting what serde rejects) never does.
+/// stricter contract passes only for a vector whose touched pointers are EVERY
+/// ONE a reviewed refined pointer (a vector that also changes an unreviewed
+/// field, the extra item or the root must agree exactly); a looser contract
+/// (accepting what serde rejects) never does.
 pub(super) fn agrees(refined: &[&str], touched: &[String], contract: bool, serde: bool) -> bool {
     contract == serde
         || (!contract
+            && !touched.is_empty()
             && touched
                 .iter()
-                .any(|field| refined.contains(&field.as_str())))
+                .all(|field| refined.contains(&field.as_str())))
+}
+
+/// Every reviewed refined pointer must exist in the operation's request schema:
+/// as a property of the object form AND (when the schema documents serde's
+/// positional form) as a positional item at the field's index in the DTO's
+/// field order. A stale or misspelled pointer would silently widen nothing and
+/// excuse nothing, so it fails.
+pub(super) fn refined_pointers_exist(
+    component: &Value,
+    fields: &[&str],
+    refined: &[&str],
+) -> anyhow::Result<()> {
+    use anyhow::{Context, ensure};
+    let arms: Vec<&Value> = match component["oneOf"].as_array() {
+        Some(arms) => arms.iter().collect(),
+        None => vec![component],
+    };
+    let object = arms
+        .iter()
+        .find_map(|arm| arm["properties"].as_object())
+        .context("the object form of the request schema is missing")?;
+    let positional = arms.iter().find_map(|arm| arm["prefixItems"].as_array());
+    for pointer in refined {
+        let field = pointer
+            .strip_prefix('/')
+            .with_context(|| format!("refined pointer {pointer} must be a /field pointer"))?;
+        ensure!(
+            object.contains_key(field),
+            "refined pointer {pointer} is not a property of the request schema"
+        );
+        let index = fields
+            .iter()
+            .position(|name| *name == field)
+            .with_context(|| format!("refined pointer {pointer} is not a DTO field"))?;
+        if let Some(items) = positional {
+            ensure!(
+                items.len() > index,
+                "refined pointer {pointer} has no positional item in the request schema"
+            );
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: Value) {
@@ -130,6 +175,8 @@ pub(super) fn vectors_in<T: DeserializeOwned>(
         "real deserialization positive control"
     );
     let names: Vec<&str> = fields.0.borrow().clone();
+    refined_pointers_exist(component, &names, refined)
+        .with_context(|| format!("{method} {template}"))?;
     let mut failures = Vec::new();
     let mut compare = |label: &str, value: Value| {
         let actual = serde_json::from_value::<T>(value.clone()).is_ok();
@@ -298,21 +345,94 @@ fn management_openapi_request_refinements_are_reviewed_and_one_directional() {
         !agrees(&["/a"], &t(&["(root)"]), false, true),
         "so must a wrong root"
     );
-    assert!(agrees(&["/a"], &t(&["/b", "/a"]), false, true));
+    assert!(
+        !agrees(&["/a"], &t(&["/b", "/a"]), false, true),
+        "...and only when EVERY touched pointer is reviewed"
+    );
+    assert!(agrees(&["/a", "/b"], &t(&["/b", "/a"]), false, true));
+    assert!(
+        !agrees(&["/a"], &t(&["/a", "(extra)"]), false, true),
+        "the extra item is never refined"
+    );
+    assert!(!agrees(&["/a"], &t(&["/a", "(root)"]), false, true));
     assert!(
         !agrees(&["/a"], &t(&["/a"]), true, false),
         "never looser than serde"
     );
     assert!(!agrees(&[], &t(&[]), true, false));
     let document = super::responses::artifact();
-    for (method, template, reason, _) in SEMANTIC_REFINEMENTS {
+    for (method, template, reason, pointers) in SEMANTIC_REFINEMENTS {
         assert!(reason.trim().len() > 20, "{template}");
         let operation = super::responses::operation(document, method, template).unwrap();
         assert!(
             operation.get("requestBody").is_some(),
             "{method} {template} has no request body to refine"
         );
+        assert!(
+            !pointers.is_empty(),
+            "{method} {template} reviews no pointer"
+        );
+        // Every listed pointer exists in the request schema: as a property of the
+        // object form and as an item of the positional form.
+        let schema = &operation["requestBody"]["content"]["application/json"]["schema"];
+        let component = document
+            .pointer(&schema["$ref"].as_str().unwrap()[1..])
+            .unwrap();
+        let arms: Vec<&Value> = match component["oneOf"].as_array() {
+            Some(arms) => arms.iter().collect(),
+            None => vec![component],
+        };
+        let object = arms
+            .iter()
+            .find_map(|a| a["properties"].as_object())
+            .unwrap();
+        let positional = arms
+            .iter()
+            .find_map(|a| a["prefixItems"].as_array())
+            .unwrap();
+        assert!(
+            positional.len() >= object.len(),
+            "{method} {template}: the positional form is shorter than the object form"
+        );
+        for pointer in *pointers {
+            assert!(
+                object.contains_key(pointer.trim_start_matches('/')),
+                "{method} {template}: refined pointer {pointer} is not a request property"
+            );
+        }
     }
+}
+
+#[test]
+fn management_openapi_refined_pointers_must_exist_in_the_request_schema() {
+    let component = json!({"oneOf":[
+        {"type":"object","properties":{"a":{"type":"string"},"b":{"type":"string"}}},
+        {"type":"array","prefixItems":[{"type":"string"},{"type":"string"}]}]});
+    refined_pointers_exist(&component, &["a", "b"], &["/a", "/b"]).unwrap();
+    for (refined, label) in [
+        (&["/c"][..], "an unknown property"),
+        (&["a"][..], "a pointer without its slash"),
+    ] {
+        assert!(
+            refined_pointers_exist(&component, &["a", "b"], refined).is_err(),
+            "accepted {label}"
+        );
+    }
+    // A property the DTO does not have, even when the schema lists it.
+    let extra = json!({"oneOf":[
+        {"type":"object","properties":{"a":{"type":"string"},"z":{"type":"string"}}},
+        {"type":"array","prefixItems":[{"type":"string"},{"type":"string"}]}]});
+    assert!(refined_pointers_exist(&extra, &["a", "b"], &["/z"]).is_err());
+    // A positional form too short to carry the pointer's index.
+    let short = json!({"oneOf":[
+        {"type":"object","properties":{"a":{"type":"string"},"b":{"type":"string"}}},
+        {"type":"array","prefixItems":[{"type":"string"}]}]});
+    refined_pointers_exist(&short, &["a", "b"], &["/a"]).unwrap();
+    let text = format!(
+        "{:#}",
+        refined_pointers_exist(&short, &["a", "b"], &["/b"]).unwrap_err()
+    );
+    assert!(text.contains("/b") && text.contains("positional"), "{text}");
 }
 
 #[derive(serde::Deserialize)]
@@ -355,6 +475,15 @@ fn management_openapi_refinement_tolerance_is_scoped_to_reviewed_pointers() {
     assert!(!text.contains("\"ok\""), "{text}");
     // Reviewing both pointers accepts it.
     run(&probe_document(true), &["/a", "/b"]).unwrap();
+    // A reviewed pointer the schema does not carry fails, whatever else passes.
+    let text = format!(
+        "{:#}",
+        run(&probe_document(true), &["/a", "/b", "/zzz"]).unwrap_err()
+    );
+    assert!(
+        text.contains("/zzz") && text.contains("POST /api/v1/x"),
+        "{text}"
+    );
     // The vectors that touch no reviewed pointer are compared exactly.
     let touched = super::requests::touched(&["a", "b"], &valid(), &json!({"a":"ok","b":"y"}));
     assert_eq!(touched, vec!["/b".to_owned()]);
