@@ -224,12 +224,18 @@
           "type": "object",
           "properties": {
             "name": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
+              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes)."
             },
             "description": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "maxLength": 2000,
+                  "description": "At most 2000 UTF-8 bytes (maxLength counts characters)."
                 },
                 {
                   "type": "null"
@@ -246,12 +252,18 @@
           "type": "array",
           "prefixItems": [
             {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
+              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes)."
             },
             {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "maxLength": 2000,
+                  "description": "At most 2000 UTF-8 bytes (maxLength counts characters)."
                 },
                 {
                   "type": "null"
@@ -478,14 +490,28 @@
           "type": "object",
           "properties": {
             "name": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
+              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes)."
             },
             "provider": {
-              "type": "string"
+              "enum": [
+                "openai",
+                "anthropic",
+                "openrouter",
+                "bedrock",
+                "vllm",
+                "sglang",
+                "ollama",
+                "openai_compatible"
+              ]
             },
             "credential_ref": {
               "type": "string",
-              "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints."
+              "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints.",
+              "minLength": 1
             },
             "endpoint": {
               "anyOf": [
@@ -537,20 +563,236 @@
             "credential_ref",
             "enabled"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "provider": {
+                    "const": "openai"
+                  }
+                },
+                "required": [
+                  "provider"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "credential_ref": {
+                    "pattern": "^env:[A-Z_][A-Z0-9_]*$"
+                  },
+                  "endpoint": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "enum": [
+                          "https://api.openai.com/v1",
+                          "https://api.openai.com/v1/"
+                        ]
+                      }
+                    ]
+                  },
+                  "region": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "const": ""
+                      }
+                    ]
+                  },
+                  "aws_external_id": {
+                    "type": "null"
+                  },
+                  "aws_session_name": {
+                    "type": "null"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "provider": {
+                    "const": "anthropic"
+                  }
+                },
+                "required": [
+                  "provider"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "credential_ref": {
+                    "pattern": "^env:[A-Z_][A-Z0-9_]*$"
+                  },
+                  "endpoint": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "enum": [
+                          "https://api.anthropic.com/v1",
+                          "https://api.anthropic.com/v1/"
+                        ]
+                      }
+                    ]
+                  },
+                  "region": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "const": ""
+                      }
+                    ]
+                  },
+                  "aws_external_id": {
+                    "type": "null"
+                  },
+                  "aws_session_name": {
+                    "type": "null"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "provider": {
+                    "const": "openrouter"
+                  }
+                },
+                "required": [
+                  "provider"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "credential_ref": {
+                    "pattern": "^env:[A-Z_][A-Z0-9_]*$"
+                  },
+                  "endpoint": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "enum": [
+                          "https://openrouter.ai/api/v1",
+                          "https://openrouter.ai/api/v1/"
+                        ]
+                      }
+                    ]
+                  },
+                  "region": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "const": ""
+                      }
+                    ]
+                  },
+                  "aws_external_id": {
+                    "type": "null"
+                  },
+                  "aws_session_name": {
+                    "type": "null"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "provider": {
+                    "const": "bedrock"
+                  }
+                },
+                "required": [
+                  "provider"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "credential_ref": {
+                    "pattern": "^aws:(default|profile:.+|role:.+)$"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "provider": {
+                    "enum": [
+                      "vllm",
+                      "sglang",
+                      "ollama",
+                      "openai_compatible"
+                    ]
+                  }
+                },
+                "required": [
+                  "provider"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "credential_ref": {
+                    "pattern": "^(none|env:[A-Z_][A-Z0-9_]*)$"
+                  },
+                  "endpoint": {
+                    "type": "string"
+                  },
+                  "aws_external_id": {
+                    "type": "null"
+                  },
+                  "aws_session_name": {
+                    "type": "null"
+                  }
+                },
+                "required": [
+                  "endpoint"
+                ]
+              }
+            }
+          ],
+          "description": "Cross-field rules by provider kind: the fixed-origin cloud profiles take an env: reference, their exact HTTPS base (or none), no region and no AWS options; Bedrock takes an aws: identity reference; local kinds take none or an env: reference and a required endpoint. Server-controlled allowlists and endpoint approvals are checked on top and are not expressible here."
         },
         {
           "type": "array",
           "prefixItems": [
             {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
+              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes)."
             },
             {
-              "type": "string"
+              "enum": [
+                "openai",
+                "anthropic",
+                "openrouter",
+                "bedrock",
+                "vllm",
+                "sglang",
+                "ollama",
+                "openai_compatible"
+              ]
             },
             {
               "type": "string",
-              "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints."
+              "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints.",
+              "minLength": 1
             },
             {
               "anyOf": [
@@ -615,7 +857,8 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints."
+                  "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints.",
+                  "minLength": 1
                 },
                 {
                   "type": "null"
@@ -669,7 +912,8 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints."
+                  "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints.",
+                  "minLength": 1
                 },
                 {
                   "type": "null"
@@ -721,15 +965,23 @@
           "type": "object",
           "properties": {
             "public_name": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[A-Za-z0-9/_.:-]{1,200}$",
+              "description": "alias_valid: 1 to 200 characters from letters, digits and / - _ . :"
             },
             "display_name": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
+              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes)."
             },
             "description": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "maxLength": 2000,
+                  "description": "At most 2000 UTF-8 bytes (maxLength counts characters)."
                 },
                 {
                   "type": "null"
@@ -740,13 +992,40 @@
               "type": "boolean"
             },
             "supported_protocols": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "default": [
-                "chat_completions"
-              ]
+              "oneOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "enum": [
+                      "chat_completions",
+                      "responses",
+                      "messages"
+                    ]
+                  },
+                  "minItems": 1,
+                  "maxItems": 3,
+                  "uniqueItems": true
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "enum": [
+                      "embeddings",
+                      "images",
+                      "audio_transcriptions",
+                      "audio_speech",
+                      "rerank",
+                      "systemone",
+                      "realtime",
+                      "videos",
+                      "batches"
+                    ]
+                  },
+                  "minItems": 1,
+                  "maxItems": 1
+                }
+              ],
+              "description": "ApiProtocol::valid_set: known, distinct protocols of one workload; only chat_completions, responses and messages combine, every other protocol stands alone."
             }
           },
           "required": [
@@ -760,15 +1039,23 @@
           "type": "array",
           "prefixItems": [
             {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[A-Za-z0-9/_.:-]{1,200}$",
+              "description": "alias_valid: 1 to 200 characters from letters, digits and / - _ . :"
             },
             {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
+              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes)."
             },
             {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "maxLength": 2000,
+                  "description": "At most 2000 UTF-8 bytes (maxLength counts characters)."
                 },
                 {
                   "type": "null"
@@ -779,13 +1066,40 @@
               "type": "boolean"
             },
             {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "default": [
-                "chat_completions"
-              ]
+              "oneOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "enum": [
+                      "chat_completions",
+                      "responses",
+                      "messages"
+                    ]
+                  },
+                  "minItems": 1,
+                  "maxItems": 3,
+                  "uniqueItems": true
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "enum": [
+                      "embeddings",
+                      "images",
+                      "audio_transcriptions",
+                      "audio_speech",
+                      "rerank",
+                      "systemone",
+                      "realtime",
+                      "videos",
+                      "batches"
+                    ]
+                  },
+                  "minItems": 1,
+                  "maxItems": 1
+                }
+              ],
+              "description": "ApiProtocol::valid_set: known, distinct protocols of one workload; only chat_completions, responses and messages combine, every other protocol stands alone."
             }
           ],
           "minItems": 4,
@@ -803,7 +1117,9 @@
             "public_name": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9/_.:-]{1,200}$",
+                  "description": "alias_valid: 1 to 200 characters from letters, digits and / - _ . :"
                 },
                 {
                   "type": "null"
@@ -813,7 +1129,11 @@
             "display_name": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120,
+                  "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
+                  "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes)."
                 },
                 {
                   "type": "null"
@@ -823,13 +1143,14 @@
             "description": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "maxLength": 2000,
+                  "description": "At most 2000 UTF-8 bytes (maxLength counts characters)."
                 },
                 {
                   "type": "null"
                 }
-              ],
-              "description": "Omitted keeps; null clears; string replaces."
+              ]
             },
             "enabled": {
               "anyOf": [
@@ -842,11 +1163,40 @@
               ]
             },
             "supported_protocols": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "description": "Omitted keeps; explicit null rejected."
+              "oneOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "enum": [
+                      "chat_completions",
+                      "responses",
+                      "messages"
+                    ]
+                  },
+                  "minItems": 1,
+                  "maxItems": 3,
+                  "uniqueItems": true
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "enum": [
+                      "embeddings",
+                      "images",
+                      "audio_transcriptions",
+                      "audio_speech",
+                      "rerank",
+                      "systemone",
+                      "realtime",
+                      "videos",
+                      "batches"
+                    ]
+                  },
+                  "minItems": 1,
+                  "maxItems": 1
+                }
+              ],
+              "description": "ApiProtocol::valid_set: known, distinct protocols of one workload; only chat_completions, responses and messages combine, every other protocol stands alone."
             }
           },
           "required": [],
@@ -858,7 +1208,9 @@
             {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9/_.:-]{1,200}$",
+                  "description": "alias_valid: 1 to 200 characters from letters, digits and / - _ . :"
                 },
                 {
                   "type": "null"
@@ -868,7 +1220,11 @@
             {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120,
+                  "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
+                  "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes)."
                 },
                 {
                   "type": "null"
@@ -878,13 +1234,14 @@
             {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "maxLength": 2000,
+                  "description": "At most 2000 UTF-8 bytes (maxLength counts characters)."
                 },
                 {
                   "type": "null"
                 }
-              ],
-              "description": "Omitted keeps; null clears; string replaces."
+              ]
             },
             {
               "anyOf": [
@@ -897,11 +1254,40 @@
               ]
             },
             {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "description": "Omitted keeps; explicit null rejected."
+              "oneOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "enum": [
+                      "chat_completions",
+                      "responses",
+                      "messages"
+                    ]
+                  },
+                  "minItems": 1,
+                  "maxItems": 3,
+                  "uniqueItems": true
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "enum": [
+                      "embeddings",
+                      "images",
+                      "audio_transcriptions",
+                      "audio_speech",
+                      "rerank",
+                      "systemone",
+                      "realtime",
+                      "videos",
+                      "batches"
+                    ]
+                  },
+                  "minItems": 1,
+                  "maxItems": 1
+                }
+              ],
+              "description": "ApiProtocol::valid_set: known, distinct protocols of one workload; only chat_completions, responses and messages combine, every other protocol stands alone."
             }
           ],
           "minItems": 4,
@@ -953,7 +1339,11 @@
               "format": "uuid"
             },
             "upstream_model": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
+              "description": "Non-blank upstream model identifier without control characters, at most 512 UTF-8 bytes. Bedrock connections additionally require a model or inference-profile ID valid for the connection's region."
             },
             "enabled": {
               "type": "boolean"
@@ -979,7 +1369,11 @@
               "format": "uuid"
             },
             {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
+              "description": "Non-blank upstream model identifier without control characters, at most 512 UTF-8 bytes. Bedrock connections additionally require a model or inference-profile ID valid for the connection's region."
             },
             {
               "type": "boolean"
@@ -6831,18 +7225,20 @@
             },
             "input_token_limit": {
               "type": "integer",
-              "minimum": -9223372036854775808,
-              "maximum": 9223372036854775807
+              "minimum": 0,
+              "maximum": 2147483647
             },
             "output_token_limit": {
               "type": "integer",
-              "minimum": -9223372036854775808,
-              "maximum": 9223372036854775807
+              "minimum": 0,
+              "maximum": 2147483647
             },
             "pricing_version": {
-              "type": "integer",
-              "minimum": -32768,
-              "maximum": 32767,
+              "enum": [
+                1,
+                2,
+                3
+              ],
               "default": 1
             },
             "cache_pricing": {
@@ -6863,7 +7259,7 @@
                     "$ref": "#/components/schemas/SetupPriceLineInput"
                   },
                   "minItems": 1,
-                  "maxItems": 80,
+                  "maxItems": 64,
                   "contains": {
                     "anyOf": [
                       {
@@ -10345,7 +10741,8 @@
                         "items": false
                       }
                     ]
-                  }
+                  },
+                  "uniqueItems": true
                 },
                 {
                   "type": "null"
@@ -10370,7 +10767,7 @@
                     "$ref": "#/components/schemas/SetupPriceLineInput"
                   },
                   "minItems": 1,
-                  "maxItems": 80,
+                  "maxItems": 64,
                   "contains": {
                     "anyOf": [
                       {
@@ -13852,7 +14249,8 @@
                         "items": false
                       }
                     ]
-                  }
+                  },
+                  "uniqueItems": true
                 },
                 {
                   "type": "null"
@@ -13864,7 +14262,94 @@
             "input_token_limit",
             "output_token_limit"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "pricing_version": {
+                    "const": 3
+                  }
+                },
+                "required": [
+                  "pricing_version"
+                ]
+              },
+              "then": {
+                "required": [
+                  "price_lines"
+                ],
+                "properties": {
+                  "price_lines": {
+                    "not": {
+                      "type": "null"
+                    }
+                  },
+                  "input_microusd_per_million": {
+                    "type": "null"
+                  },
+                  "output_microusd_per_million": {
+                    "type": "null"
+                  }
+                }
+              },
+              "else": {
+                "required": [
+                  "input_microusd_per_million",
+                  "output_microusd_per_million"
+                ],
+                "properties": {
+                  "input_microusd_per_million": {
+                    "type": "string"
+                  },
+                  "output_microusd_per_million": {
+                    "type": "string"
+                  },
+                  "price_lines": {
+                    "type": "null"
+                  },
+                  "max_units": {
+                    "type": "null"
+                  },
+                  "batch_price_lines": {
+                    "type": "null"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "pricing_version": {
+                    "const": 2
+                  }
+                },
+                "required": [
+                  "pricing_version"
+                ]
+              },
+              "then": {
+                "required": [
+                  "cache_pricing"
+                ],
+                "properties": {
+                  "cache_pricing": {
+                    "not": {
+                      "type": "null"
+                    }
+                  }
+                }
+              },
+              "else": {
+                "properties": {
+                  "cache_pricing": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          ],
+          "description": "Version 1 (default): input and output rates, no cache pricing and no price lines. Version 2: additionally cache_pricing. Version 3: price_lines (and optional batch_price_lines/max_units), no rates and no cache_pricing. An input_token_limit of 0 is accepted only for a version 3 price whose input-family token meters are all not applicable (handler rule not expressible here)."
         },
         {
           "type": "array",
@@ -13895,18 +14380,20 @@
             },
             {
               "type": "integer",
-              "minimum": -9223372036854775808,
-              "maximum": 9223372036854775807
+              "minimum": 0,
+              "maximum": 2147483647
             },
             {
               "type": "integer",
-              "minimum": -9223372036854775808,
-              "maximum": 9223372036854775807
+              "minimum": 0,
+              "maximum": 2147483647
             },
             {
-              "type": "integer",
-              "minimum": -32768,
-              "maximum": 32767,
+              "enum": [
+                1,
+                2,
+                3
+              ],
               "default": 1
             },
             {
@@ -13927,7 +14414,7 @@
                     "$ref": "#/components/schemas/SetupPriceLineInput"
                   },
                   "minItems": 1,
-                  "maxItems": 80,
+                  "maxItems": 64,
                   "contains": {
                     "anyOf": [
                       {
@@ -17409,7 +17896,8 @@
                         "items": false
                       }
                     ]
-                  }
+                  },
+                  "uniqueItems": true
                 },
                 {
                   "type": "null"
@@ -17434,7 +17922,7 @@
                     "$ref": "#/components/schemas/SetupPriceLineInput"
                   },
                   "minItems": 1,
-                  "maxItems": 80,
+                  "maxItems": 64,
                   "contains": {
                     "anyOf": [
                       {
@@ -20916,7 +21404,8 @@
                         "items": false
                       }
                     ]
-                  }
+                  },
+                  "uniqueItems": true
                 },
                 {
                   "type": "null"
@@ -21407,7 +21896,9 @@
             "required_residency": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+                  "description": "residency_valid: 1 to 64 characters, starting with a lowercase letter or digit, then lowercase letters, digits, . _ -"
                 },
                 {
                   "type": "null"
@@ -21443,7 +21934,9 @@
             {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+                  "description": "residency_valid: 1 to 64 characters, starting with a lowercase letter or digit, then lowercase letters, digits, . _ -"
                 },
                 {
                   "type": "null"
@@ -21476,7 +21969,9 @@
             "residency": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+                  "description": "residency_valid: 1 to 64 characters, starting with a lowercase letter or digit, then lowercase letters, digits, . _ -"
                 },
                 {
                   "type": "null"
@@ -21519,7 +22014,9 @@
             {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+                  "description": "residency_valid: 1 to 64 characters, starting with a lowercase letter or digit, then lowercase letters, digits, . _ -"
                 },
                 {
                   "type": "null"
@@ -21556,8 +22053,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -2147483648,
-                  "maximum": 2147483647
+                  "minimum": 0,
+                  "maximum": 100000
                 },
                 {
                   "type": "null"
@@ -21568,8 +22065,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -2147483648,
-                  "maximum": 2147483647
+                  "minimum": 0,
+                  "maximum": 100000
                 },
                 {
                   "type": "null"
@@ -21580,8 +22077,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -32768,
-                  "maximum": 32767
+                  "minimum": 1,
+                  "maximum": 100
                 },
                 {
                   "type": "null"
@@ -21604,8 +22101,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -2147483648,
-                  "maximum": 2147483647
+                  "minimum": 0,
+                  "maximum": 100000
                 },
                 {
                   "type": "null"
@@ -21616,8 +22113,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -2147483648,
-                  "maximum": 2147483647
+                  "minimum": 0,
+                  "maximum": 100000
                 },
                 {
                   "type": "null"
@@ -21628,8 +22125,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -32768,
-                  "maximum": 32767
+                  "minimum": 1,
+                  "maximum": 100
                 },
                 {
                   "type": "null"
@@ -21650,19 +22147,34 @@
           "type": "object",
           "properties": {
             "timezone": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
             },
             "days": {
               "type": "array",
               "items": {
-                "type": "string"
-              }
+                "enum": [
+                  "mon",
+                  "tue",
+                  "wed",
+                  "thu",
+                  "fri",
+                  "sat",
+                  "sun"
+                ]
+              },
+              "minItems": 1,
+              "maxItems": 7,
+              "uniqueItems": true
             },
             "start": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
             },
             "end": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
             }
           },
           "required": [
@@ -21677,19 +22189,34 @@
           "type": "array",
           "prefixItems": [
             {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
             },
             {
               "type": "array",
               "items": {
-                "type": "string"
-              }
+                "enum": [
+                  "mon",
+                  "tue",
+                  "wed",
+                  "thu",
+                  "fri",
+                  "sat",
+                  "sun"
+                ]
+              },
+              "minItems": 1,
+              "maxItems": 7,
+              "uniqueItems": true
             },
             {
-              "type": "string"
+              "type": "string",
+              "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
             },
             {
-              "type": "string"
+              "type": "string",
+              "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
             }
           ],
           "minItems": 4,
@@ -21706,15 +22233,15 @@
           "properties": {
             "max_concurrency": {
               "type": "integer",
-              "minimum": -2147483648,
-              "maximum": 2147483647
+              "minimum": 1,
+              "maximum": 256
             },
             "yield_live_threshold": {
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -2147483648,
-                  "maximum": 2147483647
+                  "minimum": 1,
+                  "maximum": 100000
                 },
                 {
                   "type": "null"
@@ -21735,8 +22262,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -2147483648,
-                  "maximum": 2147483647
+                  "minimum": 1,
+                  "maximum": 1000000
                 },
                 {
                   "type": "null"
@@ -21764,15 +22291,15 @@
           "prefixItems": [
             {
               "type": "integer",
-              "minimum": -2147483648,
-              "maximum": 2147483647
+              "minimum": 1,
+              "maximum": 256
             },
             {
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -2147483648,
-                  "maximum": 2147483647
+                  "minimum": 1,
+                  "maximum": 100000
                 },
                 {
                   "type": "null"
@@ -21793,8 +22320,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -2147483648,
-                  "maximum": 2147483647
+                  "minimum": 1,
+                  "maximum": 1000000
                 },
                 {
                   "type": "null"
@@ -22125,7 +22652,11 @@
               "format": "uuid"
             },
             "upstream_model": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
+              "description": "Non-blank upstream model identifier without control characters, at most 512 UTF-8 bytes. Bedrock connections additionally require a model or inference-profile ID valid for the connection's region."
             },
             "enabled": {
               "type": "boolean"
@@ -22146,7 +22677,11 @@
               "format": "uuid"
             },
             {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
+              "description": "Non-blank upstream model identifier without control characters, at most 512 UTF-8 bytes. Bedrock connections additionally require a model or inference-profile ID valid for the connection's region."
             },
             {
               "type": "boolean"
@@ -22435,7 +22970,12 @@
           "type": "object",
           "properties": {
             "period": {
-              "type": "string"
+              "enum": [
+                "day",
+                "week",
+                "month",
+                "lifetime"
+              ]
             },
             "amount_microusd": {
               "type": "string",
@@ -22453,7 +22993,12 @@
           "type": "array",
           "prefixItems": [
             {
-              "type": "string"
+              "enum": [
+                "day",
+                "week",
+                "month",
+                "lifetime"
+              ]
             },
             {
               "type": "string",
@@ -22477,8 +23022,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 2147483647
                 },
                 {
                   "type": "null"
@@ -22489,8 +23034,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 2147483647
                 },
                 {
                   "type": "null"
@@ -22501,8 +23046,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 2147483647
                 },
                 {
                   "type": "null"
@@ -22513,8 +23058,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 2147483647
                 },
                 {
                   "type": "null"
@@ -22525,8 +23070,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 1125899906842624
                 },
                 {
                   "type": "null"
@@ -22537,8 +23082,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 10000
                 },
                 {
                   "type": "null"
@@ -22549,8 +23094,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 10000
                 },
                 {
                   "type": "null"
@@ -22570,13 +23115,21 @@
               ]
             },
             "budget_period": {
-              "type": "string"
+              "enum": [
+                "day",
+                "week",
+                "month",
+                "lifetime"
+              ]
             },
             "budgets": {
               "type": "array",
               "items": {
                 "$ref": "#/components/schemas/SetupBudgetInput"
-              }
+              },
+              "maxItems": 4,
+              "uniqueItems": true,
+              "description": "A full replacement set: at most one budget per period (the schema can only forbid identical entries, not two amounts for one period)."
             }
           },
           "required": [
@@ -22584,7 +23137,39 @@
             "tokens_per_minute",
             "concurrent_requests"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "required": [
+                "budgets"
+              ],
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "monthly_budget_microusd"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "budget_period"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "required": [
+                "monthly_budget_microusd"
+              ],
+              "not": {
+                "required": [
+                  "budgets"
+                ]
+              }
+            }
+          ],
+          "description": "Exactly one budget form: the stacked budgets set, or the deprecated single monthly_budget_microusd (optionally with budget_period)."
         },
         {
           "type": "array",
@@ -22593,8 +23178,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 2147483647
                 },
                 {
                   "type": "null"
@@ -22605,8 +23190,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 2147483647
                 },
                 {
                   "type": "null"
@@ -22617,8 +23202,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 2147483647
                 },
                 {
                   "type": "null"
@@ -22629,8 +23214,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 2147483647
                 },
                 {
                   "type": "null"
@@ -22641,8 +23226,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 1125899906842624
                 },
                 {
                   "type": "null"
@@ -22653,8 +23238,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 10000
                 },
                 {
                   "type": "null"
@@ -22665,8 +23250,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 10000
                 },
                 {
                   "type": "null"
@@ -22686,13 +23271,21 @@
               ]
             },
             {
-              "type": "string"
+              "enum": [
+                "day",
+                "week",
+                "month",
+                "lifetime"
+              ]
             },
             {
               "type": "array",
               "items": {
                 "$ref": "#/components/schemas/SetupBudgetInput"
-              }
+              },
+              "maxItems": 4,
+              "uniqueItems": true,
+              "description": "A full replacement set: at most one budget per period (the schema can only forbid identical entries, not two amounts for one period)."
             }
           ],
           "minItems": 3,

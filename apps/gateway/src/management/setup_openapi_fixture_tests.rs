@@ -455,6 +455,12 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     // Routing is configured first: `deployment` is the model's first route.
     j.request("PUT", &format!("/api/v1/platform/deployments/{deployment}/routing"), Some(json!({"priority":-1,"weight":1,"residency":null,"failure_threshold":3,"cooldown_seconds":30}))).await;
     j.request("PUT", &format!("/api/v1/platform/models/{model}/routing"), Some(json!({"strategy":"priority","max_attempts":2,"allow_ambiguous_failover":false,"required_residency":null}))).await;
+    j.request(
+        "GET",
+        &format!("/api/v1/platform/models/{model}/routing"),
+        None,
+    )
+    .await;
     // Second model through the one-call setup, in the catalog (workspace-visible).
     let setup = j.request("POST", "/api/v1/platform/model-setup", Some(json!({"model":{"public_name":"contract/second","display_name":"Second model","enabled":true},"route":{"provider_connection_id":provider,"upstream_model":"contract/model","enabled":true},"price":v3_price(),"catalog_ids":[cat]}))).await;
     let second = Uuid::parse_str(setup["model_id"].as_str().unwrap()).unwrap();
@@ -477,6 +483,21 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         "contract/legacy-video",
         &["videos"],
         "contract/legacy",
+    )
+    .await;
+    // A route on a regional (Bedrock) connection: the deployment shows its region.
+    let (_, bedrock_route) = legacy_route(
+        &pool,
+        bedrock_default,
+        "contract/bedrock-model",
+        &["chat_completions"],
+        "anthropic.claude-3-haiku-20240307-v1:0",
+    )
+    .await;
+    j.request(
+        "GET",
+        &format!("/api/v1/platform/deployments/{bedrock_route}"),
+        None,
     )
     .await;
     let mut drafted = vec![bare];
@@ -550,6 +571,26 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         Some(json!({"personal":[cat],"team":[cat],"project":[cat]})),
     )
     .await;
+    // Policy layers, state A2: the platform default for teams is cleared (no
+    // type default limits anywhere), as are the readiness facts derived from it.
+    let r = send(
+        &j.client,
+        &j.base,
+        Some(&admin),
+        "PUT",
+        "/api/v1/platform/workspace-types/team/policy",
+        Some(json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"concurrent_jobs":null,"storage_bytes":null,"key_issuances_per_holder":null,"key_issuances_per_workspace":null,"budgets":[]})),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK);
+    for who in [&owner, &member] {
+        j.actor = who;
+        j.request("GET", &ws_policy, None).await;
+    }
+    j.actor = &admin;
+    j.request("GET", "/api/v1/platform/models", None).await;
+    j.request("GET", &format!("/api/v1/platform/models/{model}"), None)
+        .await;
     // Policy layers, state B: the platform default for teams is set.
     let r = send(
         &j.client,
@@ -1236,6 +1277,8 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             Some(json!({"name":"Vector catalog"})),
         )
         .await);
+    j.request("GET", &format!("/api/v1/platform/catalogs/{vcat}"), None)
+        .await;
     let vmodel = id(&j.request("POST", "/api/v1/platform/models", Some(json!({"public_name":"vector/target","display_name":"Vector target","enabled":true}))).await);
     let vprov = id(&j.request("POST", "/api/v1/platform/providers", Some(json!({"name":"Vector connection","provider":"openrouter","credential_ref":"env:CONTRACT_REFERENCE","enabled":true}))).await);
     let vdep = id(&j.request("POST", "/api/v1/platform/deployments", Some(json!({"model_id":vmodel,"provider_connection_id":vprov,"upstream_model":"vector/upstream","enabled":true}))).await);
@@ -1426,7 +1469,8 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     body_set(&mut j, a, "POST", "/api/v1/platform/models", "/api/v1/platform/models", json!({"public_name":"vector/created","display_name":"Vector created","description":"A model","enabled":true,"supported_protocols":["chat_completions"]}), &[]).await;
     body_set(&mut j, a, "PATCH", "/api/v1/platform/models/{id}", &format!("/api/v1/platform/models/{vmodel}"), json!({"public_name":"vector/target","display_name":"Vector target","description":"A model","enabled":true,"supported_protocols":["chat_completions"]}), &["route_unsupported_capability"]).await;
     body_set(&mut j, a, "POST", "/api/v1/platform/providers", "/api/v1/platform/providers", json!({"name":"Vector provider","provider":"openrouter","credential_ref":"env:CONTRACT_REFERENCE","endpoint":null,"region":null,"enabled":false,"aws_external_id":null,"aws_session_name":null}), &[]).await;
-    body_set(&mut j, a, "PATCH", "/api/v1/platform/providers/{id}", &format!("/api/v1/platform/providers/{vprov}"), json!({"enabled":true,"credential_ref":"env:CONTRACT_REFERENCE","aws_external_id":null,"aws_session_name":null}), &[]).await;
+    // AWS role options belong to a Bedrock connection; the stored kind is not in the body.
+    body_set_when(&mut j, a, "PATCH", "/api/v1/platform/providers/{id}", &format!("/api/v1/platform/providers/{vprov}"), json!({"enabled":true,"credential_ref":"env:CONTRACT_REFERENCE","aws_external_id":null,"aws_session_name":null}), (|b| !b["aws_external_id"].is_null() || !b["aws_session_name"].is_null(), &[])).await;
     body_set(&mut j, a, "POST", "/api/v1/platform/deployments", "/api/v1/platform/deployments", json!({"model_id":vmodel,"provider_connection_id":vprov,"upstream_model":"vector/upstream","enabled":false}), &["route_unsupported_capability"]).await;
     body_set(
         &mut j,
@@ -1438,14 +1482,18 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         &[],
     )
     .await;
-    body_set(
+    // A zero input ceiling is valid only when every input-family meter is not applicable.
+    body_set_when(
         &mut j,
         a,
         "POST",
         "/api/v1/platform/deployments/{deployment}/prices",
         &format!("/api/v1/platform/deployments/{vdep}/prices"),
         v3_price(),
-        &["price_meters_incomplete"],
+        (
+            |b| b["input_token_limit"] == 0,
+            &["price_meters_incomplete"],
+        ),
     )
     .await;
     body_set(&mut j, a, "PUT", "/api/v1/platform/deployments/{deployment}/routing", &format!("/api/v1/platform/deployments/{vdep}/routing"), json!({"priority":1,"weight":2,"residency":"eu","failure_threshold":3,"cooldown_seconds":30}), &[]).await;
