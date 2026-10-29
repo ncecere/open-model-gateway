@@ -2519,7 +2519,8 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
     c.guarded("email probes", async {
         let wide = format!("{}@t.test", "\u{e9}".repeat(157));
         let expanding = format!("{}@{}", "\u{130}".repeat(100), "a".repeat(20));
-        let targets: Vec<(&str, &str, String, Box<dyn Fn(&str) -> Value>)> = vec![
+        type Body = Box<dyn Fn(&str) -> Value>;
+        let targets: Vec<(&str, &str, String, Body)> = vec![
             (
                 "user create",
                 "POST",
