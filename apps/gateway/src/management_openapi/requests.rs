@@ -221,3 +221,27 @@ fn management_openapi_invitation_and_notification_request_vectors() {
         json!({"all":true}),
     );
 }
+
+#[test]
+fn management_openapi_request_refinements_are_reviewed_and_one_directional() {
+    assert!(agrees(false, true, true) && agrees(false, false, false));
+    assert!(
+        !agrees(false, false, true),
+        "stricter needs a reviewed refinement"
+    );
+    assert!(
+        agrees(true, false, true),
+        "reviewed refinement may be stricter"
+    );
+    assert!(!agrees(true, true, false), "never looser than serde");
+    assert!(!agrees(false, true, false));
+    let document = super::responses::artifact();
+    for (method, template, reason) in SEMANTIC_REFINEMENTS {
+        assert!(reason.trim().len() > 20, "{template}");
+        let operation = super::responses::operation(document, method, template).unwrap();
+        assert!(
+            operation.get("requestBody").is_some(),
+            "{method} {template} has no request body to refine"
+        );
+    }
+}
