@@ -1126,6 +1126,19 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         },
     )
     .await;
+    // Positive control before the vectors (which also mark everything read):
+    // marking really changes unread incidents.
+    let r = send(
+        &client,
+        base,
+        Some(&owner),
+        "POST",
+        "/api/v1/me/notifications/read",
+        Some(json!({"all":true})),
+    )
+    .await;
+    assert!(body(&r)["marked"].as_u64().unwrap() > 0);
+    observed.observe(&r);
     // Marking read: everything, then one named incident, in both wire forms.
     for valid in [
         json!({"ids":[first_event],"all":false}),
@@ -1154,17 +1167,6 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         )
         .await;
     }
-    let r = send(
-        &client,
-        base,
-        Some(&owner),
-        "POST",
-        "/api/v1/me/notifications/read",
-        Some(json!({"all":true})),
-    )
-    .await;
-    assert!(body(&r)["marked"].is_u64());
-    observed.observe(&r);
     let r = send(
         &client,
         base,
