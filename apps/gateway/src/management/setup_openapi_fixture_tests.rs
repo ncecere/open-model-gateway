@@ -173,23 +173,62 @@ fn judged(captured: openapi::responses::Captured, domain: &[&str]) -> Probe {
         Probe::from(captured)
     }
 }
-/// [`judged`] for requests whose 400 is ambiguous by BODY: when `rules.0` holds
-/// for the sent body, a 400 is a domain refusal of schema-valid input (the rule
-/// depends on state the body does not carry: the stored provider kind, or the
-/// price's own cross-field rule for a zero input ceiling); otherwise the
-/// machine reasons in `rules.1` are domain refusals.
+/// The request schema of an operation in the committed artifact.
+fn request_schema(method: &str, template: &str) -> &'static Value {
+    &openapi::responses::artifact()["paths"][template][method.to_ascii_lowercase()]["requestBody"]["content"]
+        ["application/json"]["schema"]
+}
+/// Does the SCHEMA accept this body?
+fn schema_accepts(method: &str, template: &str, body: &Value) -> bool {
+    openapi::responses::validate_value(
+        openapi::responses::artifact(),
+        request_schema(method, template),
+        body,
+    )
+    .is_ok()
+}
+/// Does the SCHEMA accept this raw value of a documented query parameter?
+fn param_accepts(template: &str, name: &str, raw: &str) -> bool {
+    let document = openapi::responses::artifact();
+    let parameter = document["paths"][template]["get"]["parameters"]
+        .as_array()
+        .and_then(|all| all.iter().find(|p| p["name"] == name))
+        .expect("documented query parameter");
+    openapi::responses::validate_value(document, &parameter["schema"], &json!(raw)).is_ok()
+}
+/// The handler's verdict on an exchange, as `Probe` derives it: 400/422 refuse,
+/// 2xx/3xx/404/409 accept; a 400 whose machine reason is in `domain` is a domain
+/// refusal of valid input. Anything else is not an input verdict.
+fn handler_accepts(captured: &openapi::responses::Captured, domain: &[&str]) -> bool {
+    match captured.status.as_u16() {
+        400 | 422 => serde_json::from_slice::<Value>(&captured.bytes)
+            .ok()
+            .and_then(|v| v["error"]["reason"].as_str().map(|r| domain.contains(&r)))
+            .unwrap_or(false),
+        200..=399 | 404 | 409 => true,
+        other => panic!("unexpected status {other}: not an input verdict"),
+    }
+}
+/// [`judged`] for requests whose 400 is ambiguous by stored STATE: the handler
+/// refuses a body the schema accepts because of what the target already is (the
+/// stored provider kind, the price's own cross-field rule). `rules.0` predicts
+/// that from the sent body and the target; it is trusted ONLY for bodies the
+/// schema accepts, so a schema-invalid body keeps the plain verdict (a 400 is
+/// then agreement, and a missing refusal is a failure), and a schema-valid body
+/// the predictor does not explain fails as a disagreement.
 fn judged_when(
     captured: openapi::responses::Captured,
+    schema_valid: bool,
     body: &Value,
-    rules: (fn(&Value) -> bool, &[&str]),
+    rules: (&dyn Fn(&Value) -> bool, &[&str]),
 ) -> Probe {
-    if captured.status == StatusCode::BAD_REQUEST && rules.0(body) {
+    if captured.status == StatusCode::BAD_REQUEST && schema_valid && rules.0(body) {
         Probe::decided(captured, true)
     } else {
         judged(captured, rules.1)
     }
 }
-/// Body boundary vectors with a body-dependent domain refusal (see [`judged_when`]).
+/// Body boundary vectors with a state-dependent domain refusal (see [`judged_when`]).
 async fn body_set_when(
     j: &mut Journey<'_>,
     who: &Browser,
@@ -197,7 +236,7 @@ async fn body_set_when(
     template: &str,
     path: &str,
     valid: Value,
-    rules: (fn(&Value) -> bool, &[&str]),
+    rules: (&dyn Fn(&Value) -> bool, &[&str]),
 ) {
     let (client, root) = (j.client.clone(), j.base.clone());
     http_vectors::body_vectors_http(
@@ -206,11 +245,76 @@ async fn body_set_when(
         template,
         valid,
         async |body: Value| {
+            let schema_valid = schema_accepts(method, template, &body);
             let captured = send(&client, &root, Some(who), method, path, Some(body.clone())).await;
-            judged_when(captured, &body, rules)
+            judged_when(captured, schema_valid, &body, rules)
         },
     )
     .await;
+}
+/// A handler-derived body vector the artifact-derived ones cannot generate. The
+/// schema's verdict must equal the handler's. `documented` states a divergence
+/// the contract cannot express (the rule needs a cross-item comparison, a byte
+/// count, arithmetic or server state): `(schema accepts, handler accepts)`, both
+/// asserted, so the description's claim stays tested.
+#[allow(clippy::too_many_arguments)]
+async fn extra_body(
+    j: &Journey<'_>,
+    who: &Browser,
+    method: &str,
+    template: &str,
+    path: &str,
+    label: &str,
+    body: Value,
+    documented: Option<(bool, bool)>,
+) {
+    let schema = schema_accepts(method, template, &body);
+    let captured = send(&j.client, &j.base, Some(who), method, path, Some(body)).await;
+    let handler = handler_accepts(&captured, &[]);
+    assert_eq!(
+        (schema, handler),
+        documented.unwrap_or((handler, handler)),
+        "{method} {template}: {label}: schema accepts {schema}, handler accepts {handler}"
+    );
+}
+fn enc(raw: &str) -> String {
+    raw.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect()
+}
+/// [`extra_body`] for one query parameter of a GET (`rest` carries the other,
+/// valid, parameters; `raw` is the parameter's decoded value).
+#[allow(clippy::too_many_arguments)]
+async fn extra_query(
+    j: &Journey<'_>,
+    who: &Browser,
+    template: &str,
+    path: &str,
+    rest: &str,
+    param: &str,
+    raw: &str,
+    label: &str,
+    documented: Option<(bool, bool)>,
+) {
+    let schema = param_accepts(template, param, raw);
+    let target = format!(
+        "{path}?{rest}{}{param}={}",
+        if rest.is_empty() { "" } else { "&" },
+        enc(raw)
+    );
+    let captured = send(&j.client, &j.base, Some(who), "GET", &target, None).await;
+    let handler = handler_accepts(&captured, &[]);
+    assert_eq!(
+        (schema, handler),
+        documented.unwrap_or((handler, handler)),
+        "GET {template}: {param} {label}: schema accepts {schema}, handler accepts {handler}"
+    );
 }
 /// Query boundary vectors for one operation: every documented parameter in the base.
 async fn query_set(
@@ -618,7 +722,11 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             "contract/tts-hour",
         ),
     ] {
-        drafted.push(api_route(&mut j, provider, name, protocols, upstream).await.1);
+        drafted.push(
+            api_route(&mut j, provider, name, protocols, upstream)
+                .await
+                .1,
+        );
     }
     j.request(
         "PATCH",
@@ -1265,7 +1373,13 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     // exactly as governance/tests.rs does (the maintaining trigger never writes
     // such rows). The owner sees that window with every consumption fact unknown
     // (the neighbouring month stays known); a member sees both restricted.
-    let broken = workspace(&pool, "Contract invalid accounting", "team", f.owner.user_id).await;
+    let broken = workspace(
+        &pool,
+        "Contract invalid accounting",
+        "team",
+        f.owner.user_id,
+    )
+    .await;
     super::member(&pool, broken, f.member.user_id, "member").await;
     let broken_policy = format!("/api/v1/workspaces/{broken}/policy");
     j.actor = &owner;
@@ -1304,16 +1418,36 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         .unwrap()
         .rows_affected();
     assert_eq!(corrupted, 1);
-    for (who, day, month) in [(&owner, "unknown", "known"), (&member, "restricted", "restricted")] {
+    for (who, day, month) in [
+        (&owner, "unknown", "known"),
+        (&member, "restricted", "restricted"),
+    ] {
         j.actor = who;
         let v = j.request("GET", &broken_policy, None).await;
-        assert_eq!(v["budgets"][0]["period"], "day");
-        assert_eq!(v["budgets"][0]["headroom_status"], day);
-        assert_eq!(v["budgets"][1]["headroom_status"], month);
+        // The local layer's own day and month windows (the platform default's month window
+        // comes first).
+        let windows = v["budgets"].as_array().unwrap();
+        let window = |period: &str| {
+            windows
+                .iter()
+                .find(|w| w["layer"] == "local" && w["period"] == period)
+                .unwrap()
+        };
+        assert_eq!(window("day")["headroom_status"], day);
+        assert_eq!(window("month")["headroom_status"], month);
         if day == "unknown" {
             // Every consumption fact travels together: all null, none fabricated.
-            for field in ["used_microusd","settled_microusd","pending_held_microusd","unknown_held_microusd","unknown_cost_requests","remaining_microusd","exhausted","unresolved_usage"] {
-                assert!(v["budgets"][0][field].is_null());
+            for field in [
+                "used_microusd",
+                "settled_microusd",
+                "pending_held_microusd",
+                "unknown_held_microusd",
+                "unknown_cost_requests",
+                "remaining_microusd",
+                "exhausted",
+                "unresolved_usage",
+            ] {
+                assert!(window("day")[field].is_null());
             }
         }
     }
@@ -1641,12 +1775,139 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     body_set(&mut j, a, "POST", "/api/v1/platform/models", "/api/v1/platform/models", json!({"public_name":"vector/created","display_name":"Vector created","description":"A model","enabled":true,"supported_protocols":["chat_completions"]}), &[]).await;
     body_set(&mut j, a, "PATCH", "/api/v1/platform/models/{id}", &format!("/api/v1/platform/models/{vmodel}"), json!({"public_name":"vector/target","display_name":"Vector target","description":"A model","enabled":true,"supported_protocols":["chat_completions"]}), &["route_unsupported_capability"]).await;
     body_set(&mut j, a, "POST", "/api/v1/platform/providers", "/api/v1/platform/providers", json!({"name":"Vector provider","provider":"openrouter","credential_ref":"env:CONTRACT_REFERENCE","endpoint":null,"region":null,"enabled":false,"aws_external_id":null,"aws_session_name":null}), &[]).await;
-    // AWS role options belong to a Bedrock connection; the stored kind is not in the body.
-    body_set_when(&mut j, a, "PATCH", "/api/v1/platform/providers/{id}", &format!("/api/v1/platform/providers/{vprov}"), json!({"enabled":true,"credential_ref":"env:CONTRACT_REFERENCE","aws_external_id":null,"aws_session_name":null}), (
-            |b| {
-                !b["aws_external_id"].is_null()
-                    || !b["aws_session_name"].is_null()
-                    || b["credential_ref"].as_str().is_some_and(|c| !c.is_empty() && !c.starts_with("env:"))
+    // A Bedrock connection: region, role identity and the AWS options it alone takes.
+    let bedrock_body = json!({"name":"Vector Bedrock","provider":"bedrock","credential_ref":"aws:role:arn:aws:iam::123456789012:role/gateway/vector","aws_external_id":"tenant-ext-42","aws_session_name":"gateway.vector","endpoint":null,"region":"us-east-1","enabled":false});
+    body_set(
+        &mut j,
+        a,
+        "POST",
+        "/api/v1/platform/providers",
+        "/api/v1/platform/providers",
+        bedrock_body.clone(),
+        &[],
+    )
+    .await;
+    let providers = "/api/v1/platform/providers";
+    for (label, patch) in [
+        ("bedrock without a region", json!({"region":null})),
+        (
+            "bedrock with a malformed region",
+            json!({"region":"us-east-1x"}),
+        ),
+        (
+            "bedrock with an uppercase region",
+            json!({"region":"US-EAST-1"}),
+        ),
+        (
+            "role options on the default identity",
+            json!({"credential_ref":"aws:default"}),
+        ),
+        (
+            "session name on the default identity",
+            json!({"credential_ref":"aws:default","aws_external_id":null}),
+        ),
+        (
+            "a ';' option in the reference",
+            json!({"credential_ref":"aws:role:arn:aws:iam::123456789012:role/r;external_id=abcd","aws_external_id":null,"aws_session_name":null}),
+        ),
+        (
+            "a one character external id",
+            json!({"aws_external_id":"x"}),
+        ),
+        (
+            "an external id with a space",
+            json!({"aws_external_id":"ab cd"}),
+        ),
+        (
+            "an external id of 1224 characters",
+            json!({"aws_external_id":"e".repeat(1224)}),
+        ),
+        (
+            "an external id of 1225 characters",
+            json!({"aws_external_id":"e".repeat(1225)}),
+        ),
+        (
+            "a session name of 64 characters",
+            json!({"aws_session_name":"s".repeat(64)}),
+        ),
+        (
+            "a session name of 65 characters",
+            json!({"aws_session_name":"s".repeat(65)}),
+        ),
+        (
+            "a role without an account",
+            json!({"credential_ref":"aws:role:arn:aws:iam:::role/r","aws_external_id":null,"aws_session_name":null}),
+        ),
+    ] {
+        let mut body = bedrock_body.clone();
+        body["name"] = json!(format!("Vector Bedrock {}", Uuid::new_v4()));
+        for (k, v) in patch.as_object().unwrap() {
+            body[k] = v.clone();
+        }
+        extra_body(
+            &j,
+            a,
+            "POST",
+            "/api/v1/platform/providers",
+            providers,
+            label,
+            body,
+            None,
+        )
+        .await;
+    }
+    // Options need a restated reference; the stored kind then decides the rest.
+    let vbed = id(&j.request("POST", providers, Some(json!({"name":"Vector Bedrock target","provider":"bedrock","credential_ref":"aws:default","endpoint":null,"region":"us-east-1","enabled":false}))).await);
+    let patch_template = "/api/v1/platform/providers/{id}";
+    let patch_bed = format!("/api/v1/platform/providers/{vbed}");
+    let patch_or = format!("/api/v1/platform/providers/{vprov}");
+    for (label, body) in [
+        (
+            "an external id without a reference",
+            json!({"enabled":true,"aws_external_id":"tenant-ext-42"}),
+        ),
+        (
+            "a session name without a reference",
+            json!({"enabled":true,"aws_session_name":"gateway.vector"}),
+        ),
+        (
+            "options with a null reference",
+            json!({"enabled":true,"credential_ref":null,"aws_external_id":"tenant-ext-42"}),
+        ),
+    ] {
+        for path in [&patch_bed, &patch_or] {
+            extra_body(
+                &j,
+                a,
+                "PATCH",
+                patch_template,
+                path,
+                label,
+                body.clone(),
+                None,
+            )
+            .await;
+        }
+    }
+    // The stored kind (a connection that takes no AWS options, no endpoint and only
+    // the allowlisted env reference) decides what the schema cannot see.
+    body_set_when(&mut j, a, "PATCH", patch_template, &patch_or, json!({"enabled":true,"credential_ref":"env:CONTRACT_REFERENCE","aws_external_id":null,"aws_session_name":null}), (
+            &|b| {
+                b.get("endpoint").is_some()
+                    || b["aws_external_id"].is_string()
+                    || b["aws_session_name"].is_string()
+                    || b["credential_ref"].as_str().is_some_and(|c| c != "env:CONTRACT_REFERENCE")
+            },
+            &[],
+        )).await;
+    // A Bedrock connection with no allowlisted profile or endpoint: options only with a role
+    // reference, never a profile, never an endpoint.
+    body_set_when(&mut j, a, "PATCH", patch_template, &patch_bed, json!({"enabled":true,"credential_ref":"aws:role:arn:aws:iam::123456789012:role/gateway/vector","aws_external_id":"tenant-ext-42","aws_session_name":"gateway.vector","endpoint":null}), (
+            &|b| {
+                b["endpoint"].is_string()
+                    || b["credential_ref"].as_str().is_some_and(|c| !(c == "aws:default" || c.starts_with("aws:role:")))
+                    || ((b["aws_external_id"].is_string() || b["aws_session_name"].is_string())
+                        && !b["credential_ref"].as_str().is_some_and(|c| c.starts_with("aws:role:")))
             },
             &[],
         )).await;
@@ -1670,7 +1931,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         &format!("/api/v1/platform/deployments/{vdep}/prices"),
         v3_price(),
         (
-            |b| b["input_token_limit"] == 0,
+            &|b| b["pricing_version"] == 3 && b["input_token_limit"] == 0,
             &["price_meters_incomplete"],
         ),
     )
@@ -1678,7 +1939,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     body_set(&mut j, a, "PUT", "/api/v1/platform/deployments/{deployment}/routing", &format!("/api/v1/platform/deployments/{vdep}/routing"), json!({"priority":1,"weight":2,"residency":"eu","failure_threshold":3,"cooldown_seconds":30}), &[]).await;
     body_set(&mut j, a, "PUT", "/api/v1/platform/models/{model}/routing", &format!("/api/v1/platform/models/{vmodel}/routing"), json!({"strategy":"priority","max_attempts":2,"allow_ambiguous_failover":false,"required_residency":"eu"}), &[]).await;
     // An IANA zone must be known to the server: another length-valid name is a domain refusal.
-    body_set_when(&mut j, a, "PUT", "/api/v1/platform/deployments/{deployment}/batch-scheduling", &format!("/api/v1/platform/deployments/{vdep}/batch-scheduling"), json!({"max_concurrency":3,"yield_live_threshold":5,"window":{"timezone":"UTC","days":["mon","fri"],"start":"23:00","end":"06:00"}}), (|b| b["window"]["timezone"].as_str().is_some_and(|z| (1..=64).contains(&z.len()) && z != "UTC"), &[])).await;
+    body_set_when(&mut j, a, "PUT", "/api/v1/platform/deployments/{deployment}/batch-scheduling", &format!("/api/v1/platform/deployments/{vdep}/batch-scheduling"), json!({"max_concurrency":3,"yield_live_threshold":5,"window":{"timezone":"UTC","days":["mon","fri"],"start":"23:00","end":"06:00"}}), (&|b| b["window"]["timezone"].as_str().is_some_and(|z| (1..=64).contains(&z.len()) && z != "UTC"), &[])).await;
     body_set(
         &mut j,
         a,
@@ -1755,6 +2016,450 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
                     &["exceeds_parent_rate", "exceeds_parent_budget"],
                 )
             },
+        )
+        .await;
+    }
+    // ---- Handler-derived vectors the artifact-derived ones cannot generate. ----
+    // Each compares the SCHEMA's verdict with the real handler's. `Some((schema,
+    // handler))` states a divergence the contract documents instead of expressing.
+    let policy_template = "/api/v1/workspaces/{ws}/policy";
+    let mut policy_vectors: Vec<(&str, Value, Option<(bool, bool)>)> = Vec::new();
+    let budget = |period: &str, amount: &str| {
+        let mut body = policy.clone();
+        body["budgets"] = json!([{"period":period,"amount_microusd":amount}]);
+        body
+    };
+    let legacy_budget = |amount: &str| json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"monthly_budget_microusd":amount,"budget_period":"month"});
+    policy_vectors.extend([
+        ("a budget above the signed 64-bit maximum", budget("month", "9223372036854775808"), None),
+        ("a zero budget", budget("month", "0"), None),
+        ("a budget with a leading zero (contract: canonical only)", budget("month", "0100"), Some((false, true))),
+        ("a monthly budget above the signed 64-bit maximum", legacy_budget("9223372036854775808"), None),
+        ("a zero monthly budget", legacy_budget("0"), None),
+        ("a monthly budget with a leading zero (contract: canonical only)", legacy_budget("0100"), Some((false, true))),
+        ("the largest budget of a period without a parent", budget("day", "9223372036854775807"), None),
+        ("two budgets for one period", {
+            let mut body = policy.clone();
+            body["budgets"] = json!([{"period":"month","amount_microusd":"100"},{"period":"month","amount_microusd":"200"}]);
+            body
+        }, Some((true, false))),
+        ("a positional policy with a monthly budget", json!([10, 1000, 2, 1, 10_000, 5, 50, "100", "month"]), None),
+        ("a positional policy without a budget form", json!([10, 1000, 2, 1]), Some((true, false))),
+        ("a positional policy with both budget forms", json!([10, 1000, 2, 1, 10_000, 5, 50, "100", "month", [{"period":"day","amount_microusd":"5"}]]), Some((true, false))),
+    ]);
+    for (label, body, documented) in policy_vectors {
+        // A fresh team per request: the policy PUT is tighten-only against stored values.
+        let ws = workspace(&pool, "Vector workspace", "team", f.owner.user_id).await;
+        extra_body(
+            &j,
+            o,
+            "PUT",
+            policy_template,
+            &format!("/api/v1/workspaces/{ws}/policy"),
+            label,
+            body,
+            documented,
+        )
+        .await;
+    }
+    // Prices: rate bounds, the pair limit, line rules and counts, label controls.
+    let prices_template = "/api/v1/platform/deployments/{deployment}/prices";
+    let prices = format!("/api/v1/platform/deployments/{vdep}/prices");
+    let line_of = |meter: &str, amount: &str| json!({"meter":meter,"microusd_per_batch":amount,"batch":1_000_000,"unit_label":"/M tokens","sku_label":"Rate"});
+    let with_lines = |extra: Vec<Value>, drop_output: bool| {
+        let mut body = v3_price();
+        let mut lines: Vec<Value> = body["price_lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|l| !(drop_output && l["meter"] == "output_tokens"))
+            .cloned()
+            .collect();
+        lines.extend(extra);
+        body["price_lines"] = json!(lines);
+        body
+    };
+    let tiers = |count: u64| {
+        (1..=count)
+            .map(|n| tiered(line_of("input_tokens", &(1000 + n).to_string()), n))
+            .collect::<Vec<_>>()
+    };
+    let cache = |read: &str| json!({"pricing_version":2,"input_microusd_per_million":"1","output_microusd_per_million":"2","input_token_limit":100,"output_token_limit":10,"cache_pricing":{"read":{"status":"priced","microusd_per_million":read},"write":{"status":"unknown"},"write_5m":{"status":"unknown"},"write_1h":{"status":"unknown"}}});
+    let rates = |input: &str, output: &str, limit: u64, out_limit: u64| json!({"input_microusd_per_million":input,"output_microusd_per_million":output,"input_token_limit":limit,"output_token_limit":out_limit});
+    let mut sku = v3_price();
+    sku["price_lines"][0]["sku_label"] = json!("In\u{9f}put");
+    let mut unknown_line = with_lines(tiers(52), false);
+    unknown_line["price_lines"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"meter":"input_audio_tokens","unknown":true}));
+    for (label, body, documented) in [
+        (
+            "an input rate above the signed 64-bit maximum",
+            rates("9223372036854775808", "1", 1, 1),
+            None,
+        ),
+        (
+            "an input rate with leading zeros",
+            rates("0000000000000000100", "1", 1, 1),
+            None,
+        ),
+        (
+            "a zero input ceiling on a version 1 price",
+            rates("1", "1", 0, 1),
+            None,
+        ),
+        (
+            "rates whose charge overflows (contract: the pair limit is arithmetic)",
+            rates("9223372036854775807", "1", 2_147_483_647, 1),
+            Some((true, false)),
+        ),
+        (
+            "a cache rate above the signed 64-bit maximum",
+            cache("9223372036854775808"),
+            None,
+        ),
+        ("a sku label with a C1 control character", sku, None),
+        (
+            "two lines for one meter and tier (contract: only whole-line duplicates)",
+            with_lines(vec![line_of("input_tokens", "999")], false),
+            Some((true, false)),
+        ),
+        (
+            "a not_applicable line next to a priced tier of one meter",
+            with_lines(
+                vec![
+                    tiered(line_of("output_tokens", "5"), 5),
+                    json!({"meter":"output_tokens","not_applicable":true}),
+                ],
+                true,
+            ),
+            Some((true, false)),
+        ),
+        (
+            "64 valued lines and an explicit unknown",
+            unknown_line,
+            None,
+        ),
+        ("65 valued lines", with_lines(tiers(53), false), None),
+    ] {
+        extra_body(
+            &j,
+            a,
+            "POST",
+            prices_template,
+            &prices,
+            label,
+            body,
+            documented,
+        )
+        .await;
+    }
+    // Routing: the reserved residency is refused by both routing handlers.
+    for (template, path, mut body, field) in [
+        (
+            "/api/v1/platform/deployments/{deployment}/routing",
+            format!("/api/v1/platform/deployments/{vdep}/routing"),
+            json!({"priority":1,"weight":2,"residency":"eu","failure_threshold":3,"cooldown_seconds":30}),
+            "residency",
+        ),
+        (
+            "/api/v1/platform/models/{model}/routing",
+            format!("/api/v1/platform/models/{vmodel}/routing"),
+            json!({"strategy":"priority","max_attempts":2,"allow_ambiguous_failover":false,"required_residency":"eu"}),
+            "required_residency",
+        ),
+    ] {
+        for value in ["unspecified", "Unspecified", "unspecified2"] {
+            body[field] = json!(value);
+            extra_body(
+                &j,
+                a,
+                "PUT",
+                template,
+                &path,
+                "a reserved or look-alike residency",
+                body.clone(),
+                None,
+            )
+            .await;
+        }
+    }
+    // Scheduling: a metrics gate needs a threshold; approvals are server state.
+    let schedule_template = "/api/v1/platform/deployments/{deployment}/batch-scheduling";
+    let schedule_vdep = format!("/api/v1/platform/deployments/{vdep}/batch-scheduling");
+    let gate = |thresholds: Value| {
+        let mut metrics = json!({"url":"http://10.0.0.5:8000/metrics","max_waiting":null,"max_running":null,"max_kv_cache_percent":null});
+        for (k, v) in thresholds.as_object().unwrap() {
+            metrics[k] = v.clone();
+        }
+        json!({"max_concurrency":3,"metrics":metrics})
+    };
+    extra_body(
+        &j,
+        a,
+        "PUT",
+        schedule_template,
+        &schedule_vdep,
+        "a metrics gate without a threshold",
+        gate(json!({})),
+        None,
+    )
+    .await;
+    extra_body(
+        &j,
+        a,
+        "PUT",
+        schedule_template,
+        &schedule_vdep,
+        "a metrics gate with a threshold (contract: endpoint approval is server state)",
+        gate(json!({"max_waiting":5})),
+        Some((true, false)),
+    )
+    .await;
+    // Id lists: 200 distinct existing ids are accepted, 201 distinct ones refused for the
+    // bound itself (not for repeating an id).
+    let mut bulk_models = vec![];
+    let mut bulk_catalogs = vec![];
+    for n in 0..200 {
+        bulk_models.push(id(&j.request("POST", "/api/v1/platform/models", Some(json!({"public_name":format!("bulk/model-{n}"),"display_name":format!("Bulk model {n}"),"enabled":true}))).await));
+        bulk_catalogs.push(id(&j
+            .request(
+                "POST",
+                "/api/v1/platform/catalogs",
+                Some(json!({"name":format!("Bulk catalog {n}")})),
+            )
+            .await));
+    }
+    let fresh = |count: usize| (0..count).map(|_| Uuid::new_v4()).collect::<Vec<_>>();
+    for (label, ids, documented) in [
+        ("200 distinct ids", bulk_models.clone(), None),
+        ("201 distinct ids", fresh(201), None),
+    ] {
+        extra_body(
+            &j,
+            a,
+            "PUT",
+            "/api/v1/platform/catalogs/{id}/models",
+            &format!("/api/v1/platform/catalogs/{vcat}/models"),
+            label,
+            json!({"model_ids":ids}),
+            documented,
+        )
+        .await;
+    }
+    for (label, ids) in [
+        ("200 distinct catalogs", bulk_catalogs.clone()),
+        ("201 distinct catalogs", fresh(201)),
+    ] {
+        extra_body(
+            &j,
+            a,
+            "PUT",
+            "/api/v1/platform/models/{id}/catalogs",
+            &format!("/api/v1/platform/models/{vmodel}/catalogs"),
+            label,
+            json!({"catalog_ids":ids}),
+            None,
+        )
+        .await;
+        extra_body(
+            &j,
+            a,
+            "PUT",
+            "/api/v1/platform/catalog-defaults",
+            "/api/v1/platform/catalog-defaults",
+            label,
+            json!({"personal":ids.clone(),"team":[],"project":[]}),
+            None,
+        )
+        .await;
+        let setup = json!({"model":{"public_name":format!("vector/bulk-{}", Uuid::new_v4()),"display_name":"Bulk setup","enabled":true},"route":{"provider_connection_id":vprov,"upstream_model":"vector/bulk","enabled":false},"catalog_ids":ids});
+        extra_body(
+            &j,
+            a,
+            "POST",
+            "/api/v1/platform/model-setup",
+            "/api/v1/platform/model-setup",
+            label,
+            setup,
+            None,
+        )
+        .await;
+    }
+    // Names are counted in bytes by the handler and in characters by the schema.
+    for (label, body) in [
+        (
+            "a name of 61 two-byte characters",
+            json!({"name":"\u{e9}".repeat(61)}),
+        ),
+        (
+            "a name of 60 two-byte characters",
+            json!({"name":"\u{e9}".repeat(60)}),
+        ),
+        (
+            "a description of 1001 two-byte characters",
+            json!({"name":"Bytes","description":"\u{e9}".repeat(1001)}),
+        ),
+        (
+            "a description of 1000 two-byte characters",
+            json!({"name":"Bytes","description":"\u{e9}".repeat(1000)}),
+        ),
+    ] {
+        let documented = if label.contains("61") || label.contains("1001") {
+            Some((true, false))
+        } else {
+            None
+        };
+        extra_body(
+            &j,
+            a,
+            "POST",
+            "/api/v1/platform/catalogs",
+            "/api/v1/platform/catalogs",
+            label,
+            body,
+            documented,
+        )
+        .await;
+    }
+    // Query values: the search bound counts characters; rate and cursor bounds are exact.
+    for (template, path, who) in [
+        (
+            "/api/v1/platform/catalogs",
+            "/api/v1/platform/catalogs".to_owned(),
+            a,
+        ),
+        (
+            "/api/v1/workspaces/{ws}/models",
+            format!("/api/v1/workspaces/{team}/models"),
+            o,
+        ),
+    ] {
+        for (label, count) in [
+            ("200 two-byte characters", 200),
+            ("201 two-byte characters", 201),
+        ] {
+            extra_query(
+                &j,
+                who,
+                template,
+                &path,
+                "",
+                "q",
+                &"\u{e9}".repeat(count),
+                label,
+                None,
+            )
+            .await;
+        }
+    }
+    for (label, value) in [
+        ("the signed 64-bit maximum", "9223372036854775807"),
+        ("one above it", "9223372036854775808"),
+        ("with leading zeros", "000000000000000000000000100"),
+    ] {
+        extra_query(
+            &j,
+            a,
+            "/api/v1/platform/models",
+            "/api/v1/platform/models",
+            "",
+            "max_input_price",
+            value,
+            label,
+            None,
+        )
+        .await;
+    }
+    let history_template = "/api/v1/platform/deployments/{id}/configuration/history";
+    let row = "00000000-0000-0000-0000-000000000001";
+    for (label, value) in [
+        (
+            "the latest representable instant",
+            format!("8210266876799999999_{row}"),
+        ),
+        (
+            "one past it",
+            format!("8210266876799999999_{row}")
+                .replace("8210266876799999999", "8210266876800000000"),
+        ),
+        (
+            "the earliest representable instant",
+            format!("-8334601315200000000_{row}"),
+        ),
+        ("one before it", format!("-8334601315200000001_{row}")),
+        (
+            "a signed zero-padded value",
+            format!("+0000000000000000000012345_{row}"),
+        ),
+        (
+            "a simple uuid",
+            "1_00000000000000000000000000000001".to_owned(),
+        ),
+        ("a braced uuid", format!("1_{{{row}}}")),
+        ("a urn uuid", format!("1_urn:uuid:{row}")),
+        ("the i64 maximum", format!("9223372036854775807_{row}")),
+    ] {
+        extra_query(
+            &j,
+            a,
+            history_template,
+            &history,
+            "limit=1",
+            "cursor",
+            &value,
+            label,
+            None,
+        )
+        .await;
+    }
+    // Compare ids: every uuid spelling and Unicode padding the handler parses.
+    let compare_template = "/api/v1/platform/models/compare";
+    let (m1, m2) = (model.to_string(), second.to_string());
+    for (label, value, documented) in [
+        (
+            "simple spellings",
+            format!("{},{}", m1.replace('-', ""), m2.replace('-', "")),
+            None,
+        ),
+        (
+            "braced and urn spellings",
+            format!("{{{m1}}},urn:uuid:{m2}"),
+            None,
+        ),
+        (
+            "ideographic space padding",
+            format!("\u{3000}{m1}\u{3000},\u{3000}{m2}\u{3000}"),
+            None,
+        ),
+        (
+            "the same id in two spellings (contract: distinctness is not expressible)",
+            format!("{m1},{}", m1.replace('-', "")),
+            Some((true, false)),
+        ),
+        ("one id", m1.clone(), None),
+        (
+            "five ids",
+            format!(
+                "{m1},{m2},{},{},{}",
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                Uuid::new_v4()
+            ),
+            None,
+        ),
+    ] {
+        extra_query(
+            &j,
+            a,
+            compare_template,
+            compare_template,
+            "",
+            "ids",
+            &value,
+            label,
+            documented,
         )
         .await;
     }

@@ -23763,7 +23763,7 @@
                 "const": "known"
               },
               "remaining_microusd": {
-                "type": "string"
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
               }
             }
           },
