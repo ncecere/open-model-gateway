@@ -942,12 +942,12 @@ impl Walk<'_> {
                 }
                 // The next positional item, when the caller seeded it.
                 let next = items.len();
-                if positional(&nodes, next) {
-                    if let Some(item_schema) = index_schema(&nodes, next) {
-                        path.push(Step::Index(next));
-                        self.seeded(&item_schema, path)?;
-                        path.pop();
-                    }
+                if positional(&nodes, next)
+                    && let Some(item_schema) = index_schema(&nodes, next)
+                {
+                    path.push(Step::Index(next));
+                    self.seeded(&item_schema, path)?;
+                    path.pop();
                 }
             }
             _ => {}
