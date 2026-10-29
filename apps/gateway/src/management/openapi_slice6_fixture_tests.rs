@@ -1295,14 +1295,7 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
             .await;
         assert!(v.get("token").is_none() && v.get("secret_hash").is_none());
     }
-    for key in [
-        full_key,
-        month_key,
-        service_key,
-        log_key,
-        off_key,
-        corrupt_key,
-    ] {
+    for key in [full_key, month_key, service_key, log_key, off_key] {
         for suffix in ["", "/policy", "/stats"] {
             w.json(&owner, "GET", &format!("{ws}/keys/{key}{suffix}"), None)
                 .await;
@@ -1311,6 +1304,19 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
             &owner,
             "GET",
             &format!("{ws}/keys/{key}/access?model_id={m}"),
+            None,
+        )
+        .await;
+    }
+    // The throwaway key's accounting is corrupt on purpose: its policy and
+    // stats reports show unavailable windows. Its detail read reports the raw
+    // usage figure, which a corrupt row cannot honestly satisfy, so it is
+    // never requested.
+    for suffix in ["/policy", "/stats"] {
+        w.json(
+            &owner,
+            "GET",
+            &format!("{ws}/keys/{corrupt_key}{suffix}"),
             None,
         )
         .await;
