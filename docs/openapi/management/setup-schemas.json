@@ -741,11 +741,70 @@
                 ]
               },
               "then": {
+                "required": [
+                  "region"
+                ],
                 "properties": {
                   "credential_ref": {
-                    "pattern": "^aws:(default|profile:.+|role:.+)$"
+                    "maxLength": 2057,
+                    "pattern": "^aws:(?:default|profile:[A-Za-z0-9_.+][A-Za-z0-9_.+-]{0,63}|role:arn:(?:aws|aws-[a-z]+(?:-[a-z]+)*):iam::[0-9]{12}:role/(?:[A-Za-z0-9_+=,.@-]+/)*[A-Za-z0-9_+=,.@-]{1,64})$"
+                  },
+                  "region": {
+                    "type": "string",
+                    "maxLength": 32,
+                    "pattern": "^[a-z]{2}(?:-[a-z]+)+-[0-9]{1,2}$"
                   }
-                }
+                },
+                "allOf": [
+                  {
+                    "if": {
+                      "properties": {
+                        "credential_ref": {
+                          "pattern": "^aws:role:"
+                        }
+                      },
+                      "required": [
+                        "credential_ref"
+                      ]
+                    },
+                    "then": {
+                      "properties": {
+                        "aws_external_id": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9_+=,.@:/-]{2,1224}$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "aws_session_name": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9_+=,.@-]{2,64}$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "else": {
+                      "properties": {
+                        "aws_external_id": {
+                          "type": "null"
+                        },
+                        "aws_session_name": {
+                          "type": "null"
+                        }
+                      }
+                    }
+                  }
+                ]
               }
             },
             {
@@ -785,7 +844,7 @@
               }
             }
           ],
-          "description": "Cross-field rules by provider kind: the fixed-origin cloud profiles take an env: reference, their exact HTTPS base (or none), no region and no AWS options; Bedrock takes an aws: identity reference; local kinds take none or an env: reference and a required endpoint. Server-controlled allowlists and endpoint approvals are checked on top and are not expressible here."
+          "description": "Cross-field rules by provider kind: the fixed-origin cloud profiles take an env: reference, their exact HTTPS base (or none), no region and no AWS options; Bedrock requires a region (valid_region: a two-letter prefix, lowercase words and a one or two digit suffix such as us-east-1, at most 32 characters) and an aws:default, aws:profile:NAME or aws:role:ARN reference without ';' options; aws_external_id (2-1224 characters) and aws_session_name (2-64 characters) belong to an aws:role: reference only (AwsAuth::from_parts) and are otherwise refused unless null; the role ARN path is at most 510 characters and the whole ARN at most 2048 (the schema bounds the length only); local kinds take none or an env: reference and a required endpoint. Server-controlled allowlists (profiles, Bedrock endpoints, local endpoint approvals, env references) are checked on top and are not expressible here."
         },
         {
           "type": "array",
@@ -920,7 +979,46 @@
           "required": [
             "enabled"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "aws_external_id"
+                    ],
+                    "properties": {
+                      "aws_external_id": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  {
+                    "required": [
+                      "aws_session_name"
+                    ],
+                    "properties": {
+                      "aws_session_name": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                ]
+              },
+              "then": {
+                "required": [
+                  "credential_ref"
+                ],
+                "properties": {
+                  "credential_ref": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          ],
+          "description": "AWS options (aws_external_id, aws_session_name) require a restated credential_ref in the same body (update_provider answers 400 for options without a reference); whether the reference is an aws:role: reference for a Bedrock connection depends on the stored provider kind and is not expressible here."
         },
         {
           "type": "array",
@@ -5772,7 +5870,7 @@
           "items": false
         }
       ],
-      "description": "Custom PriceLines parser also rejects duplicate meter/variant/tier keys, NA conflicts, all-unknown and audio-only lists. RawLine accepts object or positional struct array; stored canonical lines are separate. The externally tagged unit Meter accepts a name string or a single-key object whose value is null; responses always use strings."
+      "description": "Custom PriceLines parser also rejects duplicate meter/variant/tier keys, NA conflicts, all-unknown and audio-only lists. RawLine accepts object or positional struct array; stored canonical lines are separate. The externally tagged unit Meter accepts a name string or a single-key object whose value is null; responses always use strings. sku_label is non-blank text without control characters (C0, DEL or C1) of at most 80 CHARACTERS (label_valid counts chars(), not bytes, so maxLength is exact)."
     },
     "SetupPriceLine": {
       "anyOf": [
@@ -22232,7 +22330,8 @@
             "timezone": {
               "type": "string",
               "minLength": 1,
-              "maxLength": 64
+              "maxLength": 64,
+              "description": "An IANA zone known to the server, at most 64 UTF-8 BYTES (compile() checks len() in bytes; maxLength counts characters, and real zone names are ASCII). Another length-valid name is refused by the handler (unknown zone)."
             },
             "days": {
               "type": "array",
@@ -22274,7 +22373,8 @@
             {
               "type": "string",
               "minLength": 1,
-              "maxLength": 64
+              "maxLength": 64,
+              "description": "An IANA zone known to the server, at most 64 UTF-8 BYTES (compile() checks len() in bytes; maxLength counts characters, and real zone names are ASCII). Another length-valid name is refused by the handler (unknown zone)."
             },
             {
               "type": "array",
@@ -23228,7 +23328,7 @@
               },
               "maxItems": 4,
               "uniqueItems": true,
-              "description": "A full replacement set: at most one budget per period (the schema can only forbid identical entries, not two amounts for one period)."
+              "description": "A full replacement set: at most one budget per period. The handler refuses two entries for the same period even when their amounts differ (parse_budgets); uniqueItems can only forbid identical entries, so that case is described, not expressed."
             }
           },
           "required": [
@@ -23388,7 +23488,7 @@
               },
               "maxItems": 4,
               "uniqueItems": true,
-              "description": "A full replacement set: at most one budget per period (the schema can only forbid identical entries, not two amounts for one period)."
+              "description": "A full replacement set: at most one budget per period. The handler refuses two entries for the same period even when their amounts differ (parse_budgets); uniqueItems can only forbid identical entries, so that case is described, not expressed."
             }
           ],
           "minItems": 3,
@@ -23396,7 +23496,7 @@
           "items": false
         }
       ],
-      "description": "Closed serde object or existing positional struct array in declared field order. Handler semantic validation is additional. nullable rate fields are required even when null. Supplied fields (jobs, storage, issuance, monthly budget): omission retains, null clears subject to tighten-only validation. Present fields (budget_period, budgets): omission is accepted but explicit null is rejected. The handler requires exactly one budget representation."
+      "description": "Closed serde object or existing positional struct array in declared field order. Handler semantic validation is additional. nullable rate fields are required even when null. Supplied fields (jobs, storage, issuance, monthly budget): omission retains, null clears subject to tighten-only validation. Present fields (budget_period, budgets): omission is accepted but explicit null is rejected. The handler requires exactly one budget representation. Positional form: serde accepts 3 to 10 elements, but the handler needs exactly one budget form (monthly_budget_microusd at index 7, optionally with budget_period at index 8, or budgets, never both), and a positional array cannot carry budgets without monthly_budget_microusd; only arrays of 8 or 9 elements reach a valid budget form, shorter ones carry none and a 10-element one carries both (the handler answers 400)."
     },
     "SetupLimits": {
       "type": "object",
