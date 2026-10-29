@@ -149,33 +149,48 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
         serde_json::from_value::<T>(valid.clone()).is_ok(),
         "real deserialization positive control"
     );
-    let compare = |label: &str, value: Value| {
+    // `exact` probes are structural (unknown fields, nested unknown fields, root
+    // type, positional form): the reviewed refinements never touch them, so the
+    // contract and serde must agree exactly. Other probes sit on field values,
+    // where a refined contract may be stricter, never looser.
+    let check = |label: &str, value: Value, exact: bool| {
         let actual = serde_json::from_value::<T>(value.clone()).is_ok();
         let contract = super::responses::validate_value(document, schema, &value).is_ok();
         assert!(
-            agrees(refined, contract, actual),
+            if exact {
+                contract == actual
+            } else {
+                agrees(refined, contract, actual)
+            },
             "{method} {template}: {label}: contract {} but serde {}",
             if contract { "accepts" } else { "refuses" },
             if actual { "accepts" } else { "refuses" },
         );
     };
-    compare("positive", valid.clone());
+    let compare = |label: &str, value: Value| check(label, value, false);
+    let structural = |label: &str, value: Value| check(label, value, true);
+    // The valid body is accepted by BOTH: a contract that refuses it is wrong
+    // whatever the reviewed refinements say.
+    assert!(
+        super::responses::validate_value(document, schema, &valid).is_ok(),
+        "{method} {template}: positive: contract refuses the valid body"
+    );
     let positional = fields
         .0
         .borrow()
         .iter()
         .map(|name| valid.get(*name).cloned().unwrap_or(Value::Null))
         .collect::<Vec<_>>();
-    compare("serde positional struct representation", json!(positional));
+    structural("serde positional struct representation", json!(positional));
     for length in 0..positional.len() {
-        compare("positional omission", json!(&positional[..length]));
+        structural("positional omission", json!(&positional[..length]));
     }
     let mut extra = positional;
     extra.push(json!({"unexpected_configuration":true}));
-    compare("positional unknown extra item", json!(extra));
+    structural("positional unknown extra item", json!(extra));
     let mut unknown = valid.clone();
     unknown["unexpected_configuration"] = json!(true);
-    compare("unknown", unknown);
+    structural("unknown", unknown);
     for field in valid.as_object().unwrap().keys() {
         let mut missing = valid.clone();
         missing.as_object_mut().unwrap().remove(field);
@@ -204,7 +219,7 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
         } else {
             nested[field] = json!({"unexpected_configuration":true});
         }
-        compare(&format!("nested-unknown {field}"), nested);
+        structural(&format!("nested-unknown {field}"), nested);
     }
     // Recursively probe nested DTOs rather than replacing only their parent.
     fn nested_objects(value: &Value, path: &str, out: &mut Vec<String>) {
@@ -234,7 +249,7 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
     for path in nested {
         let mut probe = valid.clone();
         probe.pointer_mut(&path).unwrap()["unexpected_configuration"] = json!(true);
-        compare(&format!("recursive nested-unknown {path}"), probe);
+        structural(&format!("recursive nested-unknown {path}"), probe);
         for field in valid.pointer(&path).unwrap().as_object().unwrap().keys() {
             let mut probe = valid.clone();
             probe
@@ -265,7 +280,7 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
         json!("wrong"),
         json!([]),
     ] {
-        compare("wrong root type / JSON null is not omission", value);
+        structural("wrong root type / JSON null is not omission", value);
     }
     // UUID serde deliberately accepts all these spellings. JSON Schema format
     // assertions must match that parser rather than only canonical output.
