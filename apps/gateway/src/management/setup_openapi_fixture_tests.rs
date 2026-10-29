@@ -173,6 +173,11 @@ fn judged(captured: openapi::responses::Captured, domain: &[&str]) -> Probe {
         Probe::from(captured)
     }
 }
+/// A predictor of state-dependent domain refusals and the machine reasons that
+/// are domain refusals (see [`judged_when`]).
+type DomainRules<'a> = (&'a dyn Fn(&Value) -> bool, &'a [&'a str]);
+/// A divergence the contract documents: `(schema accepts, handler accepts)`.
+type Documented = Option<(bool, bool)>;
 /// The request schema of an operation in the committed artifact.
 fn request_schema(method: &str, template: &str) -> &'static Value {
     &openapi::responses::artifact()["paths"][template][method.to_ascii_lowercase()]["requestBody"]["content"]
@@ -220,7 +225,7 @@ fn judged_when(
     captured: openapi::responses::Captured,
     schema_valid: bool,
     body: &Value,
-    rules: (&dyn Fn(&Value) -> bool, &[&str]),
+    rules: DomainRules<'_>,
 ) -> Probe {
     if captured.status == StatusCode::BAD_REQUEST && schema_valid && rules.0(body) {
         Probe::decided(captured, true)
@@ -236,7 +241,7 @@ async fn body_set_when(
     template: &str,
     path: &str,
     valid: Value,
-    rules: (&dyn Fn(&Value) -> bool, &[&str]),
+    rules: DomainRules<'_>,
 ) {
     let (client, root) = (j.client.clone(), j.base.clone());
     http_vectors::body_vectors_http(
@@ -2033,7 +2038,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     // Each compares the SCHEMA's verdict with the real handler's. `Some((schema,
     // handler))` states a divergence the contract documents instead of expressing.
     let policy_template = "/api/v1/workspaces/{ws}/policy";
-    let mut policy_vectors: Vec<(&str, Value, Option<(bool, bool)>)> = Vec::new();
+    let mut policy_vectors: Vec<(&str, Value, Documented)> = Vec::new();
     let budget = |period: &str, amount: &str| {
         let mut body = policy.clone();
         body["budgets"] = json!([{"period":period,"amount_microusd":amount}]);
