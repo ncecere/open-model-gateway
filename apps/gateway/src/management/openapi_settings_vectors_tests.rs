@@ -662,6 +662,22 @@ pub(super) async fn pinned(g: &Gateway, pool: &PgPool, mail_port: u16) {
             (false, true),
         ),
     ];
+    // The handler trims BEFORE the 2048 cap (settings.rs `https_url`: `text()` then
+    // `value.len()`); the schema's maxLength counts the padding. Same for both URLs.
+    let padded = format!(" https://support.example.test/{} ", "a".repeat(2048 - 29));
+    let mut rows = rows.to_vec();
+    rows.extend([
+        (
+            "support URL of 2048 bytes with surrounding spaces",
+            with("support_url", json!(padded.clone())),
+            (true, false),
+        ),
+        (
+            "logo URL of 2048 bytes with surrounding spaces",
+            with("logo_url", json!(padded)),
+            (true, false),
+        ),
+    ]);
     for (label, body, verdicts) in rows {
         pin(
             g,
@@ -687,6 +703,12 @@ pub(super) async fn pinned(g: &Gateway, pool: &PgPool, mail_port: u16) {
     let local = |host: &str| edit(&relay, "host", json!(host));
     let long_address = format!("a@{}.test", vec!["d".repeat(60); 6].join("."));
     assert!(long_address.len() > 320);
+    // Hosts over TLS, so only `valid_host` judges them: 63-character labels, 253
+    // and 254 characters in all.
+    let starttls = edit(&relay, "tls", json!("starttls"));
+    let dotted = |last: usize| [63, 63, 63, last].map(|n| "a".repeat(n)).join(".");
+    assert_eq!(dotted(61).len(), 253);
+    assert_eq!(dotted(62).len(), 254);
     let rows = [
         // The handler trims the TLS mode; the schema models the trimmed spelling.
         (
@@ -718,6 +740,41 @@ pub(super) async fn pinned(g: &Gateway, pool: &PgPool, mail_port: u16) {
             "loopback IPv6 with an IPv4 tail",
             local("::0.0.0.1"),
             (true, false),
+        ),
+        // Any run of surrounding brackets is stripped (`trim_matches` in
+        // `valid_host` and `is_loopback_host`): the handler accepts these with
+        // plaintext, the schema's single balanced pair refuses them.
+        (
+            "loopback IPv6 in double brackets",
+            local("[[::1]]"),
+            (true, false),
+        ),
+        (
+            "loopback IPv6 with an opening bracket only",
+            local("[::1"),
+            (true, false),
+        ),
+        (
+            "loopback IPv6 with a closing bracket only",
+            local("::1]"),
+            (true, false),
+        ),
+        // `valid_host` allows 253 bytes (a 254th is refused) and requires a colon
+        // string to parse as an address; the schema counts neither.
+        (
+            "host of 253 characters",
+            edit(&starttls, "host", json!(dotted(61))),
+            (true, true),
+        ),
+        (
+            "host of 254 characters",
+            edit(&starttls, "host", json!(dotted(62))),
+            (false, true),
+        ),
+        (
+            "colon string that is not an address",
+            edit(&starttls, "host", json!("1:2")),
+            (false, true),
         ),
         // Not loopback: a fourth octet out of range is a name, not an address.
         ("octet out of range", local("127.999.0.1"), (false, false)),
