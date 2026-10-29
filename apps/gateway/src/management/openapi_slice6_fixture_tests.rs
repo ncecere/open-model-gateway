@@ -2609,9 +2609,7 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
         ("seconds 99999999999999999999", "99999999999999999999", bad),
         ("seconds padded", " 3600 ", ok),
         ("seconds no-break space", "\u{a0}3600", ok),
-        ("seconds next line", "\u{85}3600\u{85}", ok),
         ("seconds ideographic space", "3600\u{3000}", ok),
-        ("seconds byte order mark", "\u{feff}3600", bad),
         ("seconds interior space", "36 00", bad),
         ("seconds plus and zeros", "+03600", ok),
         ("seconds zero", "0", bad),
@@ -2644,6 +2642,33 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
                 r.status.is_success(),
                 "upload case {label}: schema and handler disagree"
             );
+        }
+    }
+    // `\s` is ECMA-262 whitespace in the contract and `str::trim` is Unicode
+    // White_Space in the handler; they differ on exactly two characters. U+0085
+    // is trimmed by the handler only (the contract is stricter); U+FEFF is
+    // whitespace for the contract only (the contract is looser).
+    for (label, seconds, handled) in [
+        ("seconds next line", "\u{85}3600\u{85}", true),
+        ("seconds byte order mark", "\u{feff}3600", false),
+    ] {
+        let fields = expiring(seconds);
+        let r = upload(&mut w, &owner, &uploadpath, &fields, Some(text), true).await;
+        assert_eq!(
+            r.status,
+            if handled { ok } else { bad },
+            "upload case {label}"
+        );
+        let schema_accepts = openapi::responses::validate_value(
+            openapi::responses::artifact(),
+            &upload_schema,
+            &json!({"purpose":"user_data","expires_after[anchor]":"created_at","expires_after[seconds]":seconds,"file":"x"}),
+        )
+        .is_ok();
+        if handled {
+            stricter_verdict(label, (schema_accepts, true));
+        } else {
+            same_verdict(label, schema_accepts, false, false);
         }
     }
     // The schema cannot see file content: a batch file that is not JSONL and a
