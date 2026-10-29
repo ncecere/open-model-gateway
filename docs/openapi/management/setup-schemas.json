@@ -228,7 +228,7 @@
               "minLength": 1,
               "maxLength": 120,
               "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
-              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes)."
+              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern's \\s is ECMA-262 whitespace, which counts U+FEFF but not U+0085; the handler trims with Rust's Unicode White_Space, which counts U+0085 (also a C1 control, refused anyway) but not U+FEFF, so a value made only of U+FEFF is blank to an ECMA validator and not blank to the handler."
             },
             "description": {
               "anyOf": [
@@ -256,7 +256,7 @@
               "minLength": 1,
               "maxLength": 120,
               "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
-              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes)."
+              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern's \\s is ECMA-262 whitespace, which counts U+FEFF but not U+0085; the handler trims with Rust's Unicode White_Space, which counts U+0085 (also a C1 control, refused anyway) but not U+FEFF, so a value made only of U+FEFF is blank to an ECMA validator and not blank to the handler."
             },
             {
               "anyOf": [
@@ -514,7 +514,7 @@
               "minLength": 1,
               "maxLength": 120,
               "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
-              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes)."
+              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern's \\s is ECMA-262 whitespace, which counts U+FEFF but not U+0085; the handler trims with Rust's Unicode White_Space, which counts U+0085 (also a C1 control, refused anyway) but not U+FEFF, so a value made only of U+FEFF is blank to an ECMA validator and not blank to the handler."
             },
             "provider": {
               "enum": [
@@ -848,6 +848,16 @@
                   },
                   "aws_session_name": {
                     "type": "null"
+                  },
+                  "region": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "const": ""
+                      }
+                    ]
                   }
                 },
                 "required": [
@@ -856,7 +866,7 @@
               }
             }
           ],
-          "description": "Cross-field rules by provider kind: the fixed-origin cloud profiles take an env: reference, their exact HTTPS base (or none), no region and no AWS options; Bedrock requires a region (valid_region: a two-letter prefix, lowercase words and a one or two digit suffix such as us-east-1, at most 32 characters) and an aws:default, aws:profile:NAME or aws:role:ARN reference without ';' options; aws_external_id (2-1224 characters) and aws_session_name (2-64 characters) belong to an aws:role: reference only (AwsAuth::from_parts) and are otherwise refused unless null; the role ARN path is at most 510 characters and the whole ARN at most 2048 (the schema bounds the length only); local kinds take none or an env: reference and a required endpoint. Server-controlled allowlists (profiles, Bedrock endpoints, local endpoint approvals, env references) are checked on top and are not expressible here."
+          "description": "Cross-field rules by provider kind: the fixed-origin cloud profiles take an env: reference, their exact HTTPS base (or none), no region and no AWS options; Bedrock requires a region (valid_region: a two-letter prefix, lowercase words and a one or two digit suffix such as us-east-1, at most 32 characters) and an aws:default, aws:profile:NAME or aws:role:ARN reference without ';' options; aws_external_id (2-1224 characters) and aws_session_name (2-64 characters) belong to an aws:role: reference only (AwsAuth::from_parts) and are otherwise refused unless null; the role ARN path is at most 510 characters and the whole ARN at most 2048 (the schema bounds the length only); local kinds (vllm, sglang, ollama, openai_compatible) take none or an env: reference, a required endpoint and no region (null or an empty string: validate_connection refuses a non-empty region). Server-controlled allowlists (profiles, Bedrock endpoints, local endpoint approvals, env references) are checked on top and are not expressible here."
         },
         {
           "type": "array",
@@ -866,7 +876,7 @@
               "minLength": 1,
               "maxLength": 120,
               "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
-              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes)."
+              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern's \\s is ECMA-262 whitespace, which counts U+FEFF but not U+0085; the handler trims with Rust's Unicode White_Space, which counts U+0085 (also a C1 control, refused anyway) but not U+FEFF, so a value made only of U+FEFF is blank to an ECMA validator and not blank to the handler."
             },
             {
               "enum": [
@@ -931,7 +941,8 @@
           ],
           "minItems": 6,
           "maxItems": 8,
-          "items": false
+          "items": false,
+          "description": "The positional array form carries none of the object form's cross-field rules (provider kind, region, reference and AWS option couplings): for example a Bedrock array without a region is schema-valid and refused with 400 (valid_region; documented divergence, probed)."
         }
       ],
       "description": "Closed serde object or existing positional struct array in declared field order. Handler semantic validation is additional."
@@ -1032,13 +1043,14 @@
                 ],
                 "properties": {
                   "credential_ref": {
-                    "type": "string"
+                    "type": "string",
+                    "pattern": "^aws:role:"
                   }
                 }
               }
             }
           ],
-          "description": "AWS options (aws_external_id, aws_session_name) require a restated credential_ref in the same body (update_provider answers 400 for options without a reference); whether the reference is an aws:role: reference for a Bedrock connection depends on the stored provider kind and is not expressible here."
+          "description": "AWS options (aws_external_id, aws_session_name) need a restated aws:role: credential_ref in the same body, whatever the stored provider kind: update_provider answers 400 for options without a reference, with a null reference and with any reference that is not an aws:role: reference (stored_reference: only a Bedrock role reference takes options, AwsAuth::from_parts), and the schema states exactly that. Not expressible: a non-Bedrock connection refuses the options even beside a role reference, and the role must be valid and allowed for a Bedrock connection (the stored kind and the server allowlists are not in the body)."
         },
         {
           "type": "array",
@@ -1100,7 +1112,8 @@
           ],
           "minItems": 4,
           "maxItems": 5,
-          "items": false
+          "items": false,
+          "description": "The positional array form carries none of the object form's cross-field rules: it cannot require an aws:role: reference for the AWS options, so [true, \"aws:default\", \"ab\", null] is schema-valid and refused with 400 (documented divergence, probed)."
         }
       ],
       "description": "Closed serde object or existing positional struct array in declared field order. Handler semantic validation is additional. enabled is required. Omitted/null credential_ref keeps the reference; AWS options require a restated role reference. Omitted endpoint keeps it, null clears; any endpoint member, including null, on a non-Bedrock connection is refused with 400. Local approval cannot be supplied by a client."
@@ -1120,7 +1133,7 @@
               "minLength": 1,
               "maxLength": 120,
               "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
-              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes)."
+              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern's \\s is ECMA-262 whitespace, which counts U+FEFF but not U+0085; the handler trims with Rust's Unicode White_Space, which counts U+0085 (also a C1 control, refused anyway) but not U+FEFF, so a value made only of U+FEFF is blank to an ECMA validator and not blank to the handler."
             },
             "description": {
               "anyOf": [
@@ -1194,7 +1207,7 @@
               "minLength": 1,
               "maxLength": 120,
               "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
-              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes)."
+              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern's \\s is ECMA-262 whitespace, which counts U+FEFF but not U+0085; the handler trims with Rust's Unicode White_Space, which counts U+0085 (also a C1 control, refused anyway) but not U+FEFF, so a value made only of U+FEFF is blank to an ECMA validator and not blank to the handler."
             },
             {
               "anyOf": [
@@ -1279,7 +1292,7 @@
                   "minLength": 1,
                   "maxLength": 120,
                   "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
-                  "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes)."
+                  "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern's \\s is ECMA-262 whitespace, which counts U+FEFF but not U+0085; the handler trims with Rust's Unicode White_Space, which counts U+0085 (also a C1 control, refused anyway) but not U+FEFF, so a value made only of U+FEFF is blank to an ECMA validator and not blank to the handler."
                 },
                 {
                   "type": "null"
@@ -1371,7 +1384,7 @@
                   "minLength": 1,
                   "maxLength": 120,
                   "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
-                  "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes)."
+                  "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern's \\s is ECMA-262 whitespace, which counts U+FEFF but not U+0085; the handler trims with Rust's Unicode White_Space, which counts U+0085 (also a C1 control, refused anyway) but not U+FEFF, so a value made only of U+FEFF is blank to an ECMA validator and not blank to the handler."
                 },
                 {
                   "type": "null"
@@ -1491,7 +1504,7 @@
               "minLength": 1,
               "maxLength": 512,
               "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
-              "description": "Non-blank upstream model identifier without control characters, at most 512 UTF-8 bytes. Bedrock connections additionally require a model or inference-profile ID valid for the connection's region."
+              "description": "Non-blank upstream model identifier without control characters, at most 512 UTF-8 bytes. Bedrock connections additionally require a model or inference-profile ID valid for the connection's region. The pattern's \\s is ECMA-262 whitespace, which counts U+FEFF but not U+0085; the handler trims with Rust's Unicode White_Space, which counts U+0085 (also a C1 control, refused anyway) but not U+FEFF, so a value made only of U+FEFF is blank to an ECMA validator and not blank to the handler."
             },
             "enabled": {
               "type": "boolean"
@@ -1521,7 +1534,7 @@
               "minLength": 1,
               "maxLength": 512,
               "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
-              "description": "Non-blank upstream model identifier without control characters, at most 512 UTF-8 bytes. Bedrock connections additionally require a model or inference-profile ID valid for the connection's region."
+              "description": "Non-blank upstream model identifier without control characters, at most 512 UTF-8 bytes. Bedrock connections additionally require a model or inference-profile ID valid for the connection's region. The pattern's \\s is ECMA-262 whitespace, which counts U+FEFF but not U+0085; the handler trims with Rust's Unicode White_Space, which counts U+0085 (also a C1 control, refused anyway) but not U+FEFF, so a value made only of U+FEFF is blank to an ECMA validator and not blank to the handler."
             },
             {
               "type": "boolean"
@@ -5898,7 +5911,7 @@
           "items": false
         }
       ],
-      "description": "Custom PriceLines parser also rejects duplicate meter/variant/tier keys, NA conflicts, all-unknown and audio-only lists. RawLine accepts object or positional struct array; stored canonical lines are separate. The externally tagged unit Meter accepts a name string or a single-key object whose value is null; responses always use strings. sku_label is non-blank text without control characters (C0, DEL or C1) of at most 80 CHARACTERS (label_valid counts chars(), not bytes, so maxLength is exact)."
+      "description": "Custom PriceLines parser also rejects duplicate meter/variant/tier keys, NA conflicts, all-unknown and audio-only lists. RawLine accepts object or positional struct array; stored canonical lines are separate. The externally tagged unit Meter accepts a name string or a single-key object whose value is null; responses always use strings. sku_label is non-blank text without control characters (C0, DEL or C1) of at most 80 CHARACTERS (label_valid counts chars(), not bytes, so maxLength is exact). The sku_label pattern's \\s is ECMA-262 whitespace, which counts U+FEFF but not U+0085; the handler trims with Rust's Unicode White_Space, which counts U+0085 (also a C1 control, refused anyway) but not U+FEFF, so a value made only of U+FEFF is blank to an ECMA validator and not blank to the handler."
     },
     "SetupPriceLine": {
       "anyOf": [
@@ -10895,7 +10908,7 @@
                   },
                   "uniqueItems": true,
                   "maxContains": 64,
-                  "description": "At most 64 VALUED lines (priced or not_applicable: PriceLines::validate counts only those against MAX_LINES) plus at most one explicit unknown line per meter (16 meters), so at most 80 entries. Also refused by the handler and not expressible here: two lines with the same (meter, variant, min_prompt_tokens) that differ in other members (uniqueItems only compares whole lines); a not_applicable line next to any other line of the same meter, and an unknown line next to a valued line of the same meter; a list of only audio-token meters."
+                  "description": "At most 64 VALUED lines (priced or not_applicable: PriceLines::validate counts only those against MAX_LINES) plus at most one explicit unknown line per meter (16 meters), so at most 80 entries. Refused by the handler and not expressible here: two lines with the same (meter, variant, min_prompt_tokens) that differ in other members (uniqueItems only compares whole lines). Refused by the handler and not expressed (compactness: each rule needs a per-meter copy, or a roughly 50 KB copy of the line schema, to state): a not_applicable line next to any other line of the same meter; an unknown line next to a valued line of the same meter; a list whose valued lines are all audio-token meters. The overflow rules (v3::bound) are on the price."
                 },
                 {
                   "type": "null"
@@ -14405,7 +14418,7 @@
                   },
                   "uniqueItems": true,
                   "maxContains": 64,
-                  "description": "At most 64 VALUED lines (priced or not_applicable: PriceLines::validate counts only those against MAX_LINES) plus at most one explicit unknown line per meter (16 meters), so at most 80 entries. Also refused by the handler and not expressible here: two lines with the same (meter, variant, min_prompt_tokens) that differ in other members (uniqueItems only compares whole lines); a not_applicable line next to any other line of the same meter, and an unknown line next to a valued line of the same meter; a list of only audio-token meters."
+                  "description": "At most 64 VALUED lines (priced or not_applicable: PriceLines::validate counts only those against MAX_LINES) plus at most one explicit unknown line per meter (16 meters), so at most 80 entries. Refused by the handler and not expressible here: two lines with the same (meter, variant, min_prompt_tokens) that differ in other members (uniqueItems only compares whole lines). Refused by the handler and not expressed (compactness: each rule needs a per-meter copy, or a roughly 50 KB copy of the line schema, to state): a not_applicable line next to any other line of the same meter; an unknown line next to a valued line of the same meter; a list whose valued lines are all audio-token meters. The overflow rules (v3::bound) are on the price. The batch list must state exactly the meters of price_lines (same_meters): the same (meter, variant, min_prompt_tokens, not_applicable) keys and the same explicitly unknown meters, so it cannot add, drop or change the kind of a line; rates and amounts may differ. A mismatch is refused with 400; the schema compares no two properties, so it cannot express this. The batch list is bounded like price_lines."
                 },
                 {
                   "type": "null"
@@ -14507,7 +14520,7 @@
               }
             }
           ],
-          "description": "Version 1 (default): input and output rates, no cache pricing and no price lines. Version 2: additionally cache_pricing. Version 3: price_lines (and optional batch_price_lines/max_units), no rates and no cache_pricing. An input_token_limit of 0 is accepted only for a version 3 price whose input-family token meters are all not applicable (handler rule not expressible here). Version 1 and 2 take input_token_limit of at least 1 (validate_price: a zero input ceiling is only for version 3 prices whose input-family token meters are all not applicable). Rate and ceiling overflow (validate_price): each charge is ceil(limit * rate / 1000000) and must fit a signed 64-bit integer; for version 1 the input charge and the output charge are added and the sum must fit too (charge()); for version 2 bound_v2 adds the input charge, the output charge and, for every cache rate that is not not_applicable, charge(input_token_limit, rate), and that total must fit. The schema cannot multiply, so a rate and ceiling pair that overflows is refused by the handler (400) although each value is within its own bounds."
+          "description": "Version 1 (default): input and output rates, no cache pricing and no price lines. Version 2: additionally cache_pricing. Version 3: price_lines (and optional batch_price_lines/max_units), no rates and no cache_pricing. An input_token_limit of 0 is accepted only for a version 3 price whose input-family token meters are all not applicable (handler rule not expressible here). Version 1 and 2 take input_token_limit of at least 1 (validate_price: a zero input ceiling is only for version 3 prices whose input-family token meters are all not applicable). Charge arithmetic (validate_price; billing::charge(tokens, rate) = ceil(tokens x rate / 1000000)): every charge must fit a signed 64-bit integer and so must their sum. Version 1 charges input_token_limit at the input rate and output_token_limit at the output rate (each charge, then their sum). Version 2 (bound_v2) charges the same two amounts and, for every cache rate that is priced, charge(input_token_limit, cache rate): the input charge, the output charge and each cache charge (cache rate x input ceiling) must fit, and so must the total. Version 3 (v3::bound) charges per meter the highest applicable tier of ceil(ceiling x rate / batch), with input_token_limit as the ceiling of the input-family token meters, output_token_limit for output_tokens and the max_units entry for every other meter (a not_applicable meter, a zero ceiling and a missing line or max_units entry charge nothing); each such charge must fit and so must the sum over meters, and batch_price_lines is bounded the same way. The schema cannot multiply, so a rate and ceiling combination that overflows is refused by the handler (400) although each value is within its own bounds. Meter completeness (price_meters_incomplete, stored state): a version 3 price must state, as priced, not_applicable or unknown, every meter its route's workload can use (governance::price_meters: all twelve for chat, responses, messages, embeddings and rerank routes, fewer for image, transcription, speech, realtime and video routes; the workload follows the model's first supported protocol). Otherwise the handler answers 400 with reason price_meters_incomplete and the missing meter names in missing_meters; the schema cannot know the route."
         },
         {
           "type": "array",
@@ -18059,7 +18072,7 @@
                   },
                   "uniqueItems": true,
                   "maxContains": 64,
-                  "description": "At most 64 VALUED lines (priced or not_applicable: PriceLines::validate counts only those against MAX_LINES) plus at most one explicit unknown line per meter (16 meters), so at most 80 entries. Also refused by the handler and not expressible here: two lines with the same (meter, variant, min_prompt_tokens) that differ in other members (uniqueItems only compares whole lines); a not_applicable line next to any other line of the same meter, and an unknown line next to a valued line of the same meter; a list of only audio-token meters."
+                  "description": "At most 64 VALUED lines (priced or not_applicable: PriceLines::validate counts only those against MAX_LINES) plus at most one explicit unknown line per meter (16 meters), so at most 80 entries. Refused by the handler and not expressible here: two lines with the same (meter, variant, min_prompt_tokens) that differ in other members (uniqueItems only compares whole lines). Refused by the handler and not expressed (compactness: each rule needs a per-meter copy, or a roughly 50 KB copy of the line schema, to state): a not_applicable line next to any other line of the same meter; an unknown line next to a valued line of the same meter; a list whose valued lines are all audio-token meters. The overflow rules (v3::bound) are on the price."
                 },
                 {
                   "type": "null"
@@ -21569,7 +21582,7 @@
                   },
                   "uniqueItems": true,
                   "maxContains": 64,
-                  "description": "At most 64 VALUED lines (priced or not_applicable: PriceLines::validate counts only those against MAX_LINES) plus at most one explicit unknown line per meter (16 meters), so at most 80 entries. Also refused by the handler and not expressible here: two lines with the same (meter, variant, min_prompt_tokens) that differ in other members (uniqueItems only compares whole lines); a not_applicable line next to any other line of the same meter, and an unknown line next to a valued line of the same meter; a list of only audio-token meters."
+                  "description": "At most 64 VALUED lines (priced or not_applicable: PriceLines::validate counts only those against MAX_LINES) plus at most one explicit unknown line per meter (16 meters), so at most 80 entries. Refused by the handler and not expressible here: two lines with the same (meter, variant, min_prompt_tokens) that differ in other members (uniqueItems only compares whole lines). Refused by the handler and not expressed (compactness: each rule needs a per-meter copy, or a roughly 50 KB copy of the line schema, to state): a not_applicable line next to any other line of the same meter; an unknown line next to a valued line of the same meter; a list whose valued lines are all audio-token meters. The overflow rules (v3::bound) are on the price. The batch list must state exactly the meters of price_lines (same_meters): the same (meter, variant, min_prompt_tokens, not_applicable) keys and the same explicitly unknown meters, so it cannot add, drop or change the kind of a line; rates and amounts may differ. A mismatch is refused with 400; the schema compares no two properties, so it cannot express this. The batch list is bounded like price_lines."
                 },
                 {
                   "type": "null"
@@ -22298,7 +22311,7 @@
               }
             }
           ],
-          "description": "At least one of max_waiting, max_running and max_kv_cache_percent must be a number (RouteSettings::validate: Set at least one server load threshold). The URL must be /metrics on an approved local endpoint's origin (server-controlled approvals, not expressible here)."
+          "description": "At least one of max_waiting, max_running and max_kv_cache_percent must be a number (RouteSettings::validate: Set at least one server load threshold). The URL must be /metrics on an approved local endpoint's origin (server-controlled approvals, not expressible here). RouteSettings::validate checks the thresholds before the URL, so a 400 for a missing threshold or an out-of-range one is distinguishable by its message from the URL refusal; the bounds are max_waiting and max_running 0-100000 and max_kv_cache_percent 1-100."
         },
         {
           "type": "array",
@@ -22345,7 +22358,8 @@
           ],
           "minItems": 1,
           "maxItems": 4,
-          "items": false
+          "items": false,
+          "description": "The positional array form does not carry the at-least-one-threshold rule: [url] is schema-valid and refused with 400 (\"Set at least one server load threshold\"; documented divergence, probed)."
         }
       ],
       "description": "Closed serde object or existing positional struct array in declared field order. Handler semantic validation is additional."
@@ -22445,7 +22459,8 @@
             "max_concurrency": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 256
+              "maximum": 256,
+              "description": "A JSON integer. JSON Schema treats 3.0 as an integer but the handler (serde) refuses a number written with a fractional part for any integer field with 422, so send integers without \".0\" (documented divergence, probed on this field; it applies to every integer member)."
             },
             "yield_live_threshold": {
               "anyOf": [
@@ -22867,7 +22882,7 @@
               "minLength": 1,
               "maxLength": 512,
               "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
-              "description": "Non-blank upstream model identifier without control characters, at most 512 UTF-8 bytes. Bedrock connections additionally require a model or inference-profile ID valid for the connection's region."
+              "description": "Non-blank upstream model identifier without control characters, at most 512 UTF-8 bytes. Bedrock connections additionally require a model or inference-profile ID valid for the connection's region. The pattern's \\s is ECMA-262 whitespace, which counts U+FEFF but not U+0085; the handler trims with Rust's Unicode White_Space, which counts U+0085 (also a C1 control, refused anyway) but not U+FEFF, so a value made only of U+FEFF is blank to an ECMA validator and not blank to the handler."
             },
             "enabled": {
               "type": "boolean"
@@ -22892,7 +22907,7 @@
               "minLength": 1,
               "maxLength": 512,
               "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
-              "description": "Non-blank upstream model identifier without control characters, at most 512 UTF-8 bytes. Bedrock connections additionally require a model or inference-profile ID valid for the connection's region."
+              "description": "Non-blank upstream model identifier without control characters, at most 512 UTF-8 bytes. Bedrock connections additionally require a model or inference-profile ID valid for the connection's region. The pattern's \\s is ECMA-262 whitespace, which counts U+FEFF but not U+0085; the handler trims with Rust's Unicode White_Space, which counts U+0085 (also a C1 control, refused anyway) but not U+FEFF, so a value made only of U+FEFF is blank to an ECMA validator and not blank to the handler."
             },
             {
               "type": "boolean"
