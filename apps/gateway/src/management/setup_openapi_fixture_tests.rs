@@ -2386,9 +2386,9 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         ),
         (
             "the earliest representable instant",
-            format!("-8334601315200000000_{row}"),
+            format!("-8334601228800000000_{row}"),
         ),
-        ("one before it", format!("-8334601315200000001_{row}")),
+        ("one before it", format!("-8334601228800000001_{row}")),
         (
             "a signed zero-padded value",
             format!("+0000000000000000000012345_{row}"),
