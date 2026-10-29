@@ -162,7 +162,8 @@ pub(super) struct Seed<'a> {
     pub(super) email: Mail,
     pub(super) cleared: Option<Mail>,
     /// `Some((level, severity, subject_key, summary))` where a table constraint
-    /// fixes the producer's exact row shape (aged unknown holds).
+    /// fixes the producer's exact row shape (aged unknown holds), or the producer
+    /// writes its own subject key and summary (the partitions check).
     pub(super) shape: Option<(i32, &'static str, String, &'static str)>,
 }
 impl<'a> Seed<'a> {
@@ -214,6 +215,27 @@ impl<'a> Seed<'a> {
         seed.rule = None;
         seed.builtin = Some(name);
         seed.severity = "critical";
+        seed
+    }
+    /// The built-in `partitions_missing` incident exactly as
+    /// `partitions::reconcile_alert` writes it: level 1, the built-in's name as the
+    /// subject key, `critical` only when a table has `months_ahead < 1` (else
+    /// `warning`), the producer's summary.
+    pub(super) fn partitions(error: Option<&str>, months_ahead: i64) -> Self {
+        let severity = if months_ahead < 1 {
+            "critical"
+        } else {
+            "warning"
+        };
+        let mut seed =
+            Self::builtin("partitions_missing").details(partitions_details(error, months_ahead));
+        seed.severity = severity;
+        seed.shape = Some((
+            1,
+            severity,
+            "partitions_missing".to_owned(),
+            "History tables are running out of monthly partitions",
+        ));
         seed
     }
     pub(super) fn email(mut self, email: Mail, cleared: Option<Mail>) -> Self {
@@ -307,10 +329,11 @@ fn batch_stalled_details(counted: bool) -> Value {
         json!({"batch_id":batch_id, "mode":"native", "total":null, "done":0, "minutes_without_progress":75, "window_minutes":60})
     }
 }
-/// `partitions::reconcile_alert` details, with and without a creation error.
-pub(super) fn partitions_details(error: Option<&str>) -> Value {
+/// `partitions::reconcile_alert` details, with and without a creation error; the
+/// table is listed because its coverage is below two months.
+fn partitions_details(error: Option<&str>, months_ahead: i64) -> Value {
     json!({
-        "tables":[{"table":"inference_executions", "covered_until":chrono::Utc::now(), "months_ahead":1}],
+        "tables":[{"table":"inference_executions", "covered_until":chrono::Utc::now(), "months_ahead":months_ahead}],
         "creation_error":error,
         "action":"run `open-model-gateway partitions ensure` with the schema owner",
     })
@@ -608,9 +631,9 @@ pub(super) async fn platform_events(
     let mut s = sent_pair(Seed::builtin("scim_last_admin").details(json!({"resource":"group"})));
     s.resolution = Some("cleared");
     seed(pool, s).await;
-    for error in [Some("permission denied"), None] {
-        let mut s =
-            sent_pair(Seed::builtin("partitions_missing").details(partitions_details(error)));
+    // A table with no future month is critical; one month ahead only warns.
+    for (error, months_ahead) in [(Some("permission denied"), 0), (None, 1)] {
+        let mut s = sent_pair(Seed::partitions(error, months_ahead));
         s.resolution = Some("cleared");
         seed(pool, s).await;
     }
@@ -876,9 +899,7 @@ pub(super) async fn webhooks(
         .email(Mail::Sent, Some(Mail::Sent));
     first.resolution = Some("cleared");
     seed(pool, first).await;
-    let second = Seed::builtin("partitions_missing")
-        .details(partitions_details(None))
-        .email(Mail::Sent, None);
+    let second = Seed::partitions(None, 1).email(Mail::Sent, None);
     seed(pool, second).await;
     let rows: Vec<(Uuid, Option<String>)> = sqlx::query_as("SELECT q.id,q.transition FROM alert_webhook_outbox q WHERE q.destination_id=$1 ORDER BY q.transition NULLS LAST,q.created_at")
         .bind(busy)
