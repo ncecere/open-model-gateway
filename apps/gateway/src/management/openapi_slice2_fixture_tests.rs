@@ -40,6 +40,33 @@ fn target(path: &str, query: &str) -> String {
         format!("{path}?{query}")
     }
 }
+/// Percent-encode everything outside the RFC 3986 unreserved set.
+fn encode_query(pairs: &[(String, String)]) -> String {
+    fn escape(text: &str) -> String {
+        text.bytes()
+            .map(|b| match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                    char::from(b).to_string()
+                }
+                _ => format!("%{b:02X}"),
+            })
+            .collect()
+    }
+    pairs
+        .iter()
+        .map(|(n, v)| format!("{}={}", escape(n), escape(v)))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+/// A policy body: the three required rates (null) plus `extra`.
+fn policy_body(extra: Value) -> Value {
+    let mut body =
+        json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null});
+    for (name, value) in extra.as_object().unwrap() {
+        body[name] = value.clone();
+    }
+    body
+}
 fn pairs(values: &[(&str, &str)]) -> Vec<(String, String)> {
     values
         .iter()
@@ -139,6 +166,80 @@ impl Client {
             "{method} {status}: request schema verdict disagrees with the handler class"
         );
         self.send(who, method, path, Some(body), status).await;
+    }
+    /// The handler's verdict on an input: 400 and 422 refuse it; a success, a
+    /// redirect or a domain refusal (404, 409) got past input validation.
+    fn input_verdict(status: StatusCode) -> Option<bool> {
+        match status.as_u16() {
+            400 | 422 => Some(false),
+            200..=399 | 404 | 409 => Some(true),
+            _ => None,
+        }
+    }
+    /// One handler-derived probe the derived vectors cannot generate: the
+    /// SCHEMA's verdict and the HANDLER's verdict on the same body, each pinned
+    /// to what the handler source says. A documented divergence (the schema
+    /// stricter or looser than the handler) is pinned too, so a change on either
+    /// side shows up. Only the label is ever reported, never a value.
+    #[allow(clippy::too_many_arguments)]
+    async fn pin_body(
+        &self,
+        who: &Browser,
+        method: &str,
+        path: &str,
+        what: &str,
+        body: Value,
+        schema_accepts: bool,
+        handler_accepts: bool,
+    ) {
+        let schema = openapi::responses::check_request(method, path, &body).is_ok();
+        let r = self.raw(who, method, path, Some(body), &[]).await;
+        self.expect(
+            schema == schema_accepts,
+            &format!("{method} {what}: the schema verdict changed"),
+        );
+        self.expect(
+            Self::input_verdict(r.status) == Some(handler_accepts),
+            &format!("{method} {what}: the handler verdict changed"),
+        );
+    }
+    /// [`Client::pin_body`] for a GET whose query values are checked against
+    /// the documented parameter schemas of `template`.
+    #[allow(clippy::too_many_arguments)]
+    async fn pin_query(
+        &self,
+        who: &Browser,
+        template: &str,
+        path: &str,
+        what: &str,
+        query: &[(&str, &str)],
+        schema_accepts: bool,
+        handler_accepts: bool,
+    ) {
+        let document = openapi::responses::artifact();
+        let parameters = document["paths"][template]["get"]["parameters"]
+            .as_array()
+            .unwrap();
+        let schema = query.iter().all(|(name, value)| {
+            let parameter = parameters.iter().find(|p| p["name"] == *name).unwrap();
+            openapi::responses::validate_value(document, &parameter["schema"], &json!(value))
+                .is_ok()
+        });
+        let query: Vec<(String, String)> = query
+            .iter()
+            .map(|(n, v)| ((*n).to_owned(), (*v).to_owned()))
+            .collect();
+        let r = self
+            .raw(who, "GET", &target(path, &encode_query(&query)), None, &[])
+            .await;
+        self.expect(
+            schema == schema_accepts,
+            &format!("GET {what}: the schema verdict changed"),
+        );
+        self.expect(
+            Self::input_verdict(r.status) == Some(handler_accepts),
+            &format!("GET {what}: the handler verdict changed"),
+        );
     }
     /// A fixture expectation that is reported with the rest instead of
     /// stopping the run.
@@ -1276,6 +1377,84 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         .ok(&auditor, "GET", &format!("{platform}/policy"), None)
         .await;
     assert!(unknown_windows["budgets"][0]["remaining_microusd"].is_null());
+    assert_ne!(unknown_windows["budgets"][0]["unknown_cost_requests"], "0");
+    assert!(unknown_windows["budgets"][0]["used_microusd"].is_string());
+    // A window whose accounting row is unreadable: the drift seeded exactly as
+    // governance/tests.rs does it (negative counters), on a dedicated workspace
+    // and restored afterwards.
+    let drift_ws = id(&c
+        .ok(
+            &admin,
+            "POST",
+            "/api/v1/platform/workspaces",
+            Some(json!({"name":"Contract drift","kind":"project","owner_user_id":f.owner.user_id})),
+        )
+        .await);
+    let drift_policy = format!("/api/v1/platform/workspaces/{drift_ws}/policy");
+    c.ok(
+        &admin,
+        "PUT",
+        &drift_policy,
+        Some(policy_body(
+            json!({"budgets":[{"period":"day","amount_microusd":"100"},{"period":"month","amount_microusd":"1000"}]}),
+        )),
+    )
+    .await;
+    let (status, drift_key) = key(&f, &f.owner, drift_ws, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    attempt(
+        &pool,
+        drift_ws,
+        id(&drift_key),
+        deployment,
+        "contract-drift",
+        None,
+        true,
+    )
+    .await;
+    let healthy = c.ok(&auditor, "GET", &drift_policy, None).await;
+    assert_eq!(healthy["budgets"][0]["period"], "day");
+    assert_eq!(healthy["budgets"][0]["headroom_status"], "known");
+    assert_eq!(healthy["budgets"][0]["settled_microusd"], "7");
+    let saved: (String, String) = sqlx::query_as("SELECT settled_microusd::text,held_microusd::text FROM budget_totals WHERE scope_kind='workspace' AND scope_id=$1 AND period='day'")
+        .bind(drift_ws)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let corrupted = sqlx::query("UPDATE budget_totals SET settled_microusd=-1,held_microusd=0 WHERE scope_kind='workspace' AND scope_id=$1 AND period='day'")
+        .bind(drift_ws)
+        .execute(&pool)
+        .await
+        .unwrap()
+        .rows_affected();
+    assert_eq!(corrupted, 1);
+    let drifted = c.ok(&auditor, "GET", &drift_policy, None).await;
+    assert_eq!(drifted["budgets"][0]["headroom_status"], "unknown");
+    for field in [
+        "used_microusd",
+        "unresolved_usage",
+        "exhausted",
+        "settled_microusd",
+        "pending_held_microusd",
+        "unknown_held_microusd",
+        "unknown_cost_requests",
+        "remaining_microusd",
+    ] {
+        assert!(drifted["budgets"][0][field].is_null());
+    }
+    // The neighbouring window stays readable.
+    assert_eq!(drifted["budgets"][1]["headroom_status"], "known");
+    sqlx::query("UPDATE budget_totals SET settled_microusd=$2::numeric,held_microusd=$3::numeric WHERE scope_kind='workspace' AND scope_id=$1 AND period='day'")
+        .bind(drift_ws)
+        .bind(&saved.0)
+        .bind(&saved.1)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        c.ok(&auditor, "GET", &drift_policy, None).await["budgets"][0]["headroom_status"],
+        "known"
+    );
     c.ok(
         &admin,
         "POST",
@@ -1901,7 +2080,8 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             template,
             &admin,
             path,
-            json!({"requests_per_minute":null,"tokens_per_minute":100,"concurrent_requests":3,"concurrent_jobs":null,"storage_bytes":1024,"key_issuances_per_holder":3,"key_issuances_per_workspace":9,"budgets":[{"period":"month","amount_microusd":"9007199254740993"}]})
+            // Every rate non-null, so each bound runs.
+            json!({"requests_per_minute":100,"tokens_per_minute":100,"concurrent_requests":3,"concurrent_jobs":2,"storage_bytes":1024,"key_issuances_per_holder":3,"key_issuances_per_workspace":9,"budgets":[{"period":"month","amount_microusd":"9007199254740993"}]})
         );
     }
     for (label, template, path) in [
@@ -1924,6 +2104,58 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             path,
             json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"monthly_budget_microusd":"5000","budget_period":"month"})
         );
+    }
+    // Handler-derived policy vectors the derived set cannot generate: the
+    // positive-i64 money bound and its documented leading-zero divergence, the
+    // exclusivity of budgets and the monthly form, and repeated periods.
+    for (target, path) in [
+        (
+            "type",
+            "/api/v1/platform/workspace-types/team/policy".to_owned(),
+        ),
+        ("workspace", format!("{vector_platform}/policy")),
+    ] {
+        c.guarded(
+            &format!("PUT policy probes ({target})"),
+            async {
+                // (what, extra fields, schema accepts, handler accepts)
+                let probes: Vec<(&str, Value, bool, bool)> = vec![
+                    ("monthly money i64 max", json!({"monthly_budget_microusd":"9223372036854775807"}), true, true),
+                    ("monthly money i64 max + 1", json!({"monthly_budget_microusd":"9223372036854775808"}), false, false),
+                    ("monthly money nineteen nines", json!({"monthly_budget_microusd":"9999999999999999999"}), false, false),
+                    ("monthly money zero", json!({"monthly_budget_microusd":"0"}), false, false),
+                    // The handler reads "007" as 7; the contract documents canonical digits only.
+                    ("monthly money leading zeros", json!({"monthly_budget_microusd":"007"}), false, true),
+                    ("budgets money i64 max", json!({"budgets":[{"period":"month","amount_microusd":"9223372036854775807"}]}), true, true),
+                    ("budgets money i64 max + 1", json!({"budgets":[{"period":"month","amount_microusd":"9223372036854775808"}]}), false, false),
+                    ("budgets money nineteen nines", json!({"budgets":[{"period":"month","amount_microusd":"9999999999999999999"}]}), false, false),
+                    ("budgets money zero", json!({"budgets":[{"period":"month","amount_microusd":"0"}]}), false, false),
+                    ("budgets money leading zeros", json!({"budgets":[{"period":"month","amount_microusd":"007"}]}), false, true),
+                    ("positional budget money i64 max + 1", json!({"budgets":[["month","9223372036854775808"]]}), false, false),
+                    ("positional budget money i64 max", json!({"budgets":[["day","9223372036854775807"]]}), true, true),
+                    // Exactly one of budgets / monthly_budget_microusd; budget_period only with the monthly form.
+                    ("budgets and monthly", json!({"budgets":[],"monthly_budget_microusd":"5000"}), false, false),
+                    ("budgets and budget_period", json!({"budgets":[],"budget_period":"month"}), false, false),
+                    ("budgets and null monthly", json!({"budgets":[],"monthly_budget_microusd":null}), false, false),
+                    ("budget_period alone", json!({"budget_period":"month"}), false, false),
+                    ("neither budgets nor monthly", json!({}), false, false),
+                    ("null monthly alone", json!({"monthly_budget_microusd":null}), true, true),
+                    ("monthly with a period", json!({"monthly_budget_microusd":"5000","budget_period":"day"}), true, true),
+                    ("monthly with a null period", json!({"monthly_budget_microusd":"5000","budget_period":null}), false, false),
+                    // A repeated period is refused even with different amounts (parse_budgets).
+                    ("repeated period, same amount", json!({"budgets":[{"period":"month","amount_microusd":"5"},{"period":"month","amount_microusd":"5"}]}), false, false),
+                    ("repeated period, other amount", json!({"budgets":[{"period":"month","amount_microusd":"5"},{"period":"month","amount_microusd":"6"}]}), false, false),
+                    ("repeated period, positional", json!({"budgets":[["day","5"],["day","6"]]}), false, false),
+                    ("repeated period, mixed forms", json!({"budgets":[{"period":"week","amount_microusd":"5"},["week","6"]]}), false, false),
+                    ("two distinct periods", json!({"budgets":[["day","5"],{"period":"lifetime","amount_microusd":"6"}]}), true, true),
+                ];
+                for (what, extra, schema, handler) in probes {
+                    c.pin_body(&admin, "PUT", &path, what, policy_body(extra), schema, handler)
+                        .await;
+                }
+            },
+        )
+        .await;
     }
     for (kind, valid) in [
         (

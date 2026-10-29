@@ -798,7 +798,7 @@
         "type": "object"
       },
       "AccessBudgetWindow": {
-        "description": "One budget window as a platform reader sees it: usage is always visible; the figures are all null only when the accounting totals are unreadable.",
+        "description": "One budget window as a platform reader sees it: usage is always visible. Three shapes: known (no unknown-cost request; remaining_microusd is a decimal), unknown (at least one unknown-cost request: every figure is present but remaining_microusd is null) and unavailable (the accounting row is unreadable: used_microusd, unresolved_usage, exhausted, settled_microusd, pending_held_microusd, unknown_held_microusd, unknown_cost_requests and remaining_microusd are all null together and headroom_status is unknown). A null group therefore implies headroom_status unknown, but unknown does not imply the null group (governance/totals.rs read_budget_report and BudgetReport::remaining, policies.rs budget_windows).",
         "oneOf": [
           {
             "additionalProperties": false,
@@ -813,10 +813,7 @@
                 "type": "boolean"
               },
               "headroom_status": {
-                "enum": [
-                  "known",
-                  "unknown"
-                ]
+                "const": "known"
               },
               "layer": {
                 "enum": [
@@ -834,13 +831,93 @@
                 "$ref": "#/components/schemas/IdentityPeriod"
               },
               "remaining_microusd": {
-                "$ref": "#/components/schemas/IdentityNullableDecimal"
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
               },
               "settled_microusd": {
                 "$ref": "#/components/schemas/IdentityUnsignedDecimal"
               },
               "unknown_cost_requests": {
+                "const": "0"
+              },
+              "unknown_held_microusd": {
                 "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              "unresolved_usage": {
+                "type": "boolean"
+              },
+              "usage_visible": {
+                "const": true
+              },
+              "used_microusd": {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              "window_end": {
+                "$ref": "#/components/schemas/IdentityNullableTime"
+              },
+              "window_start": {
+                "$ref": "#/components/schemas/IdentityTime"
+              }
+            },
+            "required": [
+              "layer",
+              "period",
+              "amount_microusd",
+              "monthly_budget_microusd",
+              "budget_period",
+              "window_start",
+              "window_end",
+              "usage_visible",
+              "used_microusd",
+              "unresolved_usage",
+              "exhausted",
+              "settled_microusd",
+              "pending_held_microusd",
+              "unknown_held_microusd",
+              "unknown_cost_requests",
+              "remaining_microusd",
+              "headroom_status"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "amount_microusd": {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              "budget_period": {
+                "$ref": "#/components/schemas/IdentityPeriod"
+              },
+              "exhausted": {
+                "type": "boolean"
+              },
+              "headroom_status": {
+                "const": "unknown"
+              },
+              "layer": {
+                "enum": [
+                  "platform",
+                  "local"
+                ]
+              },
+              "monthly_budget_microusd": {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              "pending_held_microusd": {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              "period": {
+                "$ref": "#/components/schemas/IdentityPeriod"
+              },
+              "remaining_microusd": {
+                "type": "null"
+              },
+              "settled_microusd": {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              "unknown_cost_requests": {
+                "pattern": "^[1-9][0-9]*$",
+                "type": "string"
               },
               "unknown_held_microusd": {
                 "$ref": "#/components/schemas/IdentityUnsignedDecimal"
@@ -959,8 +1036,7 @@
               "remaining_microusd",
               "headroom_status"
             ],
-            "type": "object",
-            "x-omg-unobserved-branch": "The accounting report is unavailable only when read_budget_report returns None for a budget_totals row whose counters are negative or mutually inconsistent (governance/totals.rs read_budget_report). The budget_totals_maintain trigger (0015_budget_totals.sql) never writes such a row, so the branch needs corrupted accounting data that no production path or test fixture can produce."
+            "type": "object"
           }
         ]
       },
@@ -3212,7 +3288,157 @@
                 "$ref": "#/components/schemas/IdentityPeriod"
               },
               "budgets": {
-                "description": "Full replacement set of stacked budgets, at most one per period (day, week, month, lifetime); a repeated period is refused.",
+                "allOf": [
+                  {
+                    "contains": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "amount_microusd": {
+                              "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                            },
+                            "period": {
+                              "const": "day"
+                            }
+                          },
+                          "required": [
+                            "period"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "items": false,
+                          "maxItems": 2,
+                          "minItems": 1,
+                          "prefixItems": [
+                            {
+                              "const": "day"
+                            },
+                            {
+                              "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                            }
+                          ],
+                          "type": "array"
+                        }
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 0
+                  },
+                  {
+                    "contains": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "amount_microusd": {
+                              "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                            },
+                            "period": {
+                              "const": "week"
+                            }
+                          },
+                          "required": [
+                            "period"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "items": false,
+                          "maxItems": 2,
+                          "minItems": 1,
+                          "prefixItems": [
+                            {
+                              "const": "week"
+                            },
+                            {
+                              "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                            }
+                          ],
+                          "type": "array"
+                        }
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 0
+                  },
+                  {
+                    "contains": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "amount_microusd": {
+                              "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                            },
+                            "period": {
+                              "const": "month"
+                            }
+                          },
+                          "required": [
+                            "period"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "items": false,
+                          "maxItems": 2,
+                          "minItems": 1,
+                          "prefixItems": [
+                            {
+                              "const": "month"
+                            },
+                            {
+                              "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                            }
+                          ],
+                          "type": "array"
+                        }
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 0
+                  },
+                  {
+                    "contains": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "amount_microusd": {
+                              "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                            },
+                            "period": {
+                              "const": "lifetime"
+                            }
+                          },
+                          "required": [
+                            "period"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "items": false,
+                          "maxItems": 2,
+                          "minItems": 1,
+                          "prefixItems": [
+                            {
+                              "const": "lifetime"
+                            },
+                            {
+                              "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                            }
+                          ],
+                          "type": "array"
+                        }
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 0
+                  }
+                ],
+                "description": "Full replacement set of stacked budgets, at most one per period (day, week, month, lifetime). A repeated period is refused with 400 even when the amounts differ (policies.rs parse_budgets); the schema states this with one maxContains 1 per period.",
                 "items": {
                   "description": "Closed serde object or positional struct array in declared field order.",
                   "oneOf": [
@@ -3225,15 +3451,10 @@
                               "$ref": "#/components/schemas/IdentityUnsignedDecimal"
                             },
                             {
-                              "not": {
-                                "const": "0"
-                              }
-                            },
-                            {
-                              "maxLength": 19
+                              "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-7])$"
                             }
                           ],
-                          "description": "Exact positive integer micro-USD amount, canonical (no leading zeros), at most 19 digits and at most 9223372036854775807 (governance.rs money(positive=true), which also tolerates leading zeros that the contract does not document)."
+                          "description": "Exact positive integer micro-USD amount: canonical decimal digits (no leading zeros), at least 1 and at most 9223372036854775807 (the handler parses an i64: governance.rs money(positive=true)). The handler also tolerates leading zeros (\"007\" is read as 7), which the contract does not document and the schema refuses."
                         },
                         "period": {
                           "$ref": "#/components/schemas/IdentityPeriod"
@@ -3259,15 +3480,10 @@
                               "$ref": "#/components/schemas/IdentityUnsignedDecimal"
                             },
                             {
-                              "not": {
-                                "const": "0"
-                              }
-                            },
-                            {
-                              "maxLength": 19
+                              "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-7])$"
                             }
                           ],
-                          "description": "Exact positive integer micro-USD amount, canonical (no leading zeros), at most 19 digits and at most 9223372036854775807 (governance.rs money(positive=true), which also tolerates leading zeros that the contract does not document)."
+                          "description": "Exact positive integer micro-USD amount: canonical decimal digits (no leading zeros), at least 1 and at most 9223372036854775807 (the handler parses an i64: governance.rs money(positive=true)). The handler also tolerates leading zeros (\"007\" is read as 7), which the contract does not document and the schema refuses."
                         }
                       ],
                       "type": "array"
@@ -3275,8 +3491,7 @@
                   ]
                 },
                 "maxItems": 4,
-                "type": "array",
-                "uniqueItems": true
+                "type": "array"
               },
               "concurrent_jobs": {
                 "anyOf": [
@@ -3334,15 +3549,10 @@
                         "$ref": "#/components/schemas/IdentityUnsignedDecimal"
                       },
                       {
-                        "not": {
-                          "const": "0"
-                        }
-                      },
-                      {
-                        "maxLength": 19
+                        "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-7])$"
                       }
                     ],
-                    "description": "Exact positive integer micro-USD amount, canonical (no leading zeros), at most 19 digits and at most 9223372036854775807 (governance.rs money(positive=true), which also tolerates leading zeros that the contract does not document)."
+                    "description": "Exact positive integer micro-USD amount: canonical decimal digits (no leading zeros), at least 1 and at most 9223372036854775807 (the handler parses an i64: governance.rs money(positive=true)). The handler also tolerates leading zeros (\"007\" is read as 7), which the contract does not document and the schema refuses."
                   },
                   {
                     "type": "null"
@@ -3490,15 +3700,10 @@
                         "$ref": "#/components/schemas/IdentityUnsignedDecimal"
                       },
                       {
-                        "not": {
-                          "const": "0"
-                        }
-                      },
-                      {
-                        "maxLength": 19
+                        "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-7])$"
                       }
                     ],
-                    "description": "Exact positive integer micro-USD amount, canonical (no leading zeros), at most 19 digits and at most 9223372036854775807 (governance.rs money(positive=true), which also tolerates leading zeros that the contract does not document)."
+                    "description": "Exact positive integer micro-USD amount: canonical decimal digits (no leading zeros), at least 1 and at most 9223372036854775807 (the handler parses an i64: governance.rs money(positive=true)). The handler also tolerates leading zeros (\"007\" is read as 7), which the contract does not document and the schema refuses."
                   },
                   {
                     "type": "null"
