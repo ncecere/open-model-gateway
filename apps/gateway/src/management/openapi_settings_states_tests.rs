@@ -322,6 +322,9 @@ pub(super) async fn storage(
 
 /// Audit export: never configured on this replica, configured but disabled with
 /// nothing queued, queued and delivering, and failing and retrying.
+/// Three gateways, three actors and the exporter are distinct fixtures of one
+/// scenario; a parameter struct would only rename them.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn audit_export(
     pool: &PgPool,
     configured: &Gateway,
