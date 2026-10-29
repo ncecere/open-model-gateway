@@ -945,9 +945,9 @@
                 "tls",
                 "authentication",
                 "rejected",
-                "timeout",
-                "host_not_allowed"
-              ]
+                "timeout"
+              ],
+              "description": "A delivery category (email.rs DeliveryError). host_not_allowed never appears here: recording it violates the last-test CHECK (migration 0010), so the request fails with 409 before this body is built."
             },
             "recipient": {
               "type": "string"
@@ -2830,10 +2830,9 @@
                     "authentication",
                     "rejected",
                     "timeout",
-                    "host_not_allowed",
                     null
                   ],
-                  "description": "Delivery category of the last failed test (email.rs DeliveryError::as_str); host_not_allowed when the operator's relay allowlist does not list the host; null when it succeeded."
+                  "description": "Delivery category of the last failed test; null when it succeeded. host_not_allowed is never recorded: the column's CHECK (migration 0010) lists only these categories, so a test against a relay host the operator has not listed is answered 409 and records nothing."
                 }
               },
               "required": [
