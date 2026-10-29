@@ -16,7 +16,15 @@
 //!
 //! * A query parameter that can never ride a positive request (its handler
 //!   always refuses a request carrying it) is exempt only with
-//!   `x-omg-unobserved-parameter: "<reason>"` on the parameter.
+//!   `x-omg-unobserved-parameter: "<reason>"` on the parameter. The exemption
+//!   is STALE (and refused) once any positive request accepted the parameter.
+//! * Typed map values (`patternProperties` / schema-valued
+//!   `additionalProperties`) are walked at the wildcard location `<map>/*`.
+//! * On a NULLABLE node `x-omg-unobserved-branch` must start with `null:` or
+//!   `non-null:`, naming the one side it exempts; on a oneOf/anyOf branch it
+//!   exempts that branch. Annotations are refused on top-level component
+//!   schemas (they apply to every `$ref` of the component), so exemptions live
+//!   at the referencing location, inline.
 //!
 //! Messages name schema/data JSON pointers only, never instance values.
 use anyhow::{Context, Result, ensure};
@@ -88,6 +96,21 @@ fn reason<'a>(node: &'a Value, key: &str) -> Option<&'a str> {
         .as_str()
         .map(str::trim)
         .filter(|s| !s.is_empty())
+}
+/// Which side of a nullable node an `x-omg-unobserved-branch` reason exempts:
+/// `Some(true)` for `null: <reason>`, `Some(false)` for `non-null: <reason>`.
+/// A reason naming no side (or no reason after it) exempts nothing.
+pub(super) fn exempt_side(node: &Value) -> Option<bool> {
+    let text = reason(node, UNOBSERVED_BRANCH)?;
+    let (side, rest) = text.split_once(':')?;
+    if rest.trim().is_empty() {
+        return None;
+    }
+    match side {
+        "null" => Some(true),
+        "non-null" => Some(false),
+        _ => None,
+    }
 }
 fn describe(branch: &Value) -> String {
     if let Some(reference) = branch["$ref"].as_str() {
@@ -180,17 +203,21 @@ fn expect(
             .or_insert(exempt);
     }
     if nullable(node) {
-        let exempt = reason(node, UNOBSERVED_BRANCH).is_some();
+        let side = exempt_side(node);
         let entry = out
             .branches
             .entry((data.to_owned(), format!("{sptr}/type")))
             .or_default();
-        entry.entry(0).or_insert(("null".into(), exempt));
-        entry.entry(1).or_insert(("non-null".into(), exempt));
+        entry
+            .entry(0)
+            .or_insert(("null".into(), side == Some(true)));
+        entry
+            .entry(1)
+            .or_insert(("non-null".into(), side == Some(false)));
     }
     for keyword in ["oneOf", "anyOf"] {
         for (i, branch) in node[keyword].as_array().into_iter().flatten().enumerate() {
-            let exempt = reason(branch, UNOBSERVED_BRANCH).is_some();
+            let exempt = !nullable(branch) && reason(branch, UNOBSERVED_BRANCH).is_some();
             out.branches
                 .entry((data.to_owned(), format!("{sptr}/{keyword}")))
                 .or_default()
@@ -267,6 +294,32 @@ fn expect(
             stack,
         )?;
     }
+    // Typed map values live at the wildcard location of their map.
+    for (pattern, child) in node["patternProperties"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(_, child)| child.is_object())
+    {
+        expect(
+            document,
+            child,
+            &format!("{data}/*"),
+            &format!("{sptr}/patternProperties/{}", segment(pattern)),
+            out,
+            stack,
+        )?;
+    }
+    if let Some(child) = node.get("additionalProperties").filter(|v| v.is_object()) {
+        expect(
+            document,
+            child,
+            &format!("{data}/*"),
+            &format!("{sptr}/additionalProperties"),
+            out,
+            stack,
+        )?;
+    }
     Ok(())
 }
 
@@ -279,12 +332,29 @@ fn observe_node(
     data: &str,
     sptr: &str,
     seen: &mut OpObserved,
+    active: &mut Vec<(String, String)>,
 ) -> Result<()> {
+    // A reference followed twice at the SAME data location made no progress
+    // through the instance: a cycle, reported instead of overflowing the stack.
+    ensure!(
+        active.len() < 256,
+        "schema nesting too deep at `{}`",
+        show(data)
+    );
     let matches = |schema: &Value| -> Result<bool> {
         Ok(super::responses::validator(document, schema)?.is_valid(instance))
     };
     if let Some((target, pointer)) = follow(document, node)? {
-        observe_node(document, target, instance, data, &pointer, seen)?;
+        let frame = (pointer.clone(), data.to_owned());
+        ensure!(
+            !active.contains(&frame),
+            "schema reference cycle at {pointer} (data location `{}`)",
+            show(data)
+        );
+        active.push(frame);
+        let walked = observe_node(document, target, instance, data, &pointer, seen, active);
+        active.pop();
+        walked?;
     }
     if let Some(array) = instance.as_array()
         && is_array_schema(node)
@@ -310,6 +380,7 @@ fn observe_node(
                     data,
                     &format!("{sptr}/{keyword}/{i}"),
                     seen,
+                    active,
                 )?;
             }
         }
@@ -322,6 +393,7 @@ fn observe_node(
             data,
             &format!("{sptr}/allOf/{i}"),
             seen,
+            active,
         )?;
     }
     if let Some(condition) = node.get("if") {
@@ -334,6 +406,7 @@ fn observe_node(
                 data,
                 &format!("{sptr}/{keyword}"),
                 seen,
+                active,
             )?;
         }
     }
@@ -348,6 +421,54 @@ fn observe_node(
                     &format!("{data}/{name}"),
                     &format!("{sptr}/properties/{name}"),
                     seen,
+                    active,
+                )?;
+            }
+        }
+    }
+    if let Some(object) = instance.as_object() {
+        let patterns: Vec<(&String, &Value, _)> = node["patternProperties"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(_, child)| child.is_object())
+            .map(|(pattern, child)| {
+                super::validation::compile_schema(
+                    &serde_json::json!({"type":"string","pattern":pattern}),
+                )
+                .map(|validator| (pattern, child, validator))
+            })
+            .collect::<Result<_>>()?;
+        let declared = node["properties"].as_object();
+        for (name, value) in object {
+            let name_value = Value::String(name.clone());
+            let mut selected = false;
+            for (pattern, child, validator) in &patterns {
+                if validator.is_valid(&name_value) {
+                    selected = true;
+                    observe_node(
+                        document,
+                        child,
+                        value,
+                        &format!("{data}/*"),
+                        &format!("{sptr}/patternProperties/{}", segment(pattern)),
+                        seen,
+                        active,
+                    )?;
+                }
+            }
+            if !selected
+                && declared.is_none_or(|d| !d.contains_key(name))
+                && let Some(child) = node.get("additionalProperties").filter(|v| v.is_object())
+            {
+                observe_node(
+                    document,
+                    child,
+                    value,
+                    &format!("{data}/*"),
+                    &format!("{sptr}/additionalProperties"),
+                    seen,
+                    active,
                 )?;
             }
         }
@@ -362,6 +483,7 @@ fn observe_node(
                     &format!("{data}/*"),
                     &format!("{sptr}/items"),
                     seen,
+                    active,
                 )?;
             }
         }
@@ -379,6 +501,7 @@ fn observe_node(
                     &format!("{data}/*"),
                     &format!("{sptr}/prefixItems/{i}"),
                     seen,
+                    active,
                 )?;
             }
         }
@@ -417,6 +540,7 @@ impl Observed {
                     "",
                     &format!("/response/{status}"),
                     seen,
+                    &mut Vec::new(),
                 )?;
             }
         }
@@ -430,6 +554,13 @@ impl Observed {
         let seen = self.0.get(op_key).unwrap_or(&empty);
         let mut gaps = Vec::new();
         let unobservable = unobservable_queries(document, operation)?;
+        for name in &unobservable {
+            if seen.queries.contains(name) {
+                gaps.push(format!(
+                    "query parameter `{name}` carries {UNOBSERVED_PARAMETER} but a positive request accepted it: the exemption is stale, remove it"
+                ));
+            }
+        }
         for name in documented_queries(document, operation)? {
             if !seen.queries.contains(&name) && !unobservable.contains(&name) {
                 gaps.push(format!(

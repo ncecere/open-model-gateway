@@ -447,7 +447,7 @@ fn management_openapi_coverage_nullability_is_a_branch() {
     let mut exempt = document.clone();
     exempt["paths"]["/api/v1/x"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
         ["properties"]["cost"]["x-omg-unobserved-branch"] =
-        json!("null needs a pricing gap the fixtures cannot create");
+        json!("null: needs a pricing gap the fixtures cannot create");
     run(&exempt, &[json!({"cost":"1"})], &[]).unwrap();
     exempt["paths"]["/api/v1/x"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
         ["properties"]["cost"]["x-omg-unobserved-branch"] = json!(" ");
@@ -511,12 +511,24 @@ fn management_openapi_coverage_nullable_exemption_is_validated_by_quality() {
     let node = |reason: Value| {
         closed(json!({"n":{"type":["string","null"],"x-omg-unobserved-branch":reason}}))
     };
-    check(node(json!("reviewed reason"))).unwrap();
-    for bad in [json!(""), json!("  "), json!(true), json!(3)] {
+    check(node(json!("null: reviewed reason"))).unwrap();
+    check(node(json!("non-null: reviewed reason"))).unwrap();
+    for bad in [
+        json!(""),
+        json!("  "),
+        json!(true),
+        json!(3),
+        // The side is mandatory, and so is the reason after it.
+        json!("reviewed reason"),
+        json!("null:"),
+        json!("non-null:  "),
+        json!("Null: reason"),
+        json!("both: reason"),
+    ] {
         assert!(check(node(bad.clone())).is_err(), "accepted {bad}");
     }
     check(closed(
-        json!({"n":{"enum":["a",null],"x-omg-unobserved-branch":"reviewed reason"}}),
+        json!({"n":{"enum":["a",null],"x-omg-unobserved-branch":"null: reviewed reason"}}),
     ))
     .unwrap();
     // A non-nullable node still cannot claim an unobserved branch.
@@ -590,4 +602,236 @@ fn management_openapi_coverage_unobservable_query_parameter_needs_a_reason() {
         "x-omg-unobserved-parameter":"reviewed reason"}]);
     let operation = &document["paths"]["/api/v1/x"]["get"];
     assert!(quality::operation(&document, operation).is_err());
+}
+
+// ----- coverage engine round 2 ----------------------------------------------
+
+#[test]
+fn management_openapi_coverage_a_stale_unobserved_parameter_exemption_is_refused() {
+    let mut parameter = query("error");
+    parameter["x-omg-unobserved-parameter"] = json!("the handler always refuses `error`");
+    let document = doc(
+        op(
+            json!({"type":"object","required":[],"additionalProperties":false,"properties":{}}),
+            json!([query("state"), parameter]),
+        ),
+        json!({}),
+    );
+    run(&document, &[json!({})], &[&["state"]]).unwrap();
+    // The exempt parameter WAS accepted by a positive request: the exemption lies.
+    let gap = message(run(&document, &[json!({})], &[&["state", "error"]]));
+    assert!(
+        gap.contains("error") && gap.contains("stale") && !gap.contains("`state`"),
+        "{gap}"
+    );
+    // Across separate positive observations too.
+    assert!(message(run(&document, &[json!({})], &[&["state"], &["error"]])).contains("stale"));
+}
+
+#[test]
+fn management_openapi_coverage_a_schema_reference_cycle_fails_cleanly() {
+    let document = doc(
+        op(json!({"$ref":"#/components/schemas/A"}), json!([])),
+        json!({"A":{"allOf":[{"$ref":"#/components/schemas/B"}]},
+               "B":{"allOf":[{"$ref":"#/components/schemas/A"}]}}),
+    );
+    let text = message(run(&document, &[json!({})], &[]));
+    assert!(
+        text.contains("cycle") && text.contains("/components/schemas/"),
+        "{text}"
+    );
+    // A self-reference with no data progress, too.
+    let document = doc(
+        op(json!({"$ref":"#/components/schemas/Loop"}), json!([])),
+        json!({"Loop":{"$ref":"#/components/schemas/Loop"}}),
+    );
+    assert!(message(run(&document, &[json!({})], &[])).contains("cycle"));
+    // Legitimate recursion consumes data and is not a cycle.
+    let tree = doc(
+        op(json!({"$ref":"#/components/schemas/Node"}), json!([])),
+        json!({"Node":{"type":"object","required":["children"],"additionalProperties":false,
+            "properties":{"children":{"type":"array","items":{"$ref":"#/components/schemas/Node"}}}}}),
+    );
+    run(
+        &tree,
+        &[json!({"children":[{"children":[{"children":[]}]}]})],
+        &[],
+    )
+    .unwrap();
+}
+
+fn typed_map() -> Value {
+    json!({"type":"object","required":["details"],"additionalProperties":false,"properties":{
+        "details":{"type":"object",
+            "patternProperties":{"_microusd$":{"anyOf":[{"type":"string"},{"type":"null"}]}}}}})
+}
+
+#[test]
+fn management_openapi_coverage_typed_map_values_need_their_branches_observed() {
+    let document = doc(op(typed_map(), json!([])), json!({}));
+    let text_only = json!({"details":{"a_microusd":"1","b_microusd":"2"}});
+    let null_only = json!({"details":{"a_microusd":null}});
+    // RED: the null branch of the values under /details/* never matched.
+    let gap = message(run(&document, std::slice::from_ref(&text_only), &[]));
+    assert!(gap.contains("/details/*") && gap.contains("null"), "{gap}");
+    let gap = message(run(&document, std::slice::from_ref(&null_only), &[]));
+    assert!(
+        gap.contains("/details/*") && gap.contains("string"),
+        "{gap}"
+    );
+    // A name the pattern does not select earns nothing.
+    let gap = message(run(
+        &document,
+        &[json!({"details":{"other":null,"a_microusd":"1"}})],
+        &[],
+    ));
+    assert!(gap.contains("/details/*"), "{gap}");
+    // GREEN: both branches, in different observations and across keys.
+    run(&document, &[text_only.clone(), null_only.clone()], &[]).unwrap();
+    run(
+        &document,
+        &[json!({"details":{"a_microusd":"1","b_microusd":null}})],
+        &[],
+    )
+    .unwrap();
+    // additionalProperties values are walked at the same wildcard location,
+    // and arrays under them must be populated.
+    let additional = doc(
+        op(
+            json!({"type":"object","required":["m"],"additionalProperties":false,"properties":{
+                "m":{"type":"object","additionalProperties":{"type":"array","items":{"type":"string"}}}}}),
+            json!([]),
+        ),
+        json!({}),
+    );
+    let gap = message(run(&additional, &[json!({"m":{"k":[]}})], &[]));
+    assert!(gap.contains("/m/*"), "{gap}");
+    run(&additional, &[json!({"m":{"k":[],"j":["x"]}})], &[]).unwrap();
+    // additionalProperties applies only to names no other keyword selects.
+    let mixed = doc(
+        op(
+            json!({"type":"object","required":["m"],"additionalProperties":false,"properties":{
+                "m":{"type":"object","properties":{"fixed":{"type":["integer","null"]}},
+                    "additionalProperties":{"type":["integer","null"]}}}}),
+            json!([]),
+        ),
+        json!({}),
+    );
+    let gap = message(run(&mixed, &[json!({"m":{"fixed":null,"a":1}})], &[]));
+    assert!(gap.contains("`/m/*`") && gap.contains("null"), "{gap}");
+    run(
+        &mixed,
+        &[
+            json!({"m":{"fixed":null,"a":1}}),
+            json!({"m":{"fixed":3,"b":null}}),
+        ],
+        &[],
+    )
+    .unwrap();
+}
+
+#[test]
+fn management_openapi_coverage_nullable_exemptions_name_the_side_they_exempt() {
+    let nullable = |reason: Option<&str>| {
+        let mut cost = json!({"type":["string","null"]});
+        if let Some(reason) = reason {
+            cost["x-omg-unobserved-branch"] = json!(reason);
+        }
+        doc(
+            op(
+                json!({"type":"object","required":["cost"],"additionalProperties":false,"properties":{"cost":cost}}),
+                json!([]),
+            ),
+            json!({}),
+        )
+    };
+    let null = json!({"cost":null});
+    let some = json!({"cost":"1"});
+    let null_exempt = nullable(Some("null: the fixtures cannot create a pricing gap"));
+    run(&null_exempt, std::slice::from_ref(&some), &[]).unwrap();
+    // `null:` exempts the null side only: the non-null side is still required.
+    let gap = message(run(&null_exempt, std::slice::from_ref(&null), &[]));
+    assert!(gap.contains("/cost") && gap.contains("non-null"), "{gap}");
+    let non_null_exempt = nullable(Some("non-null: cost is always unknown in fixtures"));
+    run(&non_null_exempt, std::slice::from_ref(&null), &[]).unwrap();
+    let gap = message(run(&non_null_exempt, std::slice::from_ref(&some), &[]));
+    assert!(
+        gap.contains("/cost") && gap.contains("null") && !gap.contains("non-null"),
+        "{gap}"
+    );
+    // A reason with no side exempts neither.
+    let sideless = nullable(Some("cost is sometimes unknown"));
+    assert!(message(run(&sideless, std::slice::from_ref(&some), &[])).contains("null"));
+    assert!(message(run(&sideless, std::slice::from_ref(&null), &[])).contains("non-null"));
+}
+
+#[test]
+fn management_openapi_coverage_exemptions_are_forbidden_on_shared_component_targets() {
+    // An annotation on a component applies everywhere it is `$ref`erenced, so it
+    // is refused there; annotate the referencing location instead.
+    let document = |component: Value| {
+        json!({"components":{"schemas":{"Shared":component,
+            "Probe":closed(json!({"list":{"$ref":"#/components/schemas/Shared"}}))}},"paths":{}})
+    };
+    quality::completed(&document(json!({"type":"array","items":{"type":"string"}}))).unwrap();
+    assert!(
+        quality::completed(&document(json!({"type":"array","items":{"type":"string"},
+        "x-omg-may-be-empty":"reviewed reason"})))
+        .is_err()
+    );
+    assert!(
+        quality::completed(&document(json!({"type":["string","null"],
+        "x-omg-unobserved-branch":"null: reviewed reason"})))
+        .is_err()
+    );
+    // The same annotation inline is fine.
+    check(closed(
+        json!({"list":{"type":"array","items":{"type":"string"},
+        "x-omg-may-be-empty":"reviewed reason"}}),
+    ))
+    .unwrap();
+    // A nullable union branch is ambiguous: split the null into its own branch.
+    assert!(
+        check(closed(json!({"u":{"anyOf":[
+        {"type":["string","null"],"x-omg-unobserved-branch":"null: reason"},{"type":"integer"}]}})))
+        .is_err()
+    );
+    // A `$ref` with the annotation beside it would be silently ignored: refused.
+    assert!(
+        quality::completed(&json!({"components":{"schemas":{
+        "Maybe":{"type":["string","null"]},
+        "Probe":closed(json!({"n":{"$ref":"#/components/schemas/Maybe",
+            "x-omg-unobserved-branch":"null: reason"}}))}},"paths":{}}))
+        .is_err()
+    );
+}
+
+#[test]
+fn management_openapi_coverage_byte_limits_are_reviewed() {
+    let string = |extra: Value| {
+        let mut node = json!({"type":"string"});
+        for (k, v) in extra.as_object().unwrap() {
+            node[k] = v.clone();
+        }
+        closed(json!({"code":node}))
+    };
+    check(string(json!({"maxLength":8,"x-omg-max-bytes":8}))).unwrap();
+    check(string(json!({"maxLength":4,"x-omg-max-bytes":8}))).unwrap();
+    // maxLength (characters) can never exceed the byte limit.
+    assert!(check(string(json!({"maxLength":9,"x-omg-max-bytes":8}))).is_err());
+    for bad in [
+        json!(0),
+        json!(-1),
+        json!("8"),
+        json!(1.5),
+        json!(null),
+        json!(true),
+    ] {
+        assert!(
+            check(string(json!({"x-omg-max-bytes":bad.clone()}))).is_err(),
+            "accepted {bad}"
+        );
+    }
+    // Only a string schema has bytes.
+    assert!(check(closed(json!({"n":{"type":"integer","x-omg-max-bytes":8}}))).is_err());
 }

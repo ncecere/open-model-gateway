@@ -343,6 +343,12 @@ fn schema(
     effective.merge(facts(document, node, location, &mut BTreeSet::new())?);
     // Coverage exemptions are reviewed claims: each needs a real reason and the
     // right kind of node, or it would silently excuse unrelated schemas.
+    // A top-level component is shared by every `$ref` to it, so an annotation
+    // there would silently apply at all of them: exemptions live inline, at the
+    // one referencing location.
+    let shared_component = location
+        .strip_prefix("/components/schemas/")
+        .is_some_and(|name| !name.contains('/'));
     if let Some(value) = node.get(super::coverage::MAY_BE_EMPTY) {
         ensure!(
             value.as_str().is_some_and(|r| !r.trim().is_empty()),
@@ -357,6 +363,11 @@ fn schema(
             "{} is only valid on an array schema at {location}",
             super::coverage::MAY_BE_EMPTY
         );
+        ensure!(
+            !shared_component,
+            "{} is refused on a shared component ({location}): it would apply everywhere the component is referenced; annotate the inline array at the one location instead",
+            super::coverage::MAY_BE_EMPTY
+        );
     }
     if let Some(value) = node.get(super::coverage::UNOBSERVED_BRANCH) {
         ensure!(
@@ -364,10 +375,53 @@ fn schema(
             "{} needs a non-empty reason at {location}",
             super::coverage::UNOBSERVED_BRANCH
         );
+        let nullable = super::coverage::nullable(node);
         ensure!(
-            in_branch || super::coverage::nullable(node),
+            in_branch || nullable,
             "{} is only valid on a oneOf/anyOf branch or a nullable node at {location}",
             super::coverage::UNOBSERVED_BRANCH
+        );
+        if nullable {
+            ensure!(
+                !in_branch,
+                "{} on a nullable union branch is ambiguous at {location}: give the null its own branch",
+                super::coverage::UNOBSERVED_BRANCH
+            );
+            ensure!(
+                super::coverage::exempt_side(node).is_some(),
+                "{} on a nullable node must read `null: <reason>` or `non-null: <reason>` at {location}",
+                super::coverage::UNOBSERVED_BRANCH
+            );
+            ensure!(
+                !shared_component,
+                "{} is refused on a shared component ({location}): annotate the referencing location (an anyOf branch or an inline nullable node)",
+                super::coverage::UNOBSERVED_BRANCH
+            );
+        }
+    }
+    if let Some(value) = node.get(super::http_vectors::MAX_BYTES) {
+        let limit = value.as_u64().filter(|n| *n > 0);
+        ensure!(
+            limit.is_some(),
+            "{} must be a positive integer at {location}",
+            super::http_vectors::MAX_BYTES
+        );
+        ensure!(
+            node["type"] == "string"
+                || node["type"]
+                    .as_array()
+                    .is_some_and(|t| t.iter().any(|v| v == "string")),
+            "{} is only valid on a string schema at {location}",
+            super::http_vectors::MAX_BYTES
+        );
+        // maxLength counts characters, each at least one byte: it can never
+        // permit more than the byte limit does.
+        ensure!(
+            node["maxLength"]
+                .as_u64()
+                .is_none_or(|max| Some(max) <= limit),
+            "maxLength exceeds {} at {location}",
+            super::http_vectors::MAX_BYTES
         );
     }
     // Reviewed arbitrary JSON still declares its JSON type (e.g. "object").
