@@ -1055,6 +1055,8 @@ async fn cap_closes_an_in_flight_session(pool: PgPool, trip: Trip) {
     // Unknown usage retains the hold; nothing is settled or counted as zero.
     assert_eq!(row["reservation"], "unknown");
     assert_eq!(row["held"], hold(expected_bounds(&g, &[])[0], 1000));
+    assert!(row["actual"].is_null(), "no actual cost on the reservation");
+    assert!(row["input_tokens"].is_null(), "unknown usage is not zero");
     let id = row["id"].as_str().unwrap();
     let responses = g.responses(id).await;
     assert_eq!(
@@ -1069,13 +1071,28 @@ async fn cap_closes_an_in_flight_session(pool: PgPool, trip: Trip) {
             .all(|(kind, _)| kind != "settlement"),
         "no settlement is fabricated"
     );
-    // Neither the oversized bytes nor the excess events reached upstream.
+    // Neither the oversized bytes nor the excess events reached upstream: only
+    // the gateway's own session updates, the response.create and (rate trip)
+    // at most the bucket's burst of clears. Non-JSON fragment bytes reaching
+    // upstream would fail the parse in received_types.
+    let types = g.mock.shared.received_types();
     assert!(
-        g.mock
-            .shared
-            .received_of("input_audio_buffer.append")
-            .is_empty()
+        types.iter().all(|t| matches!(
+            t.as_str(),
+            "session.update" | "response.create" | "input_audio_buffer.clear"
+        )),
+        "only expected events reached upstream: {types:?}"
     );
+    let clears = types
+        .iter()
+        .filter(|t| *t == "input_audio_buffer.clear")
+        .count();
+    match trip {
+        // Burst = 2 x rate: at most two of the four clears can be admitted,
+        // so the refused clear and everything after it never reached upstream.
+        Trip::Rate => assert!(clears <= 2, "excess events reached upstream: {clears}"),
+        Trip::Frame | Trip::Fragments => assert_eq!(clears, 0),
+    }
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]

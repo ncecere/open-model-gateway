@@ -59,8 +59,11 @@ hyper = { version = "=1.11.1", default-features = false }
 # Prometheus/OpenMetrics exposition on the optional GATEWAY_METRICS_ADDR listener.
 prometheus-client = "=0.25.1"
 # Secrets come only from the OS CSPRNG (rand::rngs::SysRng, fallible; src/entropy.rs).
-# No ThreadRng (it panics when the OS RNG fails); seeded StdRng only for routing's
-# deterministic, non-secret weighted choice.
+# The gateway never uses ThreadRng for secrets (it panics when the OS RNG fails);
+# seeded StdRng only for routing's deterministic, non-secret weighted choice.
+# tokio-tungstenite 0.30's tungstenite enables rand's default features, so
+# ThreadRng is compiled in transitively; it draws only WebSocket masking and
+# handshake keys there (as tungstenite 0.29 did with rand 0.9).
 rand = { version = "0.10", default-features = false, features = ["std", "sys_rng", "std_rng"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
