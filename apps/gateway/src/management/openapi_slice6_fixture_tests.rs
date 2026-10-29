@@ -33,12 +33,15 @@ async fn browser(pool: &PgPool, u: &BrowserPrincipal) -> Browser {
     Browser { token, csrf }
 }
 /// A multipart form; `typed` gives the file part a content type.
-fn multipart(fields: &[(&str, &str)], file: Option<&str>, typed: bool) -> Vec<u8> {
-    let mut body = String::new();
+fn multipart(fields: &[(&str, &str)], file: Option<&[u8]>, typed: bool) -> Vec<u8> {
+    let mut body = Vec::new();
     for (name, value) in fields {
-        body.push_str(&format!(
-            "--contract\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
-        ));
+        body.extend(
+            format!(
+                "--contract\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+            )
+            .into_bytes(),
+        );
     }
     if let Some(file) = file {
         let kind = if typed {
@@ -46,10 +49,36 @@ fn multipart(fields: &[(&str, &str)], file: Option<&str>, typed: bool) -> Vec<u8
         } else {
             ""
         };
-        body.push_str(&format!("--contract\r\nContent-Disposition: form-data; name=\"file\"; filename=\"contract.txt\"\r\n{kind}\r\n{file}\r\n"));
+        body.extend(format!("--contract\r\nContent-Disposition: form-data; name=\"file\"; filename=\"contract.txt\"\r\n{kind}\r\n").into_bytes());
+        body.extend(file);
+        body.extend(b"\r\n");
     }
-    body.push_str("--contract--\r\n");
-    body.into_bytes()
+    body.extend(b"--contract--\r\n");
+    body
+}
+/// One multipart upload to `path` as `b`, validated against the contract.
+async fn upload(
+    w: &mut Wire,
+    b: &Browser,
+    path: &str,
+    fields: &[(&str, &str)],
+    file: Option<&[u8]>,
+    typed: bool,
+) -> Captured {
+    let r = w
+        .client
+        .post(format!("{}{path}", w.base))
+        .header("origin", ORIGIN)
+        .header("cookie", format!("omg_session={}", b.token))
+        .header("x-csrf-token", &b.csrf)
+        .header("content-type", "multipart/form-data; boundary=contract")
+        .body(multipart(fields, file, typed))
+        .send()
+        .await
+        .expect("loopback request failed");
+    let r = capture_http("POST", path, r).await;
+    w.observed.observe(&r);
+    r
 }
 /// One request over loopback, validated against the contract, never observed.
 async fn raw(
@@ -68,7 +97,12 @@ async fn raw(
     if let Some(body) = body {
         r = r.json(&body);
     }
-    capture_http(method, path, r.send().await.unwrap()).await
+    capture_http(
+        method,
+        path,
+        r.send().await.expect("loopback request failed"),
+    )
+    .await
 }
 /// A domain refusal (a policy or issuance rule) is not an input refusal, even
 /// though its status is 400/403/429: the handler accepted the INPUT.
@@ -824,20 +858,16 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
             fields.push(("expires_after[anchor]", "created_at"));
             fields.push(("expires_after[seconds]", "3600"));
         }
-        let r = w
-            .client
-            .post(format!("{}{uploadpath}", w.base))
-            .header("origin", ORIGIN)
-            .header("cookie", format!("omg_session={}", owner.token))
-            .header("x-csrf-token", &owner.csrf)
-            .header("content-type", "multipart/form-data; boundary=contract")
-            .body(multipart(&fields, Some("opaque contents"), typed))
-            .send()
-            .await
-            .unwrap();
-        let r = capture_http("POST", &uploadpath, r).await;
+        let r = upload(
+            &mut w,
+            &owner,
+            &uploadpath,
+            &fields,
+            Some(b"opaque contents"),
+            typed,
+        )
+        .await;
         assert_eq!(r.status, StatusCode::OK);
-        w.observed.observe(&r);
         let file: Value = serde_json::from_slice(&r.bytes).unwrap();
         let public = file["id"].as_str().unwrap().to_owned();
         let parsed = crate::filestore::files::parse_public_id(&public).unwrap();
@@ -1703,7 +1733,7 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
             .bearer_auth(token["token"].as_str().unwrap())
             .send()
             .await
-            .unwrap(),
+            .expect("loopback request failed"),
     )
     .await;
     assert_eq!(used.status, StatusCode::OK);
@@ -1752,7 +1782,7 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
                 .bearer_auth(token)
                 .send()
                 .await
-                .unwrap(),
+                .expect("loopback request failed"),
         )
         .await;
         assert!(matches!(
@@ -2168,58 +2198,225 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
             .unwrap(),
         refusal["error"]["retry_after_seconds"].as_u64().unwrap()
     );
-    // Multipart has no serde DTO: exercise the actual streamed parser after
-    // the successful uploads, preserving valid fields for unknown-field probes.
-    for (fields, file) in [
+    // Multipart has no serde DTO and no JSON-derived vectors
+    // (`x-omg-no-boundary-vectors`): every part-level case is a real multipart
+    // request whose handler verdict must equal this schema's verdict on the
+    // same parts. Duplicate parts cannot be written as a JSON object, so that
+    // case alone is checked against the handler only.
+    let upload_schema = openapi::responses::artifact()["components"]["schemas"]
+        ["post_api_v1_workspaces_by_ws_files_uploadRequest"]
+        .clone();
+    let (png, jsonl, text): (&[u8], &[u8], &[u8]) = (
+        b"\x89PNG\r\n\x1a\nbody",
+        b"{\"custom_id\":\"contract\"}\n",
+        b"content",
+    );
+    let expiring = |seconds: &'static str| {
+        vec![
+            ("purpose", "user_data"),
+            ("expires_after[anchor]", "created_at"),
+            ("expires_after[seconds]", seconds),
+        ]
+    };
+    type Case = (
+        &'static str,
+        Vec<(&'static str, &'static str)>,
+        Option<&'static [u8]>,
+        StatusCode,
+        bool,
+    );
+    let ok = StatusCode::OK;
+    let bad = StatusCode::BAD_REQUEST;
+    let mut cases: Vec<Case> = vec![
         (
+            "purpose batch",
+            vec![("purpose", "batch")],
+            Some(jsonl),
+            ok,
+            true,
+        ),
+        (
+            "purpose user_data",
+            vec![("purpose", "user_data")],
+            Some(text),
+            ok,
+            true,
+        ),
+        (
+            "purpose assistants",
+            vec![("purpose", "assistants")],
+            Some(text),
+            ok,
+            true,
+        ),
+        (
+            "purpose vision",
+            vec![("purpose", "vision")],
+            Some(png),
+            ok,
+            true,
+        ),
+        (
+            "purpose evals",
+            vec![("purpose", "evals")],
+            Some(text),
+            ok,
+            true,
+        ),
+        (
+            "purpose batch_output",
+            vec![("purpose", "batch_output")],
+            Some(text),
+            bad,
+            true,
+        ),
+        (
+            "purpose fine-tune",
+            vec![("purpose", "fine-tune")],
+            Some(text),
+            bad,
+            true,
+        ),
+        (
+            "purpose unknown",
+            vec![("purpose", "bogus")],
+            Some(text),
+            bad,
+            true,
+        ),
+        (
+            "purpose padded",
+            vec![("purpose", "user_data ")],
+            Some(text),
+            bad,
+            true,
+        ),
+        (
+            "purpose case",
+            vec![("purpose", "User_Data")],
+            Some(text),
+            bad,
+            true,
+        ),
+        ("purpose missing", vec![], Some(text), bad, true),
+        (
+            "file missing",
+            vec![("purpose", "user_data")],
+            None,
+            bad,
+            true,
+        ),
+        (
+            "file empty",
+            vec![("purpose", "user_data")],
+            Some(b""),
+            bad,
+            true,
+        ),
+        (
+            "unknown field",
             vec![
                 ("purpose", "user_data"),
                 ("unexpected_configuration", "true"),
             ],
-            Some("content"),
-        ),
-        (vec![("purpose", "bogus")], Some("content")),
-        (
-            vec![
-                ("purpose", "user_data"),
-                ("expires_after[anchor]", "created_at"),
-            ],
-            Some("content"),
+            Some(text),
+            bad,
+            true,
         ),
         (
-            vec![
-                ("purpose", "user_data"),
-                ("expires_after[anchor]", "created_at"),
-                ("expires_after[seconds]", "3599"),
-            ],
-            Some("content"),
-        ),
-        (vec![], Some("content")),
-        (vec![("purpose", "user_data")], None),
-        (vec![("purpose", "user_data")], Some("")),
-        (
+            "duplicate purpose",
             vec![("purpose", "user_data"), ("purpose", "user_data")],
-            Some("content"),
+            Some(text),
+            bad,
+            false,
         ),
         (
-            vec![("purpose", "user_data"), ("expires_after[seconds]", "null")],
-            Some("content"),
+            "anchor without seconds",
+            vec![
+                ("purpose", "user_data"),
+                ("expires_after[anchor]", "created_at"),
+            ],
+            Some(text),
+            bad,
+            true,
         ),
+        (
+            "seconds without anchor",
+            vec![("purpose", "user_data"), ("expires_after[seconds]", "3600")],
+            Some(text),
+            bad,
+            true,
+        ),
+        (
+            "anchor other",
+            vec![
+                ("purpose", "user_data"),
+                ("expires_after[anchor]", "updated_at"),
+                ("expires_after[seconds]", "3600"),
+            ],
+            Some(text),
+            bad,
+            true,
+        ),
+    ];
+    for (label, seconds, want) in [
+        ("seconds 3599", "3599", bad),
+        ("seconds 3600", "3600", ok),
+        ("seconds 2592000", "2592000", ok),
+        ("seconds 2592001", "2592001", bad),
+        ("seconds 99999999999999999999", "99999999999999999999", bad),
+        ("seconds padded", " 3600 ", ok),
+        ("seconds plus and zeros", "+03600", ok),
+        ("seconds zero", "0", bad),
+        ("seconds negative", "-3600", bad),
+        ("seconds fractional", "3600.5", bad),
+        ("seconds non-numeric", "null", bad),
+        ("seconds empty", "", bad),
     ] {
-        let r = w
-            .client
-            .post(format!("{}{uploadpath}", w.base))
-            .header("origin", ORIGIN)
-            .header("cookie", format!("omg_session={}", owner.token))
-            .header("x-csrf-token", &owner.csrf)
-            .header("content-type", "multipart/form-data; boundary=contract")
-            .body(multipart(&fields, file, true))
-            .send()
-            .await
-            .unwrap();
-        let r = capture_http("POST", &uploadpath, r).await;
-        assert_eq!(r.status, StatusCode::BAD_REQUEST);
+        cases.push((label, expiring(seconds), Some(text), want, true));
     }
+    for (label, fields, file, want, comparable) in cases {
+        let r = upload(&mut w, &owner, &uploadpath, &fields, file, true).await;
+        assert_eq!(r.status, want, "upload case {label}");
+        if comparable {
+            let mut parts = serde_json::Map::new();
+            for (name, value) in &fields {
+                parts.insert((*name).to_owned(), json!(value));
+            }
+            if let Some(file) = file {
+                parts.insert("file".into(), json!(if file.is_empty() { "" } else { "x" }));
+            }
+            let schema_accepts = openapi::responses::validate_value(
+                openapi::responses::artifact(),
+                &upload_schema,
+                &Value::Object(parts),
+            )
+            .is_ok();
+            assert_eq!(
+                schema_accepts,
+                r.status.is_success(),
+                "upload case {label}: schema and handler disagree"
+            );
+        }
+    }
+    // The storage quota answers 413 for an input the schema accepts. The
+    // per-file cap (`GATEWAY_FILES_MAX_BYTES`, a process-wide setting) is
+    // unit-tested in `filestore/api_tests.rs`.
+    sqlx::query("INSERT INTO workspace_local_policies(workspace_id,storage_bytes) VALUES($1,1) ON CONFLICT(workspace_id) DO UPDATE SET storage_bytes=1").bind(f.project).execute(&pool).await.unwrap();
+    let refused = upload(
+        &mut w,
+        &owner,
+        &format!("{project}/files/upload"),
+        &[("purpose", "user_data")],
+        Some(text),
+        true,
+    )
+    .await;
+    assert_eq!(refused.status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&refused.bytes).unwrap()["error"]["reason"],
+        "storage_quota_exceeded"
+    );
     // Successful request controls precede extractor refusal probes.
     w.status(
         &owner,
