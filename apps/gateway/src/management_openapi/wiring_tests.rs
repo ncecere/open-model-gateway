@@ -152,3 +152,36 @@ fn management_openapi_wiring_vectors_are_required_for_queries_and_bodies() {
     bare.observe_in(&document, &captured(StatusCode::OK, &full, &[]));
     gaps(&bare, &document).unwrap();
 }
+
+#[test]
+fn management_openapi_wiring_non_json_bodies_need_a_reviewed_vector_exemption() {
+    let full = json!({"data":[{"name":"a","note":null},{"name":"b","note":"n"}]});
+    let mut document = document();
+    let multipart = json!({"required":true,"content":{
+        "multipart/form-data":{"schema":{"type":"object","required":[],"additionalProperties":false,"properties":{}}}}});
+    document["paths"]["/api/v1/x"]["get"]["requestBody"] = multipart.clone();
+    let mut fixtures = PositiveFixtures::default();
+    fixtures.observe_in(&document, &captured(StatusCode::OK, &full, &["limit"]));
+    fixtures.record_vectors("GET", "/api/v1/x", "query");
+    // RED: JSON-derived vectors cannot decide a multipart body, but nothing excuses it yet.
+    let gap = message(gaps(&fixtures, &document));
+    assert!(gap.contains(KEY) && gap.contains("body"), "{gap}");
+    // A reviewed reason excuses exactly the non-JSON body ...
+    let mut excused = multipart.clone();
+    excused["x-omg-no-boundary-vectors"] =
+        json!("parts are read by a streaming parser whose rules depend on file bytes");
+    document["paths"]["/api/v1/x"]["get"]["requestBody"] = excused;
+    gaps(&fixtures, &document).unwrap();
+    // ... never an empty reason, ...
+    document["paths"]["/api/v1/x"]["get"]["requestBody"]["x-omg-no-boundary-vectors"] = json!("  ");
+    let gap = message(gaps(&fixtures, &document));
+    assert!(gap.contains("x-omg-no-boundary-vectors"), "{gap}");
+    // ... and never a JSON body, which always owes its vectors.
+    document["paths"]["/api/v1/x"]["get"]["requestBody"] = json!({"required":true,"x-omg-no-boundary-vectors":"a real reason that is long enough","content":{
+        "application/json":{"schema":{"type":"object","required":[],"additionalProperties":false,"properties":{}}}}});
+    let gap = message(gaps(&fixtures, &document));
+    assert!(
+        gap.contains("x-omg-no-boundary-vectors") && gap.contains("body"),
+        "{gap}"
+    );
+}
