@@ -4643,7 +4643,35 @@
             "has_more",
             "next_page"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "if": {
+            "properties": {
+              "has_more": {
+                "const": false
+              }
+            },
+            "required": [
+              "has_more"
+            ]
+          },
+          "then": {
+            "properties": {
+              "next_page": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "next_page": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              }
+            }
+          },
+          "description": "has_more=false (the last page) carries next_page=null; every earlier page has has_more=true and a continuation cursor."
         },
         {
           "type": "array",
@@ -4657,20 +4685,35 @@
               "maxItems": 31
             },
             {
-              "type": "boolean"
+              "const": false
             },
             {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "type": "null"
+            }
+          ],
+          "items": false,
+          "minItems": 3,
+          "maxItems": 3
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/MoneyProviderBucket"
+              },
+              "minItems": 1,
+              "maxItems": 31
+            },
+            {
+              "const": true
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             }
           ],
           "items": false,

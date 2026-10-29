@@ -224,6 +224,7 @@ fn management_openapi_money_raw_upload_request_vectors() {
         if page.data.is_empty()
             || page.data.len() > 31
             || page.next_page.as_ref().is_some_and(|s| !bounded(s, 4096))
+            || page.has_more != page.next_page.is_some()
         {
             return Err("page".into());
         }
