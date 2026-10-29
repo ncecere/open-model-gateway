@@ -72,17 +72,18 @@ fn declare_child(
         return Ok(());
     }
     let excused = exempt(document, child);
-    out.insert(
-        key.clone(),
-        Declared {
+    // One data location may be declared several times (a `$ref` target and the
+    // keywords beside it, `allOf` members): it is exempt only if EVERY
+    // declaration is, never by whichever was written last.
+    out.entry(key.clone())
+        .and_modify(|declared| declared.exempt &= excused)
+        .or_insert(Declared {
             kind,
             exempt: excused,
-        },
-    );
-    if !excused {
-        declare(document, child, &key, out, stack, depth + 1)?;
-    }
-    Ok(())
+        });
+    // The contents are declared too: an exemption excuses a location that is
+    // never carried, not the contents of one that is (see `unreached`).
+    declare(document, child, &key, out, stack, depth + 1)
 }
 
 fn declare(
@@ -407,15 +408,55 @@ pub(super) fn reached_by_walk(
     Ok(out)
 }
 
-/// `(schema path, kind)` of every declared, non-exempt location never reached.
+/// A location is excused when it, or an ancestor, carries a reviewed reason AND
+/// that exempt location was not itself reached: the exemption covers an absent
+/// subtree, never unreached children of a location the bodies do carry.
+fn excused(key: &str, declared: &BTreeMap<String, Declared>, reached: &BTreeSet<String>) -> bool {
+    declared.iter().any(|(owner, location)| {
+        location.exempt
+            && !reached.contains(owner)
+            && (owner == key || key.starts_with(&format!("{owner}/")))
+    })
+}
+
+/// `(schema path, kind)` of every declared location never reached and not excused.
 pub(super) fn unreached(
     document: &Value,
     schema: &Value,
     reached: &BTreeSet<String>,
 ) -> Result<Vec<(String, &'static str)>> {
+    let declared = declared(document, schema)?;
+    Ok(declared
+        .iter()
+        .filter(|(key, _)| !reached.contains(*key) && !excused(key, &declared, reached))
+        .map(|(key, location)| (key.clone(), location.kind))
+        .collect())
+}
+
+/// Schema paths of every exemption that is STALE: the location carries a reviewed
+/// [`UNPROBED`] reason yet some vector run reached it (nested ones included).
+pub(super) fn stale(
+    document: &Value,
+    schema: &Value,
+    reached: &BTreeSet<String>,
+) -> Result<Vec<String>> {
     Ok(declared(document, schema)?
         .into_iter()
-        .filter(|(key, location)| !location.exempt && !reached.contains(key))
-        .map(|(key, location)| (key, location.kind))
+        .filter(|(key, location)| location.exempt && reached.contains(key))
+        .map(|(key, _)| key)
         .collect())
+}
+
+/// How a declared location can be reached: seeds add absent properties and the
+/// next positional item, nothing else (tail items, map values and union arms
+/// need a valid body that carries or matches them).
+pub(super) fn how_to_reach(key: &str, kind: &str) -> &'static str {
+    let positional = key
+        .rsplit_once("/prefixItems/")
+        .is_some_and(|(_, index)| !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()));
+    if kind == "property" || positional {
+        "carry it in a valid body or a seed"
+    } else {
+        "carry it in a valid body (a seed cannot add it)"
+    }
 }

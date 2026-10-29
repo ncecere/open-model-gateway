@@ -2317,3 +2317,141 @@ fn management_openapi_http_vectors_a_siblings_items_govern_positional_indices() 
     let schema = body_schema_of(&document);
     assert!(!super::http_vectors::accepts(&document, schema, &json!(["abc"])).unwrap());
 }
+
+// ----- round 3: exemption bookkeeping and reach controls ----
+
+fn stale_paths(document: &Value, reached: &BTreeSet<String>) -> Vec<String> {
+    request_reach::stale(document, body_schema_of(document), reached).unwrap()
+}
+const WHY: &str = "The server derives this location itself.";
+
+fn object_with(properties: Value) -> Value {
+    json!({"type":"object","required":[],"additionalProperties":false,"properties":properties})
+}
+
+#[test]
+fn management_openapi_http_vectors_a_stale_unprobed_location_is_refused() {
+    let document = body_only(object_with(
+        json!({"a":{"type":"string"},"b":{"type":"string","x-omg-unprobed-location":WHY}}),
+    ));
+    // Not carried: the exemption is needed.
+    let reached = reach_of(&document, &json!({"a":"x"}), &[]);
+    assert!(unreached_paths(&document, &reached).is_empty());
+    assert!(stale_paths(&document, &reached).is_empty());
+    // RED: carried by a valid body, the reason is dead weight.
+    let reached = reach_of(&document, &json!({"a":"x","b":"y"}), &[]);
+    assert_eq!(stale_paths(&document, &reached), ["/properties/b"]);
+    // A seed reaches it too.
+    let reached = reach_of(&document, &json!({"a":"x"}), &[("/b", json!("y"))]);
+    assert_eq!(stale_paths(&document, &reached), ["/properties/b"]);
+}
+
+#[test]
+fn management_openapi_http_vectors_an_exemption_does_not_shield_unreached_children() {
+    let document = body_only(object_with(json!({"a":{"type":"string"},
+        "m":{"type":"object","required":[],"additionalProperties":false,
+             "properties":{"k":{"type":"string"}},"x-omg-unprobed-location":WHY}})));
+    // The exempt object is not carried: it and its contents are excused.
+    let reached = reach_of(&document, &json!({"a":"x"}), &[]);
+    assert!(unreached_paths(&document, &reached).is_empty());
+    // RED: carried (so the exemption is stale), its child `k` is NOT shielded.
+    let reached = reach_of(&document, &json!({"a":"x","m":{}}), &[]);
+    assert_eq!(
+        unreached_paths(&document, &reached),
+        ["/properties/m/properties/k"]
+    );
+    assert_eq!(stale_paths(&document, &reached), ["/properties/m"]);
+    // Carrying the child as well leaves only the stale reason to report.
+    let reached = reach_of(&document, &json!({"a":"x","m":{"k":"v"}}), &[]);
+    assert!(unreached_paths(&document, &reached).is_empty());
+}
+
+#[test]
+fn management_openapi_http_vectors_nested_exemptions_are_checked_for_staleness_too() {
+    let arm = |nested: bool| {
+        let mut inner = json!({"type":"string"});
+        if nested {
+            inner["x-omg-unprobed-location"] = json!(WHY);
+        }
+        json!({"type":"object","required":["a"],"additionalProperties":false,
+            "properties":{"a":inner},"x-omg-unprobed-location":WHY})
+    };
+    let document = body_only(json!({"oneOf":[arm(true),
+        {"type":"object","required":["z"],"additionalProperties":false,"properties":{"z":{"type":"string"}}}]}));
+    // The exempt arm is never matched: nothing is stale, nothing is missing...
+    let reached = reach_of(&document, &json!({"z":"x"}), &[]);
+    assert!(unreached_paths(&document, &reached).is_empty());
+    assert!(stale_paths(&document, &reached).is_empty());
+    // ...but once a body matches it, the arm AND the exemption nested inside are stale.
+    let reached = reach_of(&document, &json!({"a":"x"}), &[]);
+    assert_eq!(
+        stale_paths(&document, &reached),
+        ["/oneOf/0", "/oneOf/0/properties/a"]
+    );
+}
+
+#[test]
+fn management_openapi_http_vectors_a_ref_and_its_siblings_do_not_overwrite_each_other() {
+    // `x` is declared by the referenced component (not exempt) and by the
+    // keywords beside the `$ref` (exempt): the location is exempt only if every
+    // declaration is, not by whichever came last.
+    let mut document = body_only(json!({"$ref":"#/components/schemas/Base",
+        "properties":{"x":{"type":"string","x-omg-unprobed-location":WHY}}}));
+    document["components"]["schemas"]["Base"] =
+        json!({"type":"object","required":[],"properties":{"x":{"type":"string"}}});
+    let reached = reach_of(&document, &json!({}), &[]);
+    assert_eq!(unreached_paths(&document, &reached), ["/properties/x"]);
+    // Carried, it is reached (and one declaration's reason is not stale: the other is not exempt).
+    let reached = reach_of(&document, &json!({"x":"v"}), &[]);
+    assert!(unreached_paths(&document, &reached).is_empty());
+    assert!(stale_paths(&document, &reached).is_empty());
+}
+
+#[test]
+fn management_openapi_http_vectors_reach_controls_for_allof_conditionals_arms_and_refs() {
+    // allOf members are walked transparently.
+    let all_of = body_only(json!({"type":"object","required":[],"allOf":[
+        {"properties":{"a":{"type":"string"}}},{"properties":{"b":{"type":"string"}}}]}));
+    let reached = reach_of(&all_of, &json!({"a":"x"}), &[]);
+    assert_eq!(
+        unreached_paths(&all_of, &reached),
+        ["/allOf/1/properties/b"]
+    );
+    assert!(
+        unreached_paths(&all_of, &reach_of(&all_of, &json!({"a":"x","b":"y"}), &[])).is_empty()
+    );
+    // if/then/else: only the ACTIVE arm's contents are reached.
+    let conditional = body_only(
+        json!({"type":"object","required":["mode"],"additionalProperties":false,
+        "properties":{"mode":{"enum":["x","y"]},"t":{"type":"string"},"e":{"type":"string"}},
+        "if":{"properties":{"mode":{"const":"x"}},"required":["mode"]},
+        "then":{"required":["t"]},"else":{"required":["e"]}}),
+    );
+    let reached = reach_of(&conditional, &json!({"mode":"x","t":"v"}), &[]);
+    assert_eq!(unreached_paths(&conditional, &reached), ["/properties/e"]);
+    let reached = reach_of(&conditional, &json!({"mode":"y","e":"v"}), &[]);
+    assert_eq!(unreached_paths(&conditional, &reached), ["/properties/t"]);
+    // Nested arms: an arm inside an arm is its own location.
+    let nested = body_only(json!({"oneOf":[
+        {"oneOf":[{"type":"string"},{"type":"integer"}]},{"type":"boolean"}]}));
+    let reached = reach_of(&nested, &json!("s"), &[]);
+    assert_eq!(
+        unreached_paths(&nested, &reached),
+        ["/oneOf/0/oneOf/1", "/oneOf/1"]
+    );
+    let all: BTreeSet<String> = ["s", "n", "b"]
+        .iter()
+        .zip([json!("s"), json!(1), json!(true)])
+        .flat_map(|(_, valid)| reach_of(&nested, &valid, &[]))
+        .collect();
+    assert!(unreached_paths(&nested, &all).is_empty());
+    // A reviewed reason carried by a `$ref` target excuses every use of it.
+    let mut by_ref = body_only(object_with(json!({"a":{"type":"string"},
+        "b":{"$ref":"#/components/schemas/Derived"}})));
+    by_ref["components"]["schemas"]["Derived"] =
+        json!({"type":"string","x-omg-unprobed-location":WHY});
+    let reached = reach_of(&by_ref, &json!({"a":"x"}), &[]);
+    assert!(unreached_paths(&by_ref, &reached).is_empty());
+    let reached = reach_of(&by_ref, &json!({"a":"x","b":"y"}), &[]);
+    assert_eq!(stale_paths(&by_ref, &reached), ["/properties/b"]);
+}

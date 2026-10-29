@@ -619,7 +619,14 @@ impl PositiveFixtures {
                 for (location, kind) in super::request_reach::unreached(document, schema, &reached)?
                 {
                     failures.push(format!(
-                        "{key}: declared request location `{location}` ({kind}) was never walked by a vector run: carry it in a valid body or a seed, or annotate it with {}",
+                        "{key}: declared request location `{location}` ({kind}) was never walked by a vector run: {}, or annotate it with {}",
+                        super::request_reach::how_to_reach(&location, kind),
+                        super::request_reach::UNPROBED
+                    ));
+                }
+                for location in super::request_reach::stale(document, schema, &reached)? {
+                    failures.push(format!(
+                        "{key}: request location `{location}` carries {} but a vector run reached it: the exemption is stale, remove it",
                         super::request_reach::UNPROBED
                     ));
                 }

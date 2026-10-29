@@ -211,3 +211,76 @@ fn management_openapi_wiring_declared_request_locations_must_be_walked() {
     reach(&mut partial, &["/oneOf/0", "/oneOf/0/properties/a"]);
     gaps(&partial, &exempt).unwrap();
 }
+
+// ----- round 3: request reach at `finish`: how-to-reach hints and stale reasons ----
+
+fn request_document(schema: Value) -> Value {
+    json!({"openapi":"3.1.0","paths":{"/api/v1/y":{"post":{"operationId":"postY",
+        "requestBody":{"required":true,"content":{"application/json":{"schema":schema}}},
+        "responses":{"200":{"description":"ok"}}}}},"components":{"schemas":{}}})
+}
+fn request_gaps(reached: &[&str], document: &Value) -> anyhow::Result<()> {
+    let mut fixtures = PositiveFixtures::default();
+    fixtures.record_vectors("POST", "/api/v1/y", "body");
+    fixtures.record_reach(
+        "POST",
+        "/api/v1/y",
+        &reached.iter().map(|r| (*r).to_owned()).collect(),
+    );
+    fixtures.check_contract_coverage(document, &BTreeSet::from(["POST /api/v1/y".to_owned()]))
+}
+
+#[test]
+fn management_openapi_wiring_reach_hints_name_only_what_can_reach_the_location() {
+    // A tail `items` location cannot be added by a seed: the message must not say so.
+    let tail = request_document(json!({"type":"array","items":{"type":"string"}}));
+    let text = message(request_gaps(&[], &tail));
+    assert!(
+        text.contains("`/items`") && text.contains("valid body"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("seed") || text.contains("a seed cannot add it"),
+        "{text}"
+    );
+    assert!(!text.contains("or a seed"), "{text}");
+    // Union arms and map values likewise.
+    let arms = request_document(json!({"oneOf":[{"type":"string"},{"type":"integer"}]}));
+    let text = message(request_gaps(&["/oneOf/0"], &arms));
+    assert!(
+        text.contains("/oneOf/1") && !text.contains("or a seed"),
+        "{text}"
+    );
+    // A property or the next positional item CAN be seeded.
+    let property = request_document(
+        json!({"type":"object","required":[],"additionalProperties":false,
+        "properties":{"b":{"type":"string"}}}),
+    );
+    let text = message(request_gaps(&[], &property));
+    assert!(text.contains("or a seed"), "{text}");
+    let tuple =
+        request_document(json!({"type":"array","prefixItems":[{"type":"string"}],"items":false}));
+    let text = message(request_gaps(&[], &tuple));
+    assert!(
+        text.contains("/prefixItems/0") && text.contains("or a seed"),
+        "{text}"
+    );
+}
+
+#[test]
+fn management_openapi_wiring_a_stale_unprobed_reason_fails_finish() {
+    let document = request_document(
+        json!({"type":"object","required":[],"additionalProperties":false,
+        "properties":{"b":{"type":"string","x-omg-unprobed-location":"Derived by the server."}}}),
+    );
+    // Not reached: the reason excuses it.
+    request_gaps(&[], &document).unwrap();
+    // RED: reached, the reason is stale.
+    let text = message(request_gaps(&["/properties/b"], &document));
+    assert!(
+        text.contains("/properties/b")
+            && text.contains("stale")
+            && text.contains("x-omg-unprobed-location"),
+        "{text}"
+    );
+}
