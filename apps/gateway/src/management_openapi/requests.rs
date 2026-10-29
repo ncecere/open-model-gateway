@@ -30,6 +30,77 @@ impl<'de> serde::Deserializer<'de> for &Fields {
     }
 }
 
+/// Operations whose HANDLER refuses values serde accepts (documented value
+/// rules: ranges, enums, alphabets, per-kind field sets). The schema carries those
+/// rules, so against serde alone it may be STRICTER, never looser. Each entry is a
+/// reviewed claim; `finish()` still demands executed HTTP boundary vectors for
+/// the operation, which compare the schema with the real handler exactly.
+pub(crate) const SEMANTIC_REFINEMENTS: &[(&str, &str, &str)] = &[
+    (
+        "POST",
+        "/api/v1/platform/alerts/rules",
+        "the kind decides which fields are required and which are refused, with ranges, enums and at most ten emails",
+    ),
+    (
+        "PUT",
+        "/api/v1/platform/alerts/rules/{id}",
+        "the kind decides which fields are required and which are refused, with ranges, enums and at most ten emails",
+    ),
+    (
+        "POST",
+        "/api/v1/workspaces/{ws}/alerts/rules",
+        "the kind decides which fields are required and which are refused, with ranges, enums and at most ten emails",
+    ),
+    (
+        "PUT",
+        "/api/v1/workspaces/{ws}/alerts/rules/{id}",
+        "the kind decides which fields are required and which are refused, with ranges, enums and at most ten emails",
+    ),
+    (
+        "PUT",
+        "/api/v1/platform/settings/general",
+        "display name 1 to 120 characters without control characters, https URLs without credentials, lifetime 1 to 365 days",
+    ),
+    (
+        "PUT",
+        "/api/v1/platform/settings/privacy",
+        "data collection is deny or allow; retention is absent or 30 to 3650 days",
+    ),
+    (
+        "PUT",
+        "/api/v1/platform/settings/email",
+        "either every field absent, or host, port 1-65535, tls enum, sender and a username with its password reference; plaintext only to loopback",
+    ),
+    (
+        "PUT",
+        "/api/v1/platform/settings/storage",
+        "every retention is 1 to 365 days",
+    ),
+    (
+        "POST",
+        "/api/v1/platform/alerts/webhooks",
+        "a trimmed label of at most 120 characters, an approved https URL and an env: reference",
+    ),
+    (
+        "PATCH",
+        "/api/v1/platform/alerts/webhooks/{id}",
+        "the same value rules as create; a rotation reference and its expiry end together",
+    ),
+];
+
+/// May the contract's verdict differ from serde's? Equal always passes; a
+/// stricter contract passes only for a reviewed semantic refinement; a looser
+/// contract (accepting what serde rejects) never does.
+pub(super) fn agrees(refined: bool, contract: bool, serde: bool) -> bool {
+    contract == serde || (refined && !contract)
+}
+
+fn refined(method: &str, template: &str) -> bool {
+    SEMANTIC_REFINEMENTS
+        .iter()
+        .any(|(m, t, _)| *m == method && *t == template)
+}
+
 pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: Value) {
     let document = super::responses::artifact();
     let operation = &document["paths"][template][method.to_ascii_lowercase()];
@@ -38,7 +109,7 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
         !schema.is_null(),
         "request schema must be bound to an operation"
     );
-    boundary_vectors::<T>(method, template, schema, valid);
+    boundary_vectors::<T>(method, template, schema, valid, refined(method, template));
 }
 
 /// Bind recursively reachable nested DTOs as well, so a new optional nested
@@ -50,7 +121,7 @@ pub(crate) fn component_vectors<T: DeserializeOwned>(
     valid: Value,
 ) {
     let schema = json!({"$ref":format!("#/components/schemas/{component}")});
-    boundary_vectors::<T>(method, template, &schema, valid);
+    boundary_vectors::<T>(method, template, &schema, valid, refined(method, template));
 }
 
 fn boundary_vectors<T: DeserializeOwned>(
@@ -58,6 +129,7 @@ fn boundary_vectors<T: DeserializeOwned>(
     template: &str,
     schema: &Value,
     valid: Value,
+    refined: bool,
 ) {
     let document = super::responses::artifact();
     let fields = Fields::default();
@@ -93,7 +165,12 @@ fn boundary_vectors<T: DeserializeOwned>(
     let compare = |label: &str, value: Value| {
         let actual = serde_json::from_value::<T>(value.clone()).is_ok();
         let contract = super::responses::validate_value(document, schema, &value).is_ok();
-        assert_eq!(contract, actual, "{method} {template}: {label}");
+        assert!(
+            agrees(refined, contract, actual),
+            "{method} {template}: {label}: contract {} but serde {}",
+            if contract { "accepts" } else { "refuses" },
+            if actual { "accepts" } else { "refuses" },
+        );
     };
     compare("positive", valid.clone());
     // Recursively probe nested DTOs as well as their parent field's type.
@@ -259,4 +336,28 @@ fn management_openapi_invitation_and_notification_request_vectors() {
         "/api/v1/me/notifications/read",
         json!({"all":true}),
     );
+}
+
+#[test]
+fn management_openapi_request_refinements_are_reviewed_and_one_directional() {
+    assert!(agrees(false, true, true) && agrees(false, false, false));
+    assert!(
+        !agrees(false, false, true),
+        "stricter needs a reviewed refinement"
+    );
+    assert!(
+        agrees(true, false, true),
+        "reviewed refinement may be stricter"
+    );
+    assert!(!agrees(true, true, false), "never looser than serde");
+    assert!(!agrees(false, true, false));
+    let document = super::responses::artifact();
+    for (method, template, reason) in SEMANTIC_REFINEMENTS {
+        assert!(reason.trim().len() > 20, "{template}");
+        let operation = super::responses::operation(document, method, template).unwrap();
+        assert!(
+            operation.get("requestBody").is_some(),
+            "{method} {template} has no request body to refine"
+        );
+    }
 }
