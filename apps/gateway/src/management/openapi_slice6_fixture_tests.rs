@@ -927,8 +927,7 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
     )
     .await;
     // One settled request of the throwaway key creates its day totals row (the
-    // trigger); the same corruption `governance/tests.rs` applies to a workspace
-    // row makes the report unavailable (`read_budget_report` returns None).
+    // trigger). It is corrupted only while its reports are read (below).
     exec(
         &pool,
         Ex {
@@ -940,9 +939,6 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
         },
     )
     .await;
-    let corrupted = sqlx::query("UPDATE budget_totals SET settled_microusd=-1,held_microusd=0 WHERE scope_kind='key' AND period='day' AND scope_id=(SELECT governance_key_id FROM api_keys WHERE id=$1)")
-        .bind(corrupt_key).execute(&pool).await.unwrap().rows_affected();
-    assert_eq!(corrupted, 1, "the throwaway key has one day totals row");
     let private_root = Uuid::new_v4();
     exec(
         &pool,
@@ -1308,10 +1304,23 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
         )
         .await;
     }
-    // The throwaway key's accounting is corrupt on purpose: its policy and
-    // stats reports show unavailable windows. Its detail read reports the raw
-    // usage figure, which a corrupt row cannot honestly satisfy, so it is
-    // never requested.
+    // The throwaway key's day totals row is corrupted exactly as
+    // `governance/tests.rs` corrupts a workspace row, so its policy and stats
+    // reports show unavailable windows (`read_budget_report` returns None); the
+    // row is restored right after, because the key list and detail report the
+    // raw figure, which a corrupt row cannot honestly satisfy.
+    let (settled, held): (String, String) = sqlx::query_as("SELECT settled_microusd::text,held_microusd::text FROM budget_totals WHERE scope_kind='key' AND period='day' AND scope_id=(SELECT governance_key_id FROM api_keys WHERE id=$1)")
+        .bind(corrupt_key).fetch_one(&pool).await.unwrap();
+    let set_totals = "UPDATE budget_totals SET settled_microusd=$2::numeric,held_microusd=$3::numeric WHERE scope_kind='key' AND period='day' AND scope_id=(SELECT governance_key_id FROM api_keys WHERE id=$1)";
+    let corrupted = sqlx::query(set_totals)
+        .bind(corrupt_key)
+        .bind("-1")
+        .bind("0")
+        .execute(&pool)
+        .await
+        .unwrap()
+        .rows_affected();
+    assert_eq!(corrupted, 1, "the throwaway key has one day totals row");
     for suffix in ["/policy", "/stats"] {
         w.json(
             &owner,
@@ -1321,6 +1330,13 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
         )
         .await;
     }
+    sqlx::query(set_totals)
+        .bind(corrupt_key)
+        .bind(&settled)
+        .bind(&held)
+        .execute(&pool)
+        .await
+        .unwrap();
     for suffix in ["", "/policy", "/stats", "/access"] {
         w.json(
             &owner,
