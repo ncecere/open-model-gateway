@@ -156,11 +156,6 @@ impl Wire {
         serde_json::from_slice(&r.bytes).unwrap_or(Value::Null)
     }
 }
-fn pairs(base: &[(&str, &str)]) -> Vec<(String, String)> {
-    base.iter()
-        .map(|(n, v)| ((*n).to_owned(), (*v).to_owned()))
-        .collect()
-}
 /// Query boundary vectors of one read, sent as `b` to `path`.
 async fn query_ops(w: &mut Wire, b: &Browser, template: &str, path: &str, base: &[(&str, &str)]) {
     let (client, root) = (w.client.clone(), w.base.clone());
