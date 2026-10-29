@@ -5,6 +5,7 @@
 //! producers write them (`seed`). Failure messages name only the method, a
 //! static label and the status, never a path, id, header or body.
 use super::*;
+use futures::FutureExt;
 use openapi::http_vectors::{Probe, body_vectors_http, query_vectors_fixed};
 use openapi::responses::{Captured, PositiveFixtures, capture_http};
 use sha2::{Digest, Sha256};
@@ -91,6 +92,8 @@ struct Wire {
     client: reqwest::Client,
     base: String,
     observed: PositiveFixtures,
+    /// Operations whose vector run failed (the run continues: one build, every gap).
+    failed: Vec<String>,
 }
 impl Wire {
     async fn send(
@@ -161,14 +164,19 @@ fn pairs(base: &[(&str, &str)]) -> Vec<(String, String)> {
 /// Query boundary vectors of one read, sent as `b` to `path`.
 async fn query_ops(w: &mut Wire, b: &Browser, template: &str, path: &str, base: &[(&str, &str)]) {
     let (client, root) = (w.client.clone(), w.base.clone());
-    query_vectors_fixed(
+    let failed = std::panic::AssertUnwindSafe(query_vectors_fixed(
         &mut w.observed,
         "GET",
         template,
         base,
         async |query: String| raw(&client, &root, b, "GET", &format!("{path}?{query}"), None).await,
-    )
-    .await;
+    ))
+    .catch_unwind()
+    .await
+    .is_err();
+    if failed {
+        w.failed.push(format!("GET {template}"));
+    }
 }
 /// Body boundary vectors of one JSON write.
 async fn body_ops(
@@ -180,14 +188,19 @@ async fn body_ops(
     valid: Value,
 ) {
     let (client, root) = (w.client.clone(), w.base.clone());
-    body_vectors_http(
+    let failed = std::panic::AssertUnwindSafe(body_vectors_http(
         &mut w.observed,
         method,
         template,
         valid,
         async |body: Value| probe(raw(&client, &root, b, method, path, Some(body)).await),
-    )
-    .await;
+    ))
+    .catch_unwind()
+    .await
+    .is_err();
+    if failed {
+        w.failed.push(format!("{method} {template}"));
+    }
 }
 
 /// An async job (kind `batch` or `video`) over an existing execution `root`,
@@ -307,7 +320,12 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let _server = Server(tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap()
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap()
     }));
     let mut w = Wire {
         client: reqwest::Client::builder()
@@ -317,6 +335,7 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
             .unwrap(),
         base,
         observed: PositiveFixtures::default(),
+        failed: Vec::new(),
     };
     let ws = format!("/api/v1/workspaces/{}", f.team);
     let personal = format!("/api/v1/workspaces/{}", f.personal);
@@ -1829,7 +1848,7 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
     let valid_policy = json!({"requests_per_minute":100,"tokens_per_minute":30,"concurrent_requests":2,"concurrent_jobs":1,"storage_bytes":null,"key_issuances_per_holder":null,"key_issuances_per_workspace":null,"budgets":[{"period":"month","amount_microusd":"5000000"}]});
     {
         let (client, root) = (w.client.clone(), w.base.clone());
-        body_vectors_http(
+        let failed = std::panic::AssertUnwindSafe(body_vectors_http(
             &mut w.observed,
             "PUT",
             "/api/v1/workspaces/{ws}/keys/{key}/policy",
@@ -1848,8 +1867,13 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
                     .await,
                 )
             },
-        )
-        .await;
+        ))
+        .catch_unwind()
+        .await
+        .is_err();
+        if failed {
+            w.failed.push("PUT policy".to_owned());
+        }
     }
     body_ops(
         &mut w,
@@ -1963,5 +1987,15 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
     )
     .await;
     w.status(&owner,"PUT",&format!("{keypath}/policy"),Some(json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"budgets":[{"period":"month","amount_microusd":"1","unknown":true}]})),StatusCode::UNPROCESSABLE_ENTITY).await;
-    w.observed.finish(openapi::responses::SLICE6_AREAS);
+    // Every vector and coverage gap is reported by one run (panic messages
+    // name only operations, kinds, pointers and statuses).
+    let coverage = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        w.observed.finish(openapi::responses::SLICE6_AREAS)
+    }));
+    assert!(
+        w.failed.is_empty() && coverage.is_ok(),
+        "slice 6 contract gaps: vectors failed for {:?}; coverage gate passed: {}",
+        w.failed,
+        coverage.is_ok()
+    );
 }

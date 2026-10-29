@@ -2625,12 +2625,7 @@
             "additionalProperties": false,
             "properties": {
               "accounting_state": {
-                "enum": [
-                  "pending",
-                  "unknown",
-                  "settled",
-                  "missing"
-                ]
+                "const": "settled"
               },
               "attempt_number": {
                 "maximum": 3,
@@ -2707,7 +2702,7 @@
                 "type": "object"
               },
               "cost_microusd": {
-                "$ref": "#/components/schemas/IdentityNullableDecimal"
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
               },
               "data_policy": {
                 "oneOf": [
@@ -2797,7 +2792,7 @@
                 ]
               },
               "held_microusd": {
-                "$ref": "#/components/schemas/IdentityNullableDecimal"
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
               },
               "input_tokens": {
                 "$ref": "#/components/schemas/IdentityNullableDecimal"
@@ -2877,16 +2872,14 @@
                           "$ref": "#/components/schemas/IdentityNullableDecimal"
                         },
                         "completed_at": {
-                          "$ref": "#/components/schemas/IdentityNullableTime"
+                          "$ref": "#/components/schemas/IdentityTime"
                         },
                         "cost_microusd": {
                           "$ref": "#/components/schemas/IdentityNullableDecimal"
                         },
                         "duration_ms": {
-                          "type": [
-                            "integer",
-                            "null"
-                          ]
+                          "minimum": 0,
+                          "type": "integer"
                         },
                         "held_microusd": {
                           "$ref": "#/components/schemas/IdentityUnsignedDecimal"
@@ -2985,14 +2978,7 @@
                 ]
               },
               "unresolved_reason": {
-                "enum": [
-                  "missing_reservation",
-                  "unpriced",
-                  "unbounded_cost_or_unknown_rate",
-                  "in_progress",
-                  "incomplete_usage",
-                  null
-                ]
+                "type": "null"
               },
               "workload_kind": {
                 "type": "string"
@@ -3068,9 +3054,11 @@
             "$ref": "#/components/schemas/IdentityTime"
           },
           "endpoint": {
-            "type": [
-              "string",
-              "null"
+            "enum": [
+              "/v1/chat/completions",
+              "/v1/responses",
+              "/v1/embeddings",
+              "/v1/messages"
             ]
           },
           "error_code": {
@@ -3109,10 +3097,7 @@
             ]
           },
           "key_name": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "last_progress_at": {
             "$ref": "#/components/schemas/IdentityNullableTime"
@@ -3343,8 +3328,12 @@
                 "$ref": "#/components/schemas/S6MoneyInput"
               },
               "period": {
-                "description": "Budget period: day, week, month or lifetime (validated by the handler, not by deserialization).",
-                "type": "string"
+                "enum": [
+                  "day",
+                  "week",
+                  "month",
+                  "lifetime"
+                ]
               }
             },
             "required": [
@@ -3359,8 +3348,12 @@
             "minItems": 2,
             "prefixItems": [
               {
-                "description": "Budget period: day, week, month or lifetime (validated by the handler, not by deserialization).",
-                "type": "string"
+                "enum": [
+                  "day",
+                  "week",
+                  "month",
+                  "lifetime"
+                ]
               },
               {
                 "$ref": "#/components/schemas/S6MoneyInput"
@@ -3739,10 +3732,7 @@
             ]
           },
           "upstream_model": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "workload_kind": {
             "type": "string"
@@ -3811,43 +3801,29 @@
                       "type": "boolean"
                     },
                     "budgets": {
-                      "anyOf": [
-                        {
-                          "items": {
-                            "$ref": "#/components/schemas/S6Budget"
-                          },
-                          "type": "array"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
+                      "items": {
+                        "$ref": "#/components/schemas/S6Budget"
+                      },
+                      "type": "array"
                     },
                     "catalogs": {
-                      "anyOf": [
-                        {
-                          "items": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "id": {
-                                "$ref": "#/components/schemas/IdentityUuid"
-                              },
-                              "name": {
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "id",
-                              "name"
-                            ],
-                            "type": "object"
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "$ref": "#/components/schemas/IdentityUuid"
                           },
-                          "type": "array"
+                          "name": {
+                            "type": "string"
+                          }
                         },
-                        {
-                          "type": "null"
-                        }
-                      ]
+                        "required": [
+                          "id",
+                          "name"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
                     },
                     "catalogs_apply": {
                       "type": "boolean"
@@ -3856,67 +3832,60 @@
                       "const": "type_default"
                     },
                     "limits": {
-                      "anyOf": [
-                        {
-                          "additionalProperties": false,
-                          "properties": {
-                            "concurrent_jobs": {
-                              "anyOf": [
-                                {
-                                  "minimum": 0,
-                                  "type": "integer"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
+                      "additionalProperties": false,
+                      "properties": {
+                        "concurrent_jobs": {
+                          "anyOf": [
+                            {
+                              "minimum": 0,
+                              "type": "integer"
                             },
-                            "concurrent_requests": {
-                              "anyOf": [
-                                {
-                                  "minimum": 0,
-                                  "type": "integer"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "requests_per_minute": {
-                              "anyOf": [
-                                {
-                                  "minimum": 0,
-                                  "type": "integer"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "tokens_per_minute": {
-                              "anyOf": [
-                                {
-                                  "minimum": 0,
-                                  "type": "integer"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
+                            {
+                              "type": "null"
                             }
-                          },
-                          "required": [
-                            "requests_per_minute",
-                            "tokens_per_minute",
-                            "concurrent_requests",
-                            "concurrent_jobs"
-                          ],
-                          "type": "object"
+                          ]
                         },
-                        {
-                          "type": "null"
+                        "concurrent_requests": {
+                          "anyOf": [
+                            {
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "requests_per_minute": {
+                          "anyOf": [
+                            {
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "tokens_per_minute": {
+                          "anyOf": [
+                            {
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
-                      ]
+                      },
+                      "required": [
+                        "requests_per_minute",
+                        "tokens_per_minute",
+                        "concurrent_requests",
+                        "concurrent_jobs"
+                      ],
+                      "type": "object"
                     },
                     "models": {
                       "additionalProperties": false,
@@ -4117,109 +4086,72 @@
                       "type": "boolean"
                     },
                     "budgets": {
-                      "anyOf": [
-                        {
-                          "items": {
-                            "$ref": "#/components/schemas/S6Budget"
-                          },
-                          "type": "array"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
+                      "items": {
+                        "$ref": "#/components/schemas/S6Budget"
+                      },
+                      "type": "array"
                     },
                     "catalogs": {
-                      "anyOf": [
-                        {
-                          "items": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "id": {
-                                "$ref": "#/components/schemas/IdentityUuid"
-                              },
-                              "name": {
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "id",
-                              "name"
-                            ],
-                            "type": "object"
-                          },
-                          "type": "array"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
+                      "type": "null"
                     },
                     "layer": {
                       "const": "workspace"
                     },
                     "limits": {
-                      "anyOf": [
-                        {
-                          "additionalProperties": false,
-                          "properties": {
-                            "concurrent_jobs": {
-                              "anyOf": [
-                                {
-                                  "minimum": 0,
-                                  "type": "integer"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
+                      "additionalProperties": false,
+                      "properties": {
+                        "concurrent_jobs": {
+                          "anyOf": [
+                            {
+                              "minimum": 0,
+                              "type": "integer"
                             },
-                            "concurrent_requests": {
-                              "anyOf": [
-                                {
-                                  "minimum": 0,
-                                  "type": "integer"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "requests_per_minute": {
-                              "anyOf": [
-                                {
-                                  "minimum": 0,
-                                  "type": "integer"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "tokens_per_minute": {
-                              "anyOf": [
-                                {
-                                  "minimum": 0,
-                                  "type": "integer"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
+                            {
+                              "type": "null"
                             }
-                          },
-                          "required": [
-                            "requests_per_minute",
-                            "tokens_per_minute",
-                            "concurrent_requests",
-                            "concurrent_jobs"
-                          ],
-                          "type": "object"
+                          ]
                         },
-                        {
-                          "type": "null"
+                        "concurrent_requests": {
+                          "anyOf": [
+                            {
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "requests_per_minute": {
+                          "anyOf": [
+                            {
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "tokens_per_minute": {
+                          "anyOf": [
+                            {
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
-                      ]
+                      },
+                      "required": [
+                        "requests_per_minute",
+                        "tokens_per_minute",
+                        "concurrent_requests",
+                        "concurrent_jobs"
+                      ],
+                      "type": "object"
                     },
                     "models": {
                       "additionalProperties": false,
@@ -4285,109 +4217,72 @@
                       "type": "boolean"
                     },
                     "budgets": {
-                      "anyOf": [
-                        {
-                          "items": {
-                            "$ref": "#/components/schemas/S6Budget"
-                          },
-                          "type": "array"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
+                      "items": {
+                        "$ref": "#/components/schemas/S6Budget"
+                      },
+                      "type": "array"
                     },
                     "catalogs": {
-                      "anyOf": [
-                        {
-                          "items": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "id": {
-                                "$ref": "#/components/schemas/IdentityUuid"
-                              },
-                              "name": {
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "id",
-                              "name"
-                            ],
-                            "type": "object"
-                          },
-                          "type": "array"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
+                      "type": "null"
                     },
                     "layer": {
                       "const": "key"
                     },
                     "limits": {
-                      "anyOf": [
-                        {
-                          "additionalProperties": false,
-                          "properties": {
-                            "concurrent_jobs": {
-                              "anyOf": [
-                                {
-                                  "minimum": 0,
-                                  "type": "integer"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
+                      "additionalProperties": false,
+                      "properties": {
+                        "concurrent_jobs": {
+                          "anyOf": [
+                            {
+                              "minimum": 0,
+                              "type": "integer"
                             },
-                            "concurrent_requests": {
-                              "anyOf": [
-                                {
-                                  "minimum": 0,
-                                  "type": "integer"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "requests_per_minute": {
-                              "anyOf": [
-                                {
-                                  "minimum": 0,
-                                  "type": "integer"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "tokens_per_minute": {
-                              "anyOf": [
-                                {
-                                  "minimum": 0,
-                                  "type": "integer"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
+                            {
+                              "type": "null"
                             }
-                          },
-                          "required": [
-                            "requests_per_minute",
-                            "tokens_per_minute",
-                            "concurrent_requests",
-                            "concurrent_jobs"
-                          ],
-                          "type": "object"
+                          ]
                         },
-                        {
-                          "type": "null"
+                        "concurrent_requests": {
+                          "anyOf": [
+                            {
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "requests_per_minute": {
+                          "anyOf": [
+                            {
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "tokens_per_minute": {
+                          "anyOf": [
+                            {
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
-                      ]
+                      },
+                      "required": [
+                        "requests_per_minute",
+                        "tokens_per_minute",
+                        "concurrent_requests",
+                        "concurrent_jobs"
+                      ],
+                      "type": "object"
                     },
                     "models": {
                       "additionalProperties": false,
@@ -4413,40 +4308,33 @@
                       "type": "object"
                     },
                     "restriction": {
-                      "anyOf": [
-                        {
-                          "additionalProperties": false,
-                          "properties": {
-                            "mode": {
-                              "enum": [
-                                "inherit",
-                                "restricted"
-                              ]
-                            },
-                            "model_ids": {
-                              "anyOf": [
-                                {
-                                  "items": {
-                                    "$ref": "#/components/schemas/IdentityUuid"
-                                  },
-                                  "type": "array"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            }
-                          },
-                          "required": [
-                            "mode",
-                            "model_ids"
-                          ],
-                          "type": "object"
+                      "additionalProperties": false,
+                      "properties": {
+                        "mode": {
+                          "enum": [
+                            "inherit",
+                            "restricted"
+                          ]
                         },
-                        {
-                          "type": "null"
+                        "model_ids": {
+                          "anyOf": [
+                            {
+                              "items": {
+                                "$ref": "#/components/schemas/IdentityUuid"
+                              },
+                              "type": "array"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
-                      ]
+                      },
+                      "required": [
+                        "mode",
+                        "model_ids"
+                      ],
+                      "type": "object"
                     },
                     "source": {
                       "const": "key"
@@ -4701,7 +4589,7 @@
           "policy": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/S6Limits"
+                "$ref": "#/components/schemas/S6KeyLayerLimits"
               },
               {
                 "type": "null"
@@ -4718,6 +4606,90 @@
           "token",
           "model_ids",
           "policy"
+        ],
+        "type": "object"
+      },
+      "S6KeyLayerLimits": {
+        "additionalProperties": false,
+        "description": "Limits of one key lineage layer: a key has no storage or issuance quota (always null).",
+        "properties": {
+          "budget_period": {
+            "$ref": "#/components/schemas/IdentityPeriod"
+          },
+          "budgets": {
+            "items": {
+              "$ref": "#/components/schemas/S6Budget"
+            },
+            "type": "array"
+          },
+          "concurrent_jobs": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "concurrent_requests": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "key_issuances_per_holder": {
+            "type": "null"
+          },
+          "key_issuances_per_workspace": {
+            "type": "null"
+          },
+          "monthly_budget_microusd": {
+            "$ref": "#/components/schemas/IdentityNullableDecimal"
+          },
+          "requests_per_minute": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "storage_bytes": {
+            "type": "null"
+          },
+          "tokens_per_minute": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "requests_per_minute",
+          "tokens_per_minute",
+          "concurrent_requests",
+          "concurrent_jobs",
+          "storage_bytes",
+          "key_issuances_per_holder",
+          "key_issuances_per_workspace",
+          "monthly_budget_microusd",
+          "budget_period",
+          "budgets"
         ],
         "type": "object"
       },
@@ -4747,13 +4719,13 @@
             ]
           },
           "policy": {
-            "$ref": "#/components/schemas/S6Limits"
+            "$ref": "#/components/schemas/S6KeyLayerLimits"
           },
           "provenance": {
             "additionalProperties": false,
             "properties": {
               "key": {
-                "$ref": "#/components/schemas/S6Limits"
+                "$ref": "#/components/schemas/S6KeyLayerLimits"
               },
               "local": {
                 "$ref": "#/components/schemas/S6Limits"
@@ -5130,10 +5102,7 @@
             "$ref": "#/components/schemas/IdentityTime"
           },
           "created_by": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "id": {
             "$ref": "#/components/schemas/IdentityUuid"
@@ -5157,10 +5126,7 @@
                 ]
               },
               "label": {
-                "type": [
-                  "string",
-                  "null"
-                ]
+                "type": "string"
               }
             },
             "required": [
@@ -5531,19 +5497,13 @@
                 "additionalProperties": false,
                 "properties": {
                   "code": {
-                    "type": [
-                      "string",
-                      "null"
-                    ]
+                    "type": "string"
                   },
                   "id": {
                     "$ref": "#/components/schemas/IdentityUuid"
                   },
                   "name": {
-                    "type": [
-                      "string",
-                      "null"
-                    ]
+                    "type": "string"
                   }
                 },
                 "required": [
@@ -5807,19 +5767,13 @@
                 "additionalProperties": false,
                 "properties": {
                   "code": {
-                    "type": [
-                      "string",
-                      "null"
-                    ]
+                    "type": "string"
                   },
                   "id": {
                     "$ref": "#/components/schemas/IdentityUuid"
                   },
                   "name": {
-                    "type": [
-                      "string",
-                      "null"
-                    ]
+                    "type": "string"
                   }
                 },
                 "required": [
@@ -5903,7 +5857,7 @@
                     ]
                   },
                   "poll_deadline_at": {
-                    "$ref": "#/components/schemas/IdentityNullableTime"
+                    "$ref": "#/components/schemas/IdentityTime"
                   },
                   "progress": {
                     "anyOf": [
@@ -6294,9 +6248,11 @@
             "$ref": "#/components/schemas/IdentityTime"
           },
           "endpoint": {
-            "type": [
-              "string",
-              "null"
+            "enum": [
+              "/v1/chat/completions",
+              "/v1/responses",
+              "/v1/embeddings",
+              "/v1/messages"
             ]
           },
           "error_code": {
@@ -6887,19 +6843,13 @@
                 "additionalProperties": false,
                 "properties": {
                   "code": {
-                    "type": [
-                      "string",
-                      "null"
-                    ]
+                    "type": "string"
                   },
                   "id": {
                     "$ref": "#/components/schemas/IdentityUuid"
                   },
                   "name": {
-                    "type": [
-                      "string",
-                      "null"
-                    ]
+                    "type": "string"
                   }
                 },
                 "required": [
@@ -7167,19 +7117,13 @@
                 "additionalProperties": false,
                 "properties": {
                   "code": {
-                    "type": [
-                      "string",
-                      "null"
-                    ]
+                    "type": "string"
                   },
                   "id": {
                     "$ref": "#/components/schemas/IdentityUuid"
                   },
                   "name": {
-                    "type": [
-                      "string",
-                      "null"
-                    ]
+                    "type": "string"
                   }
                 },
                 "required": [
@@ -7263,7 +7207,7 @@
                     ]
                   },
                   "poll_deadline_at": {
-                    "$ref": "#/components/schemas/IdentityNullableTime"
+                    "$ref": "#/components/schemas/IdentityTime"
                   },
                   "progress": {
                     "anyOf": [
@@ -7557,9 +7501,14 @@
             "$ref": "#/components/schemas/IdentityPeriod"
           },
           "exhausted": {
-            "type": [
-              "boolean",
-              "null"
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null",
+                "x-omg-unobserved-branch": "Null only when the budget_totals row fails its consistency validation (read_budget_report returns None, policies.rs budget_windows): corrupt accounting that the maintenance triggers never produce and no test can seed."
+              }
             ]
           },
           "headroom_status": {
@@ -7579,7 +7528,15 @@
             "$ref": "#/components/schemas/IdentityUnsignedDecimal"
           },
           "pending_held_microusd": {
-            "$ref": "#/components/schemas/IdentityNullableDecimal"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              {
+                "type": "null",
+                "x-omg-unobserved-branch": "Null only when the budget_totals row fails its consistency validation (read_budget_report returns None, policies.rs budget_windows): corrupt accounting that the maintenance triggers never produce and no test can seed."
+              }
+            ]
           },
           "period": {
             "$ref": "#/components/schemas/IdentityPeriod"
@@ -7588,25 +7545,62 @@
             "$ref": "#/components/schemas/IdentityNullableDecimal"
           },
           "settled_microusd": {
-            "$ref": "#/components/schemas/IdentityNullableDecimal"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              {
+                "type": "null",
+                "x-omg-unobserved-branch": "Null only when the budget_totals row fails its consistency validation (read_budget_report returns None, policies.rs budget_windows): corrupt accounting that the maintenance triggers never produce and no test can seed."
+              }
+            ]
           },
           "unknown_cost_requests": {
-            "$ref": "#/components/schemas/IdentityNullableDecimal"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              {
+                "type": "null",
+                "x-omg-unobserved-branch": "Null only when the budget_totals row fails its consistency validation (read_budget_report returns None, policies.rs budget_windows): corrupt accounting that the maintenance triggers never produce and no test can seed."
+              }
+            ]
           },
           "unknown_held_microusd": {
-            "$ref": "#/components/schemas/IdentityNullableDecimal"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              {
+                "type": "null",
+                "x-omg-unobserved-branch": "Null only when the budget_totals row fails its consistency validation (read_budget_report returns None, policies.rs budget_windows): corrupt accounting that the maintenance triggers never produce and no test can seed."
+              }
+            ]
           },
           "unresolved_usage": {
-            "type": [
-              "boolean",
-              "null"
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null",
+                "x-omg-unobserved-branch": "Null only when the budget_totals row fails its consistency validation (read_budget_report returns None, policies.rs budget_windows): corrupt accounting that the maintenance triggers never produce and no test can seed."
+              }
             ]
           },
           "usage_visible": {
             "const": true
           },
           "used_microusd": {
-            "$ref": "#/components/schemas/IdentityNullableDecimal"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              {
+                "type": "null",
+                "x-omg-unobserved-branch": "Null only when the budget_totals row fails its consistency validation (read_budget_report returns None, policies.rs budget_windows): corrupt accounting that the maintenance triggers never produce and no test can seed."
+              }
+            ]
           },
           "window_end": {
             "$ref": "#/components/schemas/IdentityNullableTime"
@@ -10552,17 +10546,22 @@
             "additionalProperties": false,
             "properties": {
               "expires_in_days": {
-                "maximum": 2147483647,
-                "minimum": -2147483648,
+                "maximum": 90,
+                "minimum": 1,
                 "type": "integer"
               },
               "ip_allowlist": {
                 "anyOf": [
                   {
                     "items": {
+                      "description": "An address or addr/prefix network (prefix length at least 1); no host bits.",
+                      "pattern": "^[0-9A-Fa-f:.]+(/[0-9]{1,3})?$",
                       "type": "string"
                     },
-                    "type": "array"
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "type": "array",
+                    "uniqueItems": true
                   },
                   {
                     "type": "null"
@@ -10570,13 +10569,26 @@
                 ]
               },
               "name": {
+                "description": "1 to 120 characters, no control characters.",
+                "maxLength": 120,
+                "minLength": 1,
+                "pattern": "^[^\\p{Cc}]+$",
                 "type": "string"
               },
               "scopes": {
                 "items": {
-                  "type": "string"
+                  "enum": [
+                    "platform:read",
+                    "catalog:write",
+                    "access:write",
+                    "governance:write",
+                    "settings:write"
+                  ]
                 },
-                "type": "array"
+                "maxItems": 5,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
               }
             },
             "required": [
@@ -10592,26 +10604,44 @@
             "minItems": 3,
             "prefixItems": [
               {
+                "description": "1 to 120 characters, no control characters.",
+                "maxLength": 120,
+                "minLength": 1,
+                "pattern": "^[^\\p{Cc}]+$",
                 "type": "string"
               },
               {
                 "items": {
-                  "type": "string"
+                  "enum": [
+                    "platform:read",
+                    "catalog:write",
+                    "access:write",
+                    "governance:write",
+                    "settings:write"
+                  ]
                 },
-                "type": "array"
+                "maxItems": 5,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
               },
               {
-                "maximum": 2147483647,
-                "minimum": -2147483648,
+                "maximum": 90,
+                "minimum": 1,
                 "type": "integer"
               },
               {
                 "anyOf": [
                   {
                     "items": {
+                      "description": "An address or addr/prefix network (prefix length at least 1); no host bits.",
+                      "pattern": "^[0-9A-Fa-f:.]+(/[0-9]{1,3})?$",
                       "type": "string"
                     },
-                    "type": "array"
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "type": "array",
+                    "uniqueItems": true
                   },
                   {
                     "type": "null"
@@ -10694,8 +10724,42 @@
         "oneOf": [
           {
             "additionalProperties": false,
+            "oneOf": [
+              {
+                "properties": {
+                  "user_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "workspace_id": {
+                    "type": "null"
+                  }
+                },
+                "required": [
+                  "user_id"
+                ]
+              },
+              {
+                "properties": {
+                  "user_id": {
+                    "type": "null"
+                  },
+                  "workspace_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "workspace_id"
+                ]
+              }
+            ],
             "properties": {
               "reference": {
+                "description": "A short code: letters, digits and . _ : / # - (at most 64), starting with a letter or digit.",
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,63}$",
                 "type": "string"
               },
               "user_id": {
@@ -10716,12 +10780,39 @@
             "minItems": 3,
             "prefixItems": [
               {
-                "$ref": "#/components/schemas/IdentityNullableUuid"
+                "format": "uuid",
+                "type": "string"
               },
               {
-                "$ref": "#/components/schemas/IdentityNullableUuid"
+                "type": "null"
               },
               {
+                "description": "A short code: letters, digits and . _ : / # - (at most 64), starting with a letter or digit.",
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,63}$",
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          {
+            "items": false,
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "type": "null"
+              },
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "description": "A short code: letters, digits and . _ : / # - (at most 64), starting with a letter or digit.",
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,63}$",
                 "type": "string"
               }
             ],
@@ -10988,7 +11079,9 @@
                     "items": {
                       "$ref": "#/components/schemas/S6BudgetInput"
                     },
-                    "type": "array"
+                    "maxItems": 4,
+                    "type": "array",
+                    "uniqueItems": true
                   },
                   {
                     "type": "null"
@@ -10998,8 +11091,8 @@
               "concurrent_jobs": {
                 "anyOf": [
                   {
-                    "maximum": 9223372036854775807,
-                    "minimum": -9223372036854775808,
+                    "maximum": 2147483647,
+                    "minimum": 1,
                     "type": "integer"
                   },
                   {
@@ -11010,8 +11103,8 @@
               "concurrent_requests": {
                 "anyOf": [
                   {
-                    "maximum": 9223372036854775807,
-                    "minimum": -9223372036854775808,
+                    "maximum": 2147483647,
+                    "minimum": 1,
                     "type": "integer"
                   },
                   {
@@ -11020,8 +11113,8 @@
                 ]
               },
               "expires_in_days": {
-                "maximum": 2147483647,
-                "minimum": -2147483648,
+                "maximum": 365,
+                "minimum": 1,
                 "type": "integer"
               },
               "model_ids": {
@@ -11030,6 +11123,7 @@
                     "items": {
                       "$ref": "#/components/schemas/IdentityUuid"
                     },
+                    "maxItems": 200,
                     "type": "array"
                   },
                   {
@@ -11038,13 +11132,17 @@
                 ]
               },
               "name": {
+                "description": "1 to 120 characters (the handler counts UTF-8 bytes), no control characters, not only whitespace.",
+                "maxLength": 120,
+                "minLength": 1,
+                "pattern": "^[^\\p{Cc}]*[^\\s\\p{Cc}][^\\p{Cc}]*$",
                 "type": "string"
               },
               "requests_per_minute": {
                 "anyOf": [
                   {
-                    "maximum": 9223372036854775807,
-                    "minimum": -9223372036854775808,
+                    "maximum": 2147483647,
+                    "minimum": 1,
                     "type": "integer"
                   },
                   {
@@ -11058,8 +11156,8 @@
               "tokens_per_minute": {
                 "anyOf": [
                   {
-                    "maximum": 9223372036854775807,
-                    "minimum": -9223372036854775808,
+                    "maximum": 2147483647,
+                    "minimum": 1,
                     "type": "integer"
                   },
                   {
@@ -11080,11 +11178,15 @@
             "minItems": 9,
             "prefixItems": [
               {
+                "description": "1 to 120 characters (the handler counts UTF-8 bytes), no control characters, not only whitespace.",
+                "maxLength": 120,
+                "minLength": 1,
+                "pattern": "^[^\\p{Cc}]*[^\\s\\p{Cc}][^\\p{Cc}]*$",
                 "type": "string"
               },
               {
-                "maximum": 2147483647,
-                "minimum": -2147483648,
+                "maximum": 365,
+                "minimum": 1,
                 "type": "integer"
               },
               {
@@ -11096,6 +11198,7 @@
                     "items": {
                       "$ref": "#/components/schemas/IdentityUuid"
                     },
+                    "maxItems": 200,
                     "type": "array"
                   },
                   {
@@ -11106,8 +11209,8 @@
               {
                 "anyOf": [
                   {
-                    "maximum": 9223372036854775807,
-                    "minimum": -9223372036854775808,
+                    "maximum": 2147483647,
+                    "minimum": 1,
                     "type": "integer"
                   },
                   {
@@ -11118,8 +11221,8 @@
               {
                 "anyOf": [
                   {
-                    "maximum": 9223372036854775807,
-                    "minimum": -9223372036854775808,
+                    "maximum": 2147483647,
+                    "minimum": 1,
                     "type": "integer"
                   },
                   {
@@ -11130,8 +11233,8 @@
               {
                 "anyOf": [
                   {
-                    "maximum": 9223372036854775807,
-                    "minimum": -9223372036854775808,
+                    "maximum": 2147483647,
+                    "minimum": 1,
                     "type": "integer"
                   },
                   {
@@ -11142,8 +11245,8 @@
               {
                 "anyOf": [
                   {
-                    "maximum": 9223372036854775807,
-                    "minimum": -9223372036854775808,
+                    "maximum": 2147483647,
+                    "minimum": 1,
                     "type": "integer"
                   },
                   {
@@ -11157,7 +11260,9 @@
                     "items": {
                       "$ref": "#/components/schemas/S6BudgetInput"
                     },
-                    "type": "array"
+                    "maxItems": 4,
+                    "type": "array",
+                    "uniqueItems": true
                   },
                   {
                     "type": "null"
@@ -11178,8 +11283,8 @@
             "additionalProperties": false,
             "properties": {
               "expires_in_days": {
-                "maximum": 2147483647,
-                "minimum": -2147483648,
+                "maximum": 365,
+                "minimum": 1,
                 "type": "integer"
               }
             },
@@ -11194,8 +11299,8 @@
             "minItems": 1,
             "prefixItems": [
               {
-                "maximum": 2147483647,
-                "minimum": -2147483648,
+                "maximum": 365,
+                "minimum": 1,
                 "type": "integer"
               }
             ],
@@ -11236,6 +11341,10 @@
             "additionalProperties": false,
             "properties": {
               "name": {
+                "description": "1 to 120 characters (the handler counts UTF-8 bytes), no control characters, not only whitespace.",
+                "maxLength": 120,
+                "minLength": 1,
+                "pattern": "^[^\\p{Cc}]*[^\\s\\p{Cc}][^\\p{Cc}]*$",
                 "type": "string"
               }
             },
@@ -11250,6 +11359,10 @@
             "minItems": 1,
             "prefixItems": [
               {
+                "description": "1 to 120 characters (the handler counts UTF-8 bytes), no control characters, not only whitespace.",
+                "maxLength": 120,
+                "minLength": 1,
+                "pattern": "^[^\\p{Cc}]*[^\\s\\p{Cc}][^\\p{Cc}]*$",
                 "type": "string"
               }
             ],
@@ -11416,22 +11529,60 @@
         "oneOf": [
           {
             "additionalProperties": false,
+            "description": " Exactly one of budgets (a full replacement set) or the deprecated monthly_budget_microusd (with an optional budget_period) is supplied.",
+            "oneOf": [
+              {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "monthly_budget_microusd"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "budget_period"
+                      ]
+                    }
+                  ]
+                },
+                "required": [
+                  "budgets"
+                ]
+              },
+              {
+                "not": {
+                  "required": [
+                    "budgets"
+                  ]
+                },
+                "required": [
+                  "monthly_budget_microusd"
+                ]
+              }
+            ],
             "properties": {
               "budget_period": {
-                "description": "Budget period: day, week, month or lifetime (validated by the handler, not by deserialization).",
-                "type": "string"
+                "enum": [
+                  "day",
+                  "week",
+                  "month",
+                  "lifetime"
+                ]
               },
               "budgets": {
                 "items": {
                   "$ref": "#/components/schemas/S6BudgetInput"
                 },
-                "type": "array"
+                "maxItems": 4,
+                "type": "array",
+                "uniqueItems": true
               },
               "concurrent_jobs": {
                 "anyOf": [
                   {
-                    "maximum": 9223372036854775807,
-                    "minimum": -9223372036854775808,
+                    "maximum": 2147483647,
+                    "minimum": 1,
                     "type": "integer"
                   },
                   {
@@ -11442,8 +11593,8 @@
               "concurrent_requests": {
                 "anyOf": [
                   {
-                    "maximum": 9223372036854775807,
-                    "minimum": -9223372036854775808,
+                    "maximum": 2147483647,
+                    "minimum": 1,
                     "type": "integer"
                   },
                   {
@@ -11452,28 +11603,12 @@
                 ]
               },
               "key_issuances_per_holder": {
-                "anyOf": [
-                  {
-                    "maximum": 9223372036854775807,
-                    "minimum": -9223372036854775808,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "description": "A key has no storage or issuance quota: only null (or omission) is accepted.",
+                "type": "null"
               },
               "key_issuances_per_workspace": {
-                "anyOf": [
-                  {
-                    "maximum": 9223372036854775807,
-                    "minimum": -9223372036854775808,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "description": "A key has no storage or issuance quota: only null (or omission) is accepted.",
+                "type": "null"
               },
               "monthly_budget_microusd": {
                 "anyOf": [
@@ -11488,8 +11623,8 @@
               "requests_per_minute": {
                 "anyOf": [
                   {
-                    "maximum": 9223372036854775807,
-                    "minimum": -9223372036854775808,
+                    "maximum": 2147483647,
+                    "minimum": 1,
                     "type": "integer"
                   },
                   {
@@ -11498,22 +11633,14 @@
                 ]
               },
               "storage_bytes": {
-                "anyOf": [
-                  {
-                    "maximum": 9223372036854775807,
-                    "minimum": -9223372036854775808,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "description": "A key has no storage or issuance quota: only null (or omission) is accepted.",
+                "type": "null"
               },
               "tokens_per_minute": {
                 "anyOf": [
                   {
-                    "maximum": 9223372036854775807,
-                    "minimum": -9223372036854775808,
+                    "maximum": 2147483647,
+                    "minimum": 1,
                     "type": "integer"
                   },
                   {
@@ -11537,8 +11664,8 @@
               {
                 "anyOf": [
                   {
-                    "maximum": 9223372036854775807,
-                    "minimum": -9223372036854775808,
+                    "maximum": 2147483647,
+                    "minimum": 1,
                     "type": "integer"
                   },
                   {
@@ -11549,8 +11676,8 @@
               {
                 "anyOf": [
                   {
-                    "maximum": 9223372036854775807,
-                    "minimum": -9223372036854775808,
+                    "maximum": 2147483647,
+                    "minimum": 1,
                     "type": "integer"
                   },
                   {
@@ -11561,8 +11688,8 @@
               {
                 "anyOf": [
                   {
-                    "maximum": 9223372036854775807,
-                    "minimum": -9223372036854775808,
+                    "maximum": 2147483647,
+                    "minimum": 1,
                     "type": "integer"
                   },
                   {
@@ -11573,8 +11700,8 @@
               {
                 "anyOf": [
                   {
-                    "maximum": 9223372036854775807,
-                    "minimum": -9223372036854775808,
+                    "maximum": 2147483647,
+                    "minimum": 1,
                     "type": "integer"
                   },
                   {
@@ -11583,40 +11710,16 @@
                 ]
               },
               {
-                "anyOf": [
-                  {
-                    "maximum": 9223372036854775807,
-                    "minimum": -9223372036854775808,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "description": "A key has no storage or issuance quota: only null (or omission) is accepted.",
+                "type": "null"
               },
               {
-                "anyOf": [
-                  {
-                    "maximum": 9223372036854775807,
-                    "minimum": -9223372036854775808,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "description": "A key has no storage or issuance quota: only null (or omission) is accepted.",
+                "type": "null"
               },
               {
-                "anyOf": [
-                  {
-                    "maximum": 9223372036854775807,
-                    "minimum": -9223372036854775808,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "description": "A key has no storage or issuance quota: only null (or omission) is accepted.",
+                "type": "null"
               },
               {
                 "anyOf": [
@@ -11629,14 +11732,20 @@
                 ]
               },
               {
-                "description": "Budget period: day, week, month or lifetime (validated by the handler, not by deserialization).",
-                "type": "string"
+                "enum": [
+                  "day",
+                  "week",
+                  "month",
+                  "lifetime"
+                ]
               },
               {
                 "items": {
                   "$ref": "#/components/schemas/S6BudgetInput"
                 },
-                "type": "array"
+                "maxItems": 4,
+                "type": "array",
+                "uniqueItems": true
               }
             ],
             "type": "array"
@@ -14627,11 +14736,12 @@
             }
           },
           {
-            "description": "exclude_actions",
+            "description": "exclude_actions Comma-separated lowercase action codes (letters, digits, _ and .; at most 20, each 1 to 64 characters).",
             "in": "query",
             "name": "exclude_actions",
             "required": false,
             "schema": {
+              "pattern": "^[a-z0-9_.]{1,64}(,[a-z0-9_.]{1,64}){0,19}$",
               "type": "string"
             }
           }
@@ -17101,12 +17211,12 @@
             }
           },
           {
-            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes.",
+            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes after trimming surrounding whitespace; empty or blank means no filter.",
             "in": "query",
             "name": "q",
             "required": false,
             "schema": {
-              "pattern": "^[0-9a-fA-F-]{4,36}$",
+              "pattern": "^\\s*([0-9a-fA-F-]{4,36})?\\s*$",
               "type": "string"
             }
           },
@@ -17176,7 +17286,7 @@
             "name": "cursor",
             "required": false,
             "schema": {
-              "pattern": "^[0-9]{1,19}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "pattern": "^[0-9]{1,19}_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
               "type": "string"
             }
           },
@@ -17318,12 +17428,12 @@
             }
           },
           {
-            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes.",
+            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes after trimming surrounding whitespace; empty or blank means no filter.",
             "in": "query",
             "name": "q",
             "required": false,
             "schema": {
-              "pattern": "^[0-9a-fA-F-]{4,36}$",
+              "pattern": "^\\s*([0-9a-fA-F-]{4,36})?\\s*$",
               "type": "string"
             }
           },
@@ -17513,12 +17623,12 @@
             }
           },
           {
-            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes.",
+            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes after trimming surrounding whitespace; empty or blank means no filter.",
             "in": "query",
             "name": "q",
             "required": false,
             "schema": {
-              "pattern": "^[0-9a-fA-F-]{4,36}$",
+              "pattern": "^\\s*([0-9a-fA-F-]{4,36})?\\s*$",
               "type": "string"
             }
           },
@@ -17588,7 +17698,7 @@
             "name": "cursor",
             "required": false,
             "schema": {
-              "pattern": "^[0-9]{1,19}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "pattern": "^[0-9]{1,19}_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
               "type": "string"
             }
           },
@@ -17738,12 +17848,12 @@
             }
           },
           {
-            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes.",
+            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes after trimming surrounding whitespace; empty or blank means no filter.",
             "in": "query",
             "name": "q",
             "required": false,
             "schema": {
-              "pattern": "^[0-9a-fA-F-]{4,36}$",
+              "pattern": "^\\s*([0-9a-fA-F-]{4,36})?\\s*$",
               "type": "string"
             }
           },
@@ -17943,12 +18053,12 @@
             }
           },
           {
-            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes.",
+            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes after trimming surrounding whitespace; empty or blank means no filter.",
             "in": "query",
             "name": "q",
             "required": false,
             "schema": {
-              "pattern": "^[0-9a-fA-F-]{4,36}$",
+              "pattern": "^\\s*([0-9a-fA-F-]{4,36})?\\s*$",
               "type": "string"
             }
           },
@@ -18018,7 +18128,7 @@
             "name": "cursor",
             "required": false,
             "schema": {
-              "pattern": "^[0-9]{1,19}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_[0-9a-f]{2,1024}$",
+              "pattern": "^[0-9]{1,19}_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}_[0-9a-fA-F]{2,1024}$",
               "type": "string"
             }
           },
@@ -18178,12 +18288,12 @@
             }
           },
           {
-            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes.",
+            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes after trimming surrounding whitespace; empty or blank means no filter.",
             "in": "query",
             "name": "q",
             "required": false,
             "schema": {
-              "pattern": "^[0-9a-fA-F-]{4,36}$",
+              "pattern": "^\\s*([0-9a-fA-F-]{4,36})?\\s*$",
               "type": "string"
             }
           },
@@ -25299,12 +25409,12 @@
             }
           },
           {
-            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes.",
+            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes after trimming surrounding whitespace; empty or blank means no filter.",
             "in": "query",
             "name": "q",
             "required": false,
             "schema": {
-              "pattern": "^[0-9a-fA-F-]{4,36}$",
+              "pattern": "^\\s*([0-9a-fA-F-]{4,36})?\\s*$",
               "type": "string"
             }
           },
@@ -25365,7 +25475,7 @@
             "name": "cursor",
             "required": false,
             "schema": {
-              "pattern": "^[0-9]{1,19}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "pattern": "^[0-9]{1,19}_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
               "type": "string"
             }
           },
@@ -27024,12 +27134,12 @@
             }
           },
           {
-            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes.",
+            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes after trimming surrounding whitespace; empty or blank means no filter.",
             "in": "query",
             "name": "q",
             "required": false,
             "schema": {
-              "pattern": "^[0-9a-fA-F-]{4,36}$",
+              "pattern": "^\\s*([0-9a-fA-F-]{4,36})?\\s*$",
               "type": "string"
             }
           },
@@ -28342,12 +28452,12 @@
             }
           },
           {
-            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes.",
+            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes after trimming surrounding whitespace; empty or blank means no filter.",
             "in": "query",
             "name": "q",
             "required": false,
             "schema": {
-              "pattern": "^[0-9a-fA-F-]{4,36}$",
+              "pattern": "^\\s*([0-9a-fA-F-]{4,36})?\\s*$",
               "type": "string"
             }
           },
@@ -28408,7 +28518,7 @@
             "name": "cursor",
             "required": false,
             "schema": {
-              "pattern": "^[0-9]{1,19}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "pattern": "^[0-9]{1,19}_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
               "type": "string"
             }
           },
@@ -28565,12 +28675,12 @@
             }
           },
           {
-            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes.",
+            "description": "Request or attempt id prefix: 4 to 36 hex digits or dashes after trimming surrounding whitespace; empty or blank means no filter.",
             "in": "query",
             "name": "q",
             "required": false,
             "schema": {
-              "pattern": "^[0-9a-fA-F-]{4,36}$",
+              "pattern": "^\\s*([0-9a-fA-F-]{4,36})?\\s*$",
               "type": "string"
             }
           },
