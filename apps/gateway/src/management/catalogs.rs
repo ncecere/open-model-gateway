@@ -119,7 +119,10 @@ async fn catalogs(
         offset: p.offset,
     }
     .bounds()?;
-    if p.q.as_ref().is_some_and(|q| q.chars().count() > 200) {
+    if p.q
+        .as_ref()
+        .is_some_and(|q| q.chars().count() > 200 || q.chars().any(char::is_control))
+    {
         return Err(invalid());
     }
     let data:Vec<Value>=sqlx::query_scalar(&format!("SELECT {CATALOG_SUMMARY} FROM catalogs c WHERE $3::text IS NULL OR strpos(lower(c.name),lower($3))>0 ORDER BY c.name,c.id LIMIT $1 OFFSET $2")).bind(l).bind(o).bind(p.q).fetch_all(&mut *tx).await?;
@@ -657,7 +660,10 @@ async fn workspace_models(
         offset: p.offset,
     }
     .bounds()?;
-    if p.q.as_ref().is_some_and(|q| q.chars().count() > 200) {
+    if p.q
+        .as_ref()
+        .is_some_and(|q| q.chars().count() > 200 || q.chars().any(char::is_control))
+    {
         return Err(invalid());
     }
     let data:Vec<Value>=sqlx::query_scalar(&format!("SELECT jsonb_build_object('id',m.id,'model_id',m.id,'public_name',m.public_name,'display_name',m.display_name,'description',m.description,'supported_protocols',m.supported_protocols,'enabled',m.enabled,'available_from_catalog',{ELIGIBLE},'selected',workspace_model_allowed(w.id,m.id),'catalog_granted',EXISTS(SELECT 1 FROM workspace_model_grants g WHERE g.workspace_id=w.id AND g.model_id=m.id AND g.source='catalog'),'direct_granted',EXISTS(SELECT 1 FROM workspace_model_grants g WHERE g.workspace_id=w.id AND g.model_id=m.id AND g.source='direct')) FROM models m CROSS JOIN workspaces w WHERE w.id=$1 AND m.enabled AND (($2 AND {ELIGIBLE}) OR workspace_model_allowed(w.id,m.id) OR ($6 AND EXISTS(SELECT 1 FROM workspace_model_grants g WHERE g.workspace_id=w.id AND g.model_id=m.id))) AND ($3::text IS NULL OR strpos(lower(m.public_name),lower($3))>0 OR strpos(lower(m.display_name),lower($3))>0) ORDER BY m.public_name,m.id LIMIT $4 OFFSET $5")).bind(ws).bind(available).bind(p.q).bind(l).bind(o).bind(a.disabled).fetch_all(&mut *tx).await?;
