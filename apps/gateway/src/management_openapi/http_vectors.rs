@@ -139,9 +139,89 @@ fn repeat_to(seed: &str, length: usize) -> String {
 /// Longest string vector (bytes of characters) the harness will send.
 const LONGEST: u64 = 100_000;
 
-/// Longest percent-encoded query value the harness sends (the `http` crate
-/// refuses request targets over 65534 bytes).
+/// Longest percent-encoded query string the harness sends (the `http` crate
+/// refuses request targets over 65534 bytes; the rest is margin for the path).
 const MAX_QUERY_BYTES: usize = 60_000;
+
+/// Longest array the harness sends (minItems/maxItems vectors).
+const MAX_ITEMS: u64 = 1000;
+
+/// Reviewed exemption on a QUERY PARAMETER or a direct request-body property:
+/// the boundary vectors of this location cannot be sent over HTTP (the
+/// request-target limit, the harness' string and array caps), so a handler
+/// bound the harness cannot probe is accepted on a reviewed reason instead of
+/// being skipped silently. Without it an unsendable DECISIVE vector fails.
+pub(super) const UNSENDABLE: &str = "x-omg-unsendable-boundary";
+
+/// Vector kinds that decide whether the handler enforces a declared length or
+/// item bound. If NONE of a kind can be sent for a location the run fails.
+const DECISIVE: &[&str] = &[
+    "minLength",
+    "minLength-1",
+    "maxLength",
+    "maxLength+1",
+    "multibyte maxLength",
+    "multibyte maxLength+1",
+    "multibyte maxBytes",
+    "multibyte maxBytes+1",
+    "minItems",
+    "minItems-1",
+    "maxItems",
+    "maxItems+1",
+];
+
+/// Candidate vectors the harness could not send. Decisive ones fail the run
+/// unless the location carries [`UNSENDABLE`]; the rest are only counted.
+#[derive(Default)]
+pub(super) struct Notes {
+    /// Decisive kinds with no sendable vector at all: `(kind, location)`.
+    pub(super) unsent: Vec<(&'static str, String)>,
+    /// Decisive drops excused by a reviewed [`UNSENDABLE`].
+    pub(super) exempt: usize,
+    /// Non-decisive candidates that were not sent (counted, never silent).
+    pub(super) minor: usize,
+}
+impl Notes {
+    /// `dropped` candidates of one location; `sent` are the kinds that WERE sent.
+    pub(super) fn settle(
+        &mut self,
+        location: &str,
+        dropped: &[&'static str],
+        sent: &[&'static str],
+        exempt: bool,
+    ) {
+        for kind in dropped {
+            if sent.contains(kind) || !DECISIVE.contains(kind) {
+                self.minor += 1;
+            } else if exempt {
+                self.exempt += 1;
+            } else if !self.unsent.iter().any(|(k, l)| k == kind && l == location) {
+                self.unsent.push((kind, location.to_owned()));
+            }
+        }
+    }
+    pub(super) fn check(&self) -> Result<()> {
+        ensure!(
+            self.unsent.is_empty(),
+            "decisive boundary vectors could not be sent ({}): annotate the query parameter or direct body property with {UNSENDABLE} and a reviewed reason, or tighten the bound",
+            self.unsent
+                .iter()
+                .map(|(kind, location)| format!("{kind} at {location}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        Ok(())
+    }
+    /// One line, counts only: never a candidate or a location's value.
+    fn report(&self, method: &str, template: &str) {
+        if self.minor > 0 || self.exempt > 0 {
+            eprintln!(
+                "{method} {template}: {} non-decisive and {} reviewed-unsendable vector candidates were not sent",
+                self.minor, self.exempt
+            );
+        }
+    }
+}
 
 /// Reviewed extension on a string schema: the handler limits the UTF-8 BYTES of
 /// the value (JSON Schema `maxLength` counts characters, so it can only state a
@@ -241,7 +321,7 @@ fn simple_bounds(pattern: &str) -> Option<(usize, Option<usize>)> {
 /// Candidates around a pattern: shape violations, control characters,
 /// multibyte values and, for simple repetition patterns, the length boundaries
 /// m-1, m, n and n+1 built from the characters of the valid seed.
-fn pattern_candidates(pattern: &str, seed: &str) -> Vec<String> {
+fn pattern_candidates(pattern: &str, seed: &str, dropped: &mut Vec<&'static str>) -> Vec<String> {
     let mut replaced = seed.chars();
     replaced.next();
     let mut out = vec![
@@ -269,10 +349,19 @@ fn pattern_candidates(pattern: &str, seed: &str) -> Vec<String> {
         for length in lengths.into_iter().flatten() {
             if (length as u64) <= LONGEST {
                 out.push(repeat_to(seed, length));
+            } else {
+                dropped.push("pattern length");
             }
         }
     }
     out
+}
+
+/// The candidates of one location and the decisive kinds it could not produce.
+struct Mutations {
+    vectors: Vec<(&'static str, Value)>,
+    /// Candidate kinds the harness refused to generate (past its caps).
+    dropped: Vec<&'static str>,
 }
 
 /// Candidate replacement values for one location, by the constraints that apply.
@@ -283,8 +372,9 @@ fn scalar_mutations(
     nodes: &[&Value],
     value: &Value,
     query: bool,
-) -> Result<Vec<(&'static str, Value)>> {
+) -> Result<Mutations> {
     let mut out: Vec<(&'static str, Value)> = Vec::new();
+    let mut dropped: Vec<&'static str> = Vec::new();
     let kinds = types(nodes);
     if !query {
         for wrong in [
@@ -386,19 +476,23 @@ fn scalar_mutations(
     // String bounds are derived from the VALID value so the alphabet stays valid.
     if kinds.contains("string") {
         let seed = value.as_str().unwrap_or("a");
-        if let Some(min) = first(nodes, "minLength").and_then(Value::as_u64)
-            && min <= LONGEST
-        {
-            out.push(("minLength", json!(repeat_to(seed, min as usize))));
-            if min > 0 {
-                out.push(("minLength-1", json!(repeat_to(seed, min as usize - 1))));
+        if let Some(min) = first(nodes, "minLength").and_then(Value::as_u64) {
+            if min <= LONGEST {
+                out.push(("minLength", json!(repeat_to(seed, min as usize))));
+                if min > 0 {
+                    out.push(("minLength-1", json!(repeat_to(seed, min as usize - 1))));
+                }
+            } else {
+                dropped.extend(["minLength", "minLength-1"]);
             }
         }
-        if let Some(max) = first(nodes, "maxLength").and_then(Value::as_u64)
-            && max < LONGEST
-        {
-            out.push(("maxLength", json!(repeat_to(seed, max as usize))));
-            out.push(("maxLength+1", json!(repeat_to(seed, max as usize + 1))));
+        if let Some(max) = first(nodes, "maxLength").and_then(Value::as_u64) {
+            if max < LONGEST {
+                out.push(("maxLength", json!(repeat_to(seed, max as usize))));
+                out.push(("maxLength+1", json!(repeat_to(seed, max as usize + 1))));
+            } else {
+                dropped.extend(["maxLength", "maxLength+1"]);
+            }
             // Characters, not bytes: a value of `max` multibyte characters is
             // within maxLength however many bytes it takes.
             if max <= 20_000 {
@@ -409,6 +503,8 @@ fn scalar_mutations(
                         json!(glyph.repeat(max as usize + 1)),
                     ));
                 }
+            } else {
+                dropped.extend(["multibyte maxLength", "multibyte maxLength+1"]);
             }
         }
         // A reviewed byte limit: multibyte values at and just over it.
@@ -416,16 +512,19 @@ fn scalar_mutations(
             .iter()
             .filter_map(|node| node.get(MAX_BYTES).and_then(Value::as_u64))
             .min()
-            && limit < LONGEST
         {
-            for glyph in ["\u{e9}", "\u{2713}", "\u{1F600}"] {
-                let fit = limit as usize / glyph.len();
-                out.push(("multibyte maxBytes", json!(glyph.repeat(fit))));
-                out.push(("multibyte maxBytes+1", json!(glyph.repeat(fit + 1))));
+            if limit < LONGEST {
+                for glyph in ["\u{e9}", "\u{2713}", "\u{1F600}"] {
+                    let fit = limit as usize / glyph.len();
+                    out.push(("multibyte maxBytes", json!(glyph.repeat(fit))));
+                    out.push(("multibyte maxBytes+1", json!(glyph.repeat(fit + 1))));
+                }
+            } else {
+                dropped.extend(["multibyte maxBytes", "multibyte maxBytes+1"]);
             }
         }
         if let Some(pattern) = first(nodes, "pattern").and_then(Value::as_str) {
-            for candidate in pattern_candidates(pattern, seed) {
+            for candidate in pattern_candidates(pattern, seed, &mut dropped) {
                 // Genuine violations are the pattern-violation vectors; the rest
                 // (multibyte text, say) must be accepted by both sides.
                 let kind = if accepts(document, schema, &json!(candidate))? {
@@ -455,7 +554,10 @@ fn scalar_mutations(
             }
         }
     }
-    Ok(out)
+    Ok(Mutations {
+        vectors: out,
+        dropped,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -513,10 +615,13 @@ fn coerce(kinds: &BTreeSet<&str>, raw: &str) -> Value {
     json!(raw)
 }
 
+/// `(name, required, schema, unsendable-boundary exemption)` per query parameter.
+type QueryParameter<'a> = (String, bool, &'a Value, bool);
+
 fn query_parameters<'a>(
     document: &'a Value,
     operation: &'a Value,
-) -> Result<Vec<(String, bool, &'a Value)>> {
+) -> Result<Vec<QueryParameter<'a>>> {
     let mut out = Vec::new();
     for parameter in operation["parameters"].as_array().into_iter().flatten() {
         let parameter = resolve(document, parameter)?;
@@ -530,28 +635,58 @@ fn query_parameters<'a>(
                 parameter
                     .get("schema")
                     .context("query parameter needs a schema")?,
+                parameter.get(UNSENDABLE).is_some(),
             ));
         }
     }
     Ok(out)
 }
 
+pub(super) struct QueryPlan {
+    pub(super) cases: Vec<QueryCase>,
+    pub(super) notes: Notes,
+}
+
 /// Every query vector of an operation. `base` is one VALID request; `seeds` give a
 /// valid value for documented OPTIONAL parameters the base request does not carry
-/// (a vector for such a parameter ADDS it to the base request).
+/// (a vector for such a parameter ADDS it to the base request). Fails when a
+/// decisive boundary vector cannot be sent (see [`UNSENDABLE`]).
 pub(super) fn query_cases(
     document: &Value,
     operation: &Value,
     base: &[(String, String)],
     seeds: &[(String, String)],
 ) -> Result<Vec<QueryCase>> {
+    Ok(query_plan(document, operation, base, seeds)?.cases)
+}
+
+/// The request's query string with `name` set (replaced, or added) to `raw`.
+fn with_param(base: &[(String, String)], name: &str, raw: &str) -> Vec<(String, String)> {
+    let mut pairs = base.to_vec();
+    if pairs.iter().any(|(n, _)| n == name) {
+        for pair in pairs.iter_mut().filter(|(n, _)| n == name) {
+            pair.1 = raw.to_owned();
+        }
+    } else {
+        pairs.push((name.to_owned(), raw.to_owned()));
+    }
+    pairs
+}
+
+pub(super) fn query_plan(
+    document: &Value,
+    operation: &Value,
+    base: &[(String, String)],
+    seeds: &[(String, String)],
+) -> Result<QueryPlan> {
+    let mut notes = Notes::default();
     let parameters = query_parameters(document, operation)?;
     ensure!(
         !parameters.is_empty(),
         "the operation documents no query parameters"
     );
     let mut out = Vec::new();
-    for (name, required, schema) in &parameters {
+    for (name, required, schema, unsendable) in &parameters {
         let raw = base
             .iter()
             .chain(seeds)
@@ -576,14 +711,18 @@ pub(super) fn query_cases(
                 accept: !required,
             });
         }
-        for (kind, value) in scalar_mutations(document, schema, &nodes, &coerce(&kinds, raw), true)?
-        {
+        let mutations = scalar_mutations(document, schema, &nodes, &coerce(&kinds, raw), true)?;
+        let mut dropped = mutations.dropped;
+        let mut sent: Vec<&'static str> = Vec::new();
+        for (kind, value) in mutations.vectors {
             let raw = render(&value);
-            // A request target is limited to 65534 bytes by the HTTP stack (and
-            // every byte may be percent-encoded): oversized candidates cannot be sent.
-            if raw.len() * 3 > MAX_QUERY_BYTES {
+            // A request target is limited to 65534 bytes by the HTTP stack: the
+            // REAL percent-encoded query string (not a worst-case estimate) must fit.
+            if encode(&with_param(base, name, &raw)).len() > MAX_QUERY_BYTES {
+                dropped.push(kind);
                 continue;
             }
+            sent.push(kind);
             if seen.insert(raw.clone()) {
                 let accept = accepts(document, schema, &coerce(&kinds, &raw))?;
                 out.push(QueryCase {
@@ -594,6 +733,8 @@ pub(super) fn query_cases(
                 });
             }
         }
+        let exempt = *unsendable || nodes.iter().any(|node| node.get(UNSENDABLE).is_some());
+        notes.settle(name, &dropped, &sent, exempt);
     }
     for name in base.iter().chain(seeds).map(|(n, _)| n) {
         ensure!(
@@ -601,10 +742,11 @@ pub(super) fn query_cases(
             "the valid base request carries an undocumented query parameter"
         );
     }
-    Ok(out)
+    notes.check()?;
+    Ok(QueryPlan { cases: out, notes })
 }
 
-fn encode(pairs: &[(String, String)]) -> String {
+pub(super) fn encode(pairs: &[(String, String)]) -> String {
     // Percent-encode everything outside the RFC 3986 unreserved set.
     fn escape(text: &str) -> String {
         text.bytes()
@@ -660,7 +802,10 @@ pub(super) async fn run_query<C>(
 ) -> Result<Vec<Captured>> {
     let operation = responses::operation(document, method, template)?;
     let (_, base) = fresh().await;
-    let cases = query_cases(document, operation, &base, seeds)?;
+    let plan = query_plan(document, operation, &base, seeds)
+        .with_context(|| format!("{method} {template}"))?;
+    plan.notes.report(method, template);
+    let cases = plan.cases;
     let mut exchanges = Vec::new();
     // The all-valid request is the positive control for every other vector.
     let mut plan: Vec<(Option<&QueryCase>, &str, String, bool)> =
@@ -674,13 +819,7 @@ pub(super) async fn run_query<C>(
         if let Some(case) = case {
             pairs.retain(|(name, _)| !(name == &case.param && matches!(case.edit, Edit::Omit)));
             if let Edit::Set(raw) = &case.edit {
-                if pairs.iter().any(|(name, _)| name == &case.param) {
-                    for pair in pairs.iter_mut().filter(|(name, _)| name == &case.param) {
-                        pair.1 = raw.clone();
-                    }
-                } else {
-                    pairs.push((case.param.clone(), raw.clone()));
-                }
+                pairs = with_param(&pairs, &case.param, raw);
             }
         }
         let probe = send(&context, encode(&pairs)).await;
@@ -841,6 +980,7 @@ struct Walk<'a> {
     used: BTreeSet<String>,
     seen: BTreeSet<String>,
     out: Vec<BodyCase>,
+    notes: Notes,
 }
 impl Walk<'_> {
     fn push(&mut self, path: &[Step], kind: &'static str, new: Option<Value>) -> Result<()> {
@@ -879,7 +1019,12 @@ impl Walk<'_> {
         ensure!(path.len() < 12, "request body nesting too deep");
         let mut nodes = Vec::new();
         applicable(self.document, schema, value, &mut nodes, 0)?;
-        for (kind, new) in scalar_mutations(self.document, schema, &nodes, value, false)? {
+        let mutations = scalar_mutations(self.document, schema, &nodes, value, false)?;
+        let sent: Vec<&'static str> = mutations.vectors.iter().map(|(kind, _)| *kind).collect();
+        let exempt = nodes.iter().any(|node| node.get(UNSENDABLE).is_some());
+        self.notes
+            .settle(&pointer(path), &mutations.dropped, &sent, exempt);
+        for (kind, new) in mutations.vectors {
             self.push(path, kind, Some(new))?;
         }
         if !path.is_empty() {
@@ -919,17 +1064,26 @@ impl Walk<'_> {
                 if let Some(first) = element {
                     let min = first_u64(&nodes, "minItems");
                     let max = first_u64(&nodes, "maxItems");
+                    let mut dropped = Vec::new();
+                    let mut sent = Vec::new();
                     for (kind, length) in [
                         ("minItems", min),
                         ("minItems-1", min.and_then(|n| n.checked_sub(1))),
                         ("maxItems", max),
                         ("maxItems+1", max.map(|n| n + 1)),
                     ] {
-                        if let Some(length) = length.filter(|n| *n <= 1000) {
-                            let array = vec![first.clone(); length as usize];
-                            self.push(path, kind, Some(Value::Array(array)))?;
+                        match length {
+                            Some(length) if length <= MAX_ITEMS => {
+                                sent.push(kind);
+                                let array = vec![first.clone(); length as usize];
+                                self.push(path, kind, Some(Value::Array(array)))?;
+                            }
+                            Some(_) => dropped.push(kind),
+                            None => {}
                         }
                     }
+                    let exempt = nodes.iter().any(|node| node.get(UNSENDABLE).is_some());
+                    self.notes.settle(&pointer(path), &dropped, &sent, exempt);
                 }
                 self.push(path, "empty array", Some(json!([])))?;
                 // Every positional index (a homogeneous `items` schema: the first).
@@ -1008,6 +1162,11 @@ fn body_schema(operation: &Value) -> Result<&Value> {
         .context("the operation documents no JSON request body")
 }
 
+pub(super) struct BodyPlan {
+    pub(super) cases: Vec<BodyCase>,
+    pub(super) notes: Notes,
+}
+
 /// Every body vector derived from the operation's request schema and a VALID body.
 pub(super) fn body_cases(
     document: &Value,
@@ -1015,6 +1174,17 @@ pub(super) fn body_cases(
     valid_body: &Value,
     seeds: &[(String, Value)],
 ) -> Result<Vec<BodyCase>> {
+    Ok(body_plan(document, operation, valid_body, seeds)?.cases)
+}
+
+/// [`body_cases`] with the account of what could not be sent. Fails when a
+/// decisive boundary vector cannot be sent (see [`UNSENDABLE`]).
+pub(super) fn body_plan(
+    document: &Value,
+    operation: &Value,
+    valid_body: &Value,
+    seeds: &[(String, Value)],
+) -> Result<BodyPlan> {
     let schema = body_schema(operation)?;
     ensure!(
         accepts(document, schema, valid_body)?,
@@ -1029,6 +1199,7 @@ pub(super) fn body_cases(
         used: BTreeSet::new(),
         seen: BTreeSet::new(),
         out: Vec::new(),
+        notes: Notes::default(),
     };
     walk.walk(schema, valid_body, &mut Vec::new())?;
     for (at, _) in seeds {
@@ -1037,7 +1208,11 @@ pub(super) fn body_cases(
             "seed at {at} names no declared optional location that the valid body omits"
         );
     }
-    Ok(walk.out)
+    walk.notes.check()?;
+    Ok(BodyPlan {
+        cases: walk.out,
+        notes: walk.notes,
+    })
 }
 
 pub(super) async fn run_body(
@@ -1049,7 +1224,10 @@ pub(super) async fn run_body(
     send: &impl AsyncFn(Value) -> Probe,
 ) -> Result<Vec<Captured>> {
     let operation = responses::operation(document, method, template)?;
-    let cases = body_cases(document, operation, &valid_body, seeds)?;
+    let plan = body_plan(document, operation, &valid_body, seeds)
+        .with_context(|| format!("{method} {template}"))?;
+    plan.notes.report(method, template);
+    let cases = plan.cases;
     let mut plan = vec![("valid", "(root)".to_owned(), valid_body.clone(), true)];
     plan.extend(
         cases

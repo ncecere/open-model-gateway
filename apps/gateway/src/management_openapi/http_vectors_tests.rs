@@ -882,20 +882,176 @@ async fn management_openapi_http_vectors_decided_probes_still_fail_on_unexpected
     assert!(message(result).contains("schema refuses but handler accepts"));
 }
 
+fn code_document(schema: Value, exempt: bool) -> Value {
+    let mut parameter = parameter("code", true, schema);
+    if exempt {
+        parameter["x-omg-unsendable-boundary"] =
+            json!("The handler caps this value far beyond what one request target can carry.");
+    }
+    json!({"openapi":"3.1.0","paths":{TEMPLATE:{"get":{"parameters":[parameter],
+        "responses":{"200":{"description":"ok"}}}}},"components":{"schemas":{}}})
+}
+fn code_cases(schema: Value, exempt: bool) -> anyhow::Result<Vec<super::http_vectors::QueryCase>> {
+    let document = code_document(schema, exempt);
+    query_cases(
+        &document,
+        &document["paths"][TEMPLATE]["get"],
+        &[("code".to_owned(), "good".to_owned())],
+        &[],
+    )
+}
+
 #[test]
-fn management_openapi_http_vectors_query_values_stay_within_the_request_target_limit() {
-    let document = json!({"openapi":"3.1.0","paths":{TEMPLATE:{"get":{"parameters":[
-        parameter("code", true, json!({"type":"string","maxLength":9000})),
-    ],"responses":{"200":{"description":"ok"}}}}},"components":{"schemas":{}}});
-    let operation = &document["paths"][TEMPLATE]["get"];
-    let base = vec![("code".to_owned(), "good".to_owned())];
-    let cases = query_cases(&document, operation, &base, &[]).unwrap();
+fn management_openapi_http_vectors_query_sizes_use_the_real_encoded_length() {
+    // 59001 unreserved characters are 59001 encoded bytes: they fit the request
+    // target, so the decisive maxLength+1 vector must be sent (a worst-case
+    // 3-bytes-per-character estimate used to drop it silently).
+    // (Its multibyte variants cannot be sent, so the parameter carries the reviewed
+    // exemption; maxLength and maxLength+1 are sent regardless.)
+    let cases = code_cases(json!({"type":"string","maxLength":59_000}), true).unwrap();
+    for kind in ["maxLength", "maxLength+1"] {
+        assert!(
+            cases
+                .iter()
+                .any(|c| c.kind == kind && matches!(&c.edit, Edit::Set(r) if r.len() >= 59_000)),
+            "{kind} was not sent"
+        );
+    }
     for case in &cases {
         if let Edit::Set(raw) = &case.edit {
-            assert!(raw.len() * 3 <= 60_000, "{} bytes", raw.len());
+            let pairs = vec![("code".to_owned(), raw.clone())];
+            assert!(super::http_vectors::encode(&pairs).len() <= 60_010);
         }
     }
-    // Multibyte values that do fit are still sent around the character limit.
+    // Multibyte values that fit are still sent around the character limit.
+    let cases = code_cases(json!({"type":"string","maxLength":9000}), false).unwrap();
     assert!(cases.iter().any(|c| c.kind == "multibyte maxLength"
         && matches!(&c.edit, Edit::Set(r) if r.starts_with('\u{e9}'))));
+}
+
+#[test]
+fn management_openapi_http_vectors_an_unsendable_decisive_query_vector_fails() {
+    // RED: 70000 characters cannot ride a request target of 65534 bytes.
+    let text = format!(
+        "{:#}",
+        code_cases(json!({"type":"string","maxLength":70_000}), false)
+            .err()
+            .expect("an unsendable maxLength+1 must fail")
+    );
+    assert!(
+        text.contains("maxLength+1")
+            && text.contains("code")
+            && text.contains("x-omg-unsendable-boundary"),
+        "{text}"
+    );
+    assert!(!text.contains("good"), "{text}");
+    // GREEN: a reviewed reason on the parameter excuses it, and those vectors are not sent.
+    let cases = code_cases(json!({"type":"string","maxLength":70_000}), true).unwrap();
+    assert!(cases.iter().all(|c| c.kind != "maxLength+1"));
+    // The annotation on the parameter's schema works as well.
+    let cases = code_cases(
+        json!({"type":"string","maxLength":70_000,
+            "x-omg-unsendable-boundary":"The handler caps this value far beyond one request target."}),
+        false,
+    )
+    .unwrap();
+    assert!(cases.iter().all(|c| c.kind != "maxLength+1"));
+    // One kind sent in some variant is enough: the emoji variant of a multibyte
+    // vector may be too long while the two-byte variant fits.
+    code_cases(json!({"type":"string","maxLength":9000}), false).unwrap();
+}
+
+fn property_document(schema: Value) -> Value {
+    body_only(
+        json!({"type":"object","required":["big"],"additionalProperties":false,
+        "properties":{"big":schema}}),
+    )
+}
+fn unsendable_body(schema: Value, valid: Value) -> anyhow::Result<()> {
+    cases_of(&property_document(schema), &json!({"big":valid}), &[]).map(|_| ())
+}
+const REASON: &str = "The handler caps this value far beyond what the harness can send.";
+
+#[test]
+fn management_openapi_http_vectors_an_unsendable_decisive_body_vector_fails() {
+    for (label, schema, valid, kind) in [
+        (
+            "maxLength past the harness cap",
+            json!({"type":"string","maxLength":150_000}),
+            json!("abc"),
+            "maxLength+1",
+        ),
+        (
+            "multibyte maxLength past the multibyte cap",
+            json!({"type":"string","maxLength":30_000}),
+            json!("abc"),
+            "multibyte maxLength",
+        ),
+        (
+            "minLength past the harness cap",
+            json!({"type":"string","minLength":150_000}),
+            json!("a".repeat(150_000)),
+            "minLength",
+        ),
+        (
+            "maxBytes past the harness cap",
+            json!({"type":"string","maxLength":120_000,"x-omg-max-bytes":120_000}),
+            json!("abc"),
+            "multibyte maxBytes",
+        ),
+        (
+            "maxItems past the item cap",
+            json!({"type":"array","maxItems":2000,"items":{"type":"string"}}),
+            json!(["a"]),
+            "maxItems+1",
+        ),
+    ] {
+        // RED: nothing is sent for the decisive bound, so the run must fail.
+        let error = unsendable_body(schema.clone(), valid.clone())
+            .err()
+            .unwrap_or_else(|| panic!("{label}: an unsendable boundary passed silently"));
+        let text = format!("{error:#}");
+        assert!(
+            text.contains(kind)
+                && text.contains("/big")
+                && text.contains("x-omg-unsendable-boundary"),
+            "{label}: {text}"
+        );
+        assert!(!text.contains("abc"), "{label}: {text}");
+        // GREEN: the reviewed annotation on the direct property excuses it.
+        let mut exempt = schema;
+        exempt["x-omg-unsendable-boundary"] = json!(REASON);
+        unsendable_body(exempt, valid).unwrap_or_else(|e| panic!("{label}: {e:#}"));
+    }
+    // Bounds the harness can send never need the annotation.
+    unsendable_body(json!({"type":"string","maxLength":9000}), json!("abc")).unwrap();
+    unsendable_body(
+        json!({"type":"array","maxItems":999,"items":{"type":"string"}}),
+        json!(["a"]),
+    )
+    .unwrap();
+}
+
+#[test]
+fn management_openapi_http_vectors_non_decisive_drops_are_counted_not_silent() {
+    use super::http_vectors::Notes;
+    let mut notes = Notes::default();
+    // A pattern boundary past the cap is counted, never a failure.
+    notes.settle("/big", &["pattern length"], &[], false);
+    assert_eq!((notes.minor, notes.exempt, notes.unsent.len()), (1, 0, 0));
+    notes.check().unwrap();
+    // A decisive kind that was sent in another variant is only counted.
+    notes.settle(
+        "/big",
+        &["multibyte maxLength"],
+        &["multibyte maxLength"],
+        false,
+    );
+    assert_eq!((notes.minor, notes.unsent.len()), (2, 0));
+    // A decisive kind with nothing sent is an exemption when reviewed, else a failure.
+    notes.settle("/big", &["maxItems"], &[], true);
+    assert_eq!((notes.exempt, notes.unsent.len()), (1, 0));
+    notes.settle("/big", &["maxItems"], &[], false);
+    let text = format!("{:#}", notes.check().unwrap_err());
+    assert!(text.contains("maxItems at /big"), "{text}");
 }
