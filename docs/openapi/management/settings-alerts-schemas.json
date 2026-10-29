@@ -12,18 +12,38 @@
           "type": "object",
           "properties": {
             "display_name": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
             },
             "support_url": {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^\\s*([Hh][Tt][Tt][Pp][Ss]://[^/@?#\\s]+([/?][^#\\s]*)?)?\\s*$",
+                  "description": "Blank means none; otherwise an absolute https URL without credentials or fragment, at most 2048 characters."
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "logo_url": {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^\\s*([Hh][Tt][Tt][Pp][Ss]://[^/@?#\\s]+([/?][^#\\s]*)?)?\\s*$",
+                  "description": "Blank means none; otherwise an absolute https URL without credentials or fragment, at most 2048 characters."
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "human_key_max_lifetime_days": {
               "type": "integer",
-              "minimum": -2147483648,
-              "maximum": 2147483647
+              "minimum": 1,
+              "maximum": 365
             }
           },
           "required": [
@@ -36,18 +56,38 @@
           "type": "array",
           "prefixItems": [
             {
-              "type": "string"
+              "type": "string",
+              "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
             },
             {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^\\s*([Hh][Tt][Tt][Pp][Ss]://[^/@?#\\s]+([/?][^#\\s]*)?)?\\s*$",
+                  "description": "Blank means none; otherwise an absolute https URL without credentials or fragment, at most 2048 characters."
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^\\s*([Hh][Tt][Tt][Pp][Ss]://[^/@?#\\s]+([/?][^#\\s]*)?)?\\s*$",
+                  "description": "Blank means none; otherwise an absolute https URL without credentials or fragment, at most 2048 characters."
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             {
               "type": "integer",
-              "minimum": -2147483648,
-              "maximum": 2147483647
+              "minimum": 1,
+              "maximum": 365
             }
           ],
           "minItems": 4,
@@ -55,7 +95,7 @@
           "items": false
         }
       ],
-      "description": "Closed serde struct object or positional array [display_name, support_url, logo_url, human_key_max_lifetime_days]. Deserialization constraints only; handler validation additionally applies."
+      "description": "Closed serde struct object or positional array [display_name, support_url, logo_url, human_key_max_lifetime_days]. Carries the handler's value rules."
     },
     "SettingsPrivacyInput": {
       "oneOf": [
@@ -63,14 +103,17 @@
           "type": "object",
           "properties": {
             "openrouter_data_collection": {
-              "type": "string"
+              "enum": [
+                "deny",
+                "allow"
+              ]
             },
             "request_log_retention_days": {
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -2147483648,
-                  "maximum": 2147483647
+                  "minimum": 30,
+                  "maximum": 3650
                 },
                 {
                   "type": "null"
@@ -87,14 +130,17 @@
           "type": "array",
           "prefixItems": [
             {
-              "type": "string"
+              "enum": [
+                "deny",
+                "allow"
+              ]
             },
             {
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -2147483648,
-                  "maximum": 2147483647
+                  "minimum": 30,
+                  "maximum": 3650
                 },
                 {
                   "type": "null"
@@ -107,7 +153,7 @@
           "items": false
         }
       ],
-      "description": "Closed serde struct object or positional array [openrouter_data_collection, request_log_retention_days]. Deserialization constraints only; handler validation additionally applies."
+      "description": "Closed serde struct object or positional array [openrouter_data_collection, request_log_retention_days]. A value locked by the server environment may only be resent unchanged (409). Carries the handler's value rules."
     },
     "SettingsEmailInput": {
       "oneOf": [
@@ -115,38 +161,204 @@
           "type": "object",
           "properties": {
             "host": {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "type": "string",
+              "pattern": "^\\s*(\\[[0-9A-Fa-f:.]+\\]|[0-9A-Fa-f:.]+|[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)\\s*$"
             },
             "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "tls": {
+              "enum": [
+                "starttls",
+                "implicit",
+                "none"
+              ]
+            },
+            "username": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\s*$"
+            },
+            "password_ref": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\s*$"
+            },
+            "from_address": {
+              "type": "string",
+              "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$"
+            },
+            "from_name": {
               "anyOf": [
                 {
-                  "type": "integer",
-                  "minimum": -2147483648,
-                  "maximum": 2147483647
+                  "type": "string",
+                  "pattern": "^\\s*[^\\p{Cc}]{0,120}\\s*$"
                 },
                 {
                   "type": "null"
                 }
               ]
+            }
+          },
+          "required": [
+            "host",
+            "port",
+            "tls",
+            "from_address"
+          ],
+          "additionalProperties": false,
+          "description": "A relay without credentials: host, port 1-65535, tls and a sender address; plaintext (`none`) only to a loopback host.",
+          "if": {
+            "properties": {
+              "tls": {
+                "const": "none"
+              }
+            },
+            "required": [
+              "tls"
+            ]
+          },
+          "then": {
+            "properties": {
+              "host": {
+                "type": "string",
+                "pattern": "^\\s*((?i:localhost)|\\[?::1\\]?|127(\\.[0-9]{1,3}){3})\\s*$"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "properties": {
+            "host": {
+              "type": "string",
+              "pattern": "^\\s*(\\[[0-9A-Fa-f:.]+\\]|[0-9A-Fa-f:.]+|[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)\\s*$"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
             },
             "tls": {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "enum": [
+                "starttls",
+                "implicit",
+                "none"
+              ]
             },
             "username": {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "type": "string",
+              "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,254}[^\\p{Cc}\\s])?\\s*$",
+              "description": "Trimmed, at most 256 bytes, no control characters."
             },
             "password_ref": {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "type": "string",
+              "pattern": "^\\s*env:[A-Z_][A-Z_0-9]{0,127}\\s*$",
+              "description": "An allowlisted environment reference (the server allowlist decides, 400 otherwise); never a password value."
             },
             "from_address": {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "type": "string",
+              "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$"
             },
             "from_name": {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^\\s*[^\\p{Cc}]{0,120}\\s*$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "host",
+            "port",
+            "tls",
+            "from_address",
+            "username",
+            "password_ref"
+          ],
+          "additionalProperties": false,
+          "description": "A relay with credentials: username and an allowlisted env: password reference together.",
+          "if": {
+            "properties": {
+              "tls": {
+                "const": "none"
+              }
+            },
+            "required": [
+              "tls"
+            ]
+          },
+          "then": {
+            "properties": {
+              "host": {
+                "type": "string",
+                "pattern": "^\\s*((?i:localhost)|\\[?::1\\]?|127(\\.[0-9]{1,3}){3})\\s*$"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "properties": {
+            "host": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\s*$"
+            },
+            "port": {
+              "type": "null"
+            },
+            "tls": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\s*$"
+            },
+            "username": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\s*$"
+            },
+            "password_ref": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\s*$"
+            },
+            "from_address": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\s*$"
+            },
+            "from_name": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\s*$"
             }
           },
           "required": [],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Turns delivery off: every field null, absent or blank."
         },
         {
           "type": "array",
@@ -187,7 +399,7 @@
           "items": false
         }
       ],
-      "description": "Closed serde struct object or positional array [host, port, tls, username, password_ref, from_address, from_name]. Deserialization constraints only; handler validation additionally applies."
+      "description": "Closed serde struct object, or positional array [host, port, tls, username, password_ref, from_address, from_name] whose element types are deserialization-level only (the handler applies the same rules). Trimmed blanks mean absent; the host is lowercased; a username and its password reference come together."
     },
     "SettingsStorageGroupInput": {
       "oneOf": [
@@ -199,8 +411,8 @@
             },
             "retention_days": {
               "type": "integer",
-              "minimum": -2147483648,
-              "maximum": 2147483647
+              "minimum": 1,
+              "maximum": 365
             }
           },
           "required": [
@@ -217,8 +429,8 @@
             },
             {
               "type": "integer",
-              "minimum": -2147483648,
-              "maximum": 2147483647
+              "minimum": 1,
+              "maximum": 365
             }
           ],
           "minItems": 2,
@@ -226,7 +438,7 @@
           "items": false
         }
       ],
-      "description": "Closed serde struct object or positional array [enabled, retention_days]. Deserialization constraints only; handler validation additionally applies."
+      "description": "Closed serde struct object or positional array [enabled, retention_days]; retention 1 to 365 days."
     },
     "SettingsStorageRetentionInput": {
       "oneOf": [
@@ -235,8 +447,8 @@
           "properties": {
             "retention_days": {
               "type": "integer",
-              "minimum": -2147483648,
-              "maximum": 2147483647
+              "minimum": 1,
+              "maximum": 365
             }
           },
           "required": [
@@ -249,8 +461,8 @@
           "prefixItems": [
             {
               "type": "integer",
-              "minimum": -2147483648,
-              "maximum": 2147483647
+              "minimum": 1,
+              "maximum": 365
             }
           ],
           "minItems": 1,
@@ -258,7 +470,7 @@
           "items": false
         }
       ],
-      "description": "Closed serde struct object or positional array [retention_days]. Deserialization constraints only; handler validation additionally applies."
+      "description": "Closed serde struct object or positional array [retention_days]; retention 1 to 365 days."
     },
     "SettingsStorageInput": {
       "oneOf": [
@@ -309,340 +521,25 @@
       ],
       "description": "Closed serde struct object or positional array [batch, video, user_files, export]. Deserialization constraints only; handler validation additionally applies."
     },
-    "SettingsAlertRuleInput": {
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "name": {
-              "type": "string"
-            },
-            "kind": {
-              "type": "string"
-            },
-            "enabled": {
-              "type": "boolean",
-              "default": true
-            },
-            "budget_layers": {
-              "anyOf": [
-                {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "thresholds": {
-              "anyOf": [
-                {
-                  "type": "array",
-                  "items": {
-                    "type": "integer",
-                    "minimum": -2147483648,
-                    "maximum": 2147483647
-                  }
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "spike_factor_percent": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": -2147483648,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "min_spend_microusd": {
-              "$ref": "#/components/schemas/IdentityNullableDecimal"
-            },
-            "window_minutes": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": -2147483648,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "error_rate_percent": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": -2147483648,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "min_requests": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": -2147483648,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "consecutive_failures": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": -2147483648,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "provider_connection_id": {
-              "$ref": "#/components/schemas/IdentityNullableUuid"
-            },
-            "spend_period": {
-              "$ref": "#/components/schemas/IdentityNullableString"
-            },
-            "spend_amount_microusd": {
-              "$ref": "#/components/schemas/IdentityNullableDecimal"
-            },
-            "ceiling_requests_per_second": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": -2147483648,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "ceiling_lock_wait_ms": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": -2147483648,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "notify_workspace_admins": {
-              "type": "boolean",
-              "default": false
-            },
-            "notify_platform_admins": {
-              "type": "boolean",
-              "default": false
-            },
-            "notify_emails": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "default": []
-            }
-          },
-          "required": [
-            "name",
-            "kind"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "array",
-          "prefixItems": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "string"
-            },
-            {
-              "type": "boolean",
-              "default": true
-            },
-            {
-              "anyOf": [
-                {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            {
-              "anyOf": [
-                {
-                  "type": "array",
-                  "items": {
-                    "type": "integer",
-                    "minimum": -2147483648,
-                    "maximum": 2147483647
-                  }
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": -2147483648,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            {
-              "$ref": "#/components/schemas/IdentityNullableDecimal"
-            },
-            {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": -2147483648,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": -2147483648,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": -2147483648,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": -2147483648,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            {
-              "$ref": "#/components/schemas/IdentityNullableUuid"
-            },
-            {
-              "$ref": "#/components/schemas/IdentityNullableString"
-            },
-            {
-              "$ref": "#/components/schemas/IdentityNullableDecimal"
-            },
-            {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": -2147483648,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": -2147483648,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            {
-              "type": "boolean",
-              "default": false
-            },
-            {
-              "type": "boolean",
-              "default": false
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "default": []
-            }
-          ],
-          "minItems": 16,
-          "maxItems": 19,
-          "items": false
-        }
-      ],
-      "description": "Closed serde struct object or positional array [name, kind, enabled, budget_layers, thresholds, spike_factor_percent, min_spend_microusd, window_minutes, error_rate_percent, min_requests, consecutive_failures, provider_connection_id, spend_period, spend_amount_microusd, ceiling_requests_per_second, ceiling_lock_wait_ms, notify_workspace_admins, notify_platform_admins, notify_emails]. Deserialization constraints only; handler validation additionally applies."
-    },
     "SettingsWebhookCreateInput": {
       "oneOf": [
         {
           "type": "object",
           "properties": {
             "label": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+              "description": "Trimmed, 1 to 120 characters, no control characters."
             },
             "url": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^(https://[^/@?#\\s]+|http://(localhost|127(\\.[0-9]{1,3}){3}|\\[::1\\])(:[0-9]{1,5})?)(/[^?#\\s]*)?$",
+              "description": "Must equal an operator-approved destination exactly (the server allowlist decides, 400 otherwise); https, or loopback http in development."
             },
             "current_secret_ref": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^env:[A-Z_][A-Z_0-9]{0,127}$",
+              "description": "An allowlisted env:NAME reference (the server allowlist decides, 400 otherwise); never a secret value."
             }
           },
           "required": [
@@ -656,13 +553,19 @@
           "type": "array",
           "prefixItems": [
             {
-              "type": "string"
+              "type": "string",
+              "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+              "description": "Trimmed, 1 to 120 characters, no control characters."
             },
             {
-              "type": "string"
+              "type": "string",
+              "pattern": "^(https://[^/@?#\\s]+|http://(localhost|127(\\.[0-9]{1,3}){3}|\\[::1\\])(:[0-9]{1,5})?)(/[^?#\\s]*)?$",
+              "description": "Must equal an operator-approved destination exactly (the server allowlist decides, 400 otherwise); https, or loopback http in development."
             },
             {
-              "type": "string"
+              "type": "string",
+              "pattern": "^env:[A-Z_][A-Z_0-9]{0,127}$",
+              "description": "An allowlisted env:NAME reference (the server allowlist decides, 400 otherwise); never a secret value."
             }
           ],
           "minItems": 3,
@@ -670,7 +573,7 @@
           "items": false
         }
       ],
-      "description": "Closed serde struct object or positional array [label, url, current_secret_ref]. Deserialization constraints only; handler validation additionally applies."
+      "description": "Manually decoded JSON (serde_json::from_slice, independent of Content-Type): a closed object or the positional array [label, url, current_secret_ref]."
     },
     "SettingsChronoDateTime": {
       "type": [
@@ -686,38 +589,110 @@
           "type": "object",
           "properties": {
             "label": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+              "description": "Trimmed, 1 to 120 characters, no control characters."
             },
             "enabled": {
               "type": "boolean"
             },
             "current_secret_ref": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^env:[A-Z_][A-Z_0-9]{0,127}$",
+              "description": "An allowlisted env:NAME reference (the server allowlist decides, 400 otherwise); never a secret value."
             },
             "previous_secret_ref": {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^env:[A-Z_][A-Z_0-9]{0,127}$",
+                  "description": "An allowlisted env:NAME reference (the server allowlist decides, 400 otherwise); never a secret value."
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "previous_secret_until": {
               "$ref": "#/components/schemas/SettingsChronoDateTime"
             }
           },
           "required": [],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "previous_secret_ref": {
+                    "type": "null"
+                  }
+                },
+                "required": [
+                  "previous_secret_ref"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "previous_secret_until": {
+                    "type": "null"
+                  }
+                },
+                "required": [
+                  "previous_secret_until"
+                ]
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "previous_secret_until": {
+                    "type": "null"
+                  }
+                },
+                "required": [
+                  "previous_secret_until"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "previous_secret_ref": {
+                    "type": "null"
+                  }
+                },
+                "required": [
+                  "previous_secret_ref"
+                ]
+              }
+            }
+          ]
         },
         {
           "type": "array",
           "prefixItems": [
             {
-              "type": "string"
+              "type": "string",
+              "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+              "description": "Trimmed, 1 to 120 characters, no control characters."
             },
             {
               "type": "boolean"
             },
             {
-              "type": "string"
+              "type": "string",
+              "pattern": "^env:[A-Z_][A-Z_0-9]{0,127}$",
+              "description": "An allowlisted env:NAME reference (the server allowlist decides, 400 otherwise); never a secret value."
             },
             {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^env:[A-Z_][A-Z_0-9]{0,127}$",
+                  "description": "An allowlisted env:NAME reference (the server allowlist decides, 400 otherwise); never a secret value."
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             {
               "$ref": "#/components/schemas/SettingsChronoDateTime"
@@ -728,7 +703,7 @@
           "items": false
         }
       ],
-      "description": "Manually decoded JSON via serde_json::from_slice, independent of Content-Type. Positional array order is [label, enabled, current_secret_ref, previous_secret_ref, previous_secret_until], with trailing elements omittable. No URL update field. Omitted fields retain saved values. Explicit null is rejected for label/enabled/current_secret_ref, but clears previous_secret_ref/previous_secret_until; both rotation fields must be jointly present/absent in the resulting state. References must be allowlisted env:NAME references, never secret values."
+      "description": "Manually decoded JSON via serde_json::from_slice, independent of Content-Type. Positional array order is [label, enabled, current_secret_ref, previous_secret_ref, previous_secret_until], with trailing elements omittable. No URL update field. Omitted fields retain saved values. Explicit null is rejected for label/enabled/current_secret_ref, but clears previous_secret_ref/previous_secret_until; both rotation fields must be jointly present/absent in the resulting state. References must be allowlisted env:NAME references, never secret values. A rotation (previous reference plus expiry no later than 24 hours ahead) needs both fields; ending one ends both. Whether a lone non-null rotation field is acceptable depends on the stored state (it must leave the destination with both or neither)."
     },
     "SettingsGeneral": {
       "type": "object",
@@ -2369,7 +2344,7 @@
       "$ref": "#/components/schemas/SettingsWebhookPrivileged"
     },
     "post_api_v1_platform_alerts_rulesRequest": {
-      "$ref": "#/components/schemas/SettingsAlertRuleInput"
+      "$ref": "#/components/schemas/SettingsPlatformRuleInput"
     },
     "post_api_v1_platform_alerts_rulesResponse": {
       "$ref": "#/components/schemas/SettingsPlatformCreatedRule"
@@ -2405,13 +2380,13 @@
       "$ref": "#/components/schemas/SettingsStorageTest"
     },
     "post_api_v1_workspaces_by_ws_alerts_rulesRequest": {
-      "$ref": "#/components/schemas/SettingsAlertRuleInput"
+      "$ref": "#/components/schemas/SettingsWorkspaceRuleInput"
     },
     "post_api_v1_workspaces_by_ws_alerts_rulesResponse": {
       "$ref": "#/components/schemas/SettingsWorkspaceCreatedRule"
     },
     "put_api_v1_platform_alerts_rules_by_idRequest": {
-      "$ref": "#/components/schemas/SettingsAlertRuleInput"
+      "$ref": "#/components/schemas/SettingsPlatformRuleInput"
     },
     "put_api_v1_platform_alerts_rules_by_idResponse": {
       "$ref": "#/components/schemas/SettingsPlatformRule"
@@ -2455,7 +2430,7 @@
       "$ref": "#/components/schemas/SettingsStorage"
     },
     "put_api_v1_workspaces_by_ws_alerts_rules_by_idRequest": {
-      "$ref": "#/components/schemas/SettingsAlertRuleInput"
+      "$ref": "#/components/schemas/SettingsWorkspaceRuleInput"
     },
     "put_api_v1_workspaces_by_ws_alerts_rules_by_idResponse": {
       "$ref": "#/components/schemas/SettingsWorkspaceRule"
@@ -4680,6 +4655,1671 @@
       ],
       "additionalProperties": false,
       "description": "A newly created destination: always disabled, with no rotation, deliveries or errors yet. Create responds with the privileged projection (the caller is a writer)."
+    },
+    "SettingsPlatformRuleInput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+            },
+            "kind": {
+              "const": "budget_threshold"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "budget_layers": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "type",
+                  "override",
+                  "local",
+                  "key"
+                ]
+              },
+              "minItems": 1
+            },
+            "thresholds": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "minItems": 1
+            },
+            "spike_factor_percent": {
+              "type": "null"
+            },
+            "min_spend_microusd": {
+              "type": "null"
+            },
+            "window_minutes": {
+              "type": "null"
+            },
+            "error_rate_percent": {
+              "type": "null"
+            },
+            "min_requests": {
+              "type": "null"
+            },
+            "consecutive_failures": {
+              "type": "null"
+            },
+            "provider_connection_id": {
+              "type": "null"
+            },
+            "spend_period": {
+              "type": "null"
+            },
+            "spend_amount_microusd": {
+              "type": "null"
+            },
+            "ceiling_requests_per_second": {
+              "type": "null"
+            },
+            "ceiling_lock_wait_ms": {
+              "type": "null"
+            },
+            "notify_workspace_admins": {
+              "const": false,
+              "default": false
+            },
+            "notify_platform_admins": {
+              "type": "boolean",
+              "default": false
+            },
+            "notify_emails": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$"
+              },
+              "maxItems": 10,
+              "default": []
+            }
+          },
+          "required": [
+            "name",
+            "kind",
+            "budget_layers",
+            "thresholds"
+          ],
+          "additionalProperties": false,
+          "description": "Budget thresholds over one or more budget layers (percentages 1-100; at most five distinct values; the installation layer does not exist)."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+            },
+            "kind": {
+              "const": "spend_threshold"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "budget_layers": {
+              "type": "null"
+            },
+            "thresholds": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "minItems": 1
+            },
+            "spike_factor_percent": {
+              "type": "null"
+            },
+            "min_spend_microusd": {
+              "type": "null"
+            },
+            "window_minutes": {
+              "type": "null"
+            },
+            "error_rate_percent": {
+              "type": "null"
+            },
+            "min_requests": {
+              "type": "null"
+            },
+            "consecutive_failures": {
+              "type": "null"
+            },
+            "provider_connection_id": {
+              "type": "null"
+            },
+            "spend_period": {
+              "$ref": "#/components/schemas/IdentityPeriod"
+            },
+            "spend_amount_microusd": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                },
+                {
+                  "pattern": "^([1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6]|9223372036854775807)$"
+                }
+              ],
+              "description": "Positive integer micro-USD string that fits a signed 64-bit integer (the handler also tolerates leading zeros; clients should send the canonical form)."
+            },
+            "ceiling_requests_per_second": {
+              "type": "null"
+            },
+            "ceiling_lock_wait_ms": {
+              "type": "null"
+            },
+            "notify_workspace_admins": {
+              "const": false,
+              "default": false
+            },
+            "notify_platform_admins": {
+              "type": "boolean",
+              "default": false
+            },
+            "notify_emails": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$"
+              },
+              "maxItems": 10,
+              "default": []
+            }
+          },
+          "required": [
+            "name",
+            "kind",
+            "thresholds",
+            "spend_period",
+            "spend_amount_microusd"
+          ],
+          "additionalProperties": false,
+          "description": "Installation spend against a reference amount per period."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+            },
+            "kind": {
+              "const": "spend_spike"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "budget_layers": {
+              "type": "null"
+            },
+            "thresholds": {
+              "type": "null"
+            },
+            "spike_factor_percent": {
+              "type": "integer",
+              "minimum": 110,
+              "maximum": 100000
+            },
+            "min_spend_microusd": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                },
+                {
+                  "pattern": "^[1-9][0-9]{0,14}$"
+                }
+              ],
+              "description": "Positive integer micro-USD string of at most 15 digits (the handler also tolerates leading zeros; clients should send the canonical form)."
+            },
+            "window_minutes": {
+              "type": "null"
+            },
+            "error_rate_percent": {
+              "type": "null"
+            },
+            "min_requests": {
+              "type": "null"
+            },
+            "consecutive_failures": {
+              "type": "null"
+            },
+            "provider_connection_id": {
+              "type": "null"
+            },
+            "spend_period": {
+              "type": "null"
+            },
+            "spend_amount_microusd": {
+              "type": "null"
+            },
+            "ceiling_requests_per_second": {
+              "type": "null"
+            },
+            "ceiling_lock_wait_ms": {
+              "type": "null"
+            },
+            "notify_workspace_admins": {
+              "const": false,
+              "default": false
+            },
+            "notify_platform_admins": {
+              "type": "boolean",
+              "default": false
+            },
+            "notify_emails": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$"
+              },
+              "maxItems": 10,
+              "default": []
+            }
+          },
+          "required": [
+            "name",
+            "kind",
+            "spike_factor_percent",
+            "min_spend_microusd"
+          ],
+          "additionalProperties": false,
+          "description": "Spend spike factor (110-100000 percent) over a spend floor."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+            },
+            "kind": {
+              "const": "error_rate"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "budget_layers": {
+              "type": "null"
+            },
+            "thresholds": {
+              "type": "null"
+            },
+            "spike_factor_percent": {
+              "type": "null"
+            },
+            "min_spend_microusd": {
+              "type": "null"
+            },
+            "window_minutes": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 1440
+            },
+            "error_rate_percent": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "min_requests": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            },
+            "consecutive_failures": {
+              "type": "null"
+            },
+            "provider_connection_id": {
+              "type": "null"
+            },
+            "spend_period": {
+              "type": "null"
+            },
+            "spend_amount_microusd": {
+              "type": "null"
+            },
+            "ceiling_requests_per_second": {
+              "type": "null"
+            },
+            "ceiling_lock_wait_ms": {
+              "type": "null"
+            },
+            "notify_workspace_admins": {
+              "const": false,
+              "default": false
+            },
+            "notify_platform_admins": {
+              "type": "boolean",
+              "default": false
+            },
+            "notify_emails": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$"
+              },
+              "maxItems": 10,
+              "default": []
+            }
+          },
+          "required": [
+            "name",
+            "kind",
+            "window_minutes",
+            "error_rate_percent",
+            "min_requests"
+          ],
+          "additionalProperties": false,
+          "description": "Error rate over a window."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+            },
+            "kind": {
+              "const": "provider_failing"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "budget_layers": {
+              "type": "null"
+            },
+            "thresholds": {
+              "type": "null"
+            },
+            "spike_factor_percent": {
+              "type": "null"
+            },
+            "min_spend_microusd": {
+              "type": "null"
+            },
+            "window_minutes": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 1440
+            },
+            "error_rate_percent": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "min_requests": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            },
+            "consecutive_failures": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "provider_connection_id": {
+              "$ref": "#/components/schemas/IdentityNullableUuid"
+            },
+            "spend_period": {
+              "type": "null"
+            },
+            "spend_amount_microusd": {
+              "type": "null"
+            },
+            "ceiling_requests_per_second": {
+              "type": "null"
+            },
+            "ceiling_lock_wait_ms": {
+              "type": "null"
+            },
+            "notify_workspace_admins": {
+              "const": false,
+              "default": false
+            },
+            "notify_platform_admins": {
+              "type": "boolean",
+              "default": false
+            },
+            "notify_emails": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$"
+              },
+              "maxItems": 10,
+              "default": []
+            }
+          },
+          "required": [
+            "name",
+            "kind",
+            "window_minutes",
+            "error_rate_percent",
+            "min_requests"
+          ],
+          "additionalProperties": false,
+          "description": "Provider connection failing by error rate, optionally with a consecutive-failure streak."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+            },
+            "kind": {
+              "const": "provider_failing"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "budget_layers": {
+              "type": "null"
+            },
+            "thresholds": {
+              "type": "null"
+            },
+            "spike_factor_percent": {
+              "type": "null"
+            },
+            "min_spend_microusd": {
+              "type": "null"
+            },
+            "window_minutes": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 1440
+            },
+            "error_rate_percent": {
+              "type": "null"
+            },
+            "min_requests": {
+              "type": "null"
+            },
+            "consecutive_failures": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "provider_connection_id": {
+              "$ref": "#/components/schemas/IdentityNullableUuid"
+            },
+            "spend_period": {
+              "type": "null"
+            },
+            "spend_amount_microusd": {
+              "type": "null"
+            },
+            "ceiling_requests_per_second": {
+              "type": "null"
+            },
+            "ceiling_lock_wait_ms": {
+              "type": "null"
+            },
+            "notify_workspace_admins": {
+              "const": false,
+              "default": false
+            },
+            "notify_platform_admins": {
+              "type": "boolean",
+              "default": false
+            },
+            "notify_emails": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$"
+              },
+              "maxItems": 10,
+              "default": []
+            }
+          },
+          "required": [
+            "name",
+            "kind",
+            "window_minutes",
+            "consecutive_failures"
+          ],
+          "additionalProperties": false,
+          "description": "Provider connection failing by consecutive-failure streak only (no error-rate threshold)."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+            },
+            "kind": {
+              "const": "batch_failed"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "budget_layers": {
+              "type": "null"
+            },
+            "thresholds": {
+              "type": "null"
+            },
+            "spike_factor_percent": {
+              "type": "null"
+            },
+            "min_spend_microusd": {
+              "type": "null"
+            },
+            "window_minutes": {
+              "type": "null"
+            },
+            "error_rate_percent": {
+              "type": "null"
+            },
+            "min_requests": {
+              "type": "null"
+            },
+            "consecutive_failures": {
+              "type": "null"
+            },
+            "provider_connection_id": {
+              "type": "null"
+            },
+            "spend_period": {
+              "type": "null"
+            },
+            "spend_amount_microusd": {
+              "type": "null"
+            },
+            "ceiling_requests_per_second": {
+              "type": "null"
+            },
+            "ceiling_lock_wait_ms": {
+              "type": "null"
+            },
+            "notify_workspace_admins": {
+              "const": false,
+              "default": false
+            },
+            "notify_platform_admins": {
+              "type": "boolean",
+              "default": false
+            },
+            "notify_emails": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$"
+              },
+              "maxItems": 10,
+              "default": []
+            }
+          },
+          "required": [
+            "name",
+            "kind"
+          ],
+          "additionalProperties": false,
+          "description": "A batch failed or expired; no parameters."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+            },
+            "kind": {
+              "const": "batch_stalled"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "budget_layers": {
+              "type": "null"
+            },
+            "thresholds": {
+              "type": "null"
+            },
+            "spike_factor_percent": {
+              "type": "null"
+            },
+            "min_spend_microusd": {
+              "type": "null"
+            },
+            "window_minutes": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 1440
+            },
+            "error_rate_percent": {
+              "type": "null"
+            },
+            "min_requests": {
+              "type": "null"
+            },
+            "consecutive_failures": {
+              "type": "null"
+            },
+            "provider_connection_id": {
+              "type": "null"
+            },
+            "spend_period": {
+              "type": "null"
+            },
+            "spend_amount_microusd": {
+              "type": "null"
+            },
+            "ceiling_requests_per_second": {
+              "type": "null"
+            },
+            "ceiling_lock_wait_ms": {
+              "type": "null"
+            },
+            "notify_workspace_admins": {
+              "const": false,
+              "default": false
+            },
+            "notify_platform_admins": {
+              "type": "boolean",
+              "default": false
+            },
+            "notify_emails": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$"
+              },
+              "maxItems": 10,
+              "default": []
+            }
+          },
+          "required": [
+            "name",
+            "kind",
+            "window_minutes"
+          ],
+          "additionalProperties": false,
+          "description": "A batch made no progress for the window."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+            },
+            "kind": {
+              "const": "admission_ceiling"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "budget_layers": {
+              "type": "null"
+            },
+            "thresholds": {
+              "type": "null"
+            },
+            "spike_factor_percent": {
+              "type": "null"
+            },
+            "min_spend_microusd": {
+              "type": "null"
+            },
+            "window_minutes": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 10
+            },
+            "error_rate_percent": {
+              "type": "null"
+            },
+            "min_requests": {
+              "type": "null"
+            },
+            "consecutive_failures": {
+              "type": "null"
+            },
+            "provider_connection_id": {
+              "type": "null"
+            },
+            "spend_period": {
+              "type": "null"
+            },
+            "spend_amount_microusd": {
+              "type": "null"
+            },
+            "ceiling_requests_per_second": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            },
+            "ceiling_lock_wait_ms": {
+              "anyOf": [
+                {
+                  "enum": [
+                    10,
+                    25,
+                    50,
+                    100,
+                    250,
+                    500,
+                    1000,
+                    2500
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "notify_workspace_admins": {
+              "const": false,
+              "default": false
+            },
+            "notify_platform_admins": {
+              "type": "boolean",
+              "default": false
+            },
+            "notify_emails": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 0,
+              "default": []
+            }
+          },
+          "required": [
+            "name",
+            "kind",
+            "window_minutes",
+            "ceiling_requests_per_second"
+          ],
+          "additionalProperties": false,
+          "description": "Admission rate ceiling, optionally with a lock-wait threshold; notification goes to Platform Admins only (no email addresses)."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+            },
+            "kind": {
+              "const": "admission_ceiling"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "budget_layers": {
+              "type": "null"
+            },
+            "thresholds": {
+              "type": "null"
+            },
+            "spike_factor_percent": {
+              "type": "null"
+            },
+            "min_spend_microusd": {
+              "type": "null"
+            },
+            "window_minutes": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 10
+            },
+            "error_rate_percent": {
+              "type": "null"
+            },
+            "min_requests": {
+              "type": "null"
+            },
+            "consecutive_failures": {
+              "type": "null"
+            },
+            "provider_connection_id": {
+              "type": "null"
+            },
+            "spend_period": {
+              "type": "null"
+            },
+            "spend_amount_microusd": {
+              "type": "null"
+            },
+            "ceiling_requests_per_second": {
+              "type": "null"
+            },
+            "ceiling_lock_wait_ms": {
+              "enum": [
+                10,
+                25,
+                50,
+                100,
+                250,
+                500,
+                1000,
+                2500
+              ]
+            },
+            "notify_workspace_admins": {
+              "const": false,
+              "default": false
+            },
+            "notify_platform_admins": {
+              "type": "boolean",
+              "default": false
+            },
+            "notify_emails": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 0,
+              "default": []
+            }
+          },
+          "required": [
+            "name",
+            "kind",
+            "window_minutes",
+            "ceiling_lock_wait_ms"
+          ],
+          "additionalProperties": false,
+          "description": "Admission lock-wait ceiling only; notification goes to Platform Admins only (no email addresses)."
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "boolean",
+              "default": true
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": -2147483648,
+                    "maximum": 2147483647
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableDecimal"
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableUuid"
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableDecimal"
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "boolean",
+              "default": false
+            },
+            {
+              "type": "boolean",
+              "default": false
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          ],
+          "minItems": 16,
+          "maxItems": 19,
+          "items": false
+        }
+      ],
+      "description": "Installation alert rule input: a closed object per rule kind (fields foreign to the kind are null or absent), or the positional serde array [name, kind, enabled, budget_layers, thresholds, spike_factor_percent, min_spend_microusd, window_minutes, error_rate_percent, min_requests, consecutive_failures, provider_connection_id, spend_period, spend_amount_microusd, ceiling_requests_per_second, ceiling_lock_wait_ms, notify_workspace_admins, notify_platform_admins, notify_emails] whose element types are deserialization-level only (the handler applies the per-kind rules to it too). Thresholds are at most five distinct values; a provider connection must exist (400)."
+    },
+    "SettingsWorkspaceRuleInput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+            },
+            "kind": {
+              "const": "budget_threshold"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "budget_layers": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "type",
+                  "override",
+                  "local",
+                  "key"
+                ]
+              },
+              "minItems": 1
+            },
+            "thresholds": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "minItems": 1
+            },
+            "spike_factor_percent": {
+              "type": "null"
+            },
+            "min_spend_microusd": {
+              "type": "null"
+            },
+            "window_minutes": {
+              "type": "null"
+            },
+            "error_rate_percent": {
+              "type": "null"
+            },
+            "min_requests": {
+              "type": "null"
+            },
+            "consecutive_failures": {
+              "type": "null"
+            },
+            "provider_connection_id": {
+              "type": "null"
+            },
+            "spend_period": {
+              "type": "null"
+            },
+            "spend_amount_microusd": {
+              "type": "null"
+            },
+            "ceiling_requests_per_second": {
+              "type": "null"
+            },
+            "ceiling_lock_wait_ms": {
+              "type": "null"
+            },
+            "notify_workspace_admins": {
+              "type": "boolean",
+              "default": false
+            },
+            "notify_platform_admins": {
+              "type": "boolean",
+              "default": false
+            },
+            "notify_emails": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$"
+              },
+              "maxItems": 10,
+              "default": []
+            }
+          },
+          "required": [
+            "name",
+            "kind",
+            "budget_layers",
+            "thresholds"
+          ],
+          "additionalProperties": false,
+          "description": "Budget thresholds over one or more budget layers (percentages 1-100; at most five distinct values; the installation layer does not exist)."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+            },
+            "kind": {
+              "const": "spend_spike"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "budget_layers": {
+              "type": "null"
+            },
+            "thresholds": {
+              "type": "null"
+            },
+            "spike_factor_percent": {
+              "type": "integer",
+              "minimum": 110,
+              "maximum": 100000
+            },
+            "min_spend_microusd": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                },
+                {
+                  "pattern": "^[1-9][0-9]{0,14}$"
+                }
+              ],
+              "description": "Positive integer micro-USD string of at most 15 digits (the handler also tolerates leading zeros; clients should send the canonical form)."
+            },
+            "window_minutes": {
+              "type": "null"
+            },
+            "error_rate_percent": {
+              "type": "null"
+            },
+            "min_requests": {
+              "type": "null"
+            },
+            "consecutive_failures": {
+              "type": "null"
+            },
+            "provider_connection_id": {
+              "type": "null"
+            },
+            "spend_period": {
+              "type": "null"
+            },
+            "spend_amount_microusd": {
+              "type": "null"
+            },
+            "ceiling_requests_per_second": {
+              "type": "null"
+            },
+            "ceiling_lock_wait_ms": {
+              "type": "null"
+            },
+            "notify_workspace_admins": {
+              "type": "boolean",
+              "default": false
+            },
+            "notify_platform_admins": {
+              "type": "boolean",
+              "default": false
+            },
+            "notify_emails": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$"
+              },
+              "maxItems": 10,
+              "default": []
+            }
+          },
+          "required": [
+            "name",
+            "kind",
+            "spike_factor_percent",
+            "min_spend_microusd"
+          ],
+          "additionalProperties": false,
+          "description": "Spend spike factor (110-100000 percent) over a spend floor."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+            },
+            "kind": {
+              "const": "error_rate"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "budget_layers": {
+              "type": "null"
+            },
+            "thresholds": {
+              "type": "null"
+            },
+            "spike_factor_percent": {
+              "type": "null"
+            },
+            "min_spend_microusd": {
+              "type": "null"
+            },
+            "window_minutes": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 1440
+            },
+            "error_rate_percent": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "min_requests": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            },
+            "consecutive_failures": {
+              "type": "null"
+            },
+            "provider_connection_id": {
+              "type": "null"
+            },
+            "spend_period": {
+              "type": "null"
+            },
+            "spend_amount_microusd": {
+              "type": "null"
+            },
+            "ceiling_requests_per_second": {
+              "type": "null"
+            },
+            "ceiling_lock_wait_ms": {
+              "type": "null"
+            },
+            "notify_workspace_admins": {
+              "type": "boolean",
+              "default": false
+            },
+            "notify_platform_admins": {
+              "type": "boolean",
+              "default": false
+            },
+            "notify_emails": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$"
+              },
+              "maxItems": 10,
+              "default": []
+            }
+          },
+          "required": [
+            "name",
+            "kind",
+            "window_minutes",
+            "error_rate_percent",
+            "min_requests"
+          ],
+          "additionalProperties": false,
+          "description": "Error rate over a window."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+            },
+            "kind": {
+              "const": "batch_failed"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "budget_layers": {
+              "type": "null"
+            },
+            "thresholds": {
+              "type": "null"
+            },
+            "spike_factor_percent": {
+              "type": "null"
+            },
+            "min_spend_microusd": {
+              "type": "null"
+            },
+            "window_minutes": {
+              "type": "null"
+            },
+            "error_rate_percent": {
+              "type": "null"
+            },
+            "min_requests": {
+              "type": "null"
+            },
+            "consecutive_failures": {
+              "type": "null"
+            },
+            "provider_connection_id": {
+              "type": "null"
+            },
+            "spend_period": {
+              "type": "null"
+            },
+            "spend_amount_microusd": {
+              "type": "null"
+            },
+            "ceiling_requests_per_second": {
+              "type": "null"
+            },
+            "ceiling_lock_wait_ms": {
+              "type": "null"
+            },
+            "notify_workspace_admins": {
+              "type": "boolean",
+              "default": false
+            },
+            "notify_platform_admins": {
+              "type": "boolean",
+              "default": false
+            },
+            "notify_emails": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$"
+              },
+              "maxItems": 10,
+              "default": []
+            }
+          },
+          "required": [
+            "name",
+            "kind"
+          ],
+          "additionalProperties": false,
+          "description": "A batch failed or expired; no parameters."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+            },
+            "kind": {
+              "const": "batch_stalled"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "budget_layers": {
+              "type": "null"
+            },
+            "thresholds": {
+              "type": "null"
+            },
+            "spike_factor_percent": {
+              "type": "null"
+            },
+            "min_spend_microusd": {
+              "type": "null"
+            },
+            "window_minutes": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 1440
+            },
+            "error_rate_percent": {
+              "type": "null"
+            },
+            "min_requests": {
+              "type": "null"
+            },
+            "consecutive_failures": {
+              "type": "null"
+            },
+            "provider_connection_id": {
+              "type": "null"
+            },
+            "spend_period": {
+              "type": "null"
+            },
+            "spend_amount_microusd": {
+              "type": "null"
+            },
+            "ceiling_requests_per_second": {
+              "type": "null"
+            },
+            "ceiling_lock_wait_ms": {
+              "type": "null"
+            },
+            "notify_workspace_admins": {
+              "type": "boolean",
+              "default": false
+            },
+            "notify_platform_admins": {
+              "type": "boolean",
+              "default": false
+            },
+            "notify_emails": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$"
+              },
+              "maxItems": 10,
+              "default": []
+            }
+          },
+          "required": [
+            "name",
+            "kind",
+            "window_minutes"
+          ],
+          "additionalProperties": false,
+          "description": "A batch made no progress for the window."
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "boolean",
+              "default": true
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": -2147483648,
+                    "maximum": 2147483647
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableDecimal"
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableUuid"
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableString"
+            },
+            {
+              "$ref": "#/components/schemas/IdentityNullableDecimal"
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -2147483648,
+                  "maximum": 2147483647
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "boolean",
+              "default": false
+            },
+            {
+              "type": "boolean",
+              "default": false
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          ],
+          "minItems": 16,
+          "maxItems": 19,
+          "items": false
+        }
+      ],
+      "description": "Workspace alert rule input: a closed object per rule kind (fields foreign to the kind are null or absent), or the positional serde array [name, kind, enabled, budget_layers, thresholds, spike_factor_percent, min_spend_microusd, window_minutes, error_rate_percent, min_requests, consecutive_failures, provider_connection_id, spend_period, spend_amount_microusd, ceiling_requests_per_second, ceiling_lock_wait_ms, notify_workspace_admins, notify_platform_admins, notify_emails] whose element types are deserialization-level only (the handler applies the per-kind rules to it too). Thresholds are at most five distinct values; a provider connection must exist (400)."
     }
   }
 }

@@ -9,6 +9,8 @@ use sha2::{Digest, Sha256};
 mod alerts_states;
 #[path = "openapi_settings_states_tests.rs"]
 mod states;
+#[path = "openapi_settings_vectors_tests.rs"]
+mod vectors;
 
 const SETTINGS: &str = "/api/v1/platform/settings";
 const ALERTS: &str = "/api/v1/platform/alerts";
@@ -748,6 +750,7 @@ async fn management_openapi_slice5_fixtures(pool: PgPool) {
         template: "/api/v1/workspaces/{ws}/alerts/rules".into(),
         actor: &owner,
     };
+    vectors::rules(&g, &pool, &mut observed, &admin, &owner, f.team, connection).await;
     let platform_made = alerts_states::create_rules(
         &g,
         &mut observed,
@@ -803,6 +806,22 @@ async fn management_openapi_slice5_fixtures(pool: PgPool) {
         &workspace_rules,
         &[&owner, &auditor],
         &workspace_made,
+    )
+    .await;
+    let budget = |made: &[(Uuid, Value)]| {
+        made.iter()
+            .find(|(_, b)| b["kind"] == "budget_threshold")
+            .map(|(id, _)| *id)
+            .unwrap()
+    };
+    vectors::events(
+        &g,
+        &mut observed,
+        &admin,
+        &owner,
+        f.team,
+        budget(&platform_made),
+        budget(&workspace_made),
     )
     .await;
     let batch_failed = |made: &[(Uuid, Value)]| {
@@ -1036,5 +1055,10 @@ async fn management_openapi_slice5_fixtures(pool: PgPool) {
     )
     .await;
     states::sign_in(&pool, &g, &scim, &none, &mut observed, &auditor).await;
+    // HTTP boundary vectors for the configuration bodies, last: they rewrite settings.
+    vectors::empty_configuration(&g, &pool, &mut observed, port).await;
+    vectors::webhooks(&g, &pool, &mut observed).await;
+    vectors::logo(&g, &pool, &mut observed).await;
+    vectors::settings(&g, &pool, &mut observed, port).await;
     observed.finish(openapi::responses::SLICE5_AREAS);
 }
