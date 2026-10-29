@@ -15,6 +15,10 @@ use std::cell::RefCell;
 
 const ORIGIN: &str = "http://127.0.0.1:3000";
 const ISSUER: &str = "https://issuer.example.test";
+/// Handler-derived probes run by the fixture, and how many of the expected
+/// accepts the handler gives as a domain refusal (404/409) rather than 2xx.
+const EXPECTED_PINS: usize = 147;
+const EXPECTED_DOMAIN_PINS: usize = 1;
 struct Server(tokio::task::JoinHandle<()>);
 impl Drop for Server {
     fn drop(&mut self) {
@@ -80,6 +84,8 @@ struct Client {
     failures: RefCell<Vec<String>>,
     /// Handler-derived probes executed (a guard against a vacuous set).
     pins: std::cell::Cell<usize>,
+    /// Probes the handler accepted only through a domain refusal (404/409).
+    domain_pins: std::cell::Cell<usize>,
 }
 impl Client {
     /// One request, captured and schema-checked against its documented
@@ -205,6 +211,7 @@ impl Client {
             Self::input_verdict(r.status) == Some(handler_accepts),
             &format!("{method} {what}: the handler verdict changed"),
         );
+        self.count_domain(&r, handler_accepts);
     }
     /// [`Client::pin_body`] for a GET whose query values are checked against
     /// the documented parameter schemas of `template`.
@@ -244,6 +251,15 @@ impl Client {
             Self::input_verdict(r.status) == Some(handler_accepts),
             &format!("GET {what}: the handler verdict changed"),
         );
+        self.count_domain(&r, handler_accepts);
+    }
+    /// An expected accept that the handler gave only as a domain refusal
+    /// (404/409): counted, and the total is pinned exactly at the end, so a
+    /// vanished target (every accept turning into 404) cannot pass silently.
+    fn count_domain(&self, r: &openapi::responses::Captured, handler_accepts: bool) {
+        if handler_accepts && matches!(r.status.as_u16(), 404 | 409) {
+            self.domain_pins.set(self.domain_pins.get() + 1);
+        }
     }
     /// A fixture expectation that is reported with the rest instead of
     /// stopping the run.
@@ -407,6 +423,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         observed: tokio::sync::Mutex::new(PositiveFixtures::default()),
         failures: RefCell::new(Vec::new()),
         pins: std::cell::Cell::new(0),
+        domain_pins: std::cell::Cell::new(0),
     };
     let c = &c;
 
@@ -1382,7 +1399,10 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         .ok(&auditor, "GET", &format!("{platform}/policy"), None)
         .await;
     assert!(unknown_windows["budgets"][0]["remaining_microusd"].is_null());
-    assert_ne!(unknown_windows["budgets"][0]["unknown_cost_requests"], "0");
+    assert!(
+        unknown_windows["budgets"][0]["unknown_cost_requests"] != "0",
+        "unknown-cost window counts the attempt"
+    );
     assert!(unknown_windows["budgets"][0]["used_microusd"].is_string());
     // A window whose accounting row is unreadable: the drift seeded exactly as
     // governance/tests.rs does it (negative counters), on a dedicated workspace
@@ -1418,9 +1438,12 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
     )
     .await;
     let healthy = c.ok(&auditor, "GET", &drift_policy, None).await;
-    assert_eq!(healthy["budgets"][0]["period"], "day");
-    assert_eq!(healthy["budgets"][0]["headroom_status"], "known");
-    assert_eq!(healthy["budgets"][0]["settled_microusd"], "7");
+    assert!(
+        healthy["budgets"][0]["period"] == "day"
+            && healthy["budgets"][0]["headroom_status"] == "known"
+            && healthy["budgets"][0]["settled_microusd"] == "7",
+        "drift workspace day window starts known"
+    );
     let saved: (String, String) = sqlx::query_as("SELECT settled_microusd::text,held_microusd::text FROM budget_totals WHERE scope_kind='workspace' AND scope_id=$1 AND period='day'")
         .bind(drift_ws)
         .fetch_one(&pool)
@@ -1434,7 +1457,10 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         .rows_affected();
     assert_eq!(corrupted, 1);
     let drifted = c.ok(&auditor, "GET", &drift_policy, None).await;
-    assert_eq!(drifted["budgets"][0]["headroom_status"], "unknown");
+    assert!(
+        drifted["budgets"][0]["headroom_status"] == "unknown",
+        "drifted window is unknown"
+    );
     for field in [
         "used_microusd",
         "unresolved_usage",
@@ -1448,7 +1474,10 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         assert!(drifted["budgets"][0][field].is_null());
     }
     // The neighbouring window stays readable.
-    assert_eq!(drifted["budgets"][1]["headroom_status"], "known");
+    assert!(
+        drifted["budgets"][1]["headroom_status"] == "known",
+        "neighbouring window stays known"
+    );
     sqlx::query("UPDATE budget_totals SET settled_microusd=$2::numeric,held_microusd=$3::numeric WHERE scope_kind='workspace' AND scope_id=$1 AND period='day'")
         .bind(drift_ws)
         .bind(&saved.0)
@@ -1456,9 +1485,10 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         .execute(&pool)
         .await
         .unwrap();
-    assert_eq!(
-        c.ok(&auditor, "GET", &drift_policy, None).await["budgets"][0]["headroom_status"],
-        "known"
+    assert!(
+        c.ok(&auditor, "GET", &drift_policy, None).await["budgets"][0]["headroom_status"]
+            == "known",
+        "restored window is known again"
     );
     c.ok(
         &admin,
@@ -2349,6 +2379,30 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
                 true,
             ),
             (
+                "C0 control character in the path",
+                "https://issuer.example.test/a\u{1}b",
+                false,
+                true,
+            ),
+            (
+                "C1 control character in the path",
+                "https://issuer.example.test/a\u{85}b",
+                false,
+                true,
+            ),
+            (
+                "no-break space in the path",
+                "https://issuer.example.test/a\u{a0}b",
+                false,
+                true,
+            ),
+            (
+                "empty user info",
+                "https://@issuer.example.test",
+                false,
+                true,
+            ),
+            (
                 "numeric host outside the IPv4 range",
                 "https://256.1.1.1",
                 true,
@@ -2484,6 +2538,8 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             // Without target_kind the stored row decides, which the schema cannot see.
             ("workspace id without a kind on a platform mapping", json!({"workspace_id":vector_ws}), true, false),
             ("null platform role without a kind on a platform mapping", json!({"platform_role":null}), true, false),
+            // Fields the body omits are filled from the stored row even with target_kind.
+            ("workspace kind leaving the stored platform role", json!({"target_kind":"workspace","workspace_id":vector_ws,"workspace_role":"member"}), true, false),
             ("platform kind restated", json!({"target_kind":"platform","platform_role":"auditor","workspace_id":null,"workspace_role":null}), true, true),
             ("switch to a workspace mapping", json!({"target_kind":"workspace","platform_role":null,"workspace_id":vector_ws,"workspace_role":"admin"}), true, true),
         ];
@@ -2715,9 +2771,14 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
     })
     .await;
 
+    // Exact: a whole probe group dropping out, or accepts silently turning into
+    // domain refusals, must fail. Only counts are reported, never values.
+    let (pins, domain) = (c.pins.get(), c.domain_pins.get());
     c.expect(
-        c.pins.get() >= 130,
-        "the handler-derived probes did not all run",
+        pins == EXPECTED_PINS && domain == EXPECTED_DOMAIN_PINS,
+        &format!(
+            "handler-derived probes: {pins} ran ({domain} accepted via 404/409); expected {EXPECTED_PINS} ({EXPECTED_DOMAIN_PINS})"
+        ),
     );
     let mut failures = c.failures.borrow().clone();
     // The coverage gates last: they judge every positive and vector set above.
