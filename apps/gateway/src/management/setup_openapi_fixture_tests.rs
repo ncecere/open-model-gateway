@@ -129,11 +129,109 @@ async fn price_views<'a>(
 ) {
     let saved = j.actor;
     j.actor = admin;
-    j.request("GET", &format!("/api/v1/platform/deployments/{deployment}"), None).await;
-    j.request("GET", &format!("/api/v1/platform/models/compare?ids={},{}", models.0, models.1), None).await;
+    j.request(
+        "GET",
+        &format!("/api/v1/platform/deployments/{deployment}"),
+        None,
+    )
+    .await;
+    j.request(
+        "GET",
+        &format!(
+            "/api/v1/platform/models/compare?ids={},{}",
+            models.0, models.1
+        ),
+        None,
+    )
+    .await;
     j.actor = owner;
-    j.request("GET", &format!("/api/v1/workspaces/{team}/models/compare?ids={},{}", models.0, models.1), None).await;
+    j.request(
+        "GET",
+        &format!(
+            "/api/v1/workspaces/{team}/models/compare?ids={},{}",
+            models.0, models.1
+        ),
+        None,
+    )
+    .await;
     j.actor = saved;
+}
+/// A telemetry attempt exactly as the engine records it: the execution row with
+/// its timings and the governance reservation (settled with an actual cost, or
+/// unknown with only a retained hold). The maintaining triggers fill the totals.
+#[allow(clippy::too_many_arguments)]
+async fn seed_attempt(
+    pool: &PgPool,
+    ws: Uuid,
+    key: Uuid,
+    deployment: Uuid,
+    model: &str,
+    state: &str,
+    actual: Option<i64>,
+    held: Option<i64>,
+) {
+    let id = Uuid::new_v4();
+    let tokens = actual.map(|_| (10_i64, 5_i64));
+    sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,started_at,completed_at,elapsed_ms,root_request_id,attempt_number,input_tokens,output_tokens,finish_reason,time_to_first_token_ms,generation_ms) VALUES($1,$2,$3,$4,$5,'openrouter',true,$6,now()-interval '1 second',now()-interval '1 second'+interval '600 milliseconds',600,$1,1,$7,$8,'stop',100,600)")
+        .bind(id).bind(ws).bind(key).bind(deployment).bind(model).bind(state)
+        .bind(tokens.map(|t| t.0)).bind(tokens.map(|t| t.1))
+        .execute(pool).await.unwrap();
+    let reservation = if actual.is_some() {
+        "settled"
+    } else {
+        "unknown"
+    };
+    sqlx::query("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,actual_microusd,held_microusd,unbounded_cost,input_tokens,output_tokens) SELECT $1,$2,$3,$4,e.started_at,date_trunc('minute',e.started_at,'UTC'),date_trunc('month',e.started_at,'UTC'),e.started_at,$5,$6,$7,$8,$9,$10 FROM inference_executions e WHERE e.id=$1")
+        .bind(id).bind(ws).bind(key).bind(deployment).bind(reservation).bind(actual).bind(held)
+        .bind(actual.is_none() && held.is_none())
+        .bind(tokens.map(|t| t.0)).bind(tokens.map(|t| t.1))
+        .execute(pool).await.unwrap();
+}
+/// A legacy local or non-chat route: model and route inserted as an earlier
+/// release accepted them (route validation did not exist or had other rules).
+async fn legacy_route(
+    pool: &PgPool,
+    provider: Uuid,
+    public_name: &str,
+    protocols: &[&str],
+    upstream: &str,
+) -> (Uuid, Uuid) {
+    let (model, deployment) = (Uuid::new_v4(), Uuid::new_v4());
+    sqlx::query("INSERT INTO models(id,public_name,supported_protocols) VALUES($1,$2,$3)")
+        .bind(model)
+        .bind(public_name)
+        .bind(
+            protocols
+                .iter()
+                .map(|p| (*p).to_owned())
+                .collect::<Vec<_>>(),
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model) VALUES($1,$2,$3,$4)")
+        .bind(deployment)
+        .bind(model)
+        .bind(provider)
+        .bind(upstream)
+        .execute(pool)
+        .await
+        .unwrap();
+    (model, deployment)
+}
+/// A policy body with every limit supplied (tighten-only: local <= platform).
+#[allow(clippy::too_many_arguments)]
+fn limits(
+    rpm: i64,
+    tpm: i64,
+    concurrent: i64,
+    jobs: i64,
+    storage: i64,
+    holder: i64,
+    workspace: i64,
+    budgets: Value,
+) -> Value {
+    json!({"requests_per_minute":rpm,"tokens_per_minute":tpm,"concurrent_requests":concurrent,"concurrent_jobs":jobs,"storage_bytes":storage,"key_issuances_per_holder":holder,"key_issuances_per_workspace":workspace,"budgets":budgets})
 }
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn management_openapi_slice3_fixtures(pool: PgPool) {
@@ -154,11 +252,46 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         Default::default(),
     )
     .unwrap();
-    // `contract/model` lists endpoints (the endpoint-priced branch);
-    // `contract/catalog-only` has none, so the catalog's top-provider price is used.
+    // The OpenRouter public catalog, one model per drafting branch. `contract/model`
+    // lists endpoints (the endpoint-priced branch); the others have none, so the
+    // catalog's top-provider price is used. Tiers and cache keys, missing
+    // ceilings and prices, and each non-chat workload's units are all real
+    // catalog shapes.
+    let catalog_models = json!({"data":[
+        {"id":"contract/model","context_length":8192,"top_provider":{"max_completion_tokens":1024},"pricing":{"prompt":"0.000000123","completion":"0.000000456"}},
+        {"id":"contract/catalog-only","context_length":8192,"top_provider":{"max_completion_tokens":1024},"pricing":{"prompt":"0.000000123","completion":"0.000000456","input_cache_read":"0.00000001","input_cache_write":"0.000000125","input_cache_write_1h":"0.0000002","overrides":[{"min_prompt_tokens":4000,"prompt":"0.0000005","completion":"0.0000025","input_cache_read":"0.00000005","input_cache_write":"0.000000625","input_cache_write_1h":"0.000001"}]}},
+        {"id":"contract/bare","pricing":{}},
+        {"id":"contract/embed","context_length":8192,"pricing":{"prompt":"0.00000002"}},
+        {"id":"contract/image","pricing":{}},
+        {"id":"contract/stt-minute","pricing":{"prompt":"0.0001","completion":"0.00001"}},
+        {"id":"contract/stt-hour","pricing":{"prompt":"0.0000000025"}},
+        {"id":"contract/tts-minute","pricing":{"prompt":"0.000015","completion":"0.0001"}},
+        {"id":"contract/tts-hour","pricing":{"prompt":"0.000015","completion":"0.0000000025"}}
+    ]});
+    let model_endpoints = json!({"data":{"id":"contract/model","endpoints":[{"provider_name":"Contract Cheap","status":0,"pricing":{"prompt":"0.000000123","completion":"0.000000456"}},{"provider_name":"Contract Dear","status":0,"pricing":{"prompt":"0.000000246","completion":"0.000000912"}}]}});
+    let image_endpoints = json!({"data":{"endpoints":[{"pricing":[{"billable":"output_image","unit":"image","cost_usd":0.041,"variant":"768"},{"billable":"output_image","unit":"image","cost_usd":0.06,"variant":"1024"}]}]}});
     let catalog_app = axum::Router::new()
-        .route("/models", axum::routing::get(|| async { Json(json!({"data":[{"id":"contract/model","context_length":8192,"top_provider":{"max_completion_tokens":1024},"pricing":{"prompt":"0.000000123","completion":"0.000000456"}},{"id":"contract/catalog-only","context_length":8192,"top_provider":{"max_completion_tokens":1024},"pricing":{"prompt":"0.000000123","completion":"0.000000456"}}]})) }))
-        .route("/models/contract/model/endpoints", axum::routing::get(|| async { Json(json!({"data":{"id":"contract/model","endpoints":[{"provider_name":"Contract Cheap","status":0,"pricing":{"prompt":"0.000000123","completion":"0.000000456"}},{"provider_name":"Contract Dear","status":0,"pricing":{"prompt":"0.000000246","completion":"0.000000912"}}]}})) }));
+        .route(
+            "/models",
+            axum::routing::get(move || {
+                let body = catalog_models.clone();
+                async move { Json(body) }
+            }),
+        )
+        .route(
+            "/models/contract/model/endpoints",
+            axum::routing::get(move || {
+                let body = model_endpoints.clone();
+                async move { Json(body) }
+            }),
+        )
+        .route(
+            "/images/models/contract/image/endpoints",
+            axum::routing::get(move || {
+                let body = image_endpoints.clone();
+                async move { Json(body) }
+            }),
+        );
     let (catalog_url, catalog_task) = governance::suggestion::tests::mock(catalog_app).await;
     let _catalog_server = Server(catalog_task);
     let catalog = std::sync::Arc::new(governance::suggestion::OpenRouterCatalog::for_test(
@@ -182,6 +315,13 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         actor: &admin,
         observed: Default::default(),
     };
+    let ws_policy = format!("/api/v1/workspaces/{}/policy", f.team);
+    // Policy layers, state A: nothing configured anywhere (every limit absent).
+    for who in [&owner, &member] {
+        j.actor = who;
+        j.request("GET", &ws_policy, None).await;
+    }
+    j.actor = &admin;
     let cat = id(&j
         .request(
             "POST",
@@ -190,35 +330,124 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         )
         .await);
     let provider = id(&j.request("POST", "/api/v1/platform/providers", Some(json!({"name":"Contract reference","provider":"openrouter","credential_ref":"env:CONTRACT_REFERENCE","enabled":true}))).await);
+    // A connection nothing uses, so its deletion is observed without touching the route fixtures.
+    let disposable = id(&j.request("POST", "/api/v1/platform/providers", Some(json!({"name":"Contract disposable","provider":"openrouter","credential_ref":"env:CONTRACT_REFERENCE","enabled":false}))).await);
     // Identity-bearing provider kinds: Bedrock default and role identities (non-null
     // `aws_auth`), created through the real route. A named AWS profile needs a
     // server allowlist and a credential-less (`none`) local endpoint needs a
     // process-level GATEWAY_LOCAL_UPSTREAMS approval; the test process sets
-    // neither, so those two connections are inserted directly (the same way the
+    // neither, so those connections are inserted directly (the same way the
     // batch-scheduling tests seed local routes).
     let bedrock_default = id(&j.request("POST", "/api/v1/platform/providers", Some(json!({"name":"Contract Bedrock","provider":"bedrock","credential_ref":"aws:default","endpoint":null,"region":"us-east-1","enabled":false}))).await);
     j.request("POST", "/api/v1/platform/providers", Some(json!({"name":"Contract Bedrock role","provider":"bedrock","credential_ref":"aws:role:arn:aws:iam::123456789012:role/gateway/bedrock-invoke","aws_external_id":"tenant-ext-42","aws_session_name":"gateway.contract","endpoint":null,"region":"us-east-1","enabled":false}))).await;
-    for (name, provider, reference, endpoint, region) in [
-        ("Contract profile", "bedrock", "aws:profile:contract", None, Some("us-east-1")),
-        ("Contract local", "ollama", "none", Some("http://10.0.0.5:11434/v1"), None),
+    let local_provider = Uuid::new_v4();
+    let vllm_provider = Uuid::new_v4();
+    for (connection, name, kind, reference, endpoint, region) in [
+        (
+            Uuid::new_v4(),
+            "Contract profile",
+            "bedrock",
+            "aws:profile:contract",
+            None,
+            Some("us-east-1"),
+        ),
+        (
+            local_provider,
+            "Contract local",
+            "ollama",
+            "none",
+            Some("http://10.0.0.5:11434/v1"),
+            None,
+        ),
+        (
+            vllm_provider,
+            "Contract vLLM",
+            "vllm",
+            "none",
+            Some("http://10.0.0.5:8000/v1"),
+            None,
+        ),
     ] {
         sqlx::query("INSERT INTO provider_connections(id,name,provider,credential_ref,endpoint,region,enabled) VALUES($6,$1,$2,$3,$4,$5,false)")
             .bind(name)
-            .bind(provider)
+            .bind(kind)
             .bind(reference)
             .bind(endpoint)
             .bind(region)
-            .bind(Uuid::new_v4())
+            .bind(connection)
             .execute(&pool)
             .await
             .unwrap();
     }
     let model = id(&j.request("POST", "/api/v1/platform/models", Some(json!({"public_name":"contract/model","display_name":"Contract model","enabled":true}))).await);
+    let unpriced = id(&j.request("POST", "/api/v1/platform/models", Some(json!({"public_name":"contract/unpriced","display_name":"Contract unpriced","enabled":true}))).await);
     let deployment = id(&j.request("POST", "/api/v1/platform/deployments", Some(json!({"model_id":model,"provider_connection_id":provider,"upstream_model":"contract/model","enabled":true}))).await);
+    // Routing is configured first: `deployment` is the model's first route.
+    j.request("PUT", &format!("/api/v1/platform/deployments/{deployment}/routing"), Some(json!({"priority":-1,"weight":1,"residency":null,"failure_threshold":3,"cooldown_seconds":30}))).await;
+    j.request("PUT", &format!("/api/v1/platform/models/{model}/routing"), Some(json!({"strategy":"priority","max_attempts":2,"allow_ambiguous_failover":false,"required_residency":null}))).await;
+    // Second model through the one-call setup, in the catalog (workspace-visible).
+    let setup = j.request("POST", "/api/v1/platform/model-setup", Some(json!({"model":{"public_name":"contract/second","display_name":"Second model","enabled":true},"route":{"provider_connection_id":provider,"upstream_model":"contract/model","enabled":true},"price":v3_price(),"catalog_ids":[cat]}))).await;
+    let second = Uuid::parse_str(setup["model_id"].as_str().unwrap()).unwrap();
+    // A setup without a price publishes none (price_id null).
+    let unpriced_setup = j.request("POST", "/api/v1/platform/model-setup", Some(json!({"model":{"public_name":"contract/third","display_name":"Third model","enabled":true},"route":{"provider_connection_id":provider,"upstream_model":"contract/third","enabled":true}}))).await;
+    assert!(unpriced_setup["price_id"].is_null());
+    // Legacy routes (accepted before route validation): chat without any catalog
+    // data, and one non-serving video route that also anchors the telemetry.
+    let (_, bare) = legacy_route(
+        &pool,
+        provider,
+        "contract/bare-model",
+        &["chat_completions"],
+        "contract/bare",
+    )
+    .await;
+    let (legacy_model, anchor) = legacy_route(
+        &pool,
+        provider,
+        "contract/legacy-video",
+        &["videos"],
+        "contract/legacy",
+    )
+    .await;
+    let mut drafted = vec![bare];
+    for (name, protocols, upstream) in [
+        (
+            "contract/embed-model",
+            &["embeddings"][..],
+            "contract/embed",
+        ),
+        ("contract/image-model", &["images"][..], "contract/image"),
+        (
+            "contract/stt-minute-model",
+            &["audio_transcriptions"][..],
+            "contract/stt-minute",
+        ),
+        (
+            "contract/stt-hour-model",
+            &["audio_transcriptions"][..],
+            "contract/stt-hour",
+        ),
+        (
+            "contract/tts-minute-model",
+            &["audio_speech"][..],
+            "contract/tts-minute",
+        ),
+        (
+            "contract/tts-hour-model",
+            &["audio_speech"][..],
+            "contract/tts-hour",
+        ),
+    ] {
+        drafted.push(
+            legacy_route(&pool, provider, name, protocols, upstream)
+                .await
+                .1,
+        );
+    }
     j.request(
         "PATCH",
         &format!("/api/v1/platform/catalogs/{cat}"),
-        Some(json!({"name":"Contract renamed"})),
+        Some(json!({"name":"Contract renamed","description":"Renamed catalog"})),
     )
     .await;
     j.request(
@@ -236,7 +465,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     j.request(
         "PUT",
         &format!("/api/v1/platform/catalogs/{cat}/models"),
-        Some(json!({"model_ids":[model]})),
+        Some(json!({"model_ids":[model,second,unpriced]})),
     )
     .await;
     j.request(
@@ -251,14 +480,115 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         Some(json!({"personal":[cat],"team":[cat],"project":[cat]})),
     )
     .await;
-    // Both immutable legacy and v3 versions (money beyond JS's exact integer range).
+    // Policy layers, state B: the platform default for teams is set.
+    let r = send(
+        &j.client,
+        &j.base,
+        Some(&admin),
+        "PUT",
+        "/api/v1/platform/workspace-types/team/policy",
+        Some(limits(
+            100,
+            100_000,
+            10,
+            5,
+            1_000_000,
+            50,
+            500,
+            json!([{"period":"month","amount_microusd":"9007199254740993"}]),
+        )),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK);
+    for who in [&owner, &member] {
+        j.actor = who;
+        j.request("GET", &ws_policy, None).await;
+    }
+    j.actor = &admin;
+    // The price history of the route, every immutable version shape, with each
+    // version's views (route detail, platform and workspace comparison) while it
+    // is the latest: legacy and v2 (all cache-rate states), then v3 with every
+    // meter and unit, then v3 with mostly not-applicable meters.
+    let models = (model, second);
+    price_views(&mut j, &admin, &owner, f.team, deployment, models).await;
     j.request(
         "POST",
         &format!("/api/v1/platform/deployments/{deployment}/prices"),
         Some(legacy_price()),
     )
     .await;
-    j.request("POST", &format!("/api/v1/platform/deployments/{deployment}/prices"), Some(json!({"pricing_version":2,"input_microusd_per_million":"1","output_microusd_per_million":"2","input_token_limit":100,"output_token_limit":10,"cache_pricing":{"read":{"status":"priced","microusd_per_million":"1"},"write":{"status":"unknown"},"write_5m":{"status":"not_applicable"},"write_1h":{"status":"priced","microusd_per_million":"2"}}}))).await;
+    price_views(&mut j, &admin, &owner, f.team, deployment, models).await;
+    let cache = |read: Value, write: Value, write_5m: Value, write_1h: Value| json!({"pricing_version":2,"input_microusd_per_million":"1","output_microusd_per_million":"2","input_token_limit":100,"output_token_limit":10,"cache_pricing":{"read":read,"write":write,"write_5m":write_5m,"write_1h":write_1h}});
+    let priced = |amount: &str| json!({"status":"priced","microusd_per_million":amount});
+    let unknown = || json!({"status":"unknown"});
+    let na = || json!({"status":"not_applicable"});
+    for body in [
+        cache(priced("1"), unknown(), na(), priced("2")),
+        cache(unknown(), na(), priced("3"), unknown()),
+        cache(na(), priced("4"), unknown(), na()),
+    ] {
+        j.request(
+            "POST",
+            &format!("/api/v1/platform/deployments/{deployment}/prices"),
+            Some(body),
+        )
+        .await;
+        price_views(&mut j, &admin, &owner, f.team, deployment, models).await;
+    }
+    let rich = v3_with(
+        &[
+            line("input_tokens", 1_000_000, 123_000),
+            line("output_tokens", 1_000_000, 456_000),
+            line("cache_read_tokens", 1_000_000, 12_000),
+            line("cache_write_tokens", 1_000_000, 150_000),
+            line("cache_write_5m_tokens", 1_000_000, 160_000),
+            line("cache_write_1h_tokens", 1_000_000, 240_000),
+            line("output_images", 1, 40_000),
+            line("input_characters", 1_000_000, 15),
+            line("input_audio_seconds_ms", 1000, 5),
+            line("output_audio_seconds_ms", 1000, 6),
+            line("search_units", 1, 7),
+            line("requests", 1, 1),
+        ],
+        &[
+            tiered(line("input_tokens", 1_000_000, 150_000), 4000),
+            varied(line("output_images", 1, 50_000), "1024"),
+            tiered(line("input_audio_seconds_ms", 60_000, 300), 10),
+            tiered(line("input_audio_seconds_ms", 3_600_000, 18_000), 20),
+            tiered(line("output_audio_seconds_ms", 60_000, 360), 10),
+            tiered(line("output_audio_seconds_ms", 3_600_000, 21_600), 20),
+            line("input_audio_tokens", 1_000_000, 100),
+            line("cache_read_audio_tokens", 1_000_000, 10),
+            line("output_audio_tokens", 1_000_000, 200),
+            varied(line("output_video_seconds_ms", 1000, 9), "720p"),
+            varied(line("output_video_seconds_ms", 60_000, 500), "1080p"),
+            varied(line("output_video_seconds_ms", 3_600_000, 30_000), "4k"),
+        ],
+        json!({"requests":"1","output_images":"4","input_characters":"10000","input_audio_seconds_ms":"60000","output_audio_seconds_ms":"60000","search_units":"2","output_video_seconds_ms":"10000"}),
+    );
+    j.request(
+        "POST",
+        &format!("/api/v1/platform/deployments/{deployment}/prices"),
+        Some(rich),
+    )
+    .await;
+    price_views(&mut j, &admin, &owner, f.team, deployment, models).await;
+    let sparse = v3_with(
+        &[
+            line("input_tokens", 1_000_000, 123),
+            line("output_tokens", 1_000_000, 456),
+            line("requests", 1, 1),
+        ],
+        &[],
+        json!({"requests":"1"}),
+    );
+    j.request(
+        "POST",
+        &format!("/api/v1/platform/deployments/{deployment}/prices"),
+        Some(sparse),
+    )
+    .await;
+    price_views(&mut j, &admin, &owner, f.team, deployment, models).await;
     j.request(
         "POST",
         &format!("/api/v1/platform/deployments/{deployment}/prices"),
@@ -273,11 +603,102 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         Some(mapped_price),
     )
     .await;
-    j.request("PUT", &format!("/api/v1/platform/models/{model}/routing"), Some(json!({"strategy":"priority","max_attempts":2,"allow_ambiguous_failover":false,"required_residency":null}))).await;
-    j.request("PUT", &format!("/api/v1/platform/deployments/{deployment}/routing"), Some(json!({"priority":-1,"weight":1,"residency":null,"failure_threshold":3,"cooldown_seconds":30}))).await;
+    price_views(&mut j, &admin, &owner, f.team, deployment, models).await;
+    // Route and model routing with a residency, then route health as the engine records it.
+    j.request("PUT", &format!("/api/v1/platform/models/{model}/routing"), Some(json!({"strategy":"weighted","max_attempts":3,"allow_ambiguous_failover":true,"required_residency":"eu"}))).await;
+    j.request(
+        "GET",
+        &format!("/api/v1/platform/models/{model}/routing"),
+        None,
+    )
+    .await;
+    j.request(
+        "GET",
+        &format!("/api/v1/platform/deployments/{deployment}/routing"),
+        None,
+    )
+    .await;
+    j.request("PUT", &format!("/api/v1/platform/deployments/{deployment}/routing"), Some(json!({"priority":-1,"weight":5,"residency":"eu","failure_threshold":3,"cooldown_seconds":30}))).await;
+    j.request(
+        "GET",
+        &format!("/api/v1/platform/deployments/{deployment}/routing"),
+        None,
+    )
+    .await;
+    crate::routing::record_result(&f.s, deployment, None)
+        .await
+        .unwrap();
+    j.request(
+        "GET",
+        &format!("/api/v1/platform/deployments/{deployment}/routing"),
+        None,
+    )
+    .await;
+    for _ in 0..3 {
+        crate::routing::record_result(
+            &f.s,
+            deployment,
+            Some(crate::inference::error::InferenceError::Timeout),
+        )
+        .await
+        .unwrap();
+    }
+    j.request(
+        "GET",
+        &format!("/api/v1/platform/deployments/{deployment}/routing"),
+        None,
+    )
+    .await;
     j.request("PUT", &format!("/api/v1/platform/deployments/{deployment}/batch-scheduling"), Some(json!({"max_concurrency":3,"yield_live_threshold":5,"window":{"timezone":"UTC","days":["mon","fri"],"start":"23:00","end":"06:00"}}))).await;
-    let setup = j.request("POST", "/api/v1/platform/model-setup", Some(json!({"model":{"public_name":"contract/second","display_name":"Second model","enabled":true},"route":{"provider_connection_id":provider,"upstream_model":"contract/model","enabled":true},"price":v3_price(),"catalog_ids":[cat]}))).await;
-    let second = Uuid::parse_str(setup["model_id"].as_str().unwrap()).unwrap();
+    // A vLLM-compatible route: defaults, then a priority and window, then
+    // server-load gates (written by the production writer: the metrics URL needs
+    // a process-level endpoint approval) and the route's batch signals.
+    let (_, vllm) = legacy_route(
+        &pool,
+        vllm_provider,
+        "contract/vllm-model",
+        &["chat_completions"],
+        "contract/vllm",
+    )
+    .await;
+    let schedule = format!("/api/v1/platform/deployments/{vllm}/batch-scheduling");
+    j.request("GET", &schedule, None).await;
+    j.request("PUT", &schedule, Some(json!({"max_concurrency":4,"yield_live_threshold":2,"priority":10,"window":{"timezone":"America/New_York","days":["mon","tue","wed","thu","fri"],"start":"19:00","end":"07:00"}}))).await;
+    j.request("GET", &schedule, None).await;
+    let gate = |waiting: Option<i32>, running: Option<i32>, kv: Option<i16>| {
+        crate::jobs::schedule::RouteSettings {
+            max_concurrency: 4,
+            yield_live_threshold: Some(2),
+            metrics: Some(crate::jobs::schedule::MetricsGate {
+                url: "http://10.0.0.5:8000/metrics".into(),
+                max_waiting: waiting,
+                max_running: running,
+                max_kv_cache_percent: kv,
+            }),
+            priority: Some(10),
+            window: None,
+        }
+    };
+    for (settings, signal) in [
+        (
+            gate(Some(5), None, Some(90)),
+            "INSERT INTO deployment_batch_signals(deployment_id,paused_reason,checked_at,live_in_flight,metrics_checked_at,metrics_ok,metrics_waiting,metrics_running,metrics_kv_cache_permille,metrics_error) VALUES($1,'server_busy',clock_timestamp(),4,clock_timestamp(),true,7,3,950,NULL)",
+        ),
+        (
+            gate(None, Some(8), None),
+            "UPDATE deployment_batch_signals SET paused_reason=NULL,checked_at=clock_timestamp(),metrics_checked_at=clock_timestamp(),metrics_ok=false,metrics_waiting=NULL,metrics_running=NULL,metrics_kv_cache_permille=NULL,metrics_error='unreachable' WHERE deployment_id=$1",
+        ),
+    ] {
+        let mut tx = pool.begin().await.unwrap();
+        crate::jobs::schedule::save_settings(&mut tx, vllm, &settings, f.admin.user_id)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        sqlx::query(signal).bind(vllm).execute(&pool).await.unwrap();
+        j.request("GET", &schedule, None).await;
+    }
+    sqlx::query("UPDATE deployment_batch_signals SET paused_reason='metrics_unavailable',checked_at=clock_timestamp() WHERE deployment_id=$1").bind(vllm).execute(&pool).await.unwrap();
+    j.request("GET", &schedule, None).await;
     // Populated shared preview, and catalog summary's owner-private count.
     direct(&pool, f.team, model).await;
     direct(&pool, f.personal, model).await;
@@ -307,10 +728,68 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         Some(json!({"enabled":false})),
     )
     .await;
+    // Re-enabling a disabled route gains a serving route.
+    let gained = j
+        .request(
+            "POST",
+            &format!("/api/v1/platform/deployments/{deployment}/configuration/preview"),
+            Some(json!({"enabled":true})),
+        )
+        .await;
+    assert_eq!(gained["serving_routes_gained"].as_array().unwrap().len(), 1);
     j.request(
         "PATCH",
         &format!("/api/v1/platform/deployments/{deployment}"),
         Some(json!({"enabled":true})),
+    )
+    .await;
+    // The same change made with an admin token (catalog:write) records the token.
+    let created = send(
+        &j.client,
+        &j.base,
+        Some(&admin),
+        "POST",
+        "/api/v1/platform/admin-tokens",
+        Some(json!({"name":"Contract token","scopes":["catalog:write"],"expires_in_days":1})),
+    )
+    .await;
+    assert_eq!(created.status, StatusCode::OK);
+    let token = serde_json::from_slice::<Value>(&created.bytes).unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let path = format!("/api/v1/platform/deployments/{deployment}");
+    let response = j
+        .client
+        .patch(format!("{}{path}", j.base))
+        .header("origin", ORIGIN)
+        .bearer_auth(&token)
+        .json(&json!({"enabled":false}))
+        .send()
+        .await
+        .unwrap();
+    let r = capture_http("PATCH", &path, response).await;
+    assert_eq!(r.status, StatusCode::OK);
+    j.observed.observe(&r);
+    j.request("PATCH", &path, Some(json!({"enabled":true})))
+        .await;
+    // Earlier releases audited deployment changes without a snapshot: one with a
+    // named actor, one without an actor (system), both values unavailable.
+    let (legacy_user, legacy_system) = (Uuid::new_v4(), Uuid::new_v4());
+    sqlx::query("INSERT INTO audit_events(id,actor_user_id,action,resource_type,resource_id,metadata,created_at) VALUES($1,$2,'configuration.updated','deployments',$3,'{}',now()-interval '1 day')").bind(legacy_user).bind(f.admin.user_id).bind(deployment).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO audit_events(id,action,resource_type,resource_id,metadata,created_at) VALUES($1,'deployment.created','deployment',$2,'{}',now()-interval '2 days')").bind(legacy_system).bind(deployment).execute(&pool).await.unwrap();
+    // Telemetry and accounting of `contract/model` for the comparisons and policy windows.
+    let (_, owner_key) = key(&f, &f.owner, f.team, Value::Null).await;
+    let owner_key = id(&owner_key);
+    seed_attempt(
+        &pool,
+        f.team,
+        owner_key,
+        anchor,
+        "contract/model",
+        "succeeded",
+        Some(50),
+        None,
     )
     .await;
     for path in [
@@ -320,10 +799,13 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         "/api/v1/platform/catalog-defaults".into(),
         "/api/v1/platform/models".into(),
         format!("/api/v1/platform/models/{model}"),
+        format!("/api/v1/platform/models/{second}"),
         format!("/api/v1/platform/models/{model}/catalogs"),
         format!("/api/v1/platform/models/{model}/routing"),
         "/api/v1/platform/providers".into(),
         format!("/api/v1/platform/providers/{provider}"),
+        format!("/api/v1/platform/providers/{bedrock_default}"),
+        format!("/api/v1/platform/providers/{local_provider}"),
         "/api/v1/platform/deployments".into(),
         format!("/api/v1/platform/deployments/{deployment}"),
         format!("/api/v1/platform/deployments/{deployment}/prices"),
@@ -331,10 +813,23 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         format!("/api/v1/platform/deployments/{deployment}/batch-scheduling"),
         format!("/api/v1/platform/deployments/{deployment}/price-suggestion"),
         format!("/api/v1/platform/models/compare?ids={model},{second}"),
+        format!("/api/v1/platform/models/compare?ids={model},{unpriced}"),
     ] {
         let value = j.request("GET", &path, None).await;
         assert!(!value.to_string().contains(&f.personal.to_string()));
     }
+    // A route with no model price data nor a legacy-compatible protocol is unsupported.
+    let detail = j
+        .request(
+            "GET",
+            &format!("/api/v1/platform/models/{legacy_model}"),
+            None,
+        )
+        .await;
+    assert_eq!(
+        detail["readiness"]["unsupported_profiles"],
+        json!(["openrouter"])
+    );
     // Optional-parameter coverage: every documented query parameter in a positive request.
     // The OpenRouter route's data policy is the configured one; the two picker
     // exclusions name workspaces/catalogs the model is not yet part of.
@@ -342,38 +837,111 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     let nested = j.request("GET", &format!("/api/v1/platform/models?limit=5&offset=0&q=contract&enabled=true&provider_connection_id={provider}&type=generation&max_input_price=9007199254740993&data_policy={policy_now}&include_deprecated=true&sort=name&not_in_catalog={}&not_direct_in={}", Uuid::new_v4(), Uuid::new_v4()), None).await;
     assert!(!nested.to_string().contains(&f.personal.to_string()));
     for sort in ["newest", "price"] {
-        j.request("GET", &format!("/api/v1/platform/models?sort={sort}"), None).await;
+        j.request("GET", &format!("/api/v1/platform/models?sort={sort}"), None)
+            .await;
     }
-    j.request("GET", "/api/v1/platform/providers?limit=10&offset=0&q=contract&enabled=false", None).await;
-    j.request("GET", &format!("/api/v1/platform/deployments/{deployment}/prices?limit=2&offset=1"), None).await;
-    // The price suggestion has two real branches: priced from a concrete
-    // endpoint, and from the catalog's top provider when no endpoint list exists.
-    let catalog_only = id(&j.request("POST", "/api/v1/platform/deployments", Some(json!({"model_id":model,"provider_connection_id":provider,"upstream_model":"contract/catalog-only","enabled":true}))).await);
-    let from_catalog = j.request("GET", &format!("/api/v1/platform/deployments/{catalog_only}/price-suggestion"), None).await;
-    assert_eq!(from_catalog["endpoint"]["selection"], "catalog");
-    let from_endpoint = j.request("GET", &format!("/api/v1/platform/deployments/{deployment}/price-suggestion"), None).await;
-    assert_eq!(from_endpoint["endpoint"]["selection"], "cheapest");
-    // PlatformRead is the declared boundary, but the handler needs platform_write.
-    let r = send(&j.client, &j.base, Some(&auditor), "GET", &format!("/api/v1/platform/deployments/{deployment}/price-suggestion"), None).await;
-    assert_eq!(r.status, StatusCode::FORBIDDEN);
-    // An explicit endpoint null is an endpoint update: Bedrock clears it; any other kind is refused.
-    j.request("PATCH", &format!("/api/v1/platform/providers/{bedrock_default}"), Some(json!({"enabled":false,"endpoint":null}))).await;
-    let r = send(&j.client, &j.base, Some(&admin), "PATCH", &format!("/api/v1/platform/providers/{provider}"), Some(json!({"enabled":true,"endpoint":null}))).await;
-    assert_eq!(r.status, StatusCode::BAD_REQUEST);
-    let history = j
-        .request(
-            "GET",
-            &format!("/api/v1/platform/deployments/{deployment}/configuration/history?limit=1"),
-            None,
-        )
-        .await;
-    let change = id(&history["data"][0]);
     j.request(
         "GET",
-        &format!("/api/v1/platform/deployments/{deployment}/configuration/history/{change}"),
+        "/api/v1/platform/catalogs?limit=5&offset=0&q=contract",
         None,
     )
     .await;
+    j.request(
+        "GET",
+        &format!("/api/v1/platform/catalogs/{cat}/models?limit=5&offset=0"),
+        None,
+    )
+    .await;
+    j.request("GET", &format!("/api/v1/platform/deployments?enabled=true&limit=5&offset=0&model_id={model}&provider_connection_id={provider}&q=contract"), None).await;
+    j.request(
+        "GET",
+        "/api/v1/platform/providers?limit=10&offset=0&q=contract&enabled=false",
+        None,
+    )
+    .await;
+    j.request(
+        "GET",
+        &format!("/api/v1/platform/deployments/{deployment}/prices?limit=2&offset=1"),
+        None,
+    )
+    .await;
+    // The price suggestion has two real branches for tokens: priced from a concrete
+    // endpoint, and from the catalog's top provider when no endpoint list exists;
+    // and every other workload's units, unknown prices and missing ceilings.
+    let catalog_only = id(&j.request("POST", "/api/v1/platform/deployments", Some(json!({"model_id":model,"provider_connection_id":provider,"upstream_model":"contract/catalog-only","enabled":true}))).await);
+    let from_catalog = j
+        .request(
+            "GET",
+            &format!("/api/v1/platform/deployments/{catalog_only}/price-suggestion"),
+            None,
+        )
+        .await;
+    assert_eq!(from_catalog["endpoint"]["selection"], "catalog");
+    let from_endpoint = j
+        .request(
+            "GET",
+            &format!("/api/v1/platform/deployments/{deployment}/price-suggestion"),
+            None,
+        )
+        .await;
+    assert_eq!(from_endpoint["endpoint"]["selection"], "cheapest");
+    for route in &drafted {
+        j.request(
+            "GET",
+            &format!("/api/v1/platform/deployments/{route}/price-suggestion"),
+            None,
+        )
+        .await;
+    }
+    // PlatformRead is the declared boundary, but the handler needs platform_write.
+    let r = send(
+        &j.client,
+        &j.base,
+        Some(&auditor),
+        "GET",
+        &format!("/api/v1/platform/deployments/{deployment}/price-suggestion"),
+        None,
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    // An explicit endpoint null is an endpoint update: Bedrock clears it; any other kind is refused.
+    j.request(
+        "PATCH",
+        &format!("/api/v1/platform/providers/{bedrock_default}"),
+        Some(json!({"enabled":false,"endpoint":null})),
+    )
+    .await;
+    let r = send(
+        &j.client,
+        &j.base,
+        Some(&admin),
+        "PATCH",
+        &format!("/api/v1/platform/providers/{provider}"),
+        Some(json!({"enabled":true,"endpoint":null})),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    // Configuration history: paged (cursor), every kind of entry in detail.
+    let history = format!("/api/v1/platform/deployments/{deployment}/configuration/history");
+    let first = j.request("GET", &format!("{history}?limit=2"), None).await;
+    let cursor = first["next_cursor"].as_str().unwrap().to_owned();
+    j.request("GET", &format!("{history}?limit=2&cursor={cursor}"), None)
+        .await;
+    let all = j
+        .request("GET", &format!("{history}?limit=100"), None)
+        .await;
+    let entries = all["data"].as_array().unwrap();
+    assert!(
+        entries
+            .iter()
+            .any(|e| e["actor"]["admin_token_id"].is_string())
+    );
+    assert!(entries.iter().any(|e| e["actor"]["id"].is_null()));
+    assert!(entries.iter().any(|e| e["values_available"] == false));
+    for entry in entries {
+        j.request("GET", &format!("{history}/{}", id(entry)), None)
+            .await;
+    }
     j.actor = &owner;
     j.request(
         "POST",
@@ -381,13 +949,44 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         Some(json!({"model_id":second})),
     )
     .await;
-    let policy = json!({"requests_per_minute":10,"tokens_per_minute":1000,"concurrent_requests":2,"concurrent_jobs":1,"storage_bytes":10000,"key_issuances_per_holder":5,"key_issuances_per_workspace":50,"budgets":[{"period":"month","amount_microusd":"9007199254740993"}]});
+    // Policy layers, state C: the team's own (tighter) limits, then its accounting:
+    // a settled request, and afterwards one whose cost is unknown.
+    let policy = limits(
+        10,
+        1000,
+        2,
+        1,
+        10_000,
+        5,
+        50,
+        json!([{"period":"month","amount_microusd":"9007199254740993"},{"period":"lifetime","amount_microusd":"9007199254740993"}]),
+    );
     j.request(
         "PUT",
         &format!("/api/v1/workspaces/{}/policy", f.team),
         Some(policy.clone()),
     )
     .await;
+    for who in [&owner, &member] {
+        j.actor = who;
+        j.request("GET", &ws_policy, None).await;
+    }
+    seed_attempt(
+        &pool,
+        f.team,
+        owner_key,
+        anchor,
+        "contract/model",
+        "failed",
+        None,
+        Some(7),
+    )
+    .await;
+    for who in [&owner, &member] {
+        j.actor = who;
+        j.request("GET", &ws_policy, None).await;
+    }
+    j.actor = &owner;
     for suffix in ["models", "available-models", "catalog", "policy"] {
         j.request(
             "GET",
@@ -579,7 +1178,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     .await;
     j.request(
         "DELETE",
-        &format!("/api/v1/platform/providers/{provider}"),
+        &format!("/api/v1/platform/providers/{disposable}"),
         None,
     )
     .await;

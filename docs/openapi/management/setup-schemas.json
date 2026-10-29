@@ -6250,36 +6250,11 @@
                 "input_audio_seconds_ms",
                 "output_audio_seconds_ms",
                 "search_units",
-                "requests",
-                "input_audio_tokens",
-                "cache_read_audio_tokens",
-                "output_audio_tokens",
-                "output_video_seconds_ms"
+                "requests"
               ]
-            },
-            "microusd_per_batch": {
-              "type": "null"
-            },
-            "batch": {
-              "type": "null"
-            },
-            "unit_label": {
-              "type": "null"
-            },
-            "sku_label": {
-              "type": "null"
-            },
-            "variant": {
-              "type": "null"
-            },
-            "min_prompt_tokens": {
-              "type": "null"
             },
             "not_applicable": {
               "const": true
-            },
-            "unknown": {
-              "const": false
             }
           },
           "required": [
@@ -6304,33 +6279,8 @@
                 "input_audio_seconds_ms",
                 "output_audio_seconds_ms",
                 "search_units",
-                "requests",
-                "input_audio_tokens",
-                "cache_read_audio_tokens",
-                "output_audio_tokens",
-                "output_video_seconds_ms"
+                "requests"
               ]
-            },
-            "microusd_per_batch": {
-              "type": "null"
-            },
-            "batch": {
-              "type": "null"
-            },
-            "unit_label": {
-              "type": "null"
-            },
-            "sku_label": {
-              "type": "null"
-            },
-            "variant": {
-              "type": "null"
-            },
-            "min_prompt_tokens": {
-              "type": "null"
-            },
-            "not_applicable": {
-              "const": false
             },
             "unknown": {
               "const": true
@@ -6365,26 +6315,10 @@
               "maxLength": 80,
               "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$"
             },
-            "variant": {
-              "type": "null"
-            },
             "min_prompt_tokens": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "not_applicable": {
-              "const": false
-            },
-            "unknown": {
-              "const": false
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
             }
           },
           "required": [
@@ -6419,26 +6353,10 @@
               "maxLength": 80,
               "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$"
             },
-            "variant": {
-              "type": "null"
-            },
             "min_prompt_tokens": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "not_applicable": {
-              "const": false
-            },
-            "unknown": {
-              "const": false
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
             }
           },
           "required": [
@@ -6473,26 +6391,10 @@
               "maxLength": 80,
               "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$"
             },
-            "variant": {
-              "type": "null"
-            },
             "min_prompt_tokens": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "not_applicable": {
-              "const": false
-            },
-            "unknown": {
-              "const": false
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
             }
           },
           "required": [
@@ -6527,26 +6429,10 @@
               "maxLength": 80,
               "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$"
             },
-            "variant": {
-              "type": "null"
-            },
             "min_prompt_tokens": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "not_applicable": {
-              "const": false
-            },
-            "unknown": {
-              "const": false
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
             }
           },
           "required": [
@@ -6581,26 +6467,10 @@
               "maxLength": 80,
               "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$"
             },
-            "variant": {
-              "type": "null"
-            },
             "min_prompt_tokens": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "not_applicable": {
-              "const": false
-            },
-            "unknown": {
-              "const": false
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
             }
           },
           "required": [
@@ -6635,26 +6505,10 @@
               "maxLength": 80,
               "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$"
             },
-            "variant": {
-              "type": "null"
-            },
             "min_prompt_tokens": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "not_applicable": {
-              "const": false
-            },
-            "unknown": {
-              "const": false
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
             }
           },
           "required": [
@@ -6690,33 +6544,8 @@
               "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$"
             },
             "variant": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "pattern": "^[A-Za-z0-9._:-]{1,32}$"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "min_prompt_tokens": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "not_applicable": {
-              "const": false
-            },
-            "unknown": {
-              "const": false
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,32}$"
             }
           },
           "required": [
@@ -6750,81 +6579,6 @@
               "minLength": 1,
               "maxLength": 80,
               "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$"
-            },
-            "variant": {
-              "type": "null"
-            },
-            "min_prompt_tokens": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "not_applicable": {
-              "const": false
-            },
-            "unknown": {
-              "const": false
-            }
-          },
-          "required": [
-            "meter",
-            "microusd_per_batch",
-            "batch",
-            "unit_label",
-            "sku_label"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "meter": {
-              "const": "input_audio_seconds_ms"
-            },
-            "microusd_per_batch": {
-              "type": "string",
-              "maxLength": 19,
-              "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$"
-            },
-            "batch": {
-              "const": 1000
-            },
-            "unit_label": {
-              "const": "/second"
-            },
-            "sku_label": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 80,
-              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$"
-            },
-            "variant": {
-              "type": "null"
-            },
-            "min_prompt_tokens": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "not_applicable": {
-              "const": false
-            },
-            "unknown": {
-              "const": false
             }
           },
           "required": [
@@ -6858,27 +6612,6 @@
               "minLength": 1,
               "maxLength": 80,
               "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$"
-            },
-            "variant": {
-              "type": "null"
-            },
-            "min_prompt_tokens": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "not_applicable": {
-              "const": false
-            },
-            "unknown": {
-              "const": false
             }
           },
           "required": [
@@ -6912,81 +6645,6 @@
               "minLength": 1,
               "maxLength": 80,
               "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$"
-            },
-            "variant": {
-              "type": "null"
-            },
-            "min_prompt_tokens": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "not_applicable": {
-              "const": false
-            },
-            "unknown": {
-              "const": false
-            }
-          },
-          "required": [
-            "meter",
-            "microusd_per_batch",
-            "batch",
-            "unit_label",
-            "sku_label"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "meter": {
-              "const": "output_audio_seconds_ms"
-            },
-            "microusd_per_batch": {
-              "type": "string",
-              "maxLength": 19,
-              "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$"
-            },
-            "batch": {
-              "const": 1000
-            },
-            "unit_label": {
-              "const": "/second"
-            },
-            "sku_label": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 80,
-              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$"
-            },
-            "variant": {
-              "type": "null"
-            },
-            "min_prompt_tokens": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "not_applicable": {
-              "const": false
-            },
-            "unknown": {
-              "const": false
             }
           },
           "required": [
@@ -7020,27 +6678,6 @@
               "minLength": 1,
               "maxLength": 80,
               "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$"
-            },
-            "variant": {
-              "type": "null"
-            },
-            "min_prompt_tokens": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "not_applicable": {
-              "const": false
-            },
-            "unknown": {
-              "const": false
             }
           },
           "required": [
@@ -7074,81 +6711,6 @@
               "minLength": 1,
               "maxLength": 80,
               "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$"
-            },
-            "variant": {
-              "type": "null"
-            },
-            "min_prompt_tokens": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "not_applicable": {
-              "const": false
-            },
-            "unknown": {
-              "const": false
-            }
-          },
-          "required": [
-            "meter",
-            "microusd_per_batch",
-            "batch",
-            "unit_label",
-            "sku_label"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "meter": {
-              "const": "search_units"
-            },
-            "microusd_per_batch": {
-              "type": "string",
-              "maxLength": 19,
-              "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$"
-            },
-            "batch": {
-              "const": 1
-            },
-            "unit_label": {
-              "const": "/search"
-            },
-            "sku_label": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 80,
-              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$"
-            },
-            "variant": {
-              "type": "null"
-            },
-            "min_prompt_tokens": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "not_applicable": {
-              "const": false
-            },
-            "unknown": {
-              "const": false
             }
           },
           "required": [
@@ -7182,348 +6744,6 @@
               "minLength": 1,
               "maxLength": 80,
               "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$"
-            },
-            "variant": {
-              "type": "null"
-            },
-            "min_prompt_tokens": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "not_applicable": {
-              "const": false
-            },
-            "unknown": {
-              "const": false
-            }
-          },
-          "required": [
-            "meter",
-            "microusd_per_batch",
-            "batch",
-            "unit_label",
-            "sku_label"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "meter": {
-              "const": "input_audio_tokens"
-            },
-            "microusd_per_batch": {
-              "type": "string",
-              "maxLength": 19,
-              "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$"
-            },
-            "batch": {
-              "const": 1000000
-            },
-            "unit_label": {
-              "const": "/M tokens"
-            },
-            "sku_label": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 80,
-              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$"
-            },
-            "variant": {
-              "type": "null"
-            },
-            "min_prompt_tokens": {
-              "type": "null"
-            },
-            "not_applicable": {
-              "const": false
-            },
-            "unknown": {
-              "const": false
-            }
-          },
-          "required": [
-            "meter",
-            "microusd_per_batch",
-            "batch",
-            "unit_label",
-            "sku_label"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "meter": {
-              "const": "cache_read_audio_tokens"
-            },
-            "microusd_per_batch": {
-              "type": "string",
-              "maxLength": 19,
-              "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$"
-            },
-            "batch": {
-              "const": 1000000
-            },
-            "unit_label": {
-              "const": "/M tokens"
-            },
-            "sku_label": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 80,
-              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$"
-            },
-            "variant": {
-              "type": "null"
-            },
-            "min_prompt_tokens": {
-              "type": "null"
-            },
-            "not_applicable": {
-              "const": false
-            },
-            "unknown": {
-              "const": false
-            }
-          },
-          "required": [
-            "meter",
-            "microusd_per_batch",
-            "batch",
-            "unit_label",
-            "sku_label"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "meter": {
-              "const": "output_audio_tokens"
-            },
-            "microusd_per_batch": {
-              "type": "string",
-              "maxLength": 19,
-              "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$"
-            },
-            "batch": {
-              "const": 1000000
-            },
-            "unit_label": {
-              "const": "/M tokens"
-            },
-            "sku_label": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 80,
-              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$"
-            },
-            "variant": {
-              "type": "null"
-            },
-            "min_prompt_tokens": {
-              "type": "null"
-            },
-            "not_applicable": {
-              "const": false
-            },
-            "unknown": {
-              "const": false
-            }
-          },
-          "required": [
-            "meter",
-            "microusd_per_batch",
-            "batch",
-            "unit_label",
-            "sku_label"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "meter": {
-              "const": "output_video_seconds_ms"
-            },
-            "microusd_per_batch": {
-              "type": "string",
-              "maxLength": 19,
-              "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$"
-            },
-            "batch": {
-              "const": 1000
-            },
-            "unit_label": {
-              "const": "/second"
-            },
-            "sku_label": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 80,
-              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$"
-            },
-            "variant": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "pattern": "^[A-Za-z0-9._:-]{1,32}$"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "min_prompt_tokens": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "not_applicable": {
-              "const": false
-            },
-            "unknown": {
-              "const": false
-            }
-          },
-          "required": [
-            "meter",
-            "microusd_per_batch",
-            "batch",
-            "unit_label",
-            "sku_label"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "meter": {
-              "const": "output_video_seconds_ms"
-            },
-            "microusd_per_batch": {
-              "type": "string",
-              "maxLength": 19,
-              "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$"
-            },
-            "batch": {
-              "const": 60000
-            },
-            "unit_label": {
-              "const": "/minute"
-            },
-            "sku_label": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 80,
-              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$"
-            },
-            "variant": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "pattern": "^[A-Za-z0-9._:-]{1,32}$"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "min_prompt_tokens": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "not_applicable": {
-              "const": false
-            },
-            "unknown": {
-              "const": false
-            }
-          },
-          "required": [
-            "meter",
-            "microusd_per_batch",
-            "batch",
-            "unit_label",
-            "sku_label"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "meter": {
-              "const": "output_video_seconds_ms"
-            },
-            "microusd_per_batch": {
-              "type": "string",
-              "maxLength": 19,
-              "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$"
-            },
-            "batch": {
-              "const": 3600000
-            },
-            "unit_label": {
-              "const": "/hour"
-            },
-            "sku_label": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 80,
-              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$"
-            },
-            "variant": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "pattern": "^[A-Za-z0-9._:-]{1,32}$"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "min_prompt_tokens": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 2147483647
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "not_applicable": {
-              "const": false
-            },
-            "unknown": {
-              "const": false
             }
           },
           "required": [
@@ -7536,7 +6756,7 @@
           "additionalProperties": false
         }
       ],
-      "description": "Suggestion draft is not yet canonicalized: explicit unknown meters remain present."
+      "description": "Exactly what the mapper emits (suggestion.rs map): not-applicable and explicit-unknown lines carry only their flag; priced lines carry no null placeholders. Prompt-size tiers exist only on the six token meters (overrides) and variants only on image lines. Audio meters price per minute or per hour only (the per-second batch can never be the first exact one because an exact per-second micro-USD amount is always exact per minute), search units are never priced by a catalog (rerank leaves them unknown), and realtime audio-token and video meters are never drafted."
     },
     "SetupMaxUnits": {
       "type": "object",
@@ -22698,14 +21918,26 @@
                 "days": {
                   "type": "array",
                   "items": {
-                    "type": "string"
-                  }
+                    "enum": [
+                      "mon",
+                      "tue",
+                      "wed",
+                      "thu",
+                      "fri",
+                      "sat",
+                      "sun"
+                    ]
+                  },
+                  "minItems": 1,
+                  "maxItems": 7
                 },
                 "start": {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
                 },
                 "end": {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
                 }
               },
               "required": [
@@ -22738,7 +21970,7 @@
           "$ref": "#/components/schemas/SetupRouteSettingsOutput"
         },
         "defaults": {
-          "$ref": "#/components/schemas/SetupRouteSettingsOutput"
+          "$ref": "#/components/schemas/SetupRouteDefaults"
         },
         "priority_supported": {
           "type": "boolean"
@@ -22761,7 +21993,12 @@
             "paused_reason": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "enum": [
+                    "outside_window",
+                    "live_traffic",
+                    "server_busy",
+                    "metrics_unavailable"
+                  ]
                 },
                 {
                   "type": "null"
@@ -23652,31 +22889,25 @@
           "const": true
         },
         "used_microusd": {
-          "$ref": "#/components/schemas/IdentityNullableDecimal"
+          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
         },
         "unresolved_usage": {
-          "type": [
-            "boolean",
-            "null"
-          ]
+          "type": "boolean"
         },
         "exhausted": {
-          "type": [
-            "boolean",
-            "null"
-          ]
+          "type": "boolean"
         },
         "settled_microusd": {
-          "$ref": "#/components/schemas/IdentityNullableDecimal"
+          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
         },
         "pending_held_microusd": {
-          "$ref": "#/components/schemas/IdentityNullableDecimal"
+          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
         },
         "unknown_held_microusd": {
-          "$ref": "#/components/schemas/IdentityNullableDecimal"
+          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
         },
         "unknown_cost_requests": {
-          "$ref": "#/components/schemas/IdentityNullableDecimal"
+          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
         },
         "remaining_microusd": {
           "$ref": "#/components/schemas/IdentityNullableDecimal"
@@ -23688,7 +22919,8 @@
           ]
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "A visible window whose accounting was read: every consumption fact is a value. remaining_microusd is null exactly when unknown_cost_requests is positive (budget_windows: remaining() needs zero unknown-cost requests)."
     },
     "SetupRestrictedBudgetWindow": {
       "type": "object",
@@ -23874,7 +23106,7 @@
           "items": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/SetupVisibleBudgetWindow"
+                "$ref": "#/components/schemas/SetupVisibleBudgetWindows"
               },
               {
                 "$ref": "#/components/schemas/SetupRestrictedBudgetWindow"
@@ -23940,7 +23172,7 @@
               "budgets": {
                 "type": "array",
                 "items": {
-                  "$ref": "#/components/schemas/SetupVisibleBudgetWindow"
+                  "$ref": "#/components/schemas/SetupVisibleBudgetWindows"
                 }
               }
             }
@@ -24344,17 +23576,11 @@
           "format": "date-time"
         },
         "display_lines": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Always an array: v1/v2 token rates and v3 lines normalize to valid price lines (compare.rs normalized_price), so display text always exists."
         },
         "batch_display_lines": {
           "type": "null"
@@ -24575,14 +23801,8 @@
           "maximum": 18446744073709551615
         },
         "unit_label": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "type": "string",
+          "description": "Draft::priced always passes a batch from the meter's own batches(), so the canonical unit label exists; not-applicable lines omit the key."
         },
         "sku_label": {
           "type": "string"
@@ -24662,7 +23882,8 @@
               }
             },
             {
-              "type": "null"
+              "type": "null",
+              "x-omg-unobserved-branch": "Null only when the draft's own lines fail PriceLines validation (suggestion.rs map: parsed is None). The mapper builds unique, in-range lines, so no catalog input known to the fixture reaches this defensive guard; it is not producible with a valid catalog fixture."
             }
           ]
         },
@@ -24783,14 +24004,8 @@
                   "minimum": 0
                 },
                 "input_rate": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
+                  "type": "string",
+                  "description": "An endpoint is chosen only when its prompt price parses (reference_cost), and the same parse formats this label (suggestion.rs map_with_endpoints), so it is never null."
                 }
               },
               "required": [
@@ -25580,6 +24795,126 @@
     },
     "put_api_v1_workspaces_by_ws_policyResponse": {
       "$ref": "#/components/schemas/SetupOk"
+    },
+    "SetupRouteDefaults": {
+      "type": "object",
+      "properties": {
+        "max_concurrency": {
+          "const": 2
+        },
+        "yield_live_threshold": {
+          "type": "null"
+        },
+        "metrics": {
+          "type": "null"
+        },
+        "priority": {
+          "type": "null"
+        },
+        "window": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "max_concurrency",
+        "yield_live_threshold",
+        "metrics",
+        "priority",
+        "window"
+      ],
+      "additionalProperties": false,
+      "description": "RouteSettings::default() (jobs/schedule.rs): always two lines at once and nothing else; a constant, not the stored settings."
+    },
+    "SetupInvalidAccountingBudgetWindow": {
+      "type": "object",
+      "required": [
+        "layer",
+        "period",
+        "amount_microusd",
+        "monthly_budget_microusd",
+        "budget_period",
+        "window_start",
+        "window_end",
+        "usage_visible",
+        "used_microusd",
+        "unresolved_usage",
+        "exhausted",
+        "settled_microusd",
+        "pending_held_microusd",
+        "unknown_held_microusd",
+        "unknown_cost_requests",
+        "remaining_microusd",
+        "headroom_status"
+      ],
+      "properties": {
+        "layer": {
+          "enum": [
+            "platform",
+            "local"
+          ]
+        },
+        "period": {
+          "$ref": "#/components/schemas/IdentityPeriod"
+        },
+        "amount_microusd": {
+          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+        },
+        "monthly_budget_microusd": {
+          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+        },
+        "budget_period": {
+          "$ref": "#/components/schemas/IdentityPeriod"
+        },
+        "window_start": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "window_end": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "usage_visible": {
+          "const": true
+        },
+        "used_microusd": {
+          "type": "null"
+        },
+        "unresolved_usage": {
+          "type": "null"
+        },
+        "exhausted": {
+          "type": "null"
+        },
+        "settled_microusd": {
+          "type": "null"
+        },
+        "pending_held_microusd": {
+          "type": "null"
+        },
+        "unknown_held_microusd": {
+          "type": "null"
+        },
+        "unknown_cost_requests": {
+          "type": "null"
+        },
+        "remaining_microusd": {
+          "type": "null"
+        },
+        "headroom_status": {
+          "const": "unknown"
+        }
+      },
+      "additionalProperties": false,
+      "description": "A visible window whose budget_totals accounting is invalid or unrepresentable (negative or overflowing counters): read_budget_report answers None and every consumption fact is null with headroom unknown (policies.rs budget_windows)."
+    },
+    "SetupVisibleBudgetWindows": {
+      "oneOf": [
+        {
+          "$ref": "#/components/schemas/SetupVisibleBudgetWindow"
+        },
+        {
+          "$ref": "#/components/schemas/SetupInvalidAccountingBudgetWindow",
+          "x-omg-unobserved-branch": "Produced only when budget_totals holds invalid accounting (negative or overflowing counters), which the maintaining trigger (migrations 0015/0025) never writes; the invalid-accounting path is exercised by management/governance/tests.rs budget_headroom_invalid_window_preserves_neighbors_and_sql_errors_remain_503 with deliberately corrupted rows, not by producer-shaped data."
+        }
+      ]
     }
   }
 }
