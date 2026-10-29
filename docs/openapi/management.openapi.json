@@ -2351,9 +2351,15 @@
             "additionalProperties": false,
             "properties": {
               "code": {
+                "maxLength": 120,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
                 "type": "string"
               },
               "name": {
+                "maxLength": 120,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
                 "type": "string"
               }
             },
@@ -2369,9 +2375,15 @@
             "minItems": 2,
             "prefixItems": [
               {
+                "maxLength": 120,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
                 "type": "string"
               },
               {
+                "maxLength": 120,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
                 "type": "string"
               }
             ],
@@ -3315,9 +3327,8 @@
                 "type": "array"
               },
               "service_accounts": {
-                "items": {
-                  "$ref": "#/components/schemas/MoneyBreakdown"
-                },
+                "description": "Platform scope never reports service accounts: the handler returns a constant empty array (governance/reports.rs, `let service = if platform { \"'[]'::jsonb\" ...`), so no element shape exists.",
+                "items": false,
                 "maxItems": 0,
                 "type": "array",
                 "x-omg-may-be-empty": "Platform scope never reports service accounts: the handler returns a constant empty array."
@@ -4192,6 +4203,970 @@
           "tokens",
           "share",
           "blended_microusd_per_million"
+        ],
+        "type": "object"
+      },
+      "MoneyPlatformReportRun": {
+        "additionalProperties": false,
+        "description": "snapshot is null exactly when expired is true (run_value: the snapshot is projected only while both the run and its payload are unexpired).",
+        "else": {
+          "properties": {
+            "snapshot": {
+              "$ref": "#/components/schemas/MoneyPlatformScheduledSnapshot"
+            }
+          }
+        },
+        "if": {
+          "properties": {
+            "expired": {
+              "const": true
+            }
+          },
+          "required": [
+            "expired"
+          ]
+        },
+        "properties": {
+          "configuration_revision": {
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "delivery": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MoneyReportDelivery"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expired": {
+            "type": "boolean"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "period_end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "period_start": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "schedule_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MoneyPlatformScheduledSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "schedule_id",
+          "period_start",
+          "period_end",
+          "observed_at",
+          "expires_at",
+          "expired",
+          "delivery",
+          "configuration_revision",
+          "snapshot"
+        ],
+        "then": {
+          "properties": {
+            "snapshot": {
+              "type": "null"
+            }
+          }
+        },
+        "type": "object"
+      },
+      "MoneyPlatformSchedule": {
+        "additionalProperties": false,
+        "else": {
+          "properties": {
+            "cost_center_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        },
+        "if": {
+          "properties": {
+            "scope_kind": {
+              "const": "installation"
+            }
+          },
+          "required": [
+            "scope_kind"
+          ]
+        },
+        "properties": {
+          "cadence": {
+            "enum": [
+              "weekly",
+              "monthly"
+            ],
+            "type": "string"
+          },
+          "configuration_revision": {
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "cost_center_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "created_by": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "delivery_time": {
+            "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "last_period_end": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_run_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recipient_user_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "scope_kind": {
+            "enum": [
+              "cost_center",
+              "installation"
+            ],
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "paused"
+            ],
+            "type": "string"
+          },
+          "timezone": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "workspace_id": {
+            "description": "Platform schedules have no workspace (workspace_id IS NULL in scheduled_reports.rs `list`/`row`).",
+            "type": "null"
+          }
+        },
+        "required": [
+          "id",
+          "scope_kind",
+          "workspace_id",
+          "cost_center_id",
+          "created_by",
+          "cadence",
+          "timezone",
+          "delivery_time",
+          "state",
+          "configuration_revision",
+          "created_at",
+          "updated_at",
+          "next_run_at",
+          "last_period_end",
+          "recipient_user_ids"
+        ],
+        "then": {
+          "properties": {
+            "cost_center_id": {
+              "type": "null"
+            }
+          }
+        },
+        "type": "object"
+      },
+      "MoneyPlatformScheduleCreated": {
+        "additionalProperties": false,
+        "else": {
+          "properties": {
+            "cost_center_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        },
+        "if": {
+          "properties": {
+            "scope_kind": {
+              "const": "installation"
+            }
+          },
+          "required": [
+            "scope_kind"
+          ]
+        },
+        "properties": {
+          "cadence": {
+            "enum": [
+              "weekly",
+              "monthly"
+            ],
+            "type": "string"
+          },
+          "configuration_revision": {
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "cost_center_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "created_by": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "delivery_time": {
+            "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "last_period_end": {
+            "description": "A new schedule has never generated a period.",
+            "type": "null"
+          },
+          "next_run_at": {
+            "description": "create() calls scheduled_reports::initialize, which always sets the first due time.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "recipient_user_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "scope_kind": {
+            "enum": [
+              "cost_center",
+              "installation"
+            ],
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "paused"
+            ],
+            "type": "string"
+          },
+          "timezone": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "workspace_id": {
+            "description": "Platform schedules have no workspace (workspace_id IS NULL in scheduled_reports.rs `list`/`row`).",
+            "type": "null"
+          }
+        },
+        "required": [
+          "id",
+          "scope_kind",
+          "workspace_id",
+          "cost_center_id",
+          "created_by",
+          "cadence",
+          "timezone",
+          "delivery_time",
+          "state",
+          "configuration_revision",
+          "created_at",
+          "updated_at",
+          "next_run_at",
+          "last_period_end",
+          "recipient_user_ids"
+        ],
+        "then": {
+          "properties": {
+            "cost_center_id": {
+              "type": "null"
+            }
+          }
+        },
+        "type": "object"
+      },
+      "MoneyPlatformScheduleList": {
+        "additionalProperties": false,
+        "properties": {
+          "configuration": {
+            "additionalProperties": false,
+            "properties": {
+              "public_url_configured": {
+                "type": "boolean"
+              },
+              "smtp_configured": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "smtp_configured",
+              "public_url_configured"
+            ],
+            "type": "object"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/MoneyPlatformSchedule"
+            },
+            "type": "array"
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "data",
+          "has_more",
+          "next_cursor",
+          "configuration"
+        ],
+        "type": "object"
+      },
+      "MoneyPlatformScheduleUpdated": {
+        "additionalProperties": false,
+        "else": {
+          "properties": {
+            "cost_center_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        },
+        "if": {
+          "properties": {
+            "scope_kind": {
+              "const": "installation"
+            }
+          },
+          "required": [
+            "scope_kind"
+          ]
+        },
+        "properties": {
+          "cadence": {
+            "enum": [
+              "weekly",
+              "monthly"
+            ],
+            "type": "string"
+          },
+          "configuration_revision": {
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "cost_center_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "created_by": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "delivery_time": {
+            "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "last_period_end": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_run_at": {
+            "description": "update() calls scheduled_reports::initialize, which always (re)sets the due time.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "recipient_user_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "scope_kind": {
+            "enum": [
+              "cost_center",
+              "installation"
+            ],
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "paused"
+            ],
+            "type": "string"
+          },
+          "timezone": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "workspace_id": {
+            "description": "Platform schedules have no workspace (workspace_id IS NULL in scheduled_reports.rs `list`/`row`).",
+            "type": "null"
+          }
+        },
+        "required": [
+          "id",
+          "scope_kind",
+          "workspace_id",
+          "cost_center_id",
+          "created_by",
+          "cadence",
+          "timezone",
+          "delivery_time",
+          "state",
+          "configuration_revision",
+          "created_at",
+          "updated_at",
+          "next_run_at",
+          "last_period_end",
+          "recipient_user_ids"
+        ],
+        "then": {
+          "properties": {
+            "cost_center_id": {
+              "type": "null"
+            }
+          }
+        },
+        "type": "object"
+      },
+      "MoneyPlatformScheduledSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "basis": {
+            "const": "configured_rate_estimate"
+          },
+          "breakdowns": {
+            "additionalProperties": false,
+            "properties": {
+              "cost_centers": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "totals": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "attempts": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "held_microusd": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "known_cost_microusd": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "root_requests": {
+                          "type": "null"
+                        },
+                        "unresolved_attempts": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "known_cost_microusd",
+                        "held_microusd",
+                        "attempts",
+                        "unresolved_attempts",
+                        "root_requests"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "totals"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "models": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "description": "The name itself: models and providers are never collapsed into a nullable identity (scheduled_aggregate.sql projects NULL only for cost centers and the platform personal aggregate).",
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "totals": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "attempts": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "held_microusd": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "known_cost_microusd": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "root_requests": {
+                          "type": "null"
+                        },
+                        "unresolved_attempts": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "known_cost_microusd",
+                        "held_microusd",
+                        "attempts",
+                        "unresolved_attempts",
+                        "root_requests"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "totals"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "providers": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "description": "The name itself: models and providers are never collapsed into a nullable identity (scheduled_aggregate.sql projects NULL only for cost centers and the platform personal aggregate).",
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "totals": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "attempts": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "held_microusd": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "known_cost_microusd": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "root_requests": {
+                          "type": "null"
+                        },
+                        "unresolved_attempts": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "known_cost_microusd",
+                        "held_microusd",
+                        "attempts",
+                        "unresolved_attempts",
+                        "root_requests"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "totals"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "workspaces": {
+                "items": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/MoneyScheduledPersonalTotals"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "totals": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "attempts": {
+                              "pattern": "^(0|[1-9][0-9]*)$",
+                              "type": "string"
+                            },
+                            "held_microusd": {
+                              "pattern": "^(0|[1-9][0-9]*)$",
+                              "type": "string"
+                            },
+                            "known_cost_microusd": {
+                              "pattern": "^(0|[1-9][0-9]*)$",
+                              "type": "string"
+                            },
+                            "root_requests": {
+                              "type": "null"
+                            },
+                            "unresolved_attempts": {
+                              "pattern": "^(0|[1-9][0-9]*)$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "known_cost_microusd",
+                            "held_microusd",
+                            "attempts",
+                            "unresolved_attempts",
+                            "root_requests"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name",
+                        "totals"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "workspaces",
+              "cost_centers",
+              "models",
+              "providers"
+            ],
+            "type": "object"
+          },
+          "breakdowns_truncated": {
+            "type": "boolean"
+          },
+          "configuration_revision": {
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "coverage": {
+            "additionalProperties": false,
+            "properties": {
+              "missing_reservation_attempts": {
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "pending_attempts": {
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "priced_attempts": {
+                "type": "null"
+              },
+              "settled_attempts": {
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "total_attempts": {
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "unknown_attempts": {
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "unresolved_attempts": {
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "priced_attempts",
+              "total_attempts",
+              "settled_attempts",
+              "pending_attempts",
+              "unknown_attempts",
+              "missing_reservation_attempts",
+              "unresolved_attempts"
+            ],
+            "type": "object"
+          },
+          "currency": {
+            "const": "USD"
+          },
+          "held_is_floor": {
+            "const": true
+          },
+          "historical_headroom": {
+            "type": "null"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "period": {
+            "$ref": "#/components/schemas/MoneyReportPeriod"
+          },
+          "privacy": {
+            "const": "personal_aggregate_only"
+          },
+          "scope": {
+            "const": "platform"
+          },
+          "totals": {
+            "additionalProperties": false,
+            "properties": {
+              "attempts": {
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "held_microusd": {
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "known_cost_microusd": {
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "root_requests": {
+                "type": "null"
+              },
+              "unresolved_attempts": {
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "known_cost_microusd",
+              "held_microusd",
+              "attempts",
+              "unresolved_attempts",
+              "root_requests"
+            ],
+            "type": "object"
+          },
+          "truncated_dimensions": {
+            "items": {
+              "enum": [
+                "workspaces",
+                "cost_centers",
+                "models",
+                "providers"
+              ],
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "unavailable": {
+            "additionalProperties": false,
+            "properties": {
+              "billing_usage": {
+                "const": "not_in_rollups"
+              },
+              "cost_components": {
+                "const": "not_in_rollups"
+              },
+              "detailed_health": {
+                "const": "not_in_rollups"
+              },
+              "meter_usage": {
+                "const": "not_in_rollups"
+              },
+              "pricing_coverage": {
+                "const": "not_in_rollups"
+              },
+              "provider_reported_cost_microusd": {
+                "const": "not_in_rollups"
+              },
+              "root_requests": {
+                "const": "non_additive"
+              }
+            },
+            "required": [
+              "root_requests",
+              "cost_components",
+              "detailed_health",
+              "pricing_coverage",
+              "billing_usage",
+              "meter_usage",
+              "provider_reported_cost_microusd"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "period",
+          "scope",
+          "observed_at",
+          "basis",
+          "currency",
+          "totals",
+          "breakdowns",
+          "breakdowns_truncated",
+          "truncated_dimensions",
+          "coverage",
+          "unavailable",
+          "held_is_floor",
+          "historical_headroom",
+          "privacy",
+          "configuration_revision"
         ],
         "type": "object"
       },
@@ -5319,15 +6294,8 @@
                     ]
                   },
                   "value": {
-                    "anyOf": [
-                      {
-                        "pattern": "^-?[0-9]+(\\.[0-9]+)?$",
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$",
+                    "type": "string"
                   }
                 },
                 "required": [
@@ -6128,7 +7096,8 @@
             "additionalProperties": false,
             "properties": {
               "attested": {
-                "type": "boolean"
+                "const": true,
+                "description": "Only attested historical scopes are accepted (create_mapping refuses attested=false)."
               },
               "connection_id": {
                 "format": "uuid",
@@ -6154,6 +7123,9 @@
                 "type": "string"
               },
               "evidence_reference": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": "string"
               },
               "exclusive": {
@@ -6163,6 +7135,7 @@
                 "items": {
                   "$ref": "#/components/schemas/MoneyProviderModelMapping"
                 },
+                "maxItems": 100,
                 "type": "array"
               },
               "non_omg_traffic": {
@@ -6171,6 +7144,9 @@
               "provider_workspace_id": {
                 "anyOf": [
                   {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                     "type": "string"
                   },
                   {
@@ -6210,6 +7186,9 @@
               {
                 "anyOf": [
                   {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                     "type": "string"
                   },
                   {
@@ -6258,15 +7237,20 @@
                 "type": "boolean"
               },
               {
-                "type": "boolean"
+                "const": true,
+                "description": "Only attested historical scopes are accepted (create_mapping refuses attested=false)."
               },
               {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": "string"
               },
               {
                 "items": {
                   "$ref": "#/components/schemas/MoneyProviderModelMapping"
                 },
+                "maxItems": 100,
                 "type": "array"
               }
             ],
@@ -6375,6 +7359,8 @@
             "additionalProperties": false,
             "properties": {
               "ending_at": {
+                "format": "date-time",
+                "maxLength": 40,
                 "type": "string"
               },
               "results": {
@@ -6384,6 +7370,8 @@
                 "type": "array"
               },
               "starting_at": {
+                "format": "date-time",
+                "maxLength": 40,
                 "type": "string"
               }
             },
@@ -6400,9 +7388,13 @@
             "minItems": 3,
             "prefixItems": [
               {
+                "format": "date-time",
+                "maxLength": 40,
                 "type": "string"
               },
               {
+                "format": "date-time",
+                "maxLength": 40,
                 "type": "string"
               },
               {
@@ -6734,6 +7726,9 @@
               "context_window": {
                 "anyOf": [
                   {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                     "type": "string"
                   },
                   {
@@ -6744,6 +7739,9 @@
               "cost_type": {
                 "anyOf": [
                   {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                     "type": "string"
                   },
                   {
@@ -6757,6 +7755,9 @@
               "description": {
                 "anyOf": [
                   {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                     "type": "string"
                   },
                   {
@@ -6767,6 +7768,9 @@
               "inference_geo": {
                 "anyOf": [
                   {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                     "type": "string"
                   },
                   {
@@ -6777,6 +7781,9 @@
               "model": {
                 "anyOf": [
                   {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                     "type": "string"
                   },
                   {
@@ -6787,6 +7794,9 @@
               "service_tier": {
                 "anyOf": [
                   {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                     "type": "string"
                   },
                   {
@@ -6797,6 +7807,9 @@
               "speed": {
                 "anyOf": [
                   {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                     "type": "string"
                   },
                   {
@@ -6807,6 +7820,9 @@
               "token_type": {
                 "anyOf": [
                   {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                     "type": "string"
                   },
                   {
@@ -6817,6 +7833,9 @@
               "workspace_id": {
                 "anyOf": [
                   {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                     "type": "string"
                   },
                   {
@@ -6848,6 +7867,9 @@
               {
                 "anyOf": [
                   {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                     "type": "string"
                   },
                   {
@@ -6858,6 +7880,9 @@
               {
                 "anyOf": [
                   {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                     "type": "string"
                   },
                   {
@@ -6868,6 +7893,9 @@
               {
                 "anyOf": [
                   {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                     "type": "string"
                   },
                   {
@@ -6878,6 +7906,9 @@
               {
                 "anyOf": [
                   {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                     "type": "string"
                   },
                   {
@@ -6888,6 +7919,9 @@
               {
                 "anyOf": [
                   {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                     "type": "string"
                   },
                   {
@@ -6898,6 +7932,9 @@
               {
                 "anyOf": [
                   {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                     "type": "string"
                   },
                   {
@@ -6908,6 +7945,9 @@
               {
                 "anyOf": [
                   {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                     "type": "string"
                   },
                   {
@@ -6918,6 +7958,9 @@
               {
                 "anyOf": [
                   {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                     "type": "string"
                   },
                   {
@@ -6928,6 +7971,9 @@
               {
                 "anyOf": [
                   {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                     "type": "string"
                   },
                   {
@@ -7149,15 +8195,22 @@
             "additionalProperties": false,
             "properties": {
               "account_id": {
+                "maxLength": 200,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": "string"
               },
               "bindings": {
                 "items": {
                   "$ref": "#/components/schemas/MoneyProviderBinding"
                 },
+                "maxItems": 1000,
                 "type": "array"
               },
               "evidence_reference": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": "string"
               },
               "supersedes": {
@@ -7185,6 +8238,9 @@
             "minItems": 4,
             "prefixItems": [
               {
+                "maxLength": 200,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": "string"
               },
               {
@@ -7199,12 +8255,16 @@
                 ]
               },
               {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": "string"
               },
               {
                 "items": {
                   "$ref": "#/components/schemas/MoneyProviderBinding"
                 },
+                "maxItems": 1000,
                 "type": "array"
               }
             ],
@@ -7269,9 +8329,15 @@
             "additionalProperties": false,
             "properties": {
               "provider_model": {
+                "maxLength": 512,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": "string"
               },
               "upstream_model": {
+                "maxLength": 512,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": "string"
               }
             },
@@ -7287,9 +8353,15 @@
             "minItems": 2,
             "prefixItems": [
               {
+                "maxLength": 512,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": "string"
               },
               {
+                "maxLength": 512,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": "string"
               }
             ],
@@ -7306,6 +8378,8 @@
                 "items": {
                   "$ref": "#/components/schemas/MoneyProviderBucket"
                 },
+                "maxItems": 31,
+                "minItems": 1,
                 "type": "array"
               },
               "has_more": {
@@ -7314,6 +8388,9 @@
               "next_page": {
                 "anyOf": [
                   {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                     "type": "string"
                   },
                   {
@@ -7338,6 +8415,8 @@
                 "items": {
                   "$ref": "#/components/schemas/MoneyProviderBucket"
                 },
+                "maxItems": 31,
+                "minItems": 1,
                 "type": "array"
               },
               {
@@ -7346,6 +8425,9 @@
               {
                 "anyOf": [
                   {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                     "type": "string"
                   },
                   {
@@ -7364,16 +8446,25 @@
             "additionalProperties": false,
             "properties": {
               "bucket_width": {
-                "type": "string"
+                "const": "1d"
               },
               "ending_at": {
+                "format": "date-time",
+                "maxLength": 40,
                 "type": "string"
               },
               "group_by": {
                 "items": {
+                  "enum": [
+                    "workspace_id",
+                    "description"
+                  ],
                   "type": "string"
                 },
-                "type": "array"
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array",
+                "uniqueItems": true
               },
               "limit": {
                 "maximum": 31,
@@ -7381,6 +8472,8 @@
                 "type": "integer"
               },
               "starting_at": {
+                "format": "date-time",
+                "maxLength": 40,
                 "type": "string"
               }
             },
@@ -7399,19 +8492,30 @@
             "minItems": 5,
             "prefixItems": [
               {
+                "format": "date-time",
+                "maxLength": 40,
                 "type": "string"
               },
               {
+                "format": "date-time",
+                "maxLength": 40,
                 "type": "string"
               },
               {
-                "type": "string"
+                "const": "1d"
               },
               {
                 "items": {
+                  "enum": [
+                    "workspace_id",
+                    "description"
+                  ],
                   "type": "string"
                 },
-                "type": "array"
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array",
+                "uniqueItems": true
               },
               {
                 "maximum": 31,
@@ -7950,18 +9054,28 @@
             "additionalProperties": false,
             "properties": {
               "account_id": {
+                "maxLength": 200,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": "string"
               },
               "evidence_reference": {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": "string"
               },
               "exported_at": {
+                "format": "date-time",
+                "maxLength": 40,
                 "type": "string"
               },
               "pages": {
                 "items": {
                   "$ref": "#/components/schemas/MoneyProviderPage"
                 },
+                "maxItems": 31,
+                "minItems": 1,
                 "type": "array"
               },
               "request": {
@@ -7994,12 +9108,20 @@
             "minItems": 6,
             "prefixItems": [
               {
+                "maxLength": 200,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": "string"
               },
               {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": "string"
               },
               {
+                "format": "date-time",
+                "maxLength": 40,
                 "type": "string"
               },
               {
@@ -8020,6 +9142,8 @@
                 "items": {
                   "$ref": "#/components/schemas/MoneyProviderPage"
                 },
+                "maxItems": 31,
+                "minItems": 1,
                 "type": "array"
               }
             ],
@@ -8043,6 +9167,9 @@
                 ]
               },
               "evidence": {
+                "maxLength": 200,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
                 "type": "string"
               },
               "input_tokens": {
@@ -8138,6 +9265,9 @@
                 ]
               },
               {
+                "maxLength": 200,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
                 "type": "string"
               },
               {
@@ -8245,205 +9375,6 @@
           "end_date",
           "timezone",
           "includes_partial_day"
-        ],
-        "type": "object"
-      },
-      "MoneyReportRun": {
-        "additionalProperties": false,
-        "allOf": [
-          {
-            "oneOf": [
-              {
-                "additionalProperties": false,
-                "properties": {
-                  "configuration_revision": {
-                    "pattern": "^(0|[1-9][0-9]*)$",
-                    "type": "string"
-                  },
-                  "delivery": {
-                    "anyOf": [
-                      {
-                        "$ref": "#/components/schemas/MoneyReportDelivery"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "expired": {
-                    "const": false
-                  },
-                  "expires_at": {
-                    "format": "date-time",
-                    "type": "string"
-                  },
-                  "id": {
-                    "format": "uuid",
-                    "type": "string"
-                  },
-                  "observed_at": {
-                    "format": "date-time",
-                    "type": "string"
-                  },
-                  "period_end": {
-                    "format": "date-time",
-                    "type": "string"
-                  },
-                  "period_start": {
-                    "format": "date-time",
-                    "type": "string"
-                  },
-                  "schedule_id": {
-                    "format": "uuid",
-                    "type": "string"
-                  },
-                  "snapshot": {
-                    "$ref": "#/components/schemas/MoneyScheduledSnapshot"
-                  }
-                },
-                "required": [
-                  "id",
-                  "schedule_id",
-                  "period_start",
-                  "period_end",
-                  "observed_at",
-                  "expires_at",
-                  "expired",
-                  "delivery",
-                  "configuration_revision",
-                  "snapshot"
-                ],
-                "type": "object"
-              },
-              {
-                "additionalProperties": false,
-                "properties": {
-                  "configuration_revision": {
-                    "pattern": "^(0|[1-9][0-9]*)$",
-                    "type": "string"
-                  },
-                  "delivery": {
-                    "anyOf": [
-                      {
-                        "$ref": "#/components/schemas/MoneyReportDelivery"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "expired": {
-                    "const": true
-                  },
-                  "expires_at": {
-                    "format": "date-time",
-                    "type": "string"
-                  },
-                  "id": {
-                    "format": "uuid",
-                    "type": "string"
-                  },
-                  "observed_at": {
-                    "format": "date-time",
-                    "type": "string"
-                  },
-                  "period_end": {
-                    "format": "date-time",
-                    "type": "string"
-                  },
-                  "period_start": {
-                    "format": "date-time",
-                    "type": "string"
-                  },
-                  "schedule_id": {
-                    "format": "uuid",
-                    "type": "string"
-                  },
-                  "snapshot": {
-                    "type": "null"
-                  }
-                },
-                "required": [
-                  "id",
-                  "schedule_id",
-                  "period_start",
-                  "period_end",
-                  "observed_at",
-                  "expires_at",
-                  "expired",
-                  "delivery",
-                  "configuration_revision",
-                  "snapshot"
-                ],
-                "type": "object"
-              }
-            ]
-          }
-        ],
-        "properties": {
-          "configuration_revision": {
-            "pattern": "^(0|[1-9][0-9]*)$",
-            "type": "string"
-          },
-          "delivery": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/MoneyReportDelivery"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "expired": {
-            "type": "boolean"
-          },
-          "expires_at": {
-            "format": "date-time",
-            "type": "string"
-          },
-          "id": {
-            "format": "uuid",
-            "type": "string"
-          },
-          "observed_at": {
-            "format": "date-time",
-            "type": "string"
-          },
-          "period_end": {
-            "format": "date-time",
-            "type": "string"
-          },
-          "period_start": {
-            "format": "date-time",
-            "type": "string"
-          },
-          "schedule_id": {
-            "format": "uuid",
-            "type": "string"
-          },
-          "snapshot": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/MoneyScheduledSnapshot"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "id",
-          "schedule_id",
-          "period_start",
-          "period_end",
-          "observed_at",
-          "expires_at",
-          "expired",
-          "delivery",
-          "configuration_revision",
-          "snapshot"
         ],
         "type": "object"
       },
@@ -8576,132 +9507,6 @@
         ],
         "type": "object"
       },
-      "MoneySchedule": {
-        "additionalProperties": false,
-        "properties": {
-          "cadence": {
-            "enum": [
-              "weekly",
-              "monthly"
-            ],
-            "type": "string"
-          },
-          "configuration_revision": {
-            "pattern": "^(0|[1-9][0-9]*)$",
-            "type": "string"
-          },
-          "cost_center_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "created_at": {
-            "format": "date-time",
-            "type": "string"
-          },
-          "created_by": {
-            "format": "uuid",
-            "type": "string"
-          },
-          "delivery_time": {
-            "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
-            "type": "string"
-          },
-          "id": {
-            "format": "uuid",
-            "type": "string"
-          },
-          "last_period_end": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "next_run_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "recipient_user_ids": {
-            "items": {
-              "format": "uuid",
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "scope_kind": {
-            "enum": [
-              "installation",
-              "cost_center",
-              "workspace",
-              "personal"
-            ],
-            "type": "string"
-          },
-          "state": {
-            "enum": [
-              "active",
-              "paused"
-            ],
-            "type": "string"
-          },
-          "timezone": {
-            "maxLength": 64,
-            "minLength": 1,
-            "type": "string"
-          },
-          "updated_at": {
-            "format": "date-time",
-            "type": "string"
-          },
-          "workspace_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "id",
-          "scope_kind",
-          "workspace_id",
-          "cost_center_id",
-          "created_by",
-          "cadence",
-          "timezone",
-          "delivery_time",
-          "state",
-          "configuration_revision",
-          "created_at",
-          "updated_at",
-          "next_run_at",
-          "last_period_end",
-          "recipient_user_ids"
-        ],
-        "type": "object"
-      },
       "MoneyScheduleCreate": {
         "oneOf": [
           {
@@ -8819,54 +9624,6 @@
             "type": "array"
           }
         ]
-      },
-      "MoneyScheduleList": {
-        "additionalProperties": false,
-        "properties": {
-          "configuration": {
-            "additionalProperties": false,
-            "properties": {
-              "public_url_configured": {
-                "type": "boolean"
-              },
-              "smtp_configured": {
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "smtp_configured",
-              "public_url_configured"
-            ],
-            "type": "object"
-          },
-          "data": {
-            "items": {
-              "$ref": "#/components/schemas/MoneySchedule"
-            },
-            "type": "array"
-          },
-          "has_more": {
-            "type": "boolean"
-          },
-          "next_cursor": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "data",
-          "has_more",
-          "next_cursor",
-          "configuration"
-        ],
-        "type": "object"
       },
       "MoneyScheduleUpdate": {
         "oneOf": [
@@ -9003,1293 +9760,6 @@
           "id",
           "name",
           "totals"
-        ],
-        "type": "object"
-      },
-      "MoneyScheduledSnapshot": {
-        "additionalProperties": false,
-        "allOf": [
-          {
-            "oneOf": [
-              {
-                "additionalProperties": false,
-                "properties": {
-                  "basis": {
-                    "const": "configured_rate_estimate"
-                  },
-                  "breakdowns": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "cost_centers": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "id": {
-                              "anyOf": [
-                                {
-                                  "type": "string"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "name": {
-                              "type": "string"
-                            },
-                            "totals": {
-                              "additionalProperties": false,
-                              "properties": {
-                                "attempts": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                },
-                                "held_microusd": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                },
-                                "known_cost_microusd": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                },
-                                "root_requests": {
-                                  "type": "null"
-                                },
-                                "unresolved_attempts": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "known_cost_microusd",
-                                "held_microusd",
-                                "attempts",
-                                "unresolved_attempts",
-                                "root_requests"
-                              ],
-                              "type": "object"
-                            }
-                          },
-                          "required": [
-                            "id",
-                            "name",
-                            "totals"
-                          ],
-                          "type": "object"
-                        },
-                        "type": "array"
-                      },
-                      "models": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "id": {
-                              "anyOf": [
-                                {
-                                  "type": "string"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "name": {
-                              "type": "string"
-                            },
-                            "totals": {
-                              "additionalProperties": false,
-                              "properties": {
-                                "attempts": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                },
-                                "held_microusd": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                },
-                                "known_cost_microusd": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                },
-                                "root_requests": {
-                                  "type": "null"
-                                },
-                                "unresolved_attempts": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "known_cost_microusd",
-                                "held_microusd",
-                                "attempts",
-                                "unresolved_attempts",
-                                "root_requests"
-                              ],
-                              "type": "object"
-                            }
-                          },
-                          "required": [
-                            "id",
-                            "name",
-                            "totals"
-                          ],
-                          "type": "object"
-                        },
-                        "type": "array"
-                      },
-                      "providers": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "id": {
-                              "anyOf": [
-                                {
-                                  "type": "string"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "name": {
-                              "type": "string"
-                            },
-                            "totals": {
-                              "additionalProperties": false,
-                              "properties": {
-                                "attempts": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                },
-                                "held_microusd": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                },
-                                "known_cost_microusd": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                },
-                                "root_requests": {
-                                  "type": "null"
-                                },
-                                "unresolved_attempts": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "known_cost_microusd",
-                                "held_microusd",
-                                "attempts",
-                                "unresolved_attempts",
-                                "root_requests"
-                              ],
-                              "type": "object"
-                            }
-                          },
-                          "required": [
-                            "id",
-                            "name",
-                            "totals"
-                          ],
-                          "type": "object"
-                        },
-                        "type": "array"
-                      },
-                      "workspaces": {
-                        "items": {
-                          "oneOf": [
-                            {
-                              "$ref": "#/components/schemas/MoneyScheduledPersonalTotals"
-                            },
-                            {
-                              "additionalProperties": false,
-                              "properties": {
-                                "id": {
-                                  "format": "uuid",
-                                  "type": "string"
-                                },
-                                "name": {
-                                  "type": "string"
-                                },
-                                "totals": {
-                                  "additionalProperties": false,
-                                  "properties": {
-                                    "attempts": {
-                                      "pattern": "^(0|[1-9][0-9]*)$",
-                                      "type": "string"
-                                    },
-                                    "held_microusd": {
-                                      "pattern": "^(0|[1-9][0-9]*)$",
-                                      "type": "string"
-                                    },
-                                    "known_cost_microusd": {
-                                      "pattern": "^(0|[1-9][0-9]*)$",
-                                      "type": "string"
-                                    },
-                                    "root_requests": {
-                                      "type": "null"
-                                    },
-                                    "unresolved_attempts": {
-                                      "pattern": "^(0|[1-9][0-9]*)$",
-                                      "type": "string"
-                                    }
-                                  },
-                                  "required": [
-                                    "known_cost_microusd",
-                                    "held_microusd",
-                                    "attempts",
-                                    "unresolved_attempts",
-                                    "root_requests"
-                                  ],
-                                  "type": "object"
-                                }
-                              },
-                              "required": [
-                                "id",
-                                "name",
-                                "totals"
-                              ],
-                              "type": "object"
-                            }
-                          ]
-                        },
-                        "type": "array"
-                      }
-                    },
-                    "required": [
-                      "workspaces",
-                      "cost_centers",
-                      "models",
-                      "providers"
-                    ],
-                    "type": "object"
-                  },
-                  "breakdowns_truncated": {
-                    "type": "boolean"
-                  },
-                  "configuration_revision": {
-                    "pattern": "^(0|[1-9][0-9]*)$",
-                    "type": "string"
-                  },
-                  "coverage": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "missing_reservation_attempts": {
-                        "pattern": "^(0|[1-9][0-9]*)$",
-                        "type": "string"
-                      },
-                      "pending_attempts": {
-                        "pattern": "^(0|[1-9][0-9]*)$",
-                        "type": "string"
-                      },
-                      "priced_attempts": {
-                        "type": "null"
-                      },
-                      "settled_attempts": {
-                        "pattern": "^(0|[1-9][0-9]*)$",
-                        "type": "string"
-                      },
-                      "total_attempts": {
-                        "pattern": "^(0|[1-9][0-9]*)$",
-                        "type": "string"
-                      },
-                      "unknown_attempts": {
-                        "pattern": "^(0|[1-9][0-9]*)$",
-                        "type": "string"
-                      },
-                      "unresolved_attempts": {
-                        "pattern": "^(0|[1-9][0-9]*)$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "priced_attempts",
-                      "total_attempts",
-                      "settled_attempts",
-                      "pending_attempts",
-                      "unknown_attempts",
-                      "missing_reservation_attempts",
-                      "unresolved_attempts"
-                    ],
-                    "type": "object"
-                  },
-                  "currency": {
-                    "const": "USD"
-                  },
-                  "held_is_floor": {
-                    "const": true
-                  },
-                  "historical_headroom": {
-                    "type": "null"
-                  },
-                  "observed_at": {
-                    "format": "date-time",
-                    "type": "string"
-                  },
-                  "period": {
-                    "$ref": "#/components/schemas/MoneyReportPeriod"
-                  },
-                  "privacy": {
-                    "const": "personal_aggregate_only"
-                  },
-                  "scope": {
-                    "const": "platform"
-                  },
-                  "totals": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "attempts": {
-                        "pattern": "^(0|[1-9][0-9]*)$",
-                        "type": "string"
-                      },
-                      "held_microusd": {
-                        "pattern": "^(0|[1-9][0-9]*)$",
-                        "type": "string"
-                      },
-                      "known_cost_microusd": {
-                        "pattern": "^(0|[1-9][0-9]*)$",
-                        "type": "string"
-                      },
-                      "root_requests": {
-                        "type": "null"
-                      },
-                      "unresolved_attempts": {
-                        "pattern": "^(0|[1-9][0-9]*)$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "known_cost_microusd",
-                      "held_microusd",
-                      "attempts",
-                      "unresolved_attempts",
-                      "root_requests"
-                    ],
-                    "type": "object"
-                  },
-                  "truncated_dimensions": {
-                    "items": {
-                      "enum": [
-                        "workspaces",
-                        "cost_centers",
-                        "models",
-                        "providers"
-                      ],
-                      "type": "string"
-                    },
-                    "type": "array",
-                    "uniqueItems": true
-                  },
-                  "unavailable": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "billing_usage": {
-                        "const": "not_in_rollups"
-                      },
-                      "cost_components": {
-                        "const": "not_in_rollups"
-                      },
-                      "detailed_health": {
-                        "const": "not_in_rollups"
-                      },
-                      "meter_usage": {
-                        "const": "not_in_rollups"
-                      },
-                      "pricing_coverage": {
-                        "const": "not_in_rollups"
-                      },
-                      "provider_reported_cost_microusd": {
-                        "const": "not_in_rollups"
-                      },
-                      "root_requests": {
-                        "const": "non_additive"
-                      }
-                    },
-                    "required": [
-                      "root_requests",
-                      "cost_components",
-                      "detailed_health",
-                      "pricing_coverage",
-                      "billing_usage",
-                      "meter_usage",
-                      "provider_reported_cost_microusd"
-                    ],
-                    "type": "object"
-                  }
-                },
-                "required": [
-                  "period",
-                  "scope",
-                  "observed_at",
-                  "basis",
-                  "currency",
-                  "totals",
-                  "breakdowns",
-                  "breakdowns_truncated",
-                  "truncated_dimensions",
-                  "coverage",
-                  "unavailable",
-                  "held_is_floor",
-                  "historical_headroom",
-                  "privacy",
-                  "configuration_revision"
-                ],
-                "type": "object"
-              },
-              {
-                "additionalProperties": false,
-                "properties": {
-                  "basis": {
-                    "const": "configured_rate_estimate"
-                  },
-                  "breakdowns": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "cost_centers": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "id": {
-                              "anyOf": [
-                                {
-                                  "type": "string"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "name": {
-                              "type": "string"
-                            },
-                            "totals": {
-                              "additionalProperties": false,
-                              "properties": {
-                                "attempts": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                },
-                                "held_microusd": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                },
-                                "known_cost_microusd": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                },
-                                "root_requests": {
-                                  "type": "null"
-                                },
-                                "unresolved_attempts": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "known_cost_microusd",
-                                "held_microusd",
-                                "attempts",
-                                "unresolved_attempts",
-                                "root_requests"
-                              ],
-                              "type": "object"
-                            }
-                          },
-                          "required": [
-                            "id",
-                            "name",
-                            "totals"
-                          ],
-                          "type": "object"
-                        },
-                        "type": "array"
-                      },
-                      "models": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "id": {
-                              "anyOf": [
-                                {
-                                  "type": "string"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "name": {
-                              "type": "string"
-                            },
-                            "totals": {
-                              "additionalProperties": false,
-                              "properties": {
-                                "attempts": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                },
-                                "held_microusd": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                },
-                                "known_cost_microusd": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                },
-                                "root_requests": {
-                                  "type": "null"
-                                },
-                                "unresolved_attempts": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "known_cost_microusd",
-                                "held_microusd",
-                                "attempts",
-                                "unresolved_attempts",
-                                "root_requests"
-                              ],
-                              "type": "object"
-                            }
-                          },
-                          "required": [
-                            "id",
-                            "name",
-                            "totals"
-                          ],
-                          "type": "object"
-                        },
-                        "type": "array"
-                      },
-                      "providers": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "id": {
-                              "anyOf": [
-                                {
-                                  "type": "string"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "name": {
-                              "type": "string"
-                            },
-                            "totals": {
-                              "additionalProperties": false,
-                              "properties": {
-                                "attempts": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                },
-                                "held_microusd": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                },
-                                "known_cost_microusd": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                },
-                                "root_requests": {
-                                  "type": "null"
-                                },
-                                "unresolved_attempts": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "known_cost_microusd",
-                                "held_microusd",
-                                "attempts",
-                                "unresolved_attempts",
-                                "root_requests"
-                              ],
-                              "type": "object"
-                            }
-                          },
-                          "required": [
-                            "id",
-                            "name",
-                            "totals"
-                          ],
-                          "type": "object"
-                        },
-                        "type": "array"
-                      },
-                      "workspaces": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "id": {
-                              "format": "uuid",
-                              "type": "string"
-                            },
-                            "name": {
-                              "type": "string"
-                            },
-                            "totals": {
-                              "additionalProperties": false,
-                              "properties": {
-                                "attempts": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                },
-                                "held_microusd": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                },
-                                "known_cost_microusd": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                },
-                                "root_requests": {
-                                  "type": "null"
-                                },
-                                "unresolved_attempts": {
-                                  "pattern": "^(0|[1-9][0-9]*)$",
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "known_cost_microusd",
-                                "held_microusd",
-                                "attempts",
-                                "unresolved_attempts",
-                                "root_requests"
-                              ],
-                              "type": "object"
-                            }
-                          },
-                          "required": [
-                            "id",
-                            "name",
-                            "totals"
-                          ],
-                          "type": "object"
-                        },
-                        "type": "array"
-                      }
-                    },
-                    "required": [
-                      "workspaces",
-                      "cost_centers",
-                      "models",
-                      "providers"
-                    ],
-                    "type": "object"
-                  },
-                  "breakdowns_truncated": {
-                    "type": "boolean"
-                  },
-                  "configuration_revision": {
-                    "pattern": "^(0|[1-9][0-9]*)$",
-                    "type": "string"
-                  },
-                  "coverage": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "missing_reservation_attempts": {
-                        "pattern": "^(0|[1-9][0-9]*)$",
-                        "type": "string"
-                      },
-                      "pending_attempts": {
-                        "pattern": "^(0|[1-9][0-9]*)$",
-                        "type": "string"
-                      },
-                      "priced_attempts": {
-                        "type": "null"
-                      },
-                      "settled_attempts": {
-                        "pattern": "^(0|[1-9][0-9]*)$",
-                        "type": "string"
-                      },
-                      "total_attempts": {
-                        "pattern": "^(0|[1-9][0-9]*)$",
-                        "type": "string"
-                      },
-                      "unknown_attempts": {
-                        "pattern": "^(0|[1-9][0-9]*)$",
-                        "type": "string"
-                      },
-                      "unresolved_attempts": {
-                        "pattern": "^(0|[1-9][0-9]*)$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "priced_attempts",
-                      "total_attempts",
-                      "settled_attempts",
-                      "pending_attempts",
-                      "unknown_attempts",
-                      "missing_reservation_attempts",
-                      "unresolved_attempts"
-                    ],
-                    "type": "object"
-                  },
-                  "currency": {
-                    "const": "USD"
-                  },
-                  "held_is_floor": {
-                    "const": true
-                  },
-                  "historical_headroom": {
-                    "type": "null"
-                  },
-                  "observed_at": {
-                    "format": "date-time",
-                    "type": "string"
-                  },
-                  "period": {
-                    "$ref": "#/components/schemas/MoneyReportPeriod"
-                  },
-                  "privacy": {
-                    "const": "workspace_aggregate"
-                  },
-                  "scope": {
-                    "const": "workspace"
-                  },
-                  "totals": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "attempts": {
-                        "pattern": "^(0|[1-9][0-9]*)$",
-                        "type": "string"
-                      },
-                      "held_microusd": {
-                        "pattern": "^(0|[1-9][0-9]*)$",
-                        "type": "string"
-                      },
-                      "known_cost_microusd": {
-                        "pattern": "^(0|[1-9][0-9]*)$",
-                        "type": "string"
-                      },
-                      "root_requests": {
-                        "type": "null"
-                      },
-                      "unresolved_attempts": {
-                        "pattern": "^(0|[1-9][0-9]*)$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "known_cost_microusd",
-                      "held_microusd",
-                      "attempts",
-                      "unresolved_attempts",
-                      "root_requests"
-                    ],
-                    "type": "object"
-                  },
-                  "truncated_dimensions": {
-                    "items": {
-                      "enum": [
-                        "workspaces",
-                        "cost_centers",
-                        "models",
-                        "providers"
-                      ],
-                      "type": "string"
-                    },
-                    "type": "array",
-                    "uniqueItems": true
-                  },
-                  "unavailable": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "billing_usage": {
-                        "const": "not_in_rollups"
-                      },
-                      "cost_components": {
-                        "const": "not_in_rollups"
-                      },
-                      "detailed_health": {
-                        "const": "not_in_rollups"
-                      },
-                      "meter_usage": {
-                        "const": "not_in_rollups"
-                      },
-                      "pricing_coverage": {
-                        "const": "not_in_rollups"
-                      },
-                      "provider_reported_cost_microusd": {
-                        "const": "not_in_rollups"
-                      },
-                      "root_requests": {
-                        "const": "non_additive"
-                      }
-                    },
-                    "required": [
-                      "root_requests",
-                      "cost_components",
-                      "detailed_health",
-                      "pricing_coverage",
-                      "billing_usage",
-                      "meter_usage",
-                      "provider_reported_cost_microusd"
-                    ],
-                    "type": "object"
-                  }
-                },
-                "required": [
-                  "period",
-                  "scope",
-                  "observed_at",
-                  "basis",
-                  "currency",
-                  "totals",
-                  "breakdowns",
-                  "breakdowns_truncated",
-                  "truncated_dimensions",
-                  "coverage",
-                  "unavailable",
-                  "held_is_floor",
-                  "historical_headroom",
-                  "privacy",
-                  "configuration_revision"
-                ],
-                "type": "object"
-              }
-            ]
-          }
-        ],
-        "properties": {
-          "basis": {
-            "const": "configured_rate_estimate"
-          },
-          "breakdowns": {
-            "additionalProperties": false,
-            "properties": {
-              "cost_centers": {
-                "items": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "id": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "name": {
-                      "type": "string"
-                    },
-                    "totals": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "attempts": {
-                          "pattern": "^(0|[1-9][0-9]*)$",
-                          "type": "string"
-                        },
-                        "held_microusd": {
-                          "pattern": "^(0|[1-9][0-9]*)$",
-                          "type": "string"
-                        },
-                        "known_cost_microusd": {
-                          "pattern": "^(0|[1-9][0-9]*)$",
-                          "type": "string"
-                        },
-                        "root_requests": {
-                          "type": "null"
-                        },
-                        "unresolved_attempts": {
-                          "pattern": "^(0|[1-9][0-9]*)$",
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "known_cost_microusd",
-                        "held_microusd",
-                        "attempts",
-                        "unresolved_attempts",
-                        "root_requests"
-                      ],
-                      "type": "object"
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "name",
-                    "totals"
-                  ],
-                  "type": "object"
-                },
-                "type": "array"
-              },
-              "models": {
-                "items": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "id": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "name": {
-                      "type": "string"
-                    },
-                    "totals": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "attempts": {
-                          "pattern": "^(0|[1-9][0-9]*)$",
-                          "type": "string"
-                        },
-                        "held_microusd": {
-                          "pattern": "^(0|[1-9][0-9]*)$",
-                          "type": "string"
-                        },
-                        "known_cost_microusd": {
-                          "pattern": "^(0|[1-9][0-9]*)$",
-                          "type": "string"
-                        },
-                        "root_requests": {
-                          "type": "null"
-                        },
-                        "unresolved_attempts": {
-                          "pattern": "^(0|[1-9][0-9]*)$",
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "known_cost_microusd",
-                        "held_microusd",
-                        "attempts",
-                        "unresolved_attempts",
-                        "root_requests"
-                      ],
-                      "type": "object"
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "name",
-                    "totals"
-                  ],
-                  "type": "object"
-                },
-                "type": "array"
-              },
-              "providers": {
-                "items": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "id": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "name": {
-                      "type": "string"
-                    },
-                    "totals": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "attempts": {
-                          "pattern": "^(0|[1-9][0-9]*)$",
-                          "type": "string"
-                        },
-                        "held_microusd": {
-                          "pattern": "^(0|[1-9][0-9]*)$",
-                          "type": "string"
-                        },
-                        "known_cost_microusd": {
-                          "pattern": "^(0|[1-9][0-9]*)$",
-                          "type": "string"
-                        },
-                        "root_requests": {
-                          "type": "null"
-                        },
-                        "unresolved_attempts": {
-                          "pattern": "^(0|[1-9][0-9]*)$",
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "known_cost_microusd",
-                        "held_microusd",
-                        "attempts",
-                        "unresolved_attempts",
-                        "root_requests"
-                      ],
-                      "type": "object"
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "name",
-                    "totals"
-                  ],
-                  "type": "object"
-                },
-                "type": "array"
-              },
-              "workspaces": {
-                "items": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "id": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "name": {
-                      "type": "string"
-                    },
-                    "totals": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "attempts": {
-                          "pattern": "^(0|[1-9][0-9]*)$",
-                          "type": "string"
-                        },
-                        "held_microusd": {
-                          "pattern": "^(0|[1-9][0-9]*)$",
-                          "type": "string"
-                        },
-                        "known_cost_microusd": {
-                          "pattern": "^(0|[1-9][0-9]*)$",
-                          "type": "string"
-                        },
-                        "root_requests": {
-                          "type": "null"
-                        },
-                        "unresolved_attempts": {
-                          "pattern": "^(0|[1-9][0-9]*)$",
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "known_cost_microusd",
-                        "held_microusd",
-                        "attempts",
-                        "unresolved_attempts",
-                        "root_requests"
-                      ],
-                      "type": "object"
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "name",
-                    "totals"
-                  ],
-                  "type": "object"
-                },
-                "type": "array"
-              }
-            },
-            "required": [
-              "workspaces",
-              "cost_centers",
-              "models",
-              "providers"
-            ],
-            "type": "object"
-          },
-          "breakdowns_truncated": {
-            "type": "boolean"
-          },
-          "configuration_revision": {
-            "pattern": "^(0|[1-9][0-9]*)$",
-            "type": "string"
-          },
-          "coverage": {
-            "additionalProperties": false,
-            "properties": {
-              "missing_reservation_attempts": {
-                "pattern": "^(0|[1-9][0-9]*)$",
-                "type": "string"
-              },
-              "pending_attempts": {
-                "pattern": "^(0|[1-9][0-9]*)$",
-                "type": "string"
-              },
-              "priced_attempts": {
-                "type": "null"
-              },
-              "settled_attempts": {
-                "pattern": "^(0|[1-9][0-9]*)$",
-                "type": "string"
-              },
-              "total_attempts": {
-                "pattern": "^(0|[1-9][0-9]*)$",
-                "type": "string"
-              },
-              "unknown_attempts": {
-                "pattern": "^(0|[1-9][0-9]*)$",
-                "type": "string"
-              },
-              "unresolved_attempts": {
-                "pattern": "^(0|[1-9][0-9]*)$",
-                "type": "string"
-              }
-            },
-            "required": [
-              "priced_attempts",
-              "total_attempts",
-              "settled_attempts",
-              "pending_attempts",
-              "unknown_attempts",
-              "missing_reservation_attempts",
-              "unresolved_attempts"
-            ],
-            "type": "object"
-          },
-          "currency": {
-            "const": "USD"
-          },
-          "held_is_floor": {
-            "const": true
-          },
-          "historical_headroom": {
-            "type": "null"
-          },
-          "observed_at": {
-            "format": "date-time",
-            "type": "string"
-          },
-          "period": {
-            "$ref": "#/components/schemas/MoneyReportPeriod"
-          },
-          "privacy": {
-            "enum": [
-              "personal_aggregate_only",
-              "workspace_aggregate"
-            ],
-            "type": "string"
-          },
-          "scope": {
-            "enum": [
-              "platform",
-              "workspace"
-            ],
-            "type": "string"
-          },
-          "totals": {
-            "additionalProperties": false,
-            "properties": {
-              "attempts": {
-                "pattern": "^(0|[1-9][0-9]*)$",
-                "type": "string"
-              },
-              "held_microusd": {
-                "pattern": "^(0|[1-9][0-9]*)$",
-                "type": "string"
-              },
-              "known_cost_microusd": {
-                "pattern": "^(0|[1-9][0-9]*)$",
-                "type": "string"
-              },
-              "root_requests": {
-                "type": "null"
-              },
-              "unresolved_attempts": {
-                "pattern": "^(0|[1-9][0-9]*)$",
-                "type": "string"
-              }
-            },
-            "required": [
-              "known_cost_microusd",
-              "held_microusd",
-              "attempts",
-              "unresolved_attempts",
-              "root_requests"
-            ],
-            "type": "object"
-          },
-          "truncated_dimensions": {
-            "items": {
-              "enum": [
-                "workspaces",
-                "cost_centers",
-                "models",
-                "providers"
-              ],
-              "type": "string"
-            },
-            "type": "array",
-            "uniqueItems": true
-          },
-          "unavailable": {
-            "additionalProperties": false,
-            "properties": {
-              "billing_usage": {
-                "const": "not_in_rollups"
-              },
-              "cost_components": {
-                "const": "not_in_rollups"
-              },
-              "detailed_health": {
-                "const": "not_in_rollups"
-              },
-              "meter_usage": {
-                "const": "not_in_rollups"
-              },
-              "pricing_coverage": {
-                "const": "not_in_rollups"
-              },
-              "provider_reported_cost_microusd": {
-                "const": "not_in_rollups"
-              },
-              "root_requests": {
-                "const": "non_additive"
-              }
-            },
-            "required": [
-              "root_requests",
-              "cost_components",
-              "detailed_health",
-              "pricing_coverage",
-              "billing_usage",
-              "meter_usage",
-              "provider_reported_cost_microusd"
-            ],
-            "type": "object"
-          }
-        },
-        "required": [
-          "period",
-          "scope",
-          "observed_at",
-          "basis",
-          "currency",
-          "totals",
-          "breakdowns",
-          "breakdowns_truncated",
-          "truncated_dimensions",
-          "coverage",
-          "unavailable",
-          "held_is_floor",
-          "historical_headroom",
-          "privacy",
-          "configuration_revision"
         ],
         "type": "object"
       },
@@ -11647,6 +11117,939 @@
         ],
         "type": "object"
       },
+      "MoneyWorkspaceReportRun": {
+        "additionalProperties": false,
+        "description": "snapshot is null exactly when expired is true (run_value: the snapshot is projected only while both the run and its payload are unexpired).",
+        "else": {
+          "properties": {
+            "snapshot": {
+              "$ref": "#/components/schemas/MoneyWorkspaceScheduledSnapshot"
+            }
+          }
+        },
+        "if": {
+          "properties": {
+            "expired": {
+              "const": true
+            }
+          },
+          "required": [
+            "expired"
+          ]
+        },
+        "properties": {
+          "configuration_revision": {
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "delivery": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MoneyReportDelivery"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expired": {
+            "type": "boolean"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "period_end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "period_start": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "schedule_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MoneyWorkspaceScheduledSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "schedule_id",
+          "period_start",
+          "period_end",
+          "observed_at",
+          "expires_at",
+          "expired",
+          "delivery",
+          "configuration_revision",
+          "snapshot"
+        ],
+        "then": {
+          "properties": {
+            "snapshot": {
+              "type": "null"
+            }
+          }
+        },
+        "type": "object"
+      },
+      "MoneyWorkspaceSchedule": {
+        "additionalProperties": false,
+        "if": {
+          "properties": {
+            "scope_kind": {
+              "const": "personal"
+            }
+          },
+          "required": [
+            "scope_kind"
+          ]
+        },
+        "properties": {
+          "cadence": {
+            "enum": [
+              "weekly",
+              "monthly"
+            ],
+            "type": "string"
+          },
+          "configuration_revision": {
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "cost_center_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "created_by": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "delivery_time": {
+            "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "last_period_end": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_run_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recipient_user_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "scope_kind": {
+            "enum": [
+              "workspace",
+              "personal"
+            ],
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "paused"
+            ],
+            "type": "string"
+          },
+          "timezone": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "workspace_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "scope_kind",
+          "workspace_id",
+          "cost_center_id",
+          "created_by",
+          "cadence",
+          "timezone",
+          "delivery_time",
+          "state",
+          "configuration_revision",
+          "created_at",
+          "updated_at",
+          "next_run_at",
+          "last_period_end",
+          "recipient_user_ids"
+        ],
+        "then": {
+          "properties": {
+            "cost_center_id": {
+              "type": "null"
+            }
+          }
+        },
+        "type": "object"
+      },
+      "MoneyWorkspaceScheduleCreated": {
+        "additionalProperties": false,
+        "if": {
+          "properties": {
+            "scope_kind": {
+              "const": "personal"
+            }
+          },
+          "required": [
+            "scope_kind"
+          ]
+        },
+        "properties": {
+          "cadence": {
+            "enum": [
+              "weekly",
+              "monthly"
+            ],
+            "type": "string"
+          },
+          "configuration_revision": {
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "cost_center_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "created_by": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "delivery_time": {
+            "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "last_period_end": {
+            "description": "A new schedule has never generated a period.",
+            "type": "null"
+          },
+          "next_run_at": {
+            "description": "create() calls scheduled_reports::initialize, which always sets the first due time.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "recipient_user_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "scope_kind": {
+            "enum": [
+              "workspace",
+              "personal"
+            ],
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "paused"
+            ],
+            "type": "string"
+          },
+          "timezone": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "workspace_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "scope_kind",
+          "workspace_id",
+          "cost_center_id",
+          "created_by",
+          "cadence",
+          "timezone",
+          "delivery_time",
+          "state",
+          "configuration_revision",
+          "created_at",
+          "updated_at",
+          "next_run_at",
+          "last_period_end",
+          "recipient_user_ids"
+        ],
+        "then": {
+          "properties": {
+            "cost_center_id": {
+              "type": "null"
+            }
+          }
+        },
+        "type": "object"
+      },
+      "MoneyWorkspaceScheduleList": {
+        "additionalProperties": false,
+        "properties": {
+          "configuration": {
+            "additionalProperties": false,
+            "properties": {
+              "public_url_configured": {
+                "type": "boolean"
+              },
+              "smtp_configured": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "smtp_configured",
+              "public_url_configured"
+            ],
+            "type": "object"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/MoneyWorkspaceSchedule"
+            },
+            "type": "array"
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "data",
+          "has_more",
+          "next_cursor",
+          "configuration"
+        ],
+        "type": "object"
+      },
+      "MoneyWorkspaceScheduleUpdated": {
+        "additionalProperties": false,
+        "if": {
+          "properties": {
+            "scope_kind": {
+              "const": "personal"
+            }
+          },
+          "required": [
+            "scope_kind"
+          ]
+        },
+        "properties": {
+          "cadence": {
+            "enum": [
+              "weekly",
+              "monthly"
+            ],
+            "type": "string"
+          },
+          "configuration_revision": {
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "cost_center_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "created_by": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "delivery_time": {
+            "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "last_period_end": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_run_at": {
+            "description": "update() calls scheduled_reports::initialize, which always (re)sets the due time.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "recipient_user_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "scope_kind": {
+            "enum": [
+              "workspace",
+              "personal"
+            ],
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "paused"
+            ],
+            "type": "string"
+          },
+          "timezone": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "workspace_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "scope_kind",
+          "workspace_id",
+          "cost_center_id",
+          "created_by",
+          "cadence",
+          "timezone",
+          "delivery_time",
+          "state",
+          "configuration_revision",
+          "created_at",
+          "updated_at",
+          "next_run_at",
+          "last_period_end",
+          "recipient_user_ids"
+        ],
+        "then": {
+          "properties": {
+            "cost_center_id": {
+              "type": "null"
+            }
+          }
+        },
+        "type": "object"
+      },
+      "MoneyWorkspaceScheduledSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "basis": {
+            "const": "configured_rate_estimate"
+          },
+          "breakdowns": {
+            "additionalProperties": false,
+            "properties": {
+              "cost_centers": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "totals": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "attempts": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "held_microusd": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "known_cost_microusd": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "root_requests": {
+                          "type": "null"
+                        },
+                        "unresolved_attempts": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "known_cost_microusd",
+                        "held_microusd",
+                        "attempts",
+                        "unresolved_attempts",
+                        "root_requests"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "totals"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "models": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "description": "The name itself: models and providers are never collapsed into a nullable identity (scheduled_aggregate.sql projects NULL only for cost centers and the platform personal aggregate).",
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "totals": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "attempts": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "held_microusd": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "known_cost_microusd": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "root_requests": {
+                          "type": "null"
+                        },
+                        "unresolved_attempts": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "known_cost_microusd",
+                        "held_microusd",
+                        "attempts",
+                        "unresolved_attempts",
+                        "root_requests"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "totals"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "providers": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "description": "The name itself: models and providers are never collapsed into a nullable identity (scheduled_aggregate.sql projects NULL only for cost centers and the platform personal aggregate).",
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "totals": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "attempts": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "held_microusd": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "known_cost_microusd": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "root_requests": {
+                          "type": "null"
+                        },
+                        "unresolved_attempts": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "known_cost_microusd",
+                        "held_microusd",
+                        "attempts",
+                        "unresolved_attempts",
+                        "root_requests"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "totals"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "workspaces": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "totals": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "attempts": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "held_microusd": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "known_cost_microusd": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "root_requests": {
+                          "type": "null"
+                        },
+                        "unresolved_attempts": {
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "known_cost_microusd",
+                        "held_microusd",
+                        "attempts",
+                        "unresolved_attempts",
+                        "root_requests"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "totals"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "workspaces",
+              "cost_centers",
+              "models",
+              "providers"
+            ],
+            "type": "object"
+          },
+          "breakdowns_truncated": {
+            "type": "boolean"
+          },
+          "configuration_revision": {
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "coverage": {
+            "additionalProperties": false,
+            "properties": {
+              "missing_reservation_attempts": {
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "pending_attempts": {
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "priced_attempts": {
+                "type": "null"
+              },
+              "settled_attempts": {
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "total_attempts": {
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "unknown_attempts": {
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "unresolved_attempts": {
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "priced_attempts",
+              "total_attempts",
+              "settled_attempts",
+              "pending_attempts",
+              "unknown_attempts",
+              "missing_reservation_attempts",
+              "unresolved_attempts"
+            ],
+            "type": "object"
+          },
+          "currency": {
+            "const": "USD"
+          },
+          "held_is_floor": {
+            "const": true
+          },
+          "historical_headroom": {
+            "type": "null"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "period": {
+            "$ref": "#/components/schemas/MoneyReportPeriod"
+          },
+          "privacy": {
+            "const": "workspace_aggregate"
+          },
+          "scope": {
+            "const": "workspace"
+          },
+          "totals": {
+            "additionalProperties": false,
+            "properties": {
+              "attempts": {
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "held_microusd": {
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "known_cost_microusd": {
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "root_requests": {
+                "type": "null"
+              },
+              "unresolved_attempts": {
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "known_cost_microusd",
+              "held_microusd",
+              "attempts",
+              "unresolved_attempts",
+              "root_requests"
+            ],
+            "type": "object"
+          },
+          "truncated_dimensions": {
+            "items": {
+              "enum": [
+                "workspaces",
+                "cost_centers",
+                "models",
+                "providers"
+              ],
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "unavailable": {
+            "additionalProperties": false,
+            "properties": {
+              "billing_usage": {
+                "const": "not_in_rollups"
+              },
+              "cost_components": {
+                "const": "not_in_rollups"
+              },
+              "detailed_health": {
+                "const": "not_in_rollups"
+              },
+              "meter_usage": {
+                "const": "not_in_rollups"
+              },
+              "pricing_coverage": {
+                "const": "not_in_rollups"
+              },
+              "provider_reported_cost_microusd": {
+                "const": "not_in_rollups"
+              },
+              "root_requests": {
+                "const": "non_additive"
+              }
+            },
+            "required": [
+              "root_requests",
+              "cost_components",
+              "detailed_health",
+              "pricing_coverage",
+              "billing_usage",
+              "meter_usage",
+              "provider_reported_cost_microusd"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "period",
+          "scope",
+          "observed_at",
+          "basis",
+          "currency",
+          "totals",
+          "breakdowns",
+          "breakdowns_truncated",
+          "truncated_dimensions",
+          "coverage",
+          "unavailable",
+          "held_is_floor",
+          "historical_headroom",
+          "privacy",
+          "configuration_revision"
+        ],
+        "type": "object"
+      },
       "MoneyWorkspaceStorage": {
         "additionalProperties": false,
         "properties": {
@@ -12625,15 +13028,8 @@
                     ]
                   },
                   "value": {
-                    "anyOf": [
-                      {
-                        "pattern": "^-?[0-9]+(\\.[0-9]+)?$",
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                    "pattern": "^-?[0-9]+(\\.[0-9]+)?$",
+                    "type": "string"
                   }
                 },
                 "required": [
@@ -14428,11 +14824,11 @@
       },
       "get_api_v1_platform_report_schedulesRequest": false,
       "get_api_v1_platform_report_schedulesResponse": {
-        "$ref": "#/components/schemas/MoneyScheduleList"
+        "$ref": "#/components/schemas/MoneyPlatformScheduleList"
       },
       "get_api_v1_platform_report_schedules_by_idRequest": false,
       "get_api_v1_platform_report_schedules_by_idResponse": {
-        "$ref": "#/components/schemas/MoneySchedule"
+        "$ref": "#/components/schemas/MoneyPlatformSchedule"
       },
       "get_api_v1_platform_report_schedules_by_id_runsRequest": false,
       "get_api_v1_platform_report_schedules_by_id_runsResponse": {
@@ -14440,7 +14836,7 @@
       },
       "get_api_v1_platform_report_schedules_by_id_runs_by_runRequest": false,
       "get_api_v1_platform_report_schedules_by_id_runs_by_runResponse": {
-        "$ref": "#/components/schemas/MoneyReportRun"
+        "$ref": "#/components/schemas/MoneyPlatformReportRun"
       },
       "get_api_v1_platform_report_schedules_by_id_runs_by_run_csvRequest": false,
       "get_api_v1_platform_report_schedules_by_id_runs_by_run_csvResponse": {
@@ -14898,11 +15294,11 @@
       },
       "get_api_v1_workspaces_by_ws_report_schedulesRequest": false,
       "get_api_v1_workspaces_by_ws_report_schedulesResponse": {
-        "$ref": "#/components/schemas/MoneyScheduleList"
+        "$ref": "#/components/schemas/MoneyWorkspaceScheduleList"
       },
       "get_api_v1_workspaces_by_ws_report_schedules_by_idRequest": false,
       "get_api_v1_workspaces_by_ws_report_schedules_by_idResponse": {
-        "$ref": "#/components/schemas/MoneySchedule"
+        "$ref": "#/components/schemas/MoneyWorkspaceSchedule"
       },
       "get_api_v1_workspaces_by_ws_report_schedules_by_id_runsRequest": false,
       "get_api_v1_workspaces_by_ws_report_schedules_by_id_runsResponse": {
@@ -14910,7 +15306,7 @@
       },
       "get_api_v1_workspaces_by_ws_report_schedules_by_id_runs_by_runRequest": false,
       "get_api_v1_workspaces_by_ws_report_schedules_by_id_runs_by_runResponse": {
-        "$ref": "#/components/schemas/MoneyReportRun"
+        "$ref": "#/components/schemas/MoneyWorkspaceReportRun"
       },
       "get_api_v1_workspaces_by_ws_report_schedules_by_id_runs_by_run_csvRequest": false,
       "get_api_v1_workspaces_by_ws_report_schedules_by_id_runs_by_run_csvResponse": {
@@ -15106,6 +15502,7 @@
         "oneOf": [
           {
             "additionalProperties": false,
+            "minProperties": 1,
             "properties": {
               "cadence": {
                 "enum": [
@@ -15149,7 +15546,7 @@
           {
             "items": false,
             "maxItems": 5,
-            "minItems": 0,
+            "minItems": 1,
             "prefixItems": [
               {
                 "enum": [
@@ -15192,7 +15589,7 @@
         ]
       },
       "patch_api_v1_platform_report_schedules_by_idResponse": {
-        "$ref": "#/components/schemas/MoneySchedule"
+        "$ref": "#/components/schemas/MoneyPlatformScheduleUpdated"
       },
       "patch_api_v1_platform_users_by_userRequest": {
         "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
@@ -15230,6 +15627,7 @@
         "oneOf": [
           {
             "additionalProperties": false,
+            "minProperties": 1,
             "properties": {
               "cadence": {
                 "enum": [
@@ -15273,7 +15671,7 @@
           {
             "items": false,
             "maxItems": 5,
-            "minItems": 0,
+            "minItems": 1,
             "prefixItems": [
               {
                 "enum": [
@@ -15316,7 +15714,7 @@
         ]
       },
       "patch_api_v1_workspaces_by_ws_report_schedules_by_idResponse": {
-        "$ref": "#/components/schemas/MoneySchedule"
+        "$ref": "#/components/schemas/MoneyWorkspaceScheduleUpdated"
       },
       "patch_api_v1_workspaces_by_ws_service_accounts_by_idRequest": {
         "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
@@ -15984,7 +16382,7 @@
         ]
       },
       "post_api_v1_platform_report_schedulesResponse": {
-        "$ref": "#/components/schemas/MoneySchedule"
+        "$ref": "#/components/schemas/MoneyPlatformScheduleCreated"
       },
       "post_api_v1_platform_settings_audit_export_testRequest": {
         "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
@@ -16422,7 +16820,7 @@
         ]
       },
       "post_api_v1_workspaces_by_ws_report_schedulesResponse": {
-        "$ref": "#/components/schemas/MoneySchedule"
+        "$ref": "#/components/schemas/MoneyWorkspaceScheduleCreated"
       },
       "post_api_v1_workspaces_by_ws_service_accountsRequest": {
         "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
@@ -25264,7 +25662,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MoneyReportRun"
+                  "$ref": "#/components/schemas/MoneyPlatformReportRun"
                 }
               }
             },
@@ -33124,7 +33522,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MoneyReportRun"
+                  "$ref": "#/components/schemas/MoneyWorkspaceReportRun"
                 }
               }
             },

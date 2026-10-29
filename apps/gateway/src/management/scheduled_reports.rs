@@ -179,13 +179,19 @@ fn management_openapi_money_schedule_request_vectors() {
     impl<'de> Deserialize<'de> for DecodedUpdate {
         fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
             let b = Update::deserialize(d)?;
-            expressible(
+            // An update that changes nothing is refused (update()).
+            let any = b.cadence.is_some()
+                || b.timezone.is_some()
+                || b.delivery_time.is_some()
+                || b.state.is_some()
+                || b.recipient_user_ids.is_some();
+            (any && expressible(
                 b.cadence.as_deref(),
                 b.timezone.as_deref(),
                 b.delivery_time.as_deref(),
                 b.state.as_deref(),
                 b.recipient_user_ids.as_deref(),
-            )
+            ))
             .then_some(Self)
             .ok_or_else(|| serde::de::Error::custom("constraint"))
         }
