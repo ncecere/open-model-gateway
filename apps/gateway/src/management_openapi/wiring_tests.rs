@@ -185,3 +185,71 @@ fn management_openapi_wiring_non_json_bodies_need_a_reviewed_vector_exemption() 
         "{gap}"
     );
 }
+
+#[test]
+fn management_openapi_wiring_vector_exemption_is_for_multipart_or_binary_bodies_with_a_real_reason()
+{
+    let full = json!({"data":[{"name":"a","note":null},{"name":"b","note":"n"}]});
+    let reason = "parts are read by a streaming parser whose rules depend on the file bytes";
+    let schema = json!({"schema":{"type":"object","required":[],"additionalProperties":false,"properties":{}}});
+    let body = |content: Value, reason: &str| json!({"required":true,"x-omg-no-boundary-vectors":reason,"content":content});
+    let mut document = document();
+    document["components"]["requestBodies"] = json!({
+        "Json":{"required":true,"content":{"application/json":schema.clone()}},
+        "Upload":{"required":true,"content":{"multipart/form-data":schema.clone()}}});
+    let mut fixtures = PositiveFixtures::default();
+    fixtures.observe_in(&document, &captured(StatusCode::OK, &full, &["limit"]));
+    fixtures.record_vectors("GET", "/api/v1/x", "query");
+    let mut verdict = |request_body: Value| {
+        document["paths"]["/api/v1/x"]["get"]["requestBody"] = request_body;
+        gaps(&fixtures, &document)
+    };
+    // Multipart (with parameters) and binary bodies are excused ...
+    for content in [
+        json!({"multipart/form-data":schema.clone()}),
+        json!({"multipart/form-data; boundary=contract":schema.clone()}),
+        json!({"application/octet-stream":schema.clone()}),
+        json!({"image/png":schema.clone(),"image/jpeg":schema.clone()}),
+    ] {
+        verdict(body(content.clone(), reason)).unwrap_or_else(|e| panic!("{content}: {e:#}"));
+    }
+    verdict(json!({"$ref":"#/components/requestBodies/Upload","x-omg-no-boundary-vectors":reason}))
+        .unwrap();
+    // ... never a body that can carry JSON, however its media type is spelled,
+    // however many other types come with it, or through a reference.
+    for content in [
+        json!({"application/json; charset=utf-8":schema.clone()}),
+        json!({"application/vnd.api+json":schema.clone()}),
+        json!({"APPLICATION/JSON":schema.clone()}),
+        json!({"multipart/form-data":schema.clone(),"application/json":schema.clone()}),
+        json!({"multipart/form-data":schema.clone(),"text/plain":schema.clone()}),
+        json!({"text/plain":schema.clone()}),
+        json!({}),
+    ] {
+        let gap = message(verdict(body(content.clone(), reason)));
+        assert!(gap.contains(KEY), "{content}: {gap}");
+    }
+    let gap = message(verdict(
+        json!({"$ref":"#/components/requestBodies/Json","x-omg-no-boundary-vectors":reason}),
+    ));
+    assert!(
+        gap.contains(KEY),
+        "a referenced JSON body is excused: {gap}"
+    );
+    // The reason must say something: long enough and made of real words.
+    let one_word = "x".repeat(60);
+    for weak in [
+        "todo",
+        "n/a",
+        one_word.as_str(),
+        "a b c d e f g h i j k l m n o p q r s t u v w",
+        "TBD TBD TBD TBD TBD TBD TBD TBD TBD TBD",
+        "parts are read by a parser",
+    ] {
+        let gap = message(verdict(body(
+            json!({"multipart/form-data":schema.clone()}),
+            weak,
+        )));
+        assert!(gap.contains("x-omg-no-boundary-vectors"), "{weak}: {gap}");
+    }
+}

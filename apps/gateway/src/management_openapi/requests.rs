@@ -75,6 +75,11 @@ pub(super) fn agrees(refined: bool, contract: bool, serde: bool) -> bool {
     contract == serde || (refined && !contract)
 }
 
+/// The positive control of an operation (a request the handler accepts).
+pub(super) fn positive_agrees(refined: bool, contract: bool, serde: bool) -> bool {
+    agrees(refined, contract, serde)
+}
+
 pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: Value) {
     let refined = SEMANTIC_REFINEMENTS
         .iter()
@@ -123,6 +128,14 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
             if actual { "accepts" } else { "refuses" },
         );
     };
+    assert!(
+        positive_agrees(
+            refined,
+            super::responses::validate_value(document, schema, &valid).is_ok(),
+            true
+        ),
+        "{method} {template}: the contract refuses the positive control"
+    );
     compare("positive", valid.clone());
     // Preserve every nested object's positive fields before adding the probe:
     // replacing it with a missing-field object cannot prove deny_unknown_fields.
@@ -274,6 +287,22 @@ fn management_openapi_request_refinements_are_reviewed_and_one_directional() {
         assert!(
             operation.get("requestBody").is_some(),
             "{method} {template} has no request body to refine"
+        );
+    }
+}
+
+/// RED control: a reviewed refinement may make the contract stricter than serde
+/// for BOUNDARY vectors, but the positive (valid) control is the documented
+/// request itself: a contract that refuses it is wrong, however it is refined.
+#[test]
+fn management_openapi_refined_operation_must_accept_its_positive_control() {
+    for refined in [false, true] {
+        assert!(positive_agrees(refined, true, true));
+        assert!(!positive_agrees(refined, false, true), "refined: {refined}");
+        assert!(!positive_agrees(refined, true, false), "refined: {refined}");
+        assert!(
+            !positive_agrees(refined, false, false),
+            "refined: {refined}"
         );
     }
 }
