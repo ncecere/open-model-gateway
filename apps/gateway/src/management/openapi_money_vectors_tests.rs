@@ -2,7 +2,7 @@
 //! JSON request body is compared, schema versus the real handler, over HTTP.
 use super::*;
 use futures::FutureExt;
-use openapi::http_vectors::{Probe, body_vectors_http, query_vectors};
+use openapi::http_vectors::{Probe, body_vectors_http, query_vectors, query_vectors_fixed};
 
 pub(super) struct Vx<'a> {
     pub client: &'a reqwest::Client,
@@ -100,6 +100,32 @@ impl Vx<'_> {
         .await;
     }
 
+    /// Operations whose valid request is a fixed query.
+    async fn query_fixed(
+        &self,
+        seen: &mut PositiveFixtures,
+        actor: &Browser,
+        template: &str,
+        path: &str,
+        base: &[(&str, &str)],
+    ) {
+        self.guard(
+            template,
+            query_vectors_fixed(seen, "GET", template, base, async |query: String| {
+                send(
+                    self.client,
+                    self.base,
+                    Some(actor),
+                    "GET",
+                    &format!("{path}?{query}"),
+                    None,
+                )
+                .await
+            }),
+        )
+        .await;
+    }
+
     fn report_filters(&self, workspace: Uuid) -> Vec<(&'static str, String)> {
         vec![
             ("start_date", self.start.clone()),
@@ -134,12 +160,6 @@ impl Vx<'_> {
         let ws = self.team;
         let wsbase = format!("/api/v1/workspaces/{ws}");
         let page = || vec![("limit", "10".to_owned()), ("offset", "0".to_owned())];
-        let dates = || {
-            vec![
-                ("start_date", self.start.clone()),
-                ("end_date", self.end.clone()),
-            ]
-        };
         let cursor = format!("1700000000000000_{}", Uuid::nil());
         let holds = || vec![("limit", "10".to_owned()), ("cursor", cursor.clone())];
         self.query(
@@ -223,20 +243,24 @@ impl Vx<'_> {
             self.usage_filters(ws),
         )
         .await;
-        self.query(
+        let fixed_dates = [
+            ("start_date", self.start.as_str()),
+            ("end_date", self.end.as_str()),
+        ];
+        self.query_fixed(
             seen,
             self.auditor,
             "/api/v1/platform/usage/storage",
             "/api/v1/platform/usage/storage",
-            dates(),
+            &fixed_dates,
         )
         .await;
-        self.query(
+        self.query_fixed(
             seen,
             self.owner,
             "/api/v1/workspaces/{ws}/usage/storage",
             &format!("{wsbase}/usage/storage"),
-            dates(),
+            &fixed_dates,
         )
         .await;
         self.query(
