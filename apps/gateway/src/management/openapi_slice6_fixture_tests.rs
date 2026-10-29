@@ -734,6 +734,7 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
     exec(
         &pool,
         Ex {
+            cost_center: Some(cost_center),
             res: Res::Settled {
                 actual: 7,
                 price: priced,
@@ -936,6 +937,131 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
     .await;
     sqlx::query("UPDATE async_jobs SET state='failed',upstream_status='failed',cancel_requested_at=now(),completed_at=now(),settled_at=now(),deleted_at=now(),error_code='upstream_failed' WHERE id=$1").bind(v2).execute(&pool).await.unwrap();
 
+    // The owner's personal workspace holds the same shapes: rich (above, with a
+    // cost center), sparse, running, and an async job of every kind.
+    let (pb, pc, jp1r, jp2r, jp3r, jp4r) = (
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    );
+    exec(
+        &pool,
+        Ex::sparse(f.personal, private_key, deployment, pb, 6),
+    )
+    .await;
+    exec(
+        &pool,
+        Ex {
+            state: "started",
+            completed: false,
+            tokens: None,
+            reasoning: None,
+            finish: None,
+            ttft: None,
+            generation: None,
+            elapsed: None,
+            reported: None,
+            billing: None,
+            meter: None,
+            res: Res::Pending {
+                held: 9,
+                price: priced,
+            },
+            ..Ex::rich(f.personal, private_key, deployment, pc, 5)
+        },
+    )
+    .await;
+    for (ago, workload, root) in [
+        (4, "batches", jp1r),
+        (3, "batches", jp2r),
+        (2, "videos", jp3r),
+        (1, "videos", jp4r),
+    ] {
+        exec(
+            &pool,
+            Ex {
+                workload,
+                streamed: false,
+                res: Res::Settled {
+                    actual: 3,
+                    price: priced,
+                },
+                ..Ex::rich(f.personal, private_key, deployment, root, ago)
+            },
+        )
+        .await;
+    }
+    let jp1 = job(
+        &pool,
+        "batch",
+        f.personal,
+        private_key,
+        deployment,
+        jp1r,
+        Some("gateway"),
+        Some(input_a),
+        owner_id,
+        None,
+        Some((3, Some(2), Some(1))),
+    )
+    .await;
+    sqlx::query("UPDATE async_jobs SET state='in_progress',in_progress_at=now(),last_progress_at=now() WHERE id=$1").bind(jp1).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE async_jobs SET state='completed',finalizing_at=now(),completed_at=now(),settled_at=now() WHERE id=$1").bind(jp1).execute(&pool).await.unwrap();
+    let jp2 = job(
+        &pool,
+        "batch",
+        f.personal,
+        private_key,
+        deployment,
+        jp2r,
+        None,
+        None,
+        None,
+        Some("standard"),
+        Some((5, None, None)),
+    )
+    .await;
+    sqlx::query(
+        "UPDATE async_jobs SET state='in_progress',upstream_status='validating' WHERE id=$1",
+    )
+    .bind(jp2)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let jp3 = job(
+        &pool,
+        "video",
+        f.personal,
+        private_key,
+        deployment,
+        jp3r,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    sqlx::query("UPDATE async_jobs SET state='in_progress',upstream_status='processing',progress=40,expires_at=now()+interval '1 hour' WHERE id=$1").bind(jp3).execute(&pool).await.unwrap();
+    let jp4 = job(
+        &pool,
+        "video",
+        f.personal,
+        private_key,
+        deployment,
+        jp4r,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    sqlx::query("UPDATE async_jobs SET state='failed',upstream_status='failed',cancel_requested_at=now(),completed_at=now(),settled_at=now(),deleted_at=now(),error_code='upstream_failed' WHERE id=$1").bind(jp4).execute(&pool).await.unwrap();
+
     // Audit rows the system itself writes (no person acts): the producers'
     // own statements (lifecycle.rs, bootstrap.rs).
     sqlx::query("INSERT INTO audit_events(id,actor_user_id,action,resource_type,resource_id) VALUES($1,NULL,'user.cleaned','user',$2)").bind(Uuid::new_v4()).bind(f.outsider.user_id).execute(&pool).await.unwrap();
@@ -1084,6 +1210,14 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
         Some(json!({"disabled":true})),
     )
     .await;
+    assert_eq!(
+        w.json(&owner, "GET", &format!("{ws}/keys/{off_key}"), None)
+            .await["status"],
+        "disabled"
+    );
+    // The member's key never expires (a finding) and is read by its holder.
+    w.json(&member, "GET", &format!("{ws}/keys/{member_key}"), None)
+        .await;
     w.json(&owner, "PATCH", &keypath, Some(json!({"disabled":true})))
         .await;
     w.status(
@@ -1132,6 +1266,8 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
             Some(json!({"disabled":disabled})),
         )
         .await;
+        w.json(&owner, "GET", &format!("{ws}/service-accounts"), None)
+            .await;
     }
     assert_eq!(
         w.json(&owner, "GET", &format!("{ws}/keys/{service_key}"), None)
@@ -1306,6 +1442,12 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
         )
         .await;
     assert!(private["trace_id"].is_null());
+    for r in [pb, pc, jp1r, jp2r, jp3r, jp4r] {
+        let v = w
+            .json(&owner, "GET", &format!("{personal}/requests/{r}"), None)
+            .await;
+        assert!(v["trace_id"].is_null());
+    }
     w.status(
         &admin,
         "GET",
@@ -1565,9 +1707,15 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
         .await;
 
     // HTTP boundary vectors of every read that takes query parameters ...
+    // The window (1 to 93 days, ending by tomorrow) holds whichever bound is omitted.
+    let today = chrono::Utc::now().date_naive();
+    let (start_date, end_date) = (
+        (today - chrono::Duration::days(2)).to_string(),
+        today.to_string(),
+    );
     let logs: [(&str, &str); 12] = [
-        ("start_date", "2020-01-02"),
-        ("end_date", "2020-01-03"),
+        ("start_date", &start_date),
+        ("end_date", &end_date),
         ("model", "contract-log"),
         ("key_id", "00000000-0000-0000-0000-000000000001"),
         ("status", "succeeded"),

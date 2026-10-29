@@ -9,7 +9,7 @@ pub(super) const BILLING_FULL: &str = r#"{"total_input_tokens":"10","uncached_in
 /// All seven keys present, every figure unknown (the provider reported none).
 pub(super) const BILLING_UNKNOWN: &str = r#"{"total_input_tokens":null,"uncached_input_tokens":null,"cache_read_input_tokens":null,"cache_write_input_tokens":null,"cache_write_default_input_tokens":null,"cache_write_5m_input_tokens":null,"cache_write_1h_input_tokens":null}"#;
 pub(super) const METER_FULL: &str = r#"{"output_images":"1","input_characters":"2","input_audio_seconds_ms":"3","output_audio_seconds_ms":"4","search_units":"5","requests":"6","output_video_seconds_ms":"7"}"#;
-pub(super) const METER_UNKNOWN: &str = r#"{"output_images":null,"input_characters":null,"input_audio_seconds_ms":null,"output_audio_seconds_ms":null,"search_units":null,"requests":null}"#;
+pub(super) const METER_UNKNOWN: &str = r#"{"output_images":null,"input_characters":null,"input_audio_seconds_ms":null,"output_audio_seconds_ms":null,"search_units":null,"requests":null,"output_video_seconds_ms":null}"#;
 
 /// What the accounting side recorded for an attempt.
 #[derive(Clone, Copy)]
