@@ -202,8 +202,12 @@ pub(super) async fn email(
     // only): it can be saved and is reported as not allowed. A test is refused
     // before any connection or credential, but the refusal cannot be recorded:
     // `host_not_allowed` violates the CHECK of `smtp_last_test_error` (migration
-    // 0010), so the request answers 409 and `last_test` stays empty. Documented as
-    // the current behaviour; a product defect reported with this slice.
+    // 0010), so the request usually answers 409 and `last_test` stays empty
+    // (#411). Documented as the current behaviour. Only when the configuration
+    // changes between the send and the recording does the conditional UPDATE match
+    // no row (settings.rs `test_email`), and then a 200 body can carry
+    // `host_not_allowed` (the schema allows it in `SettingsEmailTest.error`, never
+    // in `last_test.error`); that race is not reproducible deterministically here.
     let blocked = json!({"host":"localhost","port":mail_port,"tls":"none","from_address":"gateway@example.test"});
     let saved = good(g, observed, admin, "PUT", &path, &path, blocked).await;
     assert_eq!(saved["status"], "host_not_allowed");

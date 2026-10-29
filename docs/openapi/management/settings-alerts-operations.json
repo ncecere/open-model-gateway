@@ -1079,7 +1079,7 @@
     "POST /api/v1/platform/settings/email/test": {
       "access": "PlatformWrite",
       "operation": {
-        "description": "Tests saved server configuration only. Accepts absent bytes or an empty JSON object, not JSON null; no Content-Type requirement. Handler test throttles return 429 envelope with a retry instruction in the message (no numeric retry field or Retry-After header); serving authentication throttles are separate.",
+        "description": "Tests saved server configuration only. Accepts absent bytes or an empty JSON object, not JSON null; no Content-Type requirement. A saved relay host the operator has not listed is refused with 409, because its host_not_allowed outcome cannot be recorded (last-test CHECK, migration 0010; see #411); only a concurrent configuration change can instead return host_not_allowed in a 200 body. Handler test throttles return 429 envelope with a retry instruction in the message (no numeric retry field or Retry-After header); serving authentication throttles are separate.",
         "responses": {
           "200": {
             "description": "Actual handler representation",

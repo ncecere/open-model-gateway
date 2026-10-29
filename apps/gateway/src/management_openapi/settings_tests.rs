@@ -296,6 +296,17 @@ fn management_openapi_settings_every_incident_has_its_fired_email() {
         wrong["cleared_email"] = Value::Null;
         assert!(accepted("SettingsPlatformEvents", &wrong), "{resolution}");
     }
+    // A cleared incident of a rule kind always has its cleared email (alerts.rs
+    // resolve inserts it with the resolution); an aged hold or a key reminder is
+    // cleared silently.
+    let mut silent = cleared.clone();
+    silent["cleared_email"] = Value::Null;
+    assert!(!accepted("SettingsPlatformEvents", &silent));
+    let mut hold = aged(1, "warning", 24);
+    hold["state"] = json!("resolved");
+    hold["resolved_at"] = json!("2026-10-28T01:00:00Z");
+    hold["resolution"] = json!("cleared");
+    assert!(accepted("SettingsPlatformEvents", &hold));
     let mut firing = valid.clone();
     firing["cleared_email"] = delivery();
     assert!(!accepted("SettingsPlatformEvents", &firing));
@@ -304,7 +315,10 @@ fn management_openapi_settings_every_incident_has_its_fired_email() {
         ("status", json!("queued"), false),
         ("status", json!("report_pending"), false),
         ("status", json!("partial"), true),
-        ("error", json!("host_not_allowed"), true),
+        // The aggregate maps host_not_allowed to connection (alerts/outbox.rs
+        // refresh), so a delivery never carries it.
+        ("error", json!("host_not_allowed"), false),
+        ("error", json!("connection"), true),
         ("error", json!("interrupted"), true),
         ("error", json!("boom"), false),
         (
@@ -318,6 +332,17 @@ fn management_openapi_settings_every_incident_has_its_fired_email() {
         e["email"][field] = value;
         assert_eq!(accepted("SettingsPlatformEvents", &e), ok, "{field}");
     }
+}
+
+#[test]
+fn management_openapi_settings_email_test_error_is_a_delivery_category() {
+    // A concurrent configuration change can return host_not_allowed in a 200 body
+    // (#411); an unknown category is still refused.
+    let schema = json!({"$ref":"#/components/schemas/SettingsEmailTest"});
+    let mut body = json!({"ok":false,"error":"host_not_allowed","recipient":"admin@example.test"});
+    assert!(validate_value(artifact(), &schema, &body).is_ok());
+    body["error"] = json!("boom");
+    assert!(validate_value(artifact(), &schema, &body).is_err());
 }
 
 #[test]
