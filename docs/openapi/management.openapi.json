@@ -2100,9 +2100,18 @@
           },
           "scopes": {
             "items": {
-              "type": "string"
+              "enum": [
+                "platform:read",
+                "catalog:write",
+                "access:write",
+                "governance:write",
+                "settings:write"
+              ]
             },
-            "type": "array"
+            "maxItems": 5,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
           },
           "token": {
             "description": "Opaque management token, returned exactly once. Later inventory never includes the token or digest.",
@@ -2175,9 +2184,18 @@
           },
           "scopes": {
             "items": {
-              "type": "string"
+              "enum": [
+                "platform:read",
+                "catalog:write",
+                "access:write",
+                "governance:write",
+                "settings:write"
+              ]
             },
-            "type": "array"
+            "maxItems": 5,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
           }
         },
         "required": [
@@ -2360,9 +2378,15 @@
                 ]
               },
               "finish_reason": {
-                "type": [
-                  "string",
-                  "null"
+                "enum": [
+                  "stop",
+                  "length",
+                  "tool_calls",
+                  "content_filter",
+                  "error",
+                  "cancelled",
+                  "unknown",
+                  null
                 ]
               },
               "generation_ms": {
@@ -2492,19 +2516,27 @@
                           "$ref": "#/components/schemas/IdentityNullableDecimal"
                         },
                         "sequence": {
-                          "minimum": 0,
+                          "maximum": 100000,
+                          "minimum": 1,
                           "type": "integer"
                         },
                         "started_at": {
                           "$ref": "#/components/schemas/IdentityTime"
                         },
                         "state": {
-                          "type": "string"
+                          "enum": [
+                            "pending",
+                            "settled",
+                            "unknown"
+                          ]
                         },
                         "status": {
-                          "type": [
-                            "string",
-                            "null"
+                          "enum": [
+                            "completed",
+                            "cancelled",
+                            "incomplete",
+                            "failed",
+                            null
                           ]
                         },
                         "unbounded_cost": {
@@ -2583,7 +2615,18 @@
                 ]
               },
               "workload_kind": {
-                "type": "string"
+                "enum": [
+                  "generation",
+                  "embeddings",
+                  "images",
+                  "audio_transcriptions",
+                  "audio_speech",
+                  "rerank",
+                  "systemone",
+                  "videos",
+                  "batches",
+                  "realtime"
+                ]
               }
             },
             "required": [
@@ -2775,9 +2818,15 @@
                 ]
               },
               "finish_reason": {
-                "type": [
-                  "string",
-                  "null"
+                "enum": [
+                  "stop",
+                  "length",
+                  "tool_calls",
+                  "content_filter",
+                  "error",
+                  "cancelled",
+                  "unknown",
+                  null
                 ]
               },
               "generation_ms": {
@@ -2866,16 +2915,16 @@
                       "additionalProperties": false,
                       "properties": {
                         "cached_audio_tokens": {
-                          "$ref": "#/components/schemas/IdentityNullableDecimal"
+                          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
                         },
                         "cached_text_tokens": {
-                          "$ref": "#/components/schemas/IdentityNullableDecimal"
+                          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
                         },
                         "completed_at": {
                           "$ref": "#/components/schemas/IdentityTime"
                         },
                         "cost_microusd": {
-                          "$ref": "#/components/schemas/IdentityNullableDecimal"
+                          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
                         },
                         "duration_ms": {
                           "minimum": 0,
@@ -2885,31 +2934,35 @@
                           "$ref": "#/components/schemas/IdentityUnsignedDecimal"
                         },
                         "input_audio_tokens": {
-                          "$ref": "#/components/schemas/IdentityNullableDecimal"
+                          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
                         },
                         "input_text_tokens": {
-                          "$ref": "#/components/schemas/IdentityNullableDecimal"
+                          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
                         },
                         "output_audio_tokens": {
-                          "$ref": "#/components/schemas/IdentityNullableDecimal"
+                          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
                         },
                         "output_text_tokens": {
-                          "$ref": "#/components/schemas/IdentityNullableDecimal"
+                          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
                         },
                         "sequence": {
-                          "minimum": 0,
+                          "maximum": 100000,
+                          "minimum": 1,
                           "type": "integer"
                         },
                         "started_at": {
                           "$ref": "#/components/schemas/IdentityTime"
                         },
                         "state": {
-                          "type": "string"
+                          "const": "settled"
                         },
                         "status": {
-                          "type": [
-                            "string",
-                            "null"
+                          "enum": [
+                            "completed",
+                            "cancelled",
+                            "incomplete",
+                            "failed",
+                            null
                           ]
                         },
                         "unbounded_cost": {
@@ -2981,7 +3034,18 @@
                 "type": "null"
               },
               "workload_kind": {
-                "type": "string"
+                "enum": [
+                  "generation",
+                  "embeddings",
+                  "images",
+                  "audio_transcriptions",
+                  "audio_speech",
+                  "rerank",
+                  "systemone",
+                  "videos",
+                  "batches",
+                  "realtime"
+                ]
               }
             },
             "required": [
@@ -3626,9 +3690,15 @@
             "$ref": "#/components/schemas/IdentityUuid"
           },
           "finish_reason": {
-            "type": [
-              "string",
-              "null"
+            "enum": [
+              "stop",
+              "length",
+              "tool_calls",
+              "content_filter",
+              "error",
+              "cancelled",
+              "unknown",
+              null
             ]
           },
           "generation_ms": {
@@ -3726,6 +3796,8 @@
             ]
           },
           "tokens_per_second": {
+            "description": "Output tokens per second of the final attempt, rounded to two decimals (round(..., 2)::text); null without a measured decode time.",
+            "pattern": "^(0|[1-9][0-9]*)\\.[0-9]{2}$",
             "type": [
               "string",
               "null"
@@ -3735,7 +3807,18 @@
             "type": "string"
           },
           "workload_kind": {
-            "type": "string"
+            "enum": [
+              "generation",
+              "embeddings",
+              "images",
+              "audio_transcriptions",
+              "audio_speech",
+              "rerank",
+              "systemone",
+              "videos",
+              "batches",
+              "realtime"
+            ]
           },
           "workspace": {
             "$ref": "#/components/schemas/IdentityWorkspaceRef"
@@ -4700,7 +4783,13 @@
             "items": {
               "oneOf": [
                 {
-                  "$ref": "#/components/schemas/S6VisibleBudgetWindow"
+                  "$ref": "#/components/schemas/S6KnownBudgetWindow"
+                },
+                {
+                  "$ref": "#/components/schemas/S6UnknownCostBudgetWindow"
+                },
+                {
+                  "$ref": "#/components/schemas/S6UnavailableBudgetWindow"
                 },
                 {
                   "$ref": "#/components/schemas/S6RestrictedBudgetWindow"
@@ -4930,7 +5019,13 @@
             "items": {
               "oneOf": [
                 {
-                  "$ref": "#/components/schemas/S6VisibleBudgetWindow"
+                  "$ref": "#/components/schemas/S6KnownBudgetWindow"
+                },
+                {
+                  "$ref": "#/components/schemas/S6UnknownCostBudgetWindow"
+                },
+                {
+                  "$ref": "#/components/schemas/S6UnavailableBudgetWindow"
                 },
                 {
                   "$ref": "#/components/schemas/S6RestrictedBudgetWindow"
@@ -5092,6 +5187,87 @@
           "daily",
           "totals",
           "budgets"
+        ],
+        "type": "object"
+      },
+      "S6KnownBudgetWindow": {
+        "additionalProperties": false,
+        "description": "A visible budget window whose accounting is exact: no request of the window has an unknown cost, so the remaining allowance is known (governance::totals BudgetReport::remaining).",
+        "properties": {
+          "amount_microusd": {
+            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+          },
+          "budget_period": {
+            "$ref": "#/components/schemas/IdentityPeriod"
+          },
+          "exhausted": {
+            "type": "boolean"
+          },
+          "headroom_status": {
+            "const": "known"
+          },
+          "layer": {
+            "enum": [
+              "platform",
+              "local",
+              "key"
+            ]
+          },
+          "monthly_budget_microusd": {
+            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+          },
+          "pending_held_microusd": {
+            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+          },
+          "period": {
+            "$ref": "#/components/schemas/IdentityPeriod"
+          },
+          "remaining_microusd": {
+            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+          },
+          "settled_microusd": {
+            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+          },
+          "unknown_cost_requests": {
+            "const": "0"
+          },
+          "unknown_held_microusd": {
+            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+          },
+          "unresolved_usage": {
+            "type": "boolean"
+          },
+          "usage_visible": {
+            "const": true
+          },
+          "used_microusd": {
+            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+          },
+          "window_end": {
+            "$ref": "#/components/schemas/IdentityNullableTime"
+          },
+          "window_start": {
+            "$ref": "#/components/schemas/IdentityTime"
+          }
+        },
+        "required": [
+          "layer",
+          "period",
+          "amount_microusd",
+          "monthly_budget_microusd",
+          "budget_period",
+          "window_start",
+          "window_end",
+          "usage_visible",
+          "used_microusd",
+          "unresolved_usage",
+          "exhausted",
+          "settled_microusd",
+          "pending_held_microusd",
+          "unknown_held_microusd",
+          "unknown_cost_requests",
+          "remaining_microusd",
+          "headroom_status"
         ],
         "type": "object"
       },
@@ -5308,6 +5484,8 @@
             "$ref": "#/components/schemas/IdentityUnsignedDecimal"
           },
           "tokens_per_second": {
+            "description": "Output tokens per second of the final attempt, rounded to two decimals (round(..., 2)::text); null without a measured decode time.",
+            "pattern": "^(0|[1-9][0-9]*)\\.[0-9]{2}$",
             "type": [
               "string",
               "null"
@@ -5352,7 +5530,9 @@
             ]
           },
           "attempts": {
-            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+            "description": "Attempts of the session's requests: at least one per request, so at least 1.",
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
           },
           "cost_microusd": {
             "$ref": "#/components/schemas/IdentityNullableDecimal"
@@ -5393,6 +5573,7 @@
             "items": {
               "type": "string"
             },
+            "maxItems": 10,
             "type": "array"
           },
           "output_tokens": {
@@ -5455,10 +5636,18 @@
         "type": "object"
       },
       "S6MoneyInput": {
-        "description": "Canonical integer micro-USD string, at most 19 digits; the handler rejects zero for budgets.",
-        "maxLength": 19,
-        "pattern": "^(0|[1-9][0-9]*)$",
-        "type": "string"
+        "allOf": [
+          {
+            "maxLength": 19,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          {
+            "pattern": "^([1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-7])$",
+            "type": "string"
+          }
+        ],
+        "description": "Canonical positive integer micro-USD string, 1 to 9223372036854775807 (an i64: governance::money parses it as i64 and refuses zero for budgets, so 19-digit values above the i64 maximum and \"0\" answer 400). The first member is the canonical integer form; the second bounds it to a positive i64."
       },
       "S6Ok": {
         "additionalProperties": false,
@@ -5482,7 +5671,7 @@
             ]
           },
           "attempts": {
-            "minimum": 0,
+            "minimum": 1,
             "type": "integer"
           },
           "cached_input_tokens": {
@@ -5522,9 +5711,15 @@
             "$ref": "#/components/schemas/IdentityNullableDecimal"
           },
           "finish_reason": {
-            "type": [
-              "string",
-              "null"
+            "enum": [
+              "stop",
+              "length",
+              "tool_calls",
+              "content_filter",
+              "error",
+              "cancelled",
+              "unknown",
+              null
             ]
           },
           "generation_ms": {
@@ -5665,6 +5860,8 @@
             ]
           },
           "tokens_per_second": {
+            "description": "Output tokens per second of the final attempt, rounded to two decimals (round(..., 2)::text); null without a measured decode time.",
+            "pattern": "^(0|[1-9][0-9]*)\\.[0-9]{2}$",
             "type": [
               "string",
               "null"
@@ -5680,7 +5877,18 @@
             ]
           },
           "workload_kind": {
-            "type": "string"
+            "enum": [
+              "generation",
+              "embeddings",
+              "images",
+              "audio_transcriptions",
+              "audio_speech",
+              "rerank",
+              "systemone",
+              "videos",
+              "batches",
+              "realtime"
+            ]
           },
           "workspace": {
             "additionalProperties": false,
@@ -5746,7 +5954,7 @@
             ]
           },
           "attempt_count": {
-            "minimum": 0,
+            "minimum": 1,
             "type": "integer"
           },
           "attempts": {
@@ -5792,9 +6000,15 @@
             "$ref": "#/components/schemas/IdentityNullableDecimal"
           },
           "finish_reason": {
-            "type": [
-              "string",
-              "null"
+            "enum": [
+              "stop",
+              "length",
+              "tool_calls",
+              "content_filter",
+              "error",
+              "cancelled",
+              "unknown",
+              null
             ]
           },
           "generation_ms": {
@@ -5936,7 +6150,8 @@
                   "video_seconds": {
                     "anyOf": [
                       {
-                        "minimum": 0,
+                        "maximum": 3600,
+                        "minimum": 1,
                         "type": "integer"
                       },
                       {
@@ -6059,6 +6274,8 @@
             ]
           },
           "tokens_per_second": {
+            "description": "Output tokens per second of the final attempt, rounded to two decimals (round(..., 2)::text); null without a measured decode time.",
+            "pattern": "^(0|[1-9][0-9]*)\\.[0-9]{2}$",
             "type": [
               "string",
               "null"
@@ -6074,7 +6291,18 @@
             ]
           },
           "workload_kind": {
-            "type": "string"
+            "enum": [
+              "generation",
+              "embeddings",
+              "images",
+              "audio_transcriptions",
+              "audio_speech",
+              "rerank",
+              "systemone",
+              "videos",
+              "batches",
+              "realtime"
+            ]
           },
           "workspace": {
             "additionalProperties": false,
@@ -6828,7 +7056,7 @@
             ]
           },
           "attempts": {
-            "minimum": 0,
+            "minimum": 1,
             "type": "integer"
           },
           "cached_input_tokens": {
@@ -6868,9 +7096,15 @@
             "$ref": "#/components/schemas/IdentityNullableDecimal"
           },
           "finish_reason": {
-            "type": [
-              "string",
-              "null"
+            "enum": [
+              "stop",
+              "length",
+              "tool_calls",
+              "content_filter",
+              "error",
+              "cancelled",
+              "unknown",
+              null
             ]
           },
           "generation_ms": {
@@ -7011,6 +7245,8 @@
             ]
           },
           "tokens_per_second": {
+            "description": "Output tokens per second of the final attempt, rounded to two decimals (round(..., 2)::text); null without a measured decode time.",
+            "pattern": "^(0|[1-9][0-9]*)\\.[0-9]{2}$",
             "type": [
               "string",
               "null"
@@ -7027,7 +7263,18 @@
             ]
           },
           "workload_kind": {
-            "type": "string"
+            "enum": [
+              "generation",
+              "embeddings",
+              "images",
+              "audio_transcriptions",
+              "audio_speech",
+              "rerank",
+              "systemone",
+              "videos",
+              "batches",
+              "realtime"
+            ]
           },
           "workspace": {
             "additionalProperties": false,
@@ -7096,7 +7343,7 @@
             ]
           },
           "attempt_count": {
-            "minimum": 0,
+            "minimum": 1,
             "type": "integer"
           },
           "attempts": {
@@ -7142,9 +7389,15 @@
             "$ref": "#/components/schemas/IdentityNullableDecimal"
           },
           "finish_reason": {
-            "type": [
-              "string",
-              "null"
+            "enum": [
+              "stop",
+              "length",
+              "tool_calls",
+              "content_filter",
+              "error",
+              "cancelled",
+              "unknown",
+              null
             ]
           },
           "generation_ms": {
@@ -7286,7 +7539,8 @@
                   "video_seconds": {
                     "anyOf": [
                       {
-                        "minimum": 0,
+                        "maximum": 3600,
+                        "minimum": 1,
                         "type": "integer"
                       },
                       {
@@ -7409,6 +7663,8 @@
             ]
           },
           "tokens_per_second": {
+            "description": "Output tokens per second of the final attempt, rounded to two decimals (round(..., 2)::text); null without a measured decode time.",
+            "pattern": "^(0|[1-9][0-9]*)\\.[0-9]{2}$",
             "type": [
               "string",
               "null"
@@ -7425,7 +7681,18 @@
             ]
           },
           "workload_kind": {
-            "type": "string"
+            "enum": [
+              "generation",
+              "embeddings",
+              "images",
+              "audio_transcriptions",
+              "audio_speech",
+              "rerank",
+              "systemone",
+              "videos",
+              "batches",
+              "realtime"
+            ]
           },
           "workspace": {
             "additionalProperties": false,
@@ -7491,8 +7758,9 @@
         ],
         "type": "object"
       },
-      "S6VisibleBudgetWindow": {
+      "S6UnavailableBudgetWindow": {
         "additionalProperties": false,
+        "description": "A visible budget window whose maintained totals row fails its consistency validation (read_budget_report returns None): no accounting figure is fabricated, every one is null and the headroom is unknown.",
         "properties": {
           "amount_microusd": {
             "$ref": "#/components/schemas/IdentityUnsignedDecimal"
@@ -7501,21 +7769,10 @@
             "$ref": "#/components/schemas/IdentityPeriod"
           },
           "exhausted": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null",
-                "x-omg-unobserved-branch": "Null only when the budget_totals row fails its consistency validation (read_budget_report returns None, policies.rs budget_windows): corrupt accounting that the maintenance triggers never produce and no test can seed."
-              }
-            ]
+            "type": "null"
           },
           "headroom_status": {
-            "enum": [
-              "known",
-              "unknown"
-            ]
+            "const": "unknown"
           },
           "layer": {
             "enum": [
@@ -7528,79 +7785,113 @@
             "$ref": "#/components/schemas/IdentityUnsignedDecimal"
           },
           "pending_held_microusd": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
-              },
-              {
-                "type": "null",
-                "x-omg-unobserved-branch": "Null only when the budget_totals row fails its consistency validation (read_budget_report returns None, policies.rs budget_windows): corrupt accounting that the maintenance triggers never produce and no test can seed."
-              }
-            ]
+            "type": "null"
           },
           "period": {
             "$ref": "#/components/schemas/IdentityPeriod"
           },
           "remaining_microusd": {
-            "$ref": "#/components/schemas/IdentityNullableDecimal"
+            "type": "null"
           },
           "settled_microusd": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
-              },
-              {
-                "type": "null",
-                "x-omg-unobserved-branch": "Null only when the budget_totals row fails its consistency validation (read_budget_report returns None, policies.rs budget_windows): corrupt accounting that the maintenance triggers never produce and no test can seed."
-              }
-            ]
+            "type": "null"
           },
           "unknown_cost_requests": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
-              },
-              {
-                "type": "null",
-                "x-omg-unobserved-branch": "Null only when the budget_totals row fails its consistency validation (read_budget_report returns None, policies.rs budget_windows): corrupt accounting that the maintenance triggers never produce and no test can seed."
-              }
-            ]
+            "type": "null"
           },
           "unknown_held_microusd": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
-              },
-              {
-                "type": "null",
-                "x-omg-unobserved-branch": "Null only when the budget_totals row fails its consistency validation (read_budget_report returns None, policies.rs budget_windows): corrupt accounting that the maintenance triggers never produce and no test can seed."
-              }
-            ]
+            "type": "null"
           },
           "unresolved_usage": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null",
-                "x-omg-unobserved-branch": "Null only when the budget_totals row fails its consistency validation (read_budget_report returns None, policies.rs budget_windows): corrupt accounting that the maintenance triggers never produce and no test can seed."
-              }
-            ]
+            "type": "null"
           },
           "usage_visible": {
             "const": true
           },
           "used_microusd": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
-              },
-              {
-                "type": "null",
-                "x-omg-unobserved-branch": "Null only when the budget_totals row fails its consistency validation (read_budget_report returns None, policies.rs budget_windows): corrupt accounting that the maintenance triggers never produce and no test can seed."
-              }
+            "type": "null"
+          },
+          "window_end": {
+            "$ref": "#/components/schemas/IdentityNullableTime"
+          },
+          "window_start": {
+            "$ref": "#/components/schemas/IdentityTime"
+          }
+        },
+        "required": [
+          "layer",
+          "period",
+          "amount_microusd",
+          "monthly_budget_microusd",
+          "budget_period",
+          "window_start",
+          "window_end",
+          "usage_visible",
+          "used_microusd",
+          "unresolved_usage",
+          "exhausted",
+          "settled_microusd",
+          "pending_held_microusd",
+          "unknown_held_microusd",
+          "unknown_cost_requests",
+          "remaining_microusd",
+          "headroom_status"
+        ],
+        "type": "object"
+      },
+      "S6UnknownCostBudgetWindow": {
+        "additionalProperties": false,
+        "description": "A visible budget window with at least one request whose cost is unknown: usage is a lower bound and no remaining allowance is computed (policies.rs budget_windows: headroom_status unknown, remaining_microusd null).",
+        "properties": {
+          "amount_microusd": {
+            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+          },
+          "budget_period": {
+            "$ref": "#/components/schemas/IdentityPeriod"
+          },
+          "exhausted": {
+            "type": "boolean"
+          },
+          "headroom_status": {
+            "const": "unknown"
+          },
+          "layer": {
+            "enum": [
+              "platform",
+              "local",
+              "key"
             ]
+          },
+          "monthly_budget_microusd": {
+            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+          },
+          "pending_held_microusd": {
+            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+          },
+          "period": {
+            "$ref": "#/components/schemas/IdentityPeriod"
+          },
+          "remaining_microusd": {
+            "type": "null"
+          },
+          "settled_microusd": {
+            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+          },
+          "unknown_cost_requests": {
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "unknown_held_microusd": {
+            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+          },
+          "unresolved_usage": {
+            "type": "boolean"
+          },
+          "usage_visible": {
+            "const": true
+          },
+          "used_microusd": {
+            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
           },
           "window_end": {
             "$ref": "#/components/schemas/IdentityNullableTime"
@@ -10554,8 +10845,10 @@
                 "anyOf": [
                   {
                     "items": {
-                      "description": "An address or addr/prefix network (prefix length at least 1); no host bits.",
-                      "pattern": "^[0-9A-Fa-f:.]+(/[0-9]{1,3})?$",
+                      "description": "An IPv4 or IPv6 address, or addr/prefix network with a prefix of at least 1 (egress::parse_network, admin_tokens canonical_allowlist): octets 0 to 255 without leading zeros, prefix at most 32 (IPv4) or 128 (IPv6). The pattern cannot express that no host bits are set (10.0.0.1/8 answers 400) or that IPv4-mapped IPv6 networks are refused (write them as IPv4); the handler also accepts IPv6 with an embedded dotted-quad tail, which this contract does not document. Entries are stored in canonical addr/len form and a duplicate after canonicalization answers 400.",
+                      "maxLength": 49,
+                      "minLength": 2,
+                      "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(\\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}(/\\+?0*([1-9]|[12][0-9]|3[0-2]))?|(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:(:[0-9a-fA-F]{1,4}){1,6}|:((:[0-9a-fA-F]{1,4}){1,7}|:))(/\\+?0*([1-9]|[1-9][0-9]|1[01][0-9]|12[0-8]))?)$",
                       "type": "string"
                     },
                     "maxItems": 32,
@@ -10634,8 +10927,10 @@
                 "anyOf": [
                   {
                     "items": {
-                      "description": "An address or addr/prefix network (prefix length at least 1); no host bits.",
-                      "pattern": "^[0-9A-Fa-f:.]+(/[0-9]{1,3})?$",
+                      "description": "An IPv4 or IPv6 address, or addr/prefix network with a prefix of at least 1 (egress::parse_network, admin_tokens canonical_allowlist): octets 0 to 255 without leading zeros, prefix at most 32 (IPv4) or 128 (IPv6). The pattern cannot express that no host bits are set (10.0.0.1/8 answers 400) or that IPv4-mapped IPv6 networks are refused (write them as IPv4); the handler also accepts IPv6 with an embedded dotted-quad tail, which this contract does not document. Entries are stored in canonical addr/len form and a duplicate after canonicalization answers 400.",
+                      "maxLength": 49,
+                      "minLength": 2,
+                      "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(\\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}(/\\+?0*([1-9]|[12][0-9]|3[0-2]))?|(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:(:[0-9a-fA-F]{1,4}){1,6}|:((:[0-9a-fA-F]{1,4}){1,7}|:))(/\\+?0*([1-9]|[1-9][0-9]|1[01][0-9]|12[0-8]))?)$",
                       "type": "string"
                     },
                     "maxItems": 32,
@@ -11036,10 +11331,13 @@
         "description": "Streamed multipart parts. purpose and expiry fields may precede/follow file; no unknown or duplicate fields. The file part is binary, nonempty; server-controlled byte cap and quota apply.",
         "properties": {
           "expires_after[anchor]": {
-            "const": "created_at"
+            "const": "created_at",
+            "description": "Only created_at is accepted; any other anchor answers 400."
           },
           "expires_after[seconds]": {
-            "description": "Trimmed integer seconds, 3600 through 2592000; supply with expires_after[anchor].",
+            "description": "Integer seconds, 3600 through 2592000 (1 hour to 30 days); supply with expires_after[anchor]. The handler trims surrounding whitespace before parsing (upload.rs Fields::validate: s.trim().parse::<i64>()), so surrounding ASCII whitespace, a leading plus and leading zeros are accepted; the field is at most 64 bytes (FormReader::text).",
+            "maxLength": 64,
+            "pattern": "^[\\t-\\r ]*\\+?0*(3[6-9][0-9]{2}|[4-9][0-9]{3}|[1-9][0-9]{4,5}|1[0-9]{6}|2[0-4][0-9]{5}|25[0-8][0-9]{4}|259[01][0-9]{3}|2592000)[\\t-\\r ]*$",
             "type": "string"
           },
           "file": {
@@ -11048,7 +11346,14 @@
             "type": "string"
           },
           "purpose": {
-            "type": "string"
+            "description": "OpenAI Files API purposes the gateway holds (filestore::Purpose::from_openai). fine-tune is refused as an unsupported capability (upload.rs store_purpose) and batch_output is not an upload purpose; both answer 400. batch input must be JSONL and vision files must be images (checked on the file's first bytes); a purpose whose storage group is turned off in Settings answers 403.",
+            "enum": [
+              "batch",
+              "user_data",
+              "assistants",
+              "vision",
+              "evals"
+            ]
           }
         },
         "required": [
@@ -11076,6 +11381,7 @@
               "budgets": {
                 "anyOf": [
                   {
+                    "description": "At most one entry per period: a repeated period answers 400 even with different amounts (parse_budgets, policies.rs:490-496), which uniqueItems on whole entries cannot express.",
                     "items": {
                       "$ref": "#/components/schemas/S6BudgetInput"
                     },
@@ -11132,7 +11438,7 @@
                 ]
               },
               "name": {
-                "description": "1 to 120 characters (the handler counts UTF-8 bytes), no control characters, not only whitespace.",
+                "description": "At most 120 UTF-8 BYTES, at least one non-whitespace character, no control characters (management valid_name: s.len() <= 120). maxLength counts characters, so it is necessary but not sufficient: a name of fewer than 120 characters is still refused when its multibyte characters exceed 120 bytes.",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\p{Cc}]*[^\\s\\p{Cc}][^\\p{Cc}]*$",
@@ -11178,7 +11484,7 @@
             "minItems": 9,
             "prefixItems": [
               {
-                "description": "1 to 120 characters (the handler counts UTF-8 bytes), no control characters, not only whitespace.",
+                "description": "At most 120 UTF-8 BYTES, at least one non-whitespace character, no control characters (management valid_name: s.len() <= 120). maxLength counts characters, so it is necessary but not sufficient: a name of fewer than 120 characters is still refused when its multibyte characters exceed 120 bytes.",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\p{Cc}]*[^\\s\\p{Cc}][^\\p{Cc}]*$",
@@ -11257,6 +11563,7 @@
               {
                 "anyOf": [
                   {
+                    "description": "At most one entry per period: a repeated period answers 400 even with different amounts (parse_budgets, policies.rs:490-496), which uniqueItems on whole entries cannot express.",
                     "items": {
                       "$ref": "#/components/schemas/S6BudgetInput"
                     },
@@ -11341,7 +11648,7 @@
             "additionalProperties": false,
             "properties": {
               "name": {
-                "description": "1 to 120 characters (the handler counts UTF-8 bytes), no control characters, not only whitespace.",
+                "description": "At most 120 UTF-8 BYTES, at least one non-whitespace character, no control characters (management valid_name: s.len() <= 120). maxLength counts characters, so it is necessary but not sufficient: a name of fewer than 120 characters is still refused when its multibyte characters exceed 120 bytes.",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\p{Cc}]*[^\\s\\p{Cc}][^\\p{Cc}]*$",
@@ -11359,7 +11666,7 @@
             "minItems": 1,
             "prefixItems": [
               {
-                "description": "1 to 120 characters (the handler counts UTF-8 bytes), no control characters, not only whitespace.",
+                "description": "At most 120 UTF-8 BYTES, at least one non-whitespace character, no control characters (management valid_name: s.len() <= 120). maxLength counts characters, so it is necessary but not sufficient: a name of fewer than 120 characters is still refused when its multibyte characters exceed 120 bytes.",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\p{Cc}]*[^\\s\\p{Cc}][^\\p{Cc}]*$",
@@ -11571,6 +11878,7 @@
                 ]
               },
               "budgets": {
+                "description": "At most one entry per period: a repeated period answers 400 even with different amounts (parse_budgets, policies.rs:490-496), which uniqueItems on whole entries cannot express.",
                 "items": {
                   "$ref": "#/components/schemas/S6BudgetInput"
                 },
@@ -11740,6 +12048,7 @@
                 ]
               },
               {
+                "description": "At most one entry per period: a repeated period answers 400 even with different amounts (parse_budgets, policies.rs:490-496), which uniqueItems on whole entries cannot express.",
                 "items": {
                   "$ref": "#/components/schemas/S6BudgetInput"
                 },
@@ -17181,13 +17490,14 @@
             }
           },
           {
-            "description": "Exact public model name.",
+            "description": "Exact public model name: 1 to 200 UTF-8 bytes (maxLength counts characters and is necessary, not sufficient), no control characters (LogQuery::filters, logs.rs:114-120).",
             "in": "query",
             "name": "model",
             "required": false,
             "schema": {
               "maxLength": 200,
               "minLength": 1,
+              "pattern": "^[^\\p{Cc}]+$",
               "type": "string"
             }
           },
@@ -17240,13 +17550,14 @@
             }
           },
           {
-            "description": "Exact client session id (1 to 128 characters, no control characters, no surrounding whitespace).",
+            "description": "Exact client session id: 1 to 128 characters, no control characters and no leading or trailing whitespace (client::valid_label, inference/client.rs:36-39).",
             "in": "query",
             "name": "session_id",
             "required": false,
             "schema": {
               "maxLength": 128,
               "minLength": 1,
+              "pattern": "^[^\\s\\p{Cc}]([^\\p{Cc}]*[^\\s\\p{Cc}])?$",
               "type": "string"
             }
           },
@@ -17398,13 +17709,14 @@
             }
           },
           {
-            "description": "Exact public model name.",
+            "description": "Exact public model name: 1 to 200 UTF-8 bytes (maxLength counts characters and is necessary, not sufficient), no control characters (LogQuery::filters, logs.rs:114-120).",
             "in": "query",
             "name": "model",
             "required": false,
             "schema": {
               "maxLength": 200,
               "minLength": 1,
+              "pattern": "^[^\\p{Cc}]+$",
               "type": "string"
             }
           },
@@ -17457,13 +17769,14 @@
             }
           },
           {
-            "description": "Exact client session id (1 to 128 characters, no control characters, no surrounding whitespace).",
+            "description": "Exact client session id: 1 to 128 characters, no control characters and no leading or trailing whitespace (client::valid_label, inference/client.rs:36-39).",
             "in": "query",
             "name": "session_id",
             "required": false,
             "schema": {
               "maxLength": 128,
               "minLength": 1,
+              "pattern": "^[^\\s\\p{Cc}]([^\\p{Cc}]*[^\\s\\p{Cc}])?$",
               "type": "string"
             }
           },
@@ -17593,13 +17906,14 @@
             }
           },
           {
-            "description": "Exact public model name.",
+            "description": "Exact public model name: 1 to 200 UTF-8 bytes (maxLength counts characters and is necessary, not sufficient), no control characters (LogQuery::filters, logs.rs:114-120).",
             "in": "query",
             "name": "model",
             "required": false,
             "schema": {
               "maxLength": 200,
               "minLength": 1,
+              "pattern": "^[^\\p{Cc}]+$",
               "type": "string"
             }
           },
@@ -17652,13 +17966,14 @@
             }
           },
           {
-            "description": "Exact client session id (1 to 128 characters, no control characters, no surrounding whitespace).",
+            "description": "Exact client session id: 1 to 128 characters, no control characters and no leading or trailing whitespace (client::valid_label, inference/client.rs:36-39).",
             "in": "query",
             "name": "session_id",
             "required": false,
             "schema": {
               "maxLength": 128,
               "minLength": 1,
+              "pattern": "^[^\\s\\p{Cc}]([^\\p{Cc}]*[^\\s\\p{Cc}])?$",
               "type": "string"
             }
           },
@@ -17818,13 +18133,14 @@
             }
           },
           {
-            "description": "Exact public model name.",
+            "description": "Exact public model name: 1 to 200 UTF-8 bytes (maxLength counts characters and is necessary, not sufficient), no control characters (LogQuery::filters, logs.rs:114-120).",
             "in": "query",
             "name": "model",
             "required": false,
             "schema": {
               "maxLength": 200,
               "minLength": 1,
+              "pattern": "^[^\\p{Cc}]+$",
               "type": "string"
             }
           },
@@ -17877,13 +18193,14 @@
             }
           },
           {
-            "description": "Exact client session id (1 to 128 characters, no control characters, no surrounding whitespace).",
+            "description": "Exact client session id: 1 to 128 characters, no control characters and no leading or trailing whitespace (client::valid_label, inference/client.rs:36-39).",
             "in": "query",
             "name": "session_id",
             "required": false,
             "schema": {
               "maxLength": 128,
               "minLength": 1,
+              "pattern": "^[^\\s\\p{Cc}]([^\\p{Cc}]*[^\\s\\p{Cc}])?$",
               "type": "string"
             }
           },
@@ -18023,13 +18340,14 @@
             }
           },
           {
-            "description": "Exact public model name.",
+            "description": "Exact public model name: 1 to 200 UTF-8 bytes (maxLength counts characters and is necessary, not sufficient), no control characters (LogQuery::filters, logs.rs:114-120).",
             "in": "query",
             "name": "model",
             "required": false,
             "schema": {
               "maxLength": 200,
               "minLength": 1,
+              "pattern": "^[^\\p{Cc}]+$",
               "type": "string"
             }
           },
@@ -18082,13 +18400,14 @@
             }
           },
           {
-            "description": "Exact client session id (1 to 128 characters, no control characters, no surrounding whitespace).",
+            "description": "Exact client session id: 1 to 128 characters, no control characters and no leading or trailing whitespace (client::valid_label, inference/client.rs:36-39).",
             "in": "query",
             "name": "session_id",
             "required": false,
             "schema": {
               "maxLength": 128,
               "minLength": 1,
+              "pattern": "^[^\\s\\p{Cc}]([^\\p{Cc}]*[^\\s\\p{Cc}])?$",
               "type": "string"
             }
           },
@@ -18123,12 +18442,12 @@
             }
           },
           {
-            "description": "Opaque cursor from next_cursor of the previous page.",
+            "description": "Opaque cursor from next_cursor of the previous page: whole bytes in hexadecimal (an even number of digits, at most 1024), which must decode to a valid session id (session_cursor, logs.rs).",
             "in": "query",
             "name": "cursor",
             "required": false,
             "schema": {
-              "pattern": "^[0-9]{1,19}_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}_[0-9a-fA-F]{2,1024}$",
+              "pattern": "^[0-9]{1,19}_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}_([0-9a-fA-F]{2}){1,512}$",
               "type": "string"
             }
           },
@@ -18258,13 +18577,14 @@
             }
           },
           {
-            "description": "Exact public model name.",
+            "description": "Exact public model name: 1 to 200 UTF-8 bytes (maxLength counts characters and is necessary, not sufficient), no control characters (LogQuery::filters, logs.rs:114-120).",
             "in": "query",
             "name": "model",
             "required": false,
             "schema": {
               "maxLength": 200,
               "minLength": 1,
+              "pattern": "^[^\\p{Cc}]+$",
               "type": "string"
             }
           },
@@ -25056,7 +25376,7 @@
             }
           },
           "required": true,
-          "x-omg-no-boundary-vectors": "The parts are read by the streaming multipart parser in filestore::upload, whose purpose vocabulary, content checks (JSONL, images) and policy gates depend on installation settings and on the file's bytes; JSON-derived vectors cannot decide them. The fixture sends the unknown, duplicate, missing, empty, mistyped and out-of-range parts explicitly and compares the exact statuses."
+          "x-omg-no-boundary-vectors": "The body is multipart/form-data, which the JSON-derived vector harness cannot encode (part names, boundaries and the binary file part); the streaming parser in filestore::upload also sniffs the file bytes and applies storage-group settings, which no schema expresses. The fixture instead sends each part-level case as a real multipart request and compares this schema's verdict with the handler's status."
         },
         "responses": {
           "200": {
@@ -25380,13 +25700,14 @@
             }
           },
           {
-            "description": "Exact public model name.",
+            "description": "Exact public model name: 1 to 200 UTF-8 bytes (maxLength counts characters and is necessary, not sufficient), no control characters (LogQuery::filters, logs.rs:114-120).",
             "in": "query",
             "name": "model",
             "required": false,
             "schema": {
               "maxLength": 200,
               "minLength": 1,
+              "pattern": "^[^\\p{Cc}]+$",
               "type": "string"
             }
           },
@@ -25439,13 +25760,14 @@
             }
           },
           {
-            "description": "Exact client session id (1 to 128 characters, no control characters, no surrounding whitespace).",
+            "description": "Exact client session id: 1 to 128 characters, no control characters and no leading or trailing whitespace (client::valid_label, inference/client.rs:36-39).",
             "in": "query",
             "name": "session_id",
             "required": false,
             "schema": {
               "maxLength": 128,
               "minLength": 1,
+              "pattern": "^[^\\s\\p{Cc}]([^\\p{Cc}]*[^\\s\\p{Cc}])?$",
               "type": "string"
             }
           },
@@ -26028,12 +26350,13 @@
             }
           },
           {
-            "description": "q",
+            "description": "Case-insensitive key name search, at most 200 characters after trimming surrounding whitespace; control characters are refused (KeyListQuery::bounds, keys.rs:85-90); a blank value means no filter.",
             "in": "query",
             "name": "q",
             "required": false,
             "schema": {
               "maxLength": 200,
+              "pattern": "^[\\t-\\r ]*[^\\p{Cc}]*[\\t-\\r ]*$",
               "type": "string"
             }
           }
@@ -27105,13 +27428,14 @@
             }
           },
           {
-            "description": "Exact public model name.",
+            "description": "Exact public model name: 1 to 200 UTF-8 bytes (maxLength counts characters and is necessary, not sufficient), no control characters (LogQuery::filters, logs.rs:114-120).",
             "in": "query",
             "name": "model",
             "required": false,
             "schema": {
               "maxLength": 200,
               "minLength": 1,
+              "pattern": "^[^\\p{Cc}]+$",
               "type": "string"
             }
           },
@@ -27164,13 +27488,14 @@
             }
           },
           {
-            "description": "Exact client session id (1 to 128 characters, no control characters, no surrounding whitespace).",
+            "description": "Exact client session id: 1 to 128 characters, no control characters and no leading or trailing whitespace (client::valid_label, inference/client.rs:36-39).",
             "in": "query",
             "name": "session_id",
             "required": false,
             "schema": {
               "maxLength": 128,
               "minLength": 1,
+              "pattern": "^[^\\s\\p{Cc}]([^\\p{Cc}]*[^\\s\\p{Cc}])?$",
               "type": "string"
             }
           },
@@ -28423,13 +28748,14 @@
             }
           },
           {
-            "description": "Exact public model name.",
+            "description": "Exact public model name: 1 to 200 UTF-8 bytes (maxLength counts characters and is necessary, not sufficient), no control characters (LogQuery::filters, logs.rs:114-120).",
             "in": "query",
             "name": "model",
             "required": false,
             "schema": {
               "maxLength": 200,
               "minLength": 1,
+              "pattern": "^[^\\p{Cc}]+$",
               "type": "string"
             }
           },
@@ -28482,13 +28808,14 @@
             }
           },
           {
-            "description": "Exact client session id (1 to 128 characters, no control characters, no surrounding whitespace).",
+            "description": "Exact client session id: 1 to 128 characters, no control characters and no leading or trailing whitespace (client::valid_label, inference/client.rs:36-39).",
             "in": "query",
             "name": "session_id",
             "required": false,
             "schema": {
               "maxLength": 128,
               "minLength": 1,
+              "pattern": "^[^\\s\\p{Cc}]([^\\p{Cc}]*[^\\s\\p{Cc}])?$",
               "type": "string"
             }
           },
@@ -28646,13 +28973,14 @@
             }
           },
           {
-            "description": "Exact public model name.",
+            "description": "Exact public model name: 1 to 200 UTF-8 bytes (maxLength counts characters and is necessary, not sufficient), no control characters (LogQuery::filters, logs.rs:114-120).",
             "in": "query",
             "name": "model",
             "required": false,
             "schema": {
               "maxLength": 200,
               "minLength": 1,
+              "pattern": "^[^\\p{Cc}]+$",
               "type": "string"
             }
           },
@@ -28705,13 +29033,14 @@
             }
           },
           {
-            "description": "Exact client session id (1 to 128 characters, no control characters, no surrounding whitespace).",
+            "description": "Exact client session id: 1 to 128 characters, no control characters and no leading or trailing whitespace (client::valid_label, inference/client.rs:36-39).",
             "in": "query",
             "name": "session_id",
             "required": false,
             "schema": {
               "maxLength": 128,
               "minLength": 1,
+              "pattern": "^[^\\s\\p{Cc}]([^\\p{Cc}]*[^\\s\\p{Cc}])?$",
               "type": "string"
             }
           },
