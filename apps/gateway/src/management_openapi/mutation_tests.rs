@@ -46,6 +46,11 @@ fn sample(document: &Value, schema: &Value) -> Value {
                 .as_str()
                 .is_some_and(|p| p.starts_with("^env:")) =>
                 "env:REFERENCE".into(),
+            // The reviewed alert-webhook destination pattern (https, or loopback http).
+            _ if schema["pattern"]
+                .as_str()
+                .is_some_and(|p| p.starts_with("^(https://")) =>
+                "https://receiver.example.test/ingest".into(),
             _ if schema.get("pattern").is_some() => "0".into(),
             _ => "fixture".into(),
         }),

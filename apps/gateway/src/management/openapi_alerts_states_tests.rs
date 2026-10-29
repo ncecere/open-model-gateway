@@ -157,8 +157,34 @@ pub(super) struct Seed<'a> {
     pub(super) details: Value,
     pub(super) email: Mail,
     pub(super) cleared: Mail,
+    /// `Some((level, severity, subject_key, summary))` where a table constraint
+    /// fixes the producer's exact row shape (aged unknown holds).
+    pub(super) shape: Option<(i32, &'static str, String, &'static str)>,
 }
 impl<'a> Seed<'a> {
+    /// An aged unknown-hold incident exactly as `alerts::aged_hold` writes it
+    /// (constraint `alert_events_aged_shape`): level 1 = 24 hours, 2 = 168.
+    pub(super) fn aged(workspace: Option<Uuid>, level: i32) -> Self {
+        let (severity, hours, summary) = if level == 1 {
+            (
+                "warning",
+                24,
+                "Holds with unknown cost are over 24 hours old",
+            )
+        } else {
+            (
+                "critical",
+                168,
+                "Holds with unknown cost are over 168 hours old",
+            )
+        };
+        let subject = workspace.map_or_else(|| "personal".to_owned(), |w| format!("workspace:{w}"));
+        let mut seed = Self::rule(Uuid::nil(), "aged_unknown_hold", workspace);
+        seed.rule = None;
+        seed.details = json!({ "threshold_hours": hours });
+        seed.shape = Some((level, severity, subject, summary));
+        seed
+    }
     pub(super) fn rule(rule: Uuid, kind: &'a str, workspace: Option<Uuid>) -> Self {
         Self {
             rule: Some(rule),
@@ -170,6 +196,7 @@ impl<'a> Seed<'a> {
             details: json!({"used_microusd":"9007199254740993","threshold_percent":80}),
             email: Mail::None,
             cleared: Mail::None,
+            shape: None,
         }
     }
     pub(super) fn email(mut self, email: Mail, cleared: Mail) -> Self {
@@ -177,49 +204,90 @@ impl<'a> Seed<'a> {
         self.cleared = cleared;
         self
     }
-    pub(super) fn resolved(mut self, resolution: &'a str) -> Self {
-        self.resolution = Some(resolution);
-        self
-    }
 }
 
+/// One email delivery, in the states the worker and the generation limit leave
+/// behind. `alert_delivery_set_bucket` makes every INSERT a charged, `pending`
+/// delivery with server-owned metadata, so (as in production) the terminal and
+/// retrying states arrive by UPDATE, exactly the columns `alerts::outbox`
+/// refresh writes. A suppressed delivery is what that same trigger writes once a
+/// bucket has used its 100 deliveries a day; reaching it by volume would add a
+/// hundred incidents to every list, so the row is inserted with the trigger
+/// paused and the trigger's own values.
 async fn delivery(pool: &PgPool, event: Uuid, transition: &str, mail: Mail) {
     let id = Uuid::new_v4();
-    let query = match mail {
-        Mail::None => return,
-        Mail::Sent => {
-            "INSERT INTO alert_deliveries(id,event_id,transition,status,recipients,sent,failed,completed_at) VALUES($1,$2,$3,'sent',2,2,0,now())"
-        }
-        // A failed attempt that will be retried: still pending, with its category.
-        Mail::Retrying => {
-            "INSERT INTO alert_deliveries(id,event_id,transition,status,recipients,error,attempt_count,retrying,next_attempt_at,waiting) VALUES($1,$2,$3,'pending',1,'connection',2,true,now()+interval '10 minutes',1)"
-        }
-        Mail::Suppressed => {
-            "INSERT INTO alert_deliveries(id,event_id,transition,status,suppression_reason,completed_at) VALUES($1,$2,$3,'suppressed','workspace_generation_limit',now())"
-        }
-    };
-    sqlx::query(query)
+    if matches!(mail, Mail::None) {
+        return;
+    }
+    if matches!(mail, Mail::Suppressed) {
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query("ALTER TABLE alert_deliveries DISABLE TRIGGER alert_delivery_set_bucket")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO alert_deliveries(id,event_id,transition,bucket_id,status,suppression_reason,quota_charged,completed_at) SELECT $1,e.id,$3,coalesce(e.workspace_id,'00000000-0000-0000-0000-000000000000'::uuid),'suppressed','workspace_generation_limit',false,clock_timestamp() FROM alert_events e WHERE e.id=$2")
+            .bind(id)
+            .bind(event)
+            .bind(transition)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("ALTER TABLE alert_deliveries ENABLE TRIGGER alert_delivery_set_bucket")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        return;
+    }
+    sqlx::query("INSERT INTO alert_deliveries(id,event_id,transition) VALUES($1,$2,$3)")
         .bind(id)
         .bind(event)
         .bind(transition)
         .execute(pool)
         .await
         .unwrap();
+    let update = match mail {
+        Mail::Sent => {
+            "UPDATE alert_deliveries SET status='sent',recipients=2,sent=2,failed=0,completed_at=clock_timestamp() WHERE id=$1"
+        }
+        // A failed attempt that will be retried: still pending, with its category.
+        Mail::Retrying => {
+            "UPDATE alert_deliveries SET recipients=1,error='connection',attempt_count=2,retrying=true,next_attempt_at=clock_timestamp()+interval '10 minutes',waiting=1 WHERE id=$1"
+        }
+        Mail::None | Mail::Suppressed => unreachable!(),
+    };
+    sqlx::query(update).bind(id).execute(pool).await.unwrap();
 }
 
 /// One incident row, as `alerts::reconcile` writes it, plus its email deliveries.
 pub(super) async fn seed(pool: &PgPool, s: Seed<'_>) -> Uuid {
     let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO alert_events(id,rule_id,builtin,kind,subject_key,level,severity,workspace_id,provider_connection_id,summary,details,resolved_at,resolution) VALUES($1,$2,$3,$4,$1::text,80,$5,$6,$7,'Contract incident',$8,CASE WHEN $9::text IS NULL THEN NULL ELSE clock_timestamp() END,$9)")
+    let default_severity = if s.resolution.is_some() {
+        "warning"
+    } else {
+        "critical"
+    };
+    let (level, severity, subject, summary) = s.shape.clone().unwrap_or_else(|| {
+        (
+            80,
+            default_severity,
+            id.to_string(),
+            "Contract incident",
+        )
+    });
+    sqlx::query("INSERT INTO alert_events(id,rule_id,builtin,kind,subject_key,level,severity,workspace_id,provider_connection_id,summary,details,resolved_at,resolution) VALUES($1,$2,$3,$4,$10,$11,$5,$6,$7,$12,$8,CASE WHEN $9::text IS NULL THEN NULL ELSE clock_timestamp() END,$9)")
         .bind(id)
         .bind(s.rule)
         .bind(s.builtin)
         .bind(s.kind)
-        .bind(if s.resolution.is_some() { "warning" } else { "critical" })
+        .bind(severity)
         .bind(s.workspace)
         .bind(s.connection)
         .bind(&s.details)
         .bind(s.resolution)
+        .bind(subject)
+        .bind(level)
+        .bind(summary)
         .execute(pool)
         .await
         .unwrap();
@@ -316,11 +384,8 @@ pub(super) async fn platform_events(
     }
     // Aged unknown-cost holds: a Team/Project incident names the workspace, a
     // personal scope is never named.
-    for ws in [Some(p.team), None] {
-        let mut s = Seed::rule(Uuid::nil(), "aged_unknown_hold", ws);
-        s.rule = None;
-        s.details = json!({"threshold_hours":24});
-        seed(pool, s).await;
+    for (ws, level) in [(Some(p.team), 1), (None, 2)] {
+        seed(pool, Seed::aged(ws, level)).await;
     }
     // Admission ceilings: Team and Project (rate-only and lock-wait-only, scope
     // workspace and key) and personal ones, which never carry an identity.
@@ -418,9 +483,10 @@ pub(super) async fn workspace_events(
         s.resolution = resolution;
         seed(pool, s).await;
     }
-    let mut aged = Seed::rule(Uuid::nil(), "aged_unknown_hold", Some(w.team));
-    aged.rule = None;
-    aged.details = json!({"threshold_hours":24});
+    // The installation history already holds this Team's open aged incident
+    // (one open incident per subject), so this one is already cleared.
+    let mut aged = Seed::aged(Some(w.team), 1);
+    aged.resolution = Some("cleared");
     seed(pool, aged).await;
     // The owner's built-in personal budget alert (no rule), in two delivery shapes.
     for (email, cleared, resolution) in [
