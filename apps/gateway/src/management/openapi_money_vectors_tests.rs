@@ -29,6 +29,134 @@ pub(super) struct Vx<'a> {
     pub failures: std::cell::RefCell<Vec<String>>,
 }
 
+/// The artifact's verdict on a JSON request body of an operation.
+impl Vx<'_> {
+    pub(super) fn schema_body(&self, method: &str, template: &str, body: &Value) -> bool {
+        let document = openapi::responses::artifact();
+        let schema = &document["paths"][template][method.to_ascii_lowercase()]["requestBody"]["content"]
+            ["application/json"]["schema"];
+        openapi::responses::validate_value(document, schema, body).is_ok()
+    }
+    /// The artifact's verdict on one query parameter value.
+    pub(super) fn schema_param(&self, template: &str, name: &str, raw: &str) -> bool {
+        let document = openapi::responses::artifact();
+        let parameter = document["paths"][template]["get"]["parameters"]
+            .as_array()
+            .and_then(|all| all.iter().find(|p| p["name"] == name))
+            .unwrap();
+        openapi::responses::validate_value(document, &parameter["schema"], &json!(raw)).is_ok()
+    }
+}
+
+fn instant(v: &Value) -> Option<chrono::DateTime<chrono::Utc>> {
+    v.as_str()?.parse().ok()
+}
+/// parse()'s rules for the page chain, recomputed from the body: every page
+/// but the last has has_more=true and a distinct cursor, the last has
+/// has_more=false and no cursor, and the buckets are consecutive one-day
+/// buckets from request.starting_at to request.ending_at.
+fn chain_broken(input: &Value) -> bool {
+    let (Some(start), Some(end)) = (
+        instant(&input["request"]["starting_at"]),
+        instant(&input["request"]["ending_at"]),
+    ) else {
+        return false;
+    };
+    let Some(pages) = input["pages"].as_array() else {
+        return false;
+    };
+    let mut expected = start;
+    let mut cursors = std::collections::BTreeSet::new();
+    for (index, page) in pages.iter().enumerate() {
+        let last = index + 1 == pages.len();
+        if page["has_more"].as_bool() == Some(last) {
+            return true;
+        }
+        if !last
+            && !page["next_page"]
+                .as_str()
+                .is_some_and(|s| cursors.insert(s.to_owned()))
+        {
+            return true;
+        }
+        if last && !page["next_page"].is_null() {
+            return true;
+        }
+        for bucket in page["data"].as_array().into_iter().flatten() {
+            let (Some(from), Some(to)) = (
+                instant(&bucket["starting_at"]),
+                instant(&bucket["ending_at"]),
+            ) else {
+                return false;
+            };
+            if from != expected || to != from + chrono::TimeDelta::days(1) || to > end {
+                return true;
+            }
+            expected = to;
+        }
+    }
+    expected != end
+}
+/// create_mapping()'s relations between elements, recomputed from the body:
+/// a window must end after it starts, a binding's provider models are unique,
+/// and two bindings may not overlap in time when they share a provider
+/// workspace or a connection (a missing deployment overlaps every deployment).
+fn mapping_conflicts(input: &Value) -> bool {
+    let Some(bindings) = input["bindings"].as_array() else {
+        return false;
+    };
+    for (index, binding) in bindings.iter().enumerate() {
+        let (Some(start), Some(end)) = (
+            instant(&binding["effective_start"]),
+            instant(&binding["effective_end"]),
+        ) else {
+            return false;
+        };
+        if end <= start {
+            return true;
+        }
+        let mut names = std::collections::BTreeSet::new();
+        for mapped in binding["model_mappings"].as_array().into_iter().flatten() {
+            if !names.insert(
+                mapped["provider_model"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+            ) {
+                return true;
+            }
+        }
+        for previous in &bindings[..index] {
+            let (Some(before_start), Some(before_end)) = (
+                instant(&previous["effective_start"]),
+                instant(&previous["effective_end"]),
+            ) else {
+                return false;
+            };
+            if start < before_end
+                && end > before_start
+                && (binding["provider_workspace_id"] == previous["provider_workspace_id"]
+                    || (binding["connection_id"] == previous["connection_id"]
+                        && (binding["deployment_id"].is_null()
+                            || previous["deployment_id"].is_null()
+                            || binding["deployment_id"] == previous["deployment_id"])))
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+/// A `billing_usage` that BillingUsage::validate accepts: total 3 = uncached 3
+/// + cache read 0 + cache writes 0 (the three parts sum to the aggregate).
+pub(super) fn coherent_billing() -> Value {
+    json!({"total_input_tokens":"3","uncached_input_tokens":"3","cache_read_input_tokens":"0","cache_write_input_tokens":"0","cache_write_default_input_tokens":"0","cache_write_5m_input_tokens":"0","cache_write_1h_input_tokens":"0"})
+}
+/// Meter evidence: two known counters, the rest unknown (never zero).
+pub(super) fn meters() -> Value {
+    json!({"output_images":"1","input_characters":null,"input_audio_seconds_ms":null,"output_audio_seconds_ms":null,"search_units":null,"requests":"1"})
+}
+
 fn pairs(list: &[(&str, String)]) -> Vec<(String, String)> {
     list.iter()
         .map(|(n, v)| ((*n).to_owned(), v.clone()))
@@ -45,7 +173,7 @@ fn param(query: &str, name: &str) -> Option<String> {
 impl Vx<'_> {
     /// Record a harness refusal (its message names method, template, vector
     /// kind and status only) instead of aborting the remaining operations.
-    async fn guard(&self, label: &str, fut: impl std::future::Future<Output = ()>) {
+    pub(super) async fn guard(&self, label: &str, fut: impl std::future::Future<Output = ()>) {
         if let Err(payload) = std::panic::AssertUnwindSafe(fut).catch_unwind().await {
             let message = payload
                 .downcast_ref::<String>()
@@ -503,8 +631,10 @@ impl Vx<'_> {
         upload["pages"][0]["data"][0]["starting_at"] = upload["request"]["starting_at"].clone();
         upload["pages"][0]["data"][0]["ending_at"] = upload["request"]["ending_at"].clone();
         // A chain of pages or buckets must be contiguous and linked by
-        // has_more/next_page, which per-element schemas cannot state: a
-        // schema-valid repetition (2..=31 elements) is refused by the parser.
+        // has_more/next_page, which per-element schemas cannot state. The
+        // refusal is decided only when THIS body really breaks the chain (the
+        // parser's own rules, recomputed from the body) and the schema accepts
+        // it; a refusal of an intact chain, or any other status, stands.
         self.guard(
             imports,
             body_vectors_http(seen, "POST", imports, upload, async |input: Value| {
@@ -517,12 +647,10 @@ impl Vx<'_> {
                     Some(input.clone()),
                 )
                 .await;
-                let chained = |v: &Value| v.as_array().is_some_and(|a| (2..=31).contains(&a.len()));
-                let chain = chained(&input["pages"])
-                    || input["pages"]
-                        .as_array()
-                        .is_some_and(|pages| pages.iter().any(|p| chained(&p["data"])));
-                if chain && captured.status == StatusCode::BAD_REQUEST {
+                if chain_broken(&input)
+                    && captured.status == StatusCode::BAD_REQUEST
+                    && self.schema_body("POST", imports, &input)
+                {
                     Probe::decided(captured, true)
                 } else {
                     Probe::from(captured)
@@ -536,9 +664,10 @@ impl Vx<'_> {
         mapping["bindings"][0]["effective_start"] = json!(format!("{day}T00:00:00Z"));
         mapping["bindings"][0]["effective_end"] =
             json!(format!("{}T00:00:00Z", day + chrono::TimeDelta::days(1)));
-        // Bindings may not overlap in time or ownership, and a binding's
-        // provider models are unique: relations between elements that a schema
-        // cannot state, so a schema-valid repetition is refused.
+        // Bindings may not overlap in time or ownership, end after they start,
+        // and a binding's provider models are unique: relations between
+        // elements that a schema cannot state. Decided only when this body
+        // really violates one of them (create_mapping's rules, recomputed).
         self.guard(
             mappings,
             body_vectors_http(seen, "POST", mappings, mapping, async |input: Value| {
@@ -551,15 +680,10 @@ impl Vx<'_> {
                     Some(input.clone()),
                 )
                 .await;
-                let repeated = input["bindings"].as_array().is_some_and(|bindings| {
-                    (2..=1000).contains(&bindings.len())
-                        || bindings.iter().any(|b| {
-                            b["model_mappings"]
-                                .as_array()
-                                .is_some_and(|m| (2..=100).contains(&m.len()))
-                        })
-                });
-                if repeated && captured.status == StatusCode::BAD_REQUEST {
+                if mapping_conflicts(&input)
+                    && captured.status == StatusCode::BAD_REQUEST
+                    && self.schema_body("POST", mappings, &input)
+                {
                     Probe::decided(captured, true)
                 } else {
                     Probe::from(captured)
@@ -578,7 +702,10 @@ impl Vx<'_> {
         )
         .await;
         // Reconciliation consumes its hold, so every request gets a fresh one.
-        let valid = json!({"input_tokens":"3","output_tokens":"2","billing_usage":null,"evidence":"vector:receipt"});
+        // The valid base carries every optional sibling (meter evidence, image
+        // variant, provider cost) and a coherent billing_usage, so the nested
+        // fields are walked too.
+        let valid = json!({"input_tokens":"3","output_tokens":"2","billing_usage":coherent_billing(),"evidence":"vector:receipt","meter_usage":meters(),"output_image_variant":"1024x1024","provider_cost_microusd":"5"});
         self.guard(
             "reconcile",
             body_vectors_http(
@@ -617,11 +744,14 @@ impl Vx<'_> {
 
 /// The time-zone database is not enumerable in a schema: a well-formed but
 /// unknown zone is refused by the handler although the schema (length 1..64)
-/// accepts it. Only that refusal is decided; every other status stands.
+/// accepts it. Only that refusal is decided; every other status stands. The
+/// handler measures the zone in UTF-8 BYTES (`timezone.len() > 64`, #405), so
+/// a multibyte zone longer than 64 bytes is NOT decided here: it stays a
+/// plain refusal that the schema (which counts characters) would have to match.
 fn zone_verdict(captured: Captured, input: &Value, known: bool) -> Probe {
     let length_ok = input["timezone"]
         .as_str()
-        .is_some_and(|z| (1..=64).contains(&z.chars().count()));
+        .is_some_and(|z| (1..=64).contains(&z.len()));
     if !known && length_ok && captured.status == StatusCode::BAD_REQUEST {
         Probe::decided(captured, true)
     } else {

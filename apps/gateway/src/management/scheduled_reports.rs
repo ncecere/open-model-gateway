@@ -143,7 +143,8 @@ struct Update {
 fn management_openapi_money_schedule_request_vectors() {
     // The schema states every constraint validate() can express without the
     // time-zone database or live configuration: cadence/state enums, HH:MM,
-    // timezone length and 1..=50 unique recipients. Bind exactly those.
+    // timezone length (in bytes here, see #405) and 1..=50 unique recipients.
+    // Bind exactly those.
     fn expressible(
         cadence: Option<&str>,
         timezone: Option<&str>,
@@ -153,7 +154,9 @@ fn management_openapi_money_schedule_request_vectors() {
     ) -> bool {
         cadence.is_none_or(|v| matches!(v, "weekly" | "monthly"))
             && state.is_none_or(|v| matches!(v, "active" | "paused"))
-            && timezone.is_none_or(|v| (1..=64).contains(&v.chars().count()))
+            // validate() counts UTF-8 BYTES (`timezone.len() > 64`); the schema's
+            // maxLength counts characters (#405), so this is the handler's rule.
+            && timezone.is_none_or(|v| (1..=64).contains(&v.len()))
             && time.is_none_or(|v| crate::jobs::schedule::parse_hhmm(v).is_some())
             && recipients.is_none_or(|r| {
                 (1..=50).contains(&r.len())

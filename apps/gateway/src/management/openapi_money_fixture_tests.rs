@@ -3,6 +3,8 @@ use super::*;
 use openapi::responses::{Captured, PositiveFixtures, capture_http};
 use sha2::{Digest, Sha256};
 
+#[path = "openapi_money_probes_tests.rs"]
+mod probes;
 #[path = "openapi_money_vectors_tests.rs"]
 mod vectors;
 
@@ -46,12 +48,8 @@ async fn send(
     capture_http(method, path, r.send().await.unwrap()).await
 }
 fn body(r: &Captured) -> Value {
-    assert_eq!(
-        r.status,
-        StatusCode::OK,
-        "{}",
-        String::from_utf8_lossy(&r.bytes)
-    );
+    // Status and a label only: never the response body (cleartext-logging).
+    assert_eq!(r.status, StatusCode::OK, "fixture expected a 200 response");
     serde_json::from_slice(&r.bytes).unwrap()
 }
 
@@ -667,7 +665,11 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
     )
     .await;
     // An unbounded hold (no known floor), an attempt with no reservation row
-    // at all (details redacted), and a robot (service account) settlement.
+    // at all, a settled attempt whose details were compacted, and a robot
+    // (service account) settlement. Compaction (maintenance.rs:40) redacts only
+    // SETTLED executions, so the missing-reservation row is never redacted.
+    // (A settled row carries its compaction exactly as the job writes it: the
+    // execution is stamped with details_redacted_at and nothing else changes.)
     seed(
         &pool,
         &Seed {
@@ -686,6 +688,14 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
             at: ago(2),
             price: None,
             res: None,
+            ..Seed::new(f.team, id(&team_key), deployment, price)
+        },
+    )
+    .await;
+    seed(
+        &pool,
+        &Seed {
+            at: ago(2),
             redacted: true,
             ..Seed::new(f.team, id(&team_key), deployment, price)
         },
@@ -1068,6 +1078,8 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
         ),
         "metric=requests&group_by=day".to_owned(),
         "metric=spend&group_by=member&then_by=workspace".to_owned(),
+        // Personal workspaces as the SECOND dimension: identity and totals only.
+        "metric=spend&group_by=model&then_by=workspace".to_owned(),
         "metric=requests&group_by=workspace".to_owned(),
     ];
     for query in &platform_explore {
@@ -1085,6 +1097,13 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
         if query.starts_with("metric=requests&group_by=workspace") {
             assert!(v["rows"].as_array().unwrap().iter().any(|r| {
                 r["group"]["name"]
+                    .as_str()
+                    .is_some_and(|n| n.starts_with("Personal \u{b7} "))
+            }));
+        }
+        if query == "metric=spend&group_by=model&then_by=workspace" {
+            assert!(v["rows"].as_array().unwrap().iter().any(|r| {
+                r["then"]["name"]
                     .as_str()
                     .is_some_and(|n| n.starts_with("Personal \u{b7} "))
             }));
@@ -1291,8 +1310,70 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
         None,
     )
     .await;
-    assert_eq!(v["data"][0]["workspace"]["kind"], "personal");
+    // The owner's own personal holds: exactly the two seeded ones (the
+    // unbounded hold and the floor-10 hold), none of the shared workspaces'.
+    let rows = v["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().any(|r| r["execution_id"] == json!(private)));
+    assert!(
+        rows.iter()
+            .all(|r| r["workspace"]["kind"] == "personal"
+                && r["workspace"]["id"] == json!(f.personal))
+    );
     assert!(v["personal"].is_null());
+    // The owner reads their own personal workspace through every workspace-
+    // scoped report; Platform Admins and Auditors get 404 on each of them (they
+    // see the workspace's identity and totals only through the platform scope).
+    let personal_reads = [
+        format!("{personalbase}/cost-report?{range}"),
+        format!("{personalbase}/costs?{range}"),
+        format!("{personalbase}/usage"),
+        format!("{personalbase}/usage/explore?{range}&metric=spend&group_by=key"),
+        format!("{personalbase}/usage/overview?{range}"),
+    ];
+    let own_key = id(&private_key).to_string();
+    for path in &personal_reads {
+        let v = observe(&mut seen, &client, &base, &owner, "GET", path, None).await;
+        if path.contains("/cost-report?") {
+            assert!(
+                v["totals"]["attempts"]
+                    .as_str()
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap()
+                    > 0
+            );
+        }
+        if path.contains("/costs?") {
+            assert!(
+                v["data"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|r| r["id"] == json!(private))
+            );
+        }
+        if path.contains("/usage/explore?") {
+            assert!(
+                v["rows"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|r| r["group"]["id"] == json!(own_key))
+            );
+        }
+        if path.contains("/usage/overview?") {
+            assert!(v.to_string().contains(&own_key));
+        }
+        for actor in [&admin, &auditor] {
+            assert_eq!(
+                send(&client, &base, Some(actor), "GET", path, None)
+                    .await
+                    .status,
+                StatusCode::NOT_FOUND
+            );
+        }
+    }
     let r = send(
         &client,
         &base,
@@ -1434,45 +1515,10 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
             )
             .await;
             assert_eq!(v["expired"], false);
-            assert!(!v["delivery"].is_null());
-            // An occurrence generated before delivery envelopes existed (an
-            // upgraded installation) has none. History is append-only, so the
-            // test lifts the guards, as for expiry below, and restores them.
-            let mut tx = pool.begin().await.unwrap();
-            for statement in [
-                "ALTER TABLE alert_recipient_outbox DISABLE TRIGGER alert_recipient_outbox_no_delete",
-                "ALTER TABLE alert_deliveries DISABLE TRIGGER alert_deliveries_no_delete",
-            ] {
-                sqlx::query(statement).execute(&mut *tx).await.unwrap();
-            }
-            sqlx::query("DELETE FROM alert_recipient_outbox WHERE delivery_id IN (SELECT id FROM alert_deliveries WHERE report_run_id=$1)")
-                .bind(run2)
-                .execute(&mut *tx)
-                .await
-                .unwrap();
-            sqlx::query("DELETE FROM alert_deliveries WHERE report_run_id=$1")
-                .bind(run2)
-                .execute(&mut *tx)
-                .await
-                .unwrap();
-            for statement in [
-                "ALTER TABLE alert_recipient_outbox ENABLE TRIGGER alert_recipient_outbox_no_delete",
-                "ALTER TABLE alert_deliveries ENABLE TRIGGER alert_deliveries_no_delete",
-            ] {
-                sqlx::query(statement).execute(&mut *tx).await.unwrap();
-            }
-            tx.commit().await.unwrap();
-            let v = observe(
-                &mut seen,
-                &client,
-                &base,
-                actor,
-                "GET",
-                &format!("{schedules}/{s2}/runs/{run2}"),
-                None,
-            )
-            .await;
-            assert!(v["delivery"].is_null());
+            // Run, snapshot and delivery are written in one transaction
+            // (scheduled_reports.rs:306-313) and deliveries are never deleted:
+            // every run carries its envelope, in the list as well.
+            assert!(v["delivery"].is_object());
             let v = observe(
                 &mut seen,
                 &client,
@@ -1483,7 +1529,7 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
                 None,
             )
             .await;
-            assert!(v["data"][0]["delivery"].is_null());
+            assert!(v["data"][0]["delivery"].is_object());
         }
         // Pause again (an active schedule needs the operator public URL).
         observe(
@@ -1885,6 +1931,7 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
     };
     vx.queries(&mut seen).await;
     vx.bodies(&mut seen).await;
+    vx.probes().await;
     for line in vx.failures.borrow().iter() {
         eprintln!("slice4 vector failure: {line}");
     }

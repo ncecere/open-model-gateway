@@ -70,12 +70,20 @@ fn management_openapi_money_signed_credits_and_nested_billing_boundaries() {
     ] {
         let mut v = counters.clone();
         v["total_input_tokens"] = json!(text);
+        // The contract documents canonical decimals only (the harness money
+        // rule); the handler's counter parser additionally tolerates zero padding.
+        let canonical = text == "0" || !text.starts_with('0');
         assert_eq!(
             check("MoneyBillingUsageInput", &v),
-            serde_json::from_value::<crate::billing::BillingUsage>(v).is_ok(),
+            canonical && serde_json::from_value::<crate::billing::BillingUsage>(v).is_ok(),
             "{text}"
         );
     }
+    // Pinned divergence: zero-padded counters parse in the handler, not in the schema.
+    let mut padded = counters.clone();
+    padded["total_input_tokens"] = json!("007");
+    assert!(serde_json::from_value::<crate::billing::BillingUsage>(padded.clone()).is_ok());
+    assert!(!check("MoneyBillingUsageInput", &padded));
     let mut omitted = counters.clone();
     omitted
         .as_object_mut()

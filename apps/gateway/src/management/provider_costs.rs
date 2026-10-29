@@ -280,6 +280,10 @@ fn management_openapi_money_provider_request_vectors() {
     let mapping = json!({"account_id":"account","supersedes":null,"evidence_reference":"receipt:map","bindings":[{"provider_workspace_id":"provider-workspace","connection_id":Uuid::nil(),"deployment_id":Uuid::nil(),"workspace_id":Uuid::nil(),"effective_start":"2025-08-01T00:00:00Z","effective_end":"2025-08-02T00:00:00Z","exclusive":true,"non_omg_traffic":false,"attested":true,"evidence_reference":"receipt:binding","model_mappings":[{"provider_model":"provider-model","upstream_model":"upstream-model"}]}]});
     // The schema states the per-element rules create_mapping() enforces:
     // attested scopes, bounded text and an owner workspace for exclusive ones.
+    // This copy of the rule is only a cross-check for the DTO-level vectors:
+    // the flips (attested=false, exclusive with non-OMG traffic, exclusive
+    // without a workspace) are decided by the REAL handler over HTTP in
+    // openapi_money_probes_tests.rs, which compares its verdict with the schema.
     fn binding_ok(b: &Binding) -> bool {
         b.attested
             && bounded(&b.evidence_reference, 256)
