@@ -1503,3 +1503,83 @@ fn management_openapi_http_vectors_the_byte_oracle_covers_every_element_and_map_
     let nested = json!({"type":"object","properties":{"xs":{"type":"array","items":limited()}}});
     assert!(!accepts(nested, json!({"xs":["ab", two_byte]})));
 }
+
+// ----- round 3: keywords beside a `$ref` ----
+
+/// A request body whose property `n` is `{"$ref": Decimal, ...sibling}`.
+fn ref_document(component: Value, sibling: Value) -> Value {
+    let mut property = json!({"$ref":"#/components/schemas/Target"});
+    for (key, value) in sibling.as_object().unwrap() {
+        property[key] = value.clone();
+    }
+    let mut document = body_only(
+        json!({"type":"object","required":["n"],"additionalProperties":false,
+        "properties":{"n":property}}),
+    );
+    document["components"]["schemas"]["Target"] = component;
+    document
+}
+fn decimal() -> Value {
+    json!({"type":"string","pattern":"^(0|[1-9][0-9]*)$"})
+}
+
+#[tokio::test]
+async fn management_openapi_http_vectors_see_bounds_beside_a_ref() {
+    let document = ref_document(decimal(), json!({"maxLength":15}));
+    let valid = json!({"n":"15"});
+    // The sibling bound is a vector, and the exact handler agrees.
+    let cases = cases_of(&document, &valid, &[]).unwrap();
+    assert!(has(&cases, "/n", "maxLength+1", false, |b| b["n"]
+        .as_str()
+        .is_some_and(|n| n.len() == 16)));
+    run_judged(&judge(capped_at_15), &document, valid.clone(), &[])
+        .await
+        .unwrap();
+    // RED: a handler capped at 16 digits is looser than the sibling's maxLength.
+    let text = message(run_judged(&judge(capped_at_16), &document, valid, &[]).await);
+    assert!(
+        text.contains("maxLength+1")
+            && text.contains("/n")
+            && text.contains("schema refuses but handler accepts"),
+        "{text}"
+    );
+}
+
+#[test]
+fn management_openapi_http_vectors_annotations_beside_a_ref_take_effect() {
+    // x-omg-pattern-boundaries beside the $ref excuses the unbounded pattern.
+    let plain = ref_document(decimal(), json!({}));
+    let text = format!(
+        "{:#}",
+        cases_of(&plain, &json!({"n":"15"}), &[]).unwrap_err()
+    );
+    assert!(text.contains("no derivable length bounds"), "{text}");
+    let reviewed = ref_document(
+        decimal(),
+        json!({"x-omg-pattern-boundaries":"Covered by the handler's unit tests."}),
+    );
+    cases_of(&reviewed, &json!({"n":"15"}), &[]).unwrap();
+    // x-omg-unsendable-boundary beside the $ref excuses an unsendable bound.
+    let big = json!({"type":"string","maxLength":150_000});
+    let error = cases_of(
+        &ref_document(big.clone(), json!({})),
+        &json!({"n":"a"}),
+        &[],
+    )
+    .err()
+    .expect("an unsendable bound behind a $ref must fail");
+    assert!(format!("{error:#}").contains("maxLength+1"));
+    cases_of(
+        &ref_document(big, json!({"x-omg-unsendable-boundary":REASON})),
+        &json!({"n":"a"}),
+        &[],
+    )
+    .unwrap();
+    // x-omg-max-bytes beside the $ref is honoured by the oracle.
+    let schema = json!({"$ref":"#/components/schemas/Target","x-omg-max-bytes":4});
+    let mut document = body_only(schema.clone());
+    document["components"]["schemas"]["Target"] = json!({"type":"string"});
+    let accepts =
+        |text: &str| super::http_vectors::accepts(&document, &schema, &json!(text)).unwrap();
+    assert!(accepts("ab") && !accepts("\u{e9}\u{e9}\u{e9}"));
+}

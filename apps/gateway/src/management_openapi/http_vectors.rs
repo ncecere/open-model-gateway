@@ -75,6 +75,23 @@ fn resolve<'a>(document: &'a Value, mut node: &'a Value) -> Result<&'a Value> {
     bail!("reference chain too deep")
 }
 
+/// Every node along a `$ref` chain, the node itself first: siblings of a `$ref`
+/// (`{"$ref": ..., "maxLength": 15}`) are keywords of the instance too, so the
+/// validator, `declare` and `reach` see them and the vectors must as well.
+fn chain<'a>(document: &'a Value, mut node: &'a Value) -> Result<Vec<&'a Value>> {
+    let mut links = vec![node];
+    for _ in 0..16 {
+        match coverage::follow(document, node)? {
+            Some((target, _)) => {
+                node = target;
+                links.push(node);
+            }
+            None => return Ok(links),
+        }
+    }
+    bail!("reference chain too deep")
+}
+
 fn valid(document: &Value, schema: &Value, instance: &Value) -> Result<bool> {
     Ok(responses::validator(document, schema)?.is_valid(instance))
 }
@@ -89,26 +106,28 @@ fn applicable<'a>(
     depth: usize,
 ) -> Result<()> {
     ensure!(depth < 16, "schema nesting too deep");
-    let node = resolve(document, node)?;
-    out.push(node);
-    for branch in node["allOf"].as_array().into_iter().flatten() {
-        applicable(document, branch, value, out, depth + 1)?;
-    }
-    for keyword in ["oneOf", "anyOf"] {
-        for branch in node[keyword].as_array().into_iter().flatten() {
-            if valid(document, branch, value)? {
-                applicable(document, branch, value, out, depth + 1)?;
+    // Every link of a `$ref` chain contributes its own keywords, siblings included.
+    for node in chain(document, node)? {
+        out.push(node);
+        for branch in node["allOf"].as_array().into_iter().flatten() {
+            applicable(document, branch, value, out, depth + 1)?;
+        }
+        for keyword in ["oneOf", "anyOf"] {
+            for branch in node[keyword].as_array().into_iter().flatten() {
+                if valid(document, branch, value)? {
+                    applicable(document, branch, value, out, depth + 1)?;
+                }
             }
         }
-    }
-    if let Some(condition) = node.get("if") {
-        let keyword = if valid(document, condition, value)? {
-            "then"
-        } else {
-            "else"
-        };
-        if let Some(branch) = node.get(keyword) {
-            applicable(document, branch, value, out, depth + 1)?;
+        if let Some(condition) = node.get("if") {
+            let keyword = if valid(document, condition, value)? {
+                "then"
+            } else {
+                "else"
+            };
+            if let Some(branch) = node.get(keyword) {
+                applicable(document, branch, value, out, depth + 1)?;
+            }
         }
     }
     Ok(())
@@ -391,21 +410,22 @@ fn declared_values(
     depth: usize,
 ) -> Result<()> {
     ensure!(depth < 16, "schema nesting too deep");
-    let node = resolve(document, node)?;
-    let mut add = |value: &Value| {
-        if !out.contains(value) {
-            out.push(value.clone());
+    for node in chain(document, node)? {
+        let mut add = |value: &Value| {
+            if !out.contains(value) {
+                out.push(value.clone());
+            }
+        };
+        if let Some(constant) = node.get("const") {
+            add(constant);
         }
-    };
-    if let Some(constant) = node.get("const") {
-        add(constant);
-    }
-    for member in node["enum"].as_array().into_iter().flatten() {
-        add(member);
-    }
-    for keyword in ["oneOf", "anyOf", "allOf"] {
-        for branch in node[keyword].as_array().into_iter().flatten() {
-            declared_values(document, branch, out, depth + 1)?;
+        for member in node["enum"].as_array().into_iter().flatten() {
+            add(member);
+        }
+        for keyword in ["oneOf", "anyOf", "allOf"] {
+            for branch in node[keyword].as_array().into_iter().flatten() {
+                declared_values(document, branch, out, depth + 1)?;
+            }
         }
     }
     Ok(())
