@@ -391,25 +391,8 @@ fn represented(r: &Captured, seen: &mut PositiveFixtures) -> Value {
     seen.observe(r);
     v
 }
-/// Seeds that cannot be expressed through the product API. Failures are
-/// recorded (SQLSTATE only, never row values) and asserted empty at the end.
-#[derive(Default)]
-struct Soft(Vec<String>);
-impl Soft {
-    fn note(&mut self, what: &str, r: Result<sqlx::postgres::PgQueryResult, sqlx::Error>) {
-        if let Err(e) = r {
-            let code = e
-                .as_database_error()
-                .and_then(|d| d.code().map(|c| c.to_string()))
-                .unwrap_or_default();
-            self.0.push(format!("{what}: SQLSTATE {code}"));
-        }
-    }
-}
-
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
-    let mut soft = Soft::default();
     let f = fixture(&pool).await;
     let admin = browser(&pool, &f.admin).await;
     let auditor = browser(&pool, &f.auditor).await;
@@ -1421,13 +1404,11 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
                 Some(create(None)),
             )
             .await);
-            soft.note(
-                "legacy cursor",
-                sqlx::query("UPDATE report_schedules SET next_run_at=NULL,next_period_end=NULL WHERE id=$1 AND state='paused'")
-                    .bind(s3)
-                    .execute(&pool)
-                    .await,
-            );
+            sqlx::query("UPDATE report_schedules SET next_run_at=NULL,next_period_end=NULL WHERE id=$1 AND state='paused'")
+                .bind(s3)
+                .execute(&pool)
+                .await
+                .unwrap();
             observe(
                 &mut seen,
                 &client,
@@ -1543,13 +1524,11 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
             .await;
         }
         // A creator whose authority lapsed leaves an outcome without a period.
-        soft.note(
-            "authority outcome",
-            sqlx::query("INSERT INTO report_generation_outcomes(schedule_id,run_id,configuration_revision,claim_token,period_start,period_end,category) SELECT id,NULL,configuration_revision,NULL,NULL,NULL,'authority_lost' FROM report_schedules WHERE id=$1")
-                .bind(schedule)
-                .execute(&pool)
-                .await,
-        );
+        sqlx::query("INSERT INTO report_generation_outcomes(schedule_id,run_id,configuration_revision,claim_token,period_start,period_end,category) SELECT id,NULL,configuration_revision,NULL,NULL,NULL,'authority_lost' FROM report_schedules WHERE id=$1")
+            .bind(schedule)
+            .execute(&pool)
+            .await
+            .unwrap();
         let v = observe(
             &mut seen,
             &client,
@@ -2011,11 +1990,6 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
     )
     .await;
     assert_eq!(r.status, StatusCode::FORBIDDEN);
-    // Seeds the product API cannot express report their SQLSTATE only.
-    for line in &soft.0 {
-        eprintln!("slice4 soft seed failure: {line}");
-    }
     seen.finish(openapi::responses::SLICE4_AREAS);
-    assert!(soft.0.is_empty(), "{:?}", soft.0);
     assert!(vx.failures.borrow().is_empty());
 }

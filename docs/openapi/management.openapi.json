@@ -7196,7 +7196,11 @@
                   "format": "uuid",
                   "type": "string"
                 }
-              }
+              },
+              "required": [
+                "workspace_id",
+                "non_omg_traffic"
+              ]
             },
             "type": "object"
           },
