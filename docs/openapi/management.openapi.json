@@ -1936,8 +1936,12 @@
             "additionalProperties": false,
             "properties": {
               "amount_microusd": {
-                "description": "Canonical integer micro-USD string of at most 19 digits. The handler additionally accepts leading zeros and rejects values above the signed 64-bit maximum.",
-                "pattern": "^(0|[1-9][0-9]{0,18})$",
+                "description": "Canonical integer micro-USD string within the signed 64-bit range and greater than zero (money(n, true): the handler refuses 0 and anything above 9223372036854775807; it also tolerates leading zeros such as 0100, which the contract does not offer).",
+                "maxLength": 19,
+                "not": {
+                  "const": "0"
+                },
+                "pattern": "^(?:0|[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
                 "type": "string"
               },
               "period": {
@@ -1969,8 +1973,12 @@
                 ]
               },
               {
-                "description": "Canonical integer micro-USD string of at most 19 digits. The handler additionally accepts leading zeros and rejects values above the signed 64-bit maximum.",
-                "pattern": "^(0|[1-9][0-9]{0,18})$",
+                "description": "Canonical integer micro-USD string within the signed 64-bit range and greater than zero (money(n, true): the handler refuses 0 and anything above 9223372036854775807; it also tolerates leading zeros such as 0100, which the contract does not offer).",
+                "maxLength": 19,
+                "not": {
+                  "const": "0"
+                },
+                "pattern": "^(?:0|[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
                 "type": "string"
               }
             ],
@@ -2057,8 +2065,9 @@
             "additionalProperties": false,
             "properties": {
               "microusd_per_million": {
-                "description": "Exact nonnegative integer decimal string. Monetary fields are micro-USD, never floating-point JSON numbers.",
-                "pattern": "^[0-9]+$",
+                "description": "Decimal digits of a signed 64-bit integer (money(): at most 19 digits, parsed into an i64; leading zeros are tolerated). A rate in micro-USD per million tokens.",
+                "maxLength": 19,
+                "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
                 "type": "string"
               },
               "status": {
@@ -2272,10 +2281,12 @@
             "additionalProperties": false,
             "properties": {
               "catalog_ids": {
+                "description": "At most 200 ids (ids_valid counts the raw list, so 201 entries are refused even when repeated; repeated ids within 200 are accepted and de-duplicated). Every id must exist (validate_ids).",
                 "items": {
                   "format": "uuid",
                   "type": "string"
                 },
+                "maxItems": 200,
                 "type": "array"
               }
             },
@@ -2290,10 +2301,12 @@
             "minItems": 1,
             "prefixItems": [
               {
+                "description": "At most 200 ids (ids_valid counts the raw list, so 201 entries are refused even when repeated; repeated ids within 200 are accepted and de-duplicated). Every id must exist (validate_ids).",
                 "items": {
                   "format": "uuid",
                   "type": "string"
                 },
+                "maxItems": 200,
                 "type": "array"
               }
             ],
@@ -2552,24 +2565,30 @@
             "additionalProperties": false,
             "properties": {
               "personal": {
+                "description": "At most 200 ids (ids_valid counts the raw list, so 201 entries are refused even when repeated; repeated ids within 200 are accepted and de-duplicated). Every id must exist (validate_ids).",
                 "items": {
                   "format": "uuid",
                   "type": "string"
                 },
+                "maxItems": 200,
                 "type": "array"
               },
               "project": {
+                "description": "At most 200 ids (ids_valid counts the raw list, so 201 entries are refused even when repeated; repeated ids within 200 are accepted and de-duplicated). Every id must exist (validate_ids).",
                 "items": {
                   "format": "uuid",
                   "type": "string"
                 },
+                "maxItems": 200,
                 "type": "array"
               },
               "team": {
+                "description": "At most 200 ids (ids_valid counts the raw list, so 201 entries are refused even when repeated; repeated ids within 200 are accepted and de-duplicated). Every id must exist (validate_ids).",
                 "items": {
                   "format": "uuid",
                   "type": "string"
                 },
+                "maxItems": 200,
                 "type": "array"
               }
             },
@@ -2586,24 +2605,30 @@
             "minItems": 3,
             "prefixItems": [
               {
+                "description": "At most 200 ids (ids_valid counts the raw list, so 201 entries are refused even when repeated; repeated ids within 200 are accepted and de-duplicated). Every id must exist (validate_ids).",
                 "items": {
                   "format": "uuid",
                   "type": "string"
                 },
+                "maxItems": 200,
                 "type": "array"
               },
               {
+                "description": "At most 200 ids (ids_valid counts the raw list, so 201 entries are refused even when repeated; repeated ids within 200 are accepted and de-duplicated). Every id must exist (validate_ids).",
                 "items": {
                   "format": "uuid",
                   "type": "string"
                 },
+                "maxItems": 200,
                 "type": "array"
               },
               {
+                "description": "At most 200 ids (ids_valid counts the raw list, so 201 entries are refused even when repeated; repeated ids within 200 are accepted and de-duplicated). Every id must exist (validate_ids).",
                 "items": {
                   "format": "uuid",
                   "type": "string"
                 },
+                "maxItems": 200,
                 "type": "array"
               }
             ],
@@ -2833,7 +2858,10 @@
               "residency": {
                 "anyOf": [
                   {
-                    "description": "residency_valid: 1 to 64 characters, starting with a lowercase letter or digit, then lowercase letters, digits, . _ -",
+                    "description": "residency_valid: 1 to 64 characters, starting with a lowercase letter or digit, then lowercase letters, digits, . _ -; the reserved value unspecified is refused (put_model_routing / put_deployment_routing)",
+                    "not": {
+                      "const": "unspecified"
+                    },
                     "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
                     "type": "string"
                   },
@@ -2875,7 +2903,10 @@
               {
                 "anyOf": [
                   {
-                    "description": "residency_valid: 1 to 64 characters, starting with a lowercase letter or digit, then lowercase letters, digits, . _ -",
+                    "description": "residency_valid: 1 to 64 characters, starting with a lowercase letter or digit, then lowercase letters, digits, . _ -; the reserved value unspecified is refused (put_model_routing / put_deployment_routing)",
+                    "not": {
+                      "const": "unspecified"
+                    },
                     "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
                     "type": "string"
                   },
@@ -3020,7 +3051,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -3058,7 +3089,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -3096,7 +3127,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -3134,7 +3165,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -3172,7 +3203,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -3210,7 +3241,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -3243,7 +3274,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -3280,7 +3311,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -3313,7 +3344,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -3346,7 +3377,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -3379,7 +3410,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -3412,7 +3443,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -3445,7 +3476,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -3733,7 +3764,7 @@
       },
       "SetupInvalidAccountingBudgetWindow": {
         "additionalProperties": false,
-        "description": "A visible window whose budget_totals accounting is invalid or unrepresentable (negative or overflowing counters): read_budget_report answers None and every consumption fact is null with headroom unknown (policies.rs budget_windows).",
+        "description": "A visible window whose budget_totals accounting is invalid or unrepresentable (negative or overflowing counters): read_budget_report answers None and every consumption fact is null with headroom unknown (policies.rs budget_windows). Every consumption fact is null together, in this branch only.",
         "properties": {
           "amount_microusd": {
             "$ref": "#/components/schemas/IdentityUnsignedDecimal"
@@ -3995,6 +4026,39 @@
         "oneOf": [
           {
             "additionalProperties": false,
+            "anyOf": [
+              {
+                "properties": {
+                  "max_waiting": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "max_waiting"
+                ]
+              },
+              {
+                "properties": {
+                  "max_running": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "max_running"
+                ]
+              },
+              {
+                "properties": {
+                  "max_kv_cache_percent": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "max_kv_cache_percent"
+                ]
+              }
+            ],
+            "description": "At least one of max_waiting, max_running and max_kv_cache_percent must be a number (RouteSettings::validate: Set at least one server load threshold). The URL must be /metrics on an approved local endpoint's origin (server-controlled approvals, not expressible here).",
             "properties": {
               "max_kv_cache_percent": {
                 "anyOf": [
@@ -4309,7 +4373,10 @@
               "required_residency": {
                 "anyOf": [
                   {
-                    "description": "residency_valid: 1 to 64 characters, starting with a lowercase letter or digit, then lowercase letters, digits, . _ -",
+                    "description": "residency_valid: 1 to 64 characters, starting with a lowercase letter or digit, then lowercase letters, digits, . _ -; the reserved value unspecified is refused (put_model_routing / put_deployment_routing)",
+                    "not": {
+                      "const": "unspecified"
+                    },
                     "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
                     "type": "string"
                   },
@@ -4355,7 +4422,10 @@
               {
                 "anyOf": [
                   {
-                    "description": "residency_valid: 1 to 64 characters, starting with a lowercase letter or digit, then lowercase letters, digits, . _ -",
+                    "description": "residency_valid: 1 to 64 characters, starting with a lowercase letter or digit, then lowercase letters, digits, . _ -; the reserved value unspecified is refused (put_model_routing / put_deployment_routing)",
+                    "not": {
+                      "const": "unspecified"
+                    },
                     "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
                     "type": "string"
                   },
@@ -4456,10 +4526,12 @@
             "additionalProperties": false,
             "properties": {
               "catalog_ids": {
+                "description": "At most 200 ids (ids_valid counts the raw list, so 201 entries are refused even when repeated; repeated ids within 200 are accepted and de-duplicated). Every id must exist (validate_ids).",
                 "items": {
                   "format": "uuid",
                   "type": "string"
                 },
+                "maxItems": 200,
                 "type": "array"
               },
               "model": {
@@ -4507,10 +4579,12 @@
                 ]
               },
               {
+                "description": "At most 200 ids (ids_valid counts the raw list, so 201 entries are refused even when repeated; repeated ids within 200 are accepted and de-duplicated). Every id must exist (validate_ids).",
                 "items": {
                   "format": "uuid",
                   "type": "string"
                 },
+                "maxItems": 200,
                 "type": "array"
               }
             ],
@@ -4534,7 +4608,8 @@
                   {
                     "type": "null"
                   }
-                ]
+                ],
+                "description": "Omitted keeps; null clears; string replaces."
               },
               "display_name": {
                 "anyOf": [
@@ -4573,7 +4648,7 @@
                 ]
               },
               "supported_protocols": {
-                "description": "ApiProtocol::valid_set: known, distinct protocols of one workload; only chat_completions, responses and messages combine, every other protocol stands alone.",
+                "description": "Omitted keeps; explicit null rejected. ApiProtocol::valid_set: known, distinct protocols of one workload; only chat_completions, responses and messages combine, every other protocol stands alone.",
                 "oneOf": [
                   {
                     "items": {
@@ -4653,7 +4728,8 @@
                   {
                     "type": "null"
                   }
-                ]
+                ],
+                "description": "Omitted keeps; null clears; string replaces."
               },
               {
                 "anyOf": [
@@ -4666,7 +4742,7 @@
                 ]
               },
               {
-                "description": "ApiProtocol::valid_set: known, distinct protocols of one workload; only chat_completions, responses and messages combine, every other protocol stands alone.",
+                "description": "Omitted keeps; explicit null rejected. ApiProtocol::valid_set: known, distinct protocols of one workload; only chat_completions, responses and messages combine, every other protocol stands alone.",
                 "oneOf": [
                   {
                     "items": {
@@ -4713,10 +4789,12 @@
             "additionalProperties": false,
             "properties": {
               "model_ids": {
+                "description": "At most 200 ids (ids_valid counts the raw list, so 201 entries are refused even when repeated; repeated ids within 200 are accepted and de-duplicated). Every id must exist (validate_ids).",
                 "items": {
                   "format": "uuid",
                   "type": "string"
                 },
+                "maxItems": 200,
                 "type": "array"
               }
             },
@@ -4731,10 +4809,12 @@
             "minItems": 1,
             "prefixItems": [
               {
+                "description": "At most 200 ids (ids_valid counts the raw list, so 201 entries are refused even when repeated; repeated ids within 200 are accepted and de-duplicated). Every id must exist (validate_ids).",
                 "items": {
                   "format": "uuid",
                   "type": "string"
                 },
+                "maxItems": 200,
                 "type": "array"
               }
             ],
@@ -4803,7 +4883,7 @@
         "type": "object"
       },
       "SetupPolicy": {
-        "description": "Closed serde object or existing positional struct array in declared field order. Handler semantic validation is additional. nullable rate fields are required even when null. Supplied fields (jobs, storage, issuance, monthly budget): omission retains, null clears subject to tighten-only validation. Present fields (budget_period, budgets): omission is accepted but explicit null is rejected. The handler requires exactly one budget representation.",
+        "description": "Closed serde object or existing positional struct array in declared field order. Handler semantic validation is additional. nullable rate fields are required even when null. Supplied fields (jobs, storage, issuance, monthly budget): omission retains, null clears subject to tighten-only validation. Present fields (budget_period, budgets): omission is accepted but explicit null is rejected. The handler requires exactly one budget representation. Positional form: serde accepts 3 to 10 elements, but the handler needs exactly one budget form (monthly_budget_microusd at index 7, optionally with budget_period at index 8, or budgets, never both), and a positional array cannot carry budgets without monthly_budget_microusd; only arrays of 8 or 9 elements reach a valid budget form, shorter ones carry none and a 10-element one carries both (the handler answers 400).",
         "oneOf": [
           {
             "additionalProperties": false,
@@ -4849,7 +4929,7 @@
                 ]
               },
               "budgets": {
-                "description": "A full replacement set: at most one budget per period (the schema can only forbid identical entries, not two amounts for one period).",
+                "description": "A full replacement set: at most one budget per period. The handler refuses two entries for the same period even when their amounts differ (parse_budgets); uniqueItems can only forbid identical entries, so that case is described, not expressed.",
                 "items": {
                   "$ref": "#/components/schemas/SetupBudgetInput"
                 },
@@ -4908,8 +4988,12 @@
               "monthly_budget_microusd": {
                 "anyOf": [
                   {
-                    "description": "Canonical integer micro-USD string of at most 19 digits. The handler additionally accepts leading zeros and rejects values above the signed 64-bit maximum.",
-                    "pattern": "^(0|[1-9][0-9]{0,18})$",
+                    "description": "Canonical integer micro-USD string within the signed 64-bit range and greater than zero (money(n, true): the handler refuses 0 and anything above 9223372036854775807; it also tolerates leading zeros such as 0100, which the contract does not offer).",
+                    "maxLength": 19,
+                    "not": {
+                      "const": "0"
+                    },
+                    "pattern": "^(?:0|[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
                     "type": "string"
                   },
                   {
@@ -5053,8 +5137,12 @@
               {
                 "anyOf": [
                   {
-                    "description": "Canonical integer micro-USD string of at most 19 digits. The handler additionally accepts leading zeros and rejects values above the signed 64-bit maximum.",
-                    "pattern": "^(0|[1-9][0-9]{0,18})$",
+                    "description": "Canonical integer micro-USD string within the signed 64-bit range and greater than zero (money(n, true): the handler refuses 0 and anything above 9223372036854775807; it also tolerates leading zeros such as 0100, which the contract does not offer).",
+                    "maxLength": 19,
+                    "not": {
+                      "const": "0"
+                    },
+                    "pattern": "^(?:0|[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
                     "type": "string"
                   },
                   {
@@ -5071,7 +5159,7 @@
                 ]
               },
               {
-                "description": "A full replacement set: at most one budget per period (the schema can only forbid identical entries, not two amounts for one period).",
+                "description": "A full replacement set: at most one budget per period. The handler refuses two entries for the same period even when their amounts differ (parse_budgets); uniqueItems can only forbid identical entries, so that case is described, not expressed.",
                 "items": {
                   "$ref": "#/components/schemas/SetupBudgetInput"
                 },
@@ -5275,6 +5363,9 @@
                     "input_microusd_per_million": {
                       "type": "string"
                     },
+                    "input_token_limit": {
+                      "minimum": 1
+                    },
                     "max_units": {
                       "type": "null"
                     },
@@ -5351,7 +5442,7 @@
                 }
               }
             ],
-            "description": "Version 1 (default): input and output rates, no cache pricing and no price lines. Version 2: additionally cache_pricing. Version 3: price_lines (and optional batch_price_lines/max_units), no rates and no cache_pricing. An input_token_limit of 0 is accepted only for a version 3 price whose input-family token meters are all not applicable (handler rule not expressible here).",
+            "description": "Version 1 (default): input and output rates, no cache pricing and no price lines. Version 2: additionally cache_pricing. Version 3: price_lines (and optional batch_price_lines/max_units), no rates and no cache_pricing. An input_token_limit of 0 is accepted only for a version 3 price whose input-family token meters are all not applicable (handler rule not expressible here). Version 1 and 2 take input_token_limit of at least 1 (validate_price: a zero input ceiling is only for version 3 prices whose input-family token meters are all not applicable). Rate and ceiling overflow (validate_price): each charge is ceil(limit * rate / 1000000) and must fit a signed 64-bit integer; for version 1 the input charge and the output charge are added and the sum must fit too (charge()); for version 2 bound_v2 adds the input charge, the output charge and, for every cache rate that is not not_applicable, charge(input_token_limit, rate), and that total must fit. The schema cannot multiply, so a rate and ceiling pair that overflows is refused by the handler (400) although each value is within its own bounds.",
             "properties": {
               "batch_price_lines": {
                 "anyOf": [
@@ -5656,7 +5747,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -5726,7 +5817,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -5796,7 +5887,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -5866,7 +5957,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -5936,7 +6027,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -6006,7 +6097,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -6076,7 +6167,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -6154,7 +6245,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -6224,7 +6315,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -6294,7 +6385,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -6364,7 +6455,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -6434,7 +6525,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -6504,7 +6595,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -6574,7 +6665,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -6644,7 +6735,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -6714,7 +6805,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -6775,7 +6866,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -6836,7 +6927,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -6897,7 +6988,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -6967,7 +7058,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -7045,7 +7136,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -7123,7 +7214,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -7439,7 +7530,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -7504,7 +7595,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -7569,7 +7660,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -7634,7 +7725,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -7699,7 +7790,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -7764,7 +7855,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -7829,7 +7920,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -7902,7 +7993,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -7967,7 +8058,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -8032,7 +8123,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -8097,7 +8188,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -8162,7 +8253,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -8227,7 +8318,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -8292,7 +8383,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -8357,7 +8448,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -8422,7 +8513,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -8487,7 +8578,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -8543,7 +8634,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -8599,7 +8690,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -8655,7 +8746,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -8728,7 +8819,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -8801,7 +8892,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -8838,10 +8929,12 @@
                         }
                       ]
                     },
+                    "description": "At most 64 VALUED lines (priced or not_applicable: PriceLines::validate counts only those against MAX_LINES) plus at most one explicit unknown line per meter (16 meters), so at most 80 entries. Also refused by the handler and not expressible here: two lines with the same (meter, variant, min_prompt_tokens) that differ in other members (uniqueItems only compares whole lines); a not_applicable line next to any other line of the same meter, and an unknown line next to a valued line of the same meter; a list of only audio-token meters.",
                     "items": {
                       "$ref": "#/components/schemas/SetupPriceLineInput"
                     },
-                    "maxItems": 64,
+                    "maxContains": 64,
+                    "maxItems": 80,
                     "minItems": 1,
                     "type": "array",
                     "uniqueItems": true
@@ -8864,8 +8957,9 @@
               "input_microusd_per_million": {
                 "anyOf": [
                   {
-                    "description": "Decimal digits only, at most 19 characters (the handler's parse into a signed 64-bit integer rejects larger values). A rate in micro-USD per million tokens.",
-                    "pattern": "^[0-9]{1,19}$",
+                    "description": "Decimal digits of a signed 64-bit integer (money(): at most 19 digits, parsed into an i64; leading zeros are tolerated). A rate in micro-USD per million tokens.",
+                    "maxLength": 19,
+                    "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
                     "type": "string"
                   },
                   {
@@ -8891,8 +8985,9 @@
               "output_microusd_per_million": {
                 "anyOf": [
                   {
-                    "description": "Decimal digits only, at most 19 characters (the handler's parse into a signed 64-bit integer rejects larger values). A rate in micro-USD per million tokens.",
-                    "pattern": "^[0-9]{1,19}$",
+                    "description": "Decimal digits of a signed 64-bit integer (money(): at most 19 digits, parsed into an i64; leading zeros are tolerated). A rate in micro-USD per million tokens.",
+                    "maxLength": 19,
+                    "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
                     "type": "string"
                   },
                   {
@@ -9208,7 +9303,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -9278,7 +9373,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -9348,7 +9443,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -9418,7 +9513,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -9488,7 +9583,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -9558,7 +9653,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -9628,7 +9723,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -9706,7 +9801,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -9776,7 +9871,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -9846,7 +9941,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -9916,7 +10011,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -9986,7 +10081,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -10056,7 +10151,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -10126,7 +10221,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -10196,7 +10291,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -10266,7 +10361,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -10327,7 +10422,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -10388,7 +10483,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -10449,7 +10544,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -10519,7 +10614,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -10597,7 +10692,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -10675,7 +10770,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -10991,7 +11086,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -11056,7 +11151,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -11121,7 +11216,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -11186,7 +11281,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -11251,7 +11346,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -11316,7 +11411,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -11381,7 +11476,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -11454,7 +11549,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -11519,7 +11614,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -11584,7 +11679,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -11649,7 +11744,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -11714,7 +11809,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -11779,7 +11874,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -11844,7 +11939,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -11909,7 +12004,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -11974,7 +12069,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -12039,7 +12134,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -12095,7 +12190,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -12151,7 +12246,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -12207,7 +12302,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -12280,7 +12375,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -12353,7 +12448,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -12390,10 +12485,12 @@
                         }
                       ]
                     },
+                    "description": "At most 64 VALUED lines (priced or not_applicable: PriceLines::validate counts only those against MAX_LINES) plus at most one explicit unknown line per meter (16 meters), so at most 80 entries. Also refused by the handler and not expressible here: two lines with the same (meter, variant, min_prompt_tokens) that differ in other members (uniqueItems only compares whole lines); a not_applicable line next to any other line of the same meter, and an unknown line next to a valued line of the same meter; a list of only audio-token meters.",
                     "items": {
                       "$ref": "#/components/schemas/SetupPriceLineInput"
                     },
-                    "maxItems": 64,
+                    "maxContains": 64,
+                    "maxItems": 80,
                     "minItems": 1,
                     "type": "array",
                     "uniqueItems": true
@@ -12426,8 +12523,9 @@
               {
                 "anyOf": [
                   {
-                    "description": "Decimal digits only, at most 19 characters (the handler's parse into a signed 64-bit integer rejects larger values). A rate in micro-USD per million tokens.",
-                    "pattern": "^[0-9]{1,19}$",
+                    "description": "Decimal digits of a signed 64-bit integer (money(): at most 19 digits, parsed into an i64; leading zeros are tolerated). A rate in micro-USD per million tokens.",
+                    "maxLength": 19,
+                    "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
                     "type": "string"
                   },
                   {
@@ -12438,8 +12536,9 @@
               {
                 "anyOf": [
                   {
-                    "description": "Decimal digits only, at most 19 characters (the handler's parse into a signed 64-bit integer rejects larger values). A rate in micro-USD per million tokens.",
-                    "pattern": "^[0-9]{1,19}$",
+                    "description": "Decimal digits of a signed 64-bit integer (money(): at most 19 digits, parsed into an i64; leading zeros are tolerated). A rate in micro-USD per million tokens.",
+                    "maxLength": 19,
+                    "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
                     "type": "string"
                   },
                   {
@@ -12778,7 +12877,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -12848,7 +12947,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -12918,7 +13017,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -12988,7 +13087,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -13058,7 +13157,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -13128,7 +13227,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -13198,7 +13297,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -13276,7 +13375,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -13346,7 +13445,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -13416,7 +13515,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -13486,7 +13585,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -13556,7 +13655,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -13626,7 +13725,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -13696,7 +13795,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -13766,7 +13865,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -13836,7 +13935,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -13897,7 +13996,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -13958,7 +14057,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -14019,7 +14118,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -14089,7 +14188,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -14167,7 +14266,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -14245,7 +14344,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -14561,7 +14660,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -14626,7 +14725,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -14691,7 +14790,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -14756,7 +14855,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -14821,7 +14920,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -14886,7 +14985,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -14951,7 +15050,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -15024,7 +15123,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -15089,7 +15188,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -15154,7 +15253,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -15219,7 +15318,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -15284,7 +15383,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -15349,7 +15448,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -15414,7 +15513,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -15479,7 +15578,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -15544,7 +15643,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -15609,7 +15708,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -15665,7 +15764,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -15721,7 +15820,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -15777,7 +15876,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -15850,7 +15949,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -15923,7 +16022,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -15960,10 +16059,12 @@
                         }
                       ]
                     },
+                    "description": "At most 64 VALUED lines (priced or not_applicable: PriceLines::validate counts only those against MAX_LINES) plus at most one explicit unknown line per meter (16 meters), so at most 80 entries. Also refused by the handler and not expressible here: two lines with the same (meter, variant, min_prompt_tokens) that differ in other members (uniqueItems only compares whole lines); a not_applicable line next to any other line of the same meter, and an unknown line next to a valued line of the same meter; a list of only audio-token meters.",
                     "items": {
                       "$ref": "#/components/schemas/SetupPriceLineInput"
                     },
-                    "maxItems": 64,
+                    "maxContains": 64,
+                    "maxItems": 80,
                     "minItems": 1,
                     "type": "array",
                     "uniqueItems": true
@@ -16286,7 +16387,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -16356,7 +16457,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -16426,7 +16527,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -16496,7 +16597,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -16566,7 +16667,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -16636,7 +16737,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -16706,7 +16807,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -16784,7 +16885,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -16854,7 +16955,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -16924,7 +17025,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -16994,7 +17095,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -17064,7 +17165,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -17134,7 +17235,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -17204,7 +17305,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -17274,7 +17375,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -17344,7 +17445,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -17405,7 +17506,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -17466,7 +17567,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -17527,7 +17628,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -17597,7 +17698,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -17675,7 +17776,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -17753,7 +17854,7 @@
                             "sku_label": {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             "unit_label": {
@@ -18069,7 +18170,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -18134,7 +18235,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -18199,7 +18300,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -18264,7 +18365,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -18329,7 +18430,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -18394,7 +18495,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -18459,7 +18560,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -18532,7 +18633,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -18597,7 +18698,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -18662,7 +18763,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -18727,7 +18828,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -18792,7 +18893,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -18857,7 +18958,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -18922,7 +19023,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -18987,7 +19088,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -19052,7 +19153,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -19117,7 +19218,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -19173,7 +19274,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -19229,7 +19330,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -19285,7 +19386,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -19358,7 +19459,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -19431,7 +19532,7 @@
                             {
                               "maxLength": 80,
                               "minLength": 1,
-                              "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                               "type": "string"
                             },
                             {
@@ -19468,10 +19569,12 @@
                         }
                       ]
                     },
+                    "description": "At most 64 VALUED lines (priced or not_applicable: PriceLines::validate counts only those against MAX_LINES) plus at most one explicit unknown line per meter (16 meters), so at most 80 entries. Also refused by the handler and not expressible here: two lines with the same (meter, variant, min_prompt_tokens) that differ in other members (uniqueItems only compares whole lines); a not_applicable line next to any other line of the same meter, and an unknown line next to a valued line of the same meter; a list of only audio-token meters.",
                     "items": {
                       "$ref": "#/components/schemas/SetupPriceLineInput"
                     },
-                    "maxItems": 64,
+                    "maxContains": 64,
+                    "maxItems": 80,
                     "minItems": 1,
                     "type": "array",
                     "uniqueItems": true
@@ -19699,7 +19802,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -19737,7 +19840,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -19775,7 +19878,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -19813,7 +19916,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -19851,7 +19954,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -19889,7 +19992,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -19927,7 +20030,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -19969,7 +20072,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -20007,7 +20110,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -20045,7 +20148,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -20083,7 +20186,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -20121,7 +20224,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -20159,7 +20262,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -20197,7 +20300,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -20235,7 +20338,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -20273,7 +20376,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -20306,7 +20409,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -20339,7 +20442,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -20372,7 +20475,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -20410,7 +20513,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -20452,7 +20555,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -20494,7 +20597,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -21067,7 +21170,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -21137,7 +21240,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -21207,7 +21310,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -21277,7 +21380,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -21347,7 +21450,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -21417,7 +21520,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -21487,7 +21590,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -21565,7 +21668,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -21635,7 +21738,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -21705,7 +21808,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -21775,7 +21878,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -21845,7 +21948,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -21915,7 +22018,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -21985,7 +22088,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -22055,7 +22158,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -22125,7 +22228,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -22186,7 +22289,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -22247,7 +22350,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -22308,7 +22411,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -22378,7 +22481,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -22456,7 +22559,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -22534,7 +22637,7 @@
               "sku_label": {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               "unit_label": {
@@ -23098,7 +23201,7 @@
               {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               {
@@ -23163,7 +23266,7 @@
               {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               {
@@ -23228,7 +23331,7 @@
               {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               {
@@ -23293,7 +23396,7 @@
               {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               {
@@ -23358,7 +23461,7 @@
               {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               {
@@ -23423,7 +23526,7 @@
               {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               {
@@ -23488,7 +23591,7 @@
               {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               {
@@ -23561,7 +23664,7 @@
               {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               {
@@ -23626,7 +23729,7 @@
               {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               {
@@ -23691,7 +23794,7 @@
               {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               {
@@ -23756,7 +23859,7 @@
               {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               {
@@ -23821,7 +23924,7 @@
               {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               {
@@ -23886,7 +23989,7 @@
               {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               {
@@ -23951,7 +24054,7 @@
               {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               {
@@ -24016,7 +24119,7 @@
               {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               {
@@ -24081,7 +24184,7 @@
               {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               {
@@ -24146,7 +24249,7 @@
               {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               {
@@ -24202,7 +24305,7 @@
               {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               {
@@ -24258,7 +24361,7 @@
               {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               {
@@ -24314,7 +24417,7 @@
               {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               {
@@ -24387,7 +24490,7 @@
               {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               {
@@ -24460,7 +24563,7 @@
               {
                 "maxLength": 80,
                 "minLength": 1,
-                "pattern": "^[^\\x00-\\x1f\\x7f]*[^\\s\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$",
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f][^\\x00-\\x1f\\x7f-\\x9f]*$",
                 "type": "string"
               },
               {
@@ -24496,7 +24599,7 @@
             "type": "array"
           }
         ],
-        "description": "Custom PriceLines parser also rejects duplicate meter/variant/tier keys, NA conflicts, all-unknown and audio-only lists. RawLine accepts object or positional struct array; stored canonical lines are separate. The externally tagged unit Meter accepts a name string or a single-key object whose value is null; responses always use strings."
+        "description": "Custom PriceLines parser also rejects duplicate meter/variant/tier keys, NA conflicts, all-unknown and audio-only lists. RawLine accepts object or positional struct array; stored canonical lines are separate. The externally tagged unit Meter accepts a name string or a single-key object whose value is null; responses always use strings. sku_label is non-blank text without control characters (C0, DEL or C1) of at most 80 CHARACTERS (label_valid counts chars(), not bytes, so maxLength is exact)."
       },
       "SetupPriceOutput": {
         "additionalProperties": false,
@@ -24889,11 +24992,82 @@
                   ]
                 },
                 "then": {
+                  "allOf": [
+                    {
+                      "else": {
+                        "properties": {
+                          "aws_external_id": {
+                            "type": "null"
+                          },
+                          "aws_session_name": {
+                            "type": "null"
+                          }
+                        }
+                      },
+                      "if": {
+                        "properties": {
+                          "credential_ref": {
+                            "pattern": "^aws:role:"
+                          }
+                        },
+                        "required": [
+                          "credential_ref"
+                        ]
+                      },
+                      "then": {
+                        "properties": {
+                          "aws_external_id": {
+                            "anyOf": [
+                              {
+                                "pattern": "^[A-Za-z0-9_+=,.@:/-]{2,1224}$",
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "aws_session_name": {
+                            "anyOf": [
+                              {
+                                "pattern": "^[A-Za-z0-9_+=,.@-]{2,64}$",
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  ],
                   "properties": {
                     "credential_ref": {
-                      "pattern": "^aws:(default|profile:.+|role:.+)$"
+                      "maxLength": 2057,
+                      "pattern": "^aws:(?:default|profile:[A-Za-z0-9_.+][A-Za-z0-9_.+-]{0,63}|role:arn:(?:aws|aws-[a-z]+(?:-[a-z]+)*):iam::[0-9]{12}:role/(?:[A-Za-z0-9_+=,.@-]+/)*[A-Za-z0-9_+=,.@-]{1,64})$"
+                    },
+                    "endpoint": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "description": "A canonical HTTPS origin without credentials, path, query or fragment (canonical_endpoint); Bedrock endpoints must also be allowlisted by the server (GATEWAY_BEDROCK_ENDPOINT_ALLOWLIST, not expressible here).",
+                          "pattern": "^https://[a-z0-9.-]+(?::[0-9]{1,5})?/?$",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "region": {
+                      "maxLength": 32,
+                      "pattern": "^[a-z]{2}(?:-[a-z]+)+-[0-9]{1,2}$",
+                      "type": "string"
                     }
-                  }
+                  },
+                  "required": [
+                    "region"
+                  ]
                 }
               },
               {
@@ -24933,7 +25107,7 @@
                 }
               }
             ],
-            "description": "Cross-field rules by provider kind: the fixed-origin cloud profiles take an env: reference, their exact HTTPS base (or none), no region and no AWS options; Bedrock takes an aws: identity reference; local kinds take none or an env: reference and a required endpoint. Server-controlled allowlists and endpoint approvals are checked on top and are not expressible here.",
+            "description": "Cross-field rules by provider kind: the fixed-origin cloud profiles take an env: reference, their exact HTTPS base (or none), no region and no AWS options; Bedrock requires a region (valid_region: a two-letter prefix, lowercase words and a one or two digit suffix such as us-east-1, at most 32 characters) and an aws:default, aws:profile:NAME or aws:role:ARN reference without ';' options; aws_external_id (2-1224 characters) and aws_session_name (2-64 characters) belong to an aws:role: reference only (AwsAuth::from_parts) and are otherwise refused unless null; the role ARN path is at most 510 characters and the whole ARN at most 2048 (the schema bounds the length only); local kinds take none or an env: reference and a required endpoint. Server-controlled allowlists (profiles, Bedrock endpoints, local endpoint approvals, env references) are checked on top and are not expressible here.",
             "properties": {
               "aws_external_id": {
                 "anyOf": [
@@ -25093,10 +25267,51 @@
         "oneOf": [
           {
             "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "aws_external_id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "aws_external_id"
+                      ]
+                    },
+                    {
+                      "properties": {
+                        "aws_session_name": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "aws_session_name"
+                      ]
+                    }
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "credential_ref": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "credential_ref"
+                  ]
+                }
+              }
+            ],
+            "description": "AWS options (aws_external_id, aws_session_name) require a restated credential_ref in the same body (update_provider answers 400 for options without a reference); whether the reference is an aws:role: reference for a Bedrock connection depends on the stored provider kind and is not expressible here.",
             "properties": {
               "aws_external_id": {
                 "anyOf": [
                   {
+                    "description": "STS ExternalId: 2-1224 characters of letters, digits and _+=,.@:/- (valid_external_id). Only with a restated aws:role: reference on a Bedrock connection.",
+                    "pattern": "^[A-Za-z0-9_+=,.@:/-]{2,1224}$",
                     "type": "string"
                   },
                   {
@@ -25107,6 +25322,8 @@
               "aws_session_name": {
                 "anyOf": [
                   {
+                    "description": "STS RoleSessionName: 2-64 characters of letters, digits and _+=,.@- (valid_session_name). Only with a restated aws:role: reference on a Bedrock connection.",
+                    "pattern": "^[A-Za-z0-9_+=,.@-]{2,64}$",
                     "type": "string"
                   },
                   {
@@ -25117,8 +25334,10 @@
               "credential_ref": {
                 "anyOf": [
                   {
-                    "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints.",
+                    "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints. Shape: none, an env: reference, or an aws:default / aws:profile:NAME / aws:role:ARN reference (the union over every provider kind; the stored kind and the server allowlists decide the rest).",
+                    "maxLength": 2057,
                     "minLength": 1,
+                    "pattern": "^(?:none|env:[A-Z_][A-Z0-9_]*|aws:(?:default|profile:[A-Za-z0-9_.+][A-Za-z0-9_.+-]{0,63}|role:arn:(?:aws|aws-[a-z]+(?:-[a-z]+)*):iam::[0-9]{12}:role/(?:[A-Za-z0-9_+=,.@-]+/)*[A-Za-z0-9_+=,.@-]{1,64}))$",
                     "type": "string"
                   },
                   {
@@ -25132,6 +25351,8 @@
               "endpoint": {
                 "anyOf": [
                   {
+                    "description": "A canonical HTTPS origin without credentials, path, query or fragment (canonical_endpoint); Bedrock endpoints must also be allowlisted by the server (GATEWAY_BEDROCK_ENDPOINT_ALLOWLIST, not expressible here).",
+                    "pattern": "^https://[a-z0-9.-]+(?::[0-9]{1,5})?/?$",
                     "type": "string"
                   },
                   {
@@ -25157,8 +25378,10 @@
               {
                 "anyOf": [
                   {
-                    "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints.",
+                    "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints. Shape: none, an env: reference, or an aws:default / aws:profile:NAME / aws:role:ARN reference (the union over every provider kind; the stored kind and the server allowlists decide the rest).",
+                    "maxLength": 2057,
                     "minLength": 1,
+                    "pattern": "^(?:none|env:[A-Z_][A-Z0-9_]*|aws:(?:default|profile:[A-Za-z0-9_.+][A-Za-z0-9_.+-]{0,63}|role:arn:(?:aws|aws-[a-z]+(?:-[a-z]+)*):iam::[0-9]{12}:role/(?:[A-Za-z0-9_+=,.@-]+/)*[A-Za-z0-9_+=,.@-]{1,64}))$",
                     "type": "string"
                   },
                   {
@@ -25169,6 +25392,8 @@
               {
                 "anyOf": [
                   {
+                    "description": "STS ExternalId: 2-1224 characters of letters, digits and _+=,.@:/- (valid_external_id). Only with a restated aws:role: reference on a Bedrock connection.",
+                    "pattern": "^[A-Za-z0-9_+=,.@:/-]{2,1224}$",
                     "type": "string"
                   },
                   {
@@ -25179,6 +25404,8 @@
               {
                 "anyOf": [
                   {
+                    "description": "STS RoleSessionName: 2-64 characters of letters, digits and _+=,.@- (valid_session_name). Only with a restated aws:role: reference on a Bedrock connection.",
+                    "pattern": "^[A-Za-z0-9_+=,.@-]{2,64}$",
                     "type": "string"
                   },
                   {
@@ -25189,6 +25416,8 @@
               {
                 "anyOf": [
                   {
+                    "description": "A canonical HTTPS origin without credentials, path, query or fragment (canonical_endpoint); Bedrock endpoints must also be allowlisted by the server (GATEWAY_BEDROCK_ENDPOINT_ALLOWLIST, not expressible here).",
+                    "pattern": "^https://[a-z0-9.-]+(?::[0-9]{1,5})?/?$",
                     "type": "string"
                   },
                   {
@@ -26008,8 +26237,7 @@
                 "type": "array"
               },
               {
-                "type": "null",
-                "x-omg-unobserved-branch": "Null only when the draft's own lines fail PriceLines validation (suggestion.rs map: parsed is None). The mapper builds unique, in-range lines, so no catalog input known to the fixture reaches this defensive guard; it is not producible with a valid catalog fixture."
+                "type": "null"
               }
             ]
           },
@@ -26179,6 +26407,7 @@
                 "type": "string"
               },
               "timezone": {
+                "description": "An IANA zone known to the server, at most 64 UTF-8 BYTES (compile() checks len() in bytes; maxLength counts characters, and real zone names are ASCII). Another length-valid name is refused by the handler (unknown zone).",
                 "maxLength": 64,
                 "minLength": 1,
                 "type": "string"
@@ -26198,6 +26427,7 @@
             "minItems": 4,
             "prefixItems": [
               {
+                "description": "An IANA zone known to the server, at most 64 UTF-8 BYTES (compile() checks len() in bytes; maxLength counts characters, and real zone names are ASCII). Another length-valid name is refused by the handler (unknown zone).",
                 "maxLength": 64,
                 "minLength": 1,
                 "type": "string"
@@ -26234,7 +26464,41 @@
       },
       "SetupVisibleBudgetWindow": {
         "additionalProperties": false,
-        "description": "A visible window whose accounting was read: every consumption fact is a value. remaining_microusd is null exactly when unknown_cost_requests is positive (budget_windows: remaining() needs zero unknown-cost requests).",
+        "allOf": [
+          {
+            "else": {
+              "properties": {
+                "headroom_status": {
+                  "const": "unknown"
+                },
+                "remaining_microusd": {
+                  "type": "null"
+                }
+              }
+            },
+            "if": {
+              "properties": {
+                "unknown_cost_requests": {
+                  "const": "0"
+                }
+              },
+              "required": [
+                "unknown_cost_requests"
+              ]
+            },
+            "then": {
+              "properties": {
+                "headroom_status": {
+                  "const": "known"
+                },
+                "remaining_microusd": {
+                  "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                }
+              }
+            }
+          }
+        ],
+        "description": "A visible window whose accounting was read: every consumption fact is a value. remaining_microusd is null exactly when unknown_cost_requests is positive (budget_windows: remaining() needs zero unknown-cost requests). The facts are coupled (budget_windows): while unknown_cost_requests is 0 the headroom is known and remaining_microusd is a value; otherwise the headroom is unknown and remaining_microusd is null.",
         "properties": {
           "amount_microusd": {
             "$ref": "#/components/schemas/IdentityUnsignedDecimal"
@@ -26321,8 +26585,7 @@
             "$ref": "#/components/schemas/SetupVisibleBudgetWindow"
           },
           {
-            "$ref": "#/components/schemas/SetupInvalidAccountingBudgetWindow",
-            "x-omg-unobserved-branch": "Produced only when budget_totals holds invalid accounting (negative or overflowing counters), which the maintaining trigger (migrations 0015/0025) never writes; the invalid-accounting path is exercised by management/governance/tests.rs budget_headroom_invalid_window_preserves_neighbors_and_sql_errors_remain_503 with deliberately corrupted rows, not by producer-shaped data."
+            "$ref": "#/components/schemas/SetupInvalidAccountingBudgetWindow"
           }
         ]
       },
@@ -33108,6 +33371,8 @@
             "name": "q",
             "required": false,
             "schema": {
+              "description": "Case-insensitive substring filter, at most 200 characters (search(): chars().count() > 200 is refused; surrounding whitespace is trimmed after the check, a blank value filters nothing).",
+              "maxLength": 200,
               "type": "string"
             }
           }
@@ -34257,6 +34522,8 @@
             "name": "q",
             "required": false,
             "schema": {
+              "description": "Case-insensitive substring filter, at most 200 characters (search(): chars().count() > 200 is refused; surrounding whitespace is trimmed after the check, a blank value filters nothing).",
+              "maxLength": 200,
               "type": "string"
             }
           },
@@ -35684,8 +35951,8 @@
             "name": "cursor",
             "required": false,
             "schema": {
-              "description": "An opaque page cursor as returned in next_cursor: microseconds since the epoch, an underscore and the last row's id.",
-              "pattern": "^[+-]?[0-9]{1,19}_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+              "description": "An opaque page cursor as returned in next_cursor: microseconds since the Unix epoch as a signed 64-bit integer (an optional sign and leading zeros are tolerated) that chrono can represent as a UTC timestamp (from_timestamp_micros: -8334601315200000000 to 8210266876799999999), an underscore and the last row's id in any UUID spelling the handler parses (cursor_parts).",
+              "pattern": "^(?:\\+?0*(?:[0-9]{1,18}|[0-7][0-9]{18}|8[0-1][0-9]{17}|82[0-0][0-9]{16}|8210[0-1][0-9]{14}|82102[0-5][0-9]{13}|821026[0-5][0-9]{12}|8210266[0-7][0-9]{11}|82102668[0-6][0-9]{10}|821026687[0-5][0-9]{9}|8210266876[0-6][0-9]{8}|82102668767[0-8][0-9]{7}|821026687679[0-8][0-9]{6}|8210266876799[0-8][0-9]{5}|82102668767999[0-8][0-9]{4}|821026687679999[0-8][0-9]{3}|8210266876799999[0-8][0-9]{2}|82102668767999999[0-8][0-9]{1}|821026687679999999[0-8]|8210266876799999999)|-0*(?:[0-9]{1,18}|[0-7][0-9]{18}|8[0-2][0-9]{17}|83[0-2][0-9]{16}|833[0-3][0-9]{15}|8334[0-5][0-9]{14}|833460[0-0][0-9]{12}|8334601[0-2][0-9]{11}|83346013[0-0][0-9]{10}|833460131[0-4][0-9]{9}|8334601315[0-1][0-9]{8}|8334601315200000000))_(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32}|\\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\}|urn:uuid:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$",
               "type": "string"
             }
           }
@@ -36835,6 +37102,8 @@
             "name": "q",
             "required": false,
             "schema": {
+              "description": "Case-insensitive substring filter, at most 200 characters (search(): chars().count() > 200 is refused; surrounding whitespace is trimmed after the check, a blank value filters nothing).",
+              "maxLength": 200,
               "type": "string"
             }
           },
@@ -36879,8 +37148,9 @@
             "name": "max_input_price",
             "required": false,
             "schema": {
-              "description": "Maximum cheapest input rate (micro-USD per million tokens) as decimal digits, at most 19 characters.",
-              "pattern": "^[0-9]{1,19}$",
+              "description": "Maximum cheapest input rate (micro-USD per million tokens) as decimal digits within the signed 64-bit range (governance_money: at most 19 digits, parsed into an i64; leading zeros are tolerated).",
+              "maxLength": 19,
+              "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
               "type": "string"
             }
           },
@@ -37154,9 +37424,9 @@
             "name": "ids",
             "required": true,
             "schema": {
-              "description": "Two to four DISTINCT model ids separated by commas (distinctness is not expressible in a pattern).",
+              "description": "Two to four DISTINCT model ids separated by commas (parse_ids). Each id may be hyphenated, simple (32 hex digits), braced or urn:uuid: and may have Unicode whitespace around it. Distinctness is not expressible in a pattern, and the same id in two spellings is a duplicate. The handler limits the raw value to 148 BYTES (4 * 37); maxLength counts characters, so a value padded with multibyte whitespace can pass the schema and be refused.",
               "maxLength": 148,
-              "pattern": "^ *[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12} *(, *[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12} *){1,3}$",
+              "pattern": "^\\s*(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32}|\\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\}|urn:uuid:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\\s*(?:,\\s*(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32}|\\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\}|urn:uuid:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\\s*){1,3}$",
               "type": "string"
             }
           }
@@ -38929,6 +39199,8 @@
             "name": "q",
             "required": false,
             "schema": {
+              "description": "Case-insensitive substring filter, at most 200 characters (search(): chars().count() > 200 is refused; surrounding whitespace is trimmed after the check, a blank value filters nothing).",
+              "maxLength": 200,
               "type": "string"
             }
           },
@@ -43438,6 +43710,8 @@
             "name": "q",
             "required": false,
             "schema": {
+              "description": "Case-insensitive substring filter, at most 200 characters (search(): chars().count() > 200 is refused; surrounding whitespace is trimmed after the check, a blank value filters nothing).",
+              "maxLength": 200,
               "type": "string"
             }
           }
@@ -43749,6 +44023,8 @@
             "name": "q",
             "required": false,
             "schema": {
+              "description": "Case-insensitive substring filter, at most 200 characters (search(): chars().count() > 200 is refused; surrounding whitespace is trimmed after the check, a blank value filters nothing).",
+              "maxLength": 200,
               "type": "string"
             }
           },
@@ -45805,6 +46081,8 @@
             "name": "q",
             "required": false,
             "schema": {
+              "description": "Case-insensitive substring filter, at most 200 characters (search(): chars().count() > 200 is refused; surrounding whitespace is trimmed after the check, a blank value filters nothing).",
+              "maxLength": 200,
               "type": "string"
             }
           }
@@ -46027,9 +46305,9 @@
             "name": "ids",
             "required": true,
             "schema": {
-              "description": "Two to four DISTINCT model ids separated by commas (distinctness is not expressible in a pattern).",
+              "description": "Two to four DISTINCT model ids separated by commas (parse_ids). Each id may be hyphenated, simple (32 hex digits), braced or urn:uuid: and may have Unicode whitespace around it. Distinctness is not expressible in a pattern, and the same id in two spellings is a duplicate. The handler limits the raw value to 148 BYTES (4 * 37); maxLength counts characters, so a value padded with multibyte whitespace can pass the schema and be refused.",
               "maxLength": 148,
-              "pattern": "^ *[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12} *(, *[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12} *){1,3}$",
+              "pattern": "^\\s*(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32}|\\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\}|urn:uuid:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\\s*(?:,\\s*(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32}|\\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\}|urn:uuid:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\\s*){1,3}$",
               "type": "string"
             }
           }
