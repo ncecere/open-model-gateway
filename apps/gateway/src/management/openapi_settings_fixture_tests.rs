@@ -5,6 +5,8 @@ use super::*;
 use openapi::responses::{Captured, PositiveFixtures, capture_http};
 use sha2::{Digest, Sha256};
 
+#[path = "openapi_alerts_states_tests.rs"]
+mod alerts_states;
 #[path = "openapi_settings_states_tests.rs"]
 mod states;
 
@@ -493,6 +495,26 @@ async fn management_openapi_slice5_fixtures(pool: PgPool) {
         .status,
         StatusCode::UNSUPPORTED_MEDIA_TYPE
     );
+    // Refused uploads keep their documented envelopes: a declared type that is
+    // not the bytes, an oversize file and sides outside 16-4096 pixels.
+    let mut oversize = branding::fixtures::png(64, 64);
+    oversize.resize(512 * 1024 + 1, 0);
+    for (media, bytes, expected) in [
+        (
+            "image/jpeg",
+            branding::fixtures::png(64, 64),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        ),
+        ("image/png", oversize, StatusCode::PAYLOAD_TOO_LARGE),
+        (
+            "image/png",
+            branding::fixtures::png(8, 8),
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let r = g.raw(Some(&admin), "PUT", &path, media, bytes).await;
+        assert_eq!(r.status, expected);
+    }
     assert_eq!(
         off.raw(
             Some(&admin),
@@ -665,8 +687,18 @@ async fn management_openapi_slice5_fixtures(pool: PgPool) {
         1
     );
     let personal = format!("/api/v1/workspaces/{}/alerts/rules", f.personal);
-    let b = value(&g.send(&owner, "GET", &personal, Value::Null).await);
+    let b = good(
+        &g,
+        &mut observed,
+        &owner,
+        "GET",
+        &personal,
+        "/api/v1/workspaces/{ws}/alerts/rules",
+        Value::Null,
+    )
+    .await;
     assert_eq!(b["writable"], false);
+    assert!(b["data"].as_array().unwrap().is_empty());
     assert!(b["builtin"].is_object());
     assert_eq!(
         g.send(&owner, "POST", &personal, rule_input.clone())
@@ -701,6 +733,92 @@ async fn management_openapi_slice5_fixtures(pool: PgPool) {
         )
         .await;
     }
+
+    // Every rule kind and every incident shape: rules from real API writes, incidents
+    // and deliveries exactly as the producers write them. Run before any webhook
+    // destination is enabled, because a delivery row enqueues one webhook per destination.
+    let connection = alerts_states::provider_connection(&pool).await;
+    let platform_rules = alerts_states::Family {
+        prefix: format!("{ALERTS}/rules"),
+        template: format!("{ALERTS}/rules"),
+        actor: &admin,
+    };
+    let workspace_rules = alerts_states::Family {
+        prefix: format!("/api/v1/workspaces/{}/alerts/rules", f.team),
+        template: "/api/v1/workspaces/{ws}/alerts/rules".into(),
+        actor: &owner,
+    };
+    let platform_made = alerts_states::create_rules(
+        &g,
+        &mut observed,
+        &platform_rules,
+        alerts_states::platform_rules(connection),
+    )
+    .await;
+    let workspace_made = alerts_states::create_rules(
+        &g,
+        &mut observed,
+        &workspace_rules,
+        alerts_states::workspace_rules(),
+    )
+    .await;
+    alerts_states::platform_events(
+        &g,
+        &pool,
+        &mut observed,
+        &admin,
+        &auditor,
+        &alerts_states::Platform {
+            rules: platform_made.clone(),
+            connection,
+            team: f.team,
+            project: f.project,
+        },
+    )
+    .await;
+    alerts_states::workspace_events(
+        &g,
+        &pool,
+        &mut observed,
+        &owner,
+        &auditor,
+        &alerts_states::Workspace {
+            team: f.team,
+            personal: f.personal,
+            rules: workspace_made.clone(),
+        },
+    )
+    .await;
+    alerts_states::refresh_rules(
+        &g,
+        &mut observed,
+        &platform_rules,
+        &[&admin, &auditor],
+        &platform_made,
+    )
+    .await;
+    alerts_states::refresh_rules(
+        &g,
+        &mut observed,
+        &workspace_rules,
+        &[&owner, &auditor],
+        &workspace_made,
+    )
+    .await;
+    let batch_failed = |made: &[(Uuid, Value)]| {
+        made.iter()
+            .find(|(_, b)| b["kind"] == "batch_failed")
+            .map(|(id, _)| *id)
+            .unwrap()
+    };
+    alerts_states::deleted_rule_history(
+        &g,
+        &mut observed,
+        (&platform_rules, batch_failed(&platform_made)),
+        (&workspace_rules, batch_failed(&workspace_made)),
+        (&admin, &owner),
+    )
+    .await;
 
     let prefix = format!("{ALERTS}/webhooks");
     // Manual decoder accepts JSON even with text/plain, including serde arrays.
@@ -853,6 +971,7 @@ async fn management_openapi_slice5_fixtures(pool: PgPool) {
         g.send(&admin, "GET", &path, Value::Null).await.status,
         StatusCode::NOT_FOUND
     );
+    alerts_states::webhooks(&g, &pool, &mut observed, &admin, &auditor).await;
     // Every documented branch of the settings responses, from real state.
     let mut extra = Vec::new();
     for name in ["admin2", "admin3", "admin4", "admin5"] {
