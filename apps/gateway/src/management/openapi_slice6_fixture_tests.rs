@@ -106,21 +106,139 @@ async fn raw(
 }
 /// A domain refusal (a policy or issuance rule) is not an input refusal, even
 /// though its status is 400/403/429: the handler accepted the INPUT.
-fn probe(c: Captured) -> Probe {
+fn domain_refusal(c: &Captured) -> bool {
     let reason = serde_json::from_slice::<Value>(&c.bytes)
         .ok()
         .and_then(|v| v["error"]["reason"].as_str().map(str::to_owned));
-    match reason {
-        Some(r)
-            if r == "key_issuance_limit_exceeded"
-                || crate::management::POLICY_REASONS
-                    .iter()
-                    .any(|(_, reason, _, _)| *reason == r) =>
-        {
-            Probe::decided(c, true)
-        }
-        _ => Probe::from(c),
+    reason.is_some_and(|r| {
+        r == "key_issuance_limit_exceeded"
+            || crate::management::POLICY_REASONS
+                .iter()
+                .any(|(_, reason, _, _)| *reason == r)
+    })
+}
+fn probe(c: Captured) -> Probe {
+    if domain_refusal(&c) {
+        Probe::decided(c, true)
+    } else {
+        Probe::from(c)
     }
+}
+/// Whether the handler got past input validation (the verdict of `Probe`).
+fn handler_accepts(c: &Captured, label: &str) -> bool {
+    if domain_refusal(c) {
+        return true;
+    }
+    match c.status.as_u16() {
+        400 | 422 => false,
+        200..=399 | 404 | 409 => true,
+        other => panic!("vector {label}: status {other} is not an input verdict"),
+    }
+}
+/// The documented JSON request schema of an operation.
+fn request_schema(method: &str, template: &str) -> &'static Value {
+    let schema = &openapi::responses::artifact()["paths"][template][method.to_ascii_lowercase()]["requestBody"]
+        ["content"]["application/json"]["schema"];
+    assert!(!schema.is_null(), "{method}: request schema not found");
+    schema
+}
+/// The schema of a documented query parameter.
+fn query_schema(template: &str, name: &str) -> &'static Value {
+    let document = openapi::responses::artifact();
+    document["paths"][template]["get"]["parameters"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|p| p["in"] == "query" && p["name"] == name)
+        .map(|p| &p["schema"])
+        .next()
+        .expect("documented query parameter")
+}
+/// Percent-encode every byte but the unreserved ones.
+fn encode(value: &str) -> String {
+    value
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            other => format!("%{other:02X}"),
+        })
+        .collect()
+}
+/// One explicit vector: the contract's verdict equals the handler's, or (for a
+/// rule JSON Schema cannot express, `expressible == false`) the contract
+/// accepts what the handler refuses, pinning that documented gap.
+fn same_verdict(label: &str, schema_accepts: bool, handler: bool, expressible: bool) {
+    if expressible {
+        assert_eq!(
+            schema_accepts, handler,
+            "vector {label}: schema and handler disagree"
+        );
+    } else {
+        assert!(
+            schema_accepts && !handler,
+            "vector {label}: the documented gap changed"
+        );
+    }
+}
+#[allow(clippy::too_many_arguments)]
+async fn body_vector(
+    w: &Wire,
+    b: &Browser,
+    method: &str,
+    template: &str,
+    path: &str,
+    label: &str,
+    body: Value,
+    expressible: bool,
+) {
+    let schema_accepts = openapi::responses::validate_value(
+        openapi::responses::artifact(),
+        request_schema(method, template),
+        &body,
+    )
+    .is_ok();
+    let r = raw(&w.client, &w.base, b, method, path, Some(body)).await;
+    same_verdict(
+        label,
+        schema_accepts,
+        handler_accepts(&r, label),
+        expressible,
+    );
+}
+#[allow(clippy::too_many_arguments)]
+async fn query_vector(
+    w: &Wire,
+    b: &Browser,
+    template: &str,
+    path: &str,
+    name: &str,
+    label: &str,
+    value: &str,
+    expressible: bool,
+) {
+    let schema_accepts = openapi::responses::validate_value(
+        openapi::responses::artifact(),
+        query_schema(template, name),
+        &json!(value),
+    )
+    .is_ok();
+    let r = raw(
+        &w.client,
+        &w.base,
+        b,
+        "GET",
+        &format!("{path}?{name}={}", encode(value)),
+        None,
+    )
+    .await;
+    same_verdict(
+        label,
+        schema_accepts,
+        handler_accepts(&r, label),
+        expressible,
+    );
 }
 struct Wire {
     client: reqwest::Client,
@@ -2417,6 +2535,198 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
         serde_json::from_slice::<Value>(&refused.bytes).unwrap()["error"]["reason"],
         "storage_quota_exceeded"
     );
+    // Request rules the derived vectors cannot reach: each is sent over HTTP and
+    // the contract's verdict is compared with the handler's. `false` marks a
+    // rule JSON Schema cannot express (documented in the schema's description):
+    // the contract accepts, the handler refuses.
+    let keys_path = format!("{ws}/keys");
+    let keys_template = "/api/v1/workspaces/{ws}/keys";
+    let policy_template = "/api/v1/workspaces/{ws}/keys/{key}/policy";
+    let key_body = |extra: Value| {
+        let mut body = json!({"name":"Vector key","expires_in_days":30});
+        body.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        body
+    };
+    let multibyte = |n: usize| "\u{e9}".repeat(n);
+    for (label, amount, expressible) in [
+        ("money above i64", "9999999999999999999", true),
+        ("money just above i64", "9223372036854775808", true),
+        ("money zero", "0", true),
+    ] {
+        let budgets = json!([{"period":"month","amount_microusd":amount}]);
+        body_vector(
+            &w,
+            &owner,
+            "POST",
+            keys_template,
+            &keys_path,
+            label,
+            key_body(json!({"budgets":budgets})),
+            expressible,
+        )
+        .await;
+        let policy = json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"budgets":budgets});
+        body_vector(
+            &w,
+            &owner,
+            "PUT",
+            policy_template,
+            &format!("{keypath}/policy"),
+            label,
+            policy,
+            expressible,
+        )
+        .await;
+    }
+    let repeated =
+        json!([{"period":"month","amount_microusd":"1"},{"period":"month","amount_microusd":"2"}]);
+    body_vector(
+        &w,
+        &owner,
+        "POST",
+        keys_template,
+        &keys_path,
+        "duplicate period",
+        key_body(json!({"budgets":repeated})),
+        false,
+    )
+    .await;
+    body_vector(&w, &owner, "PUT", policy_template, &format!("{keypath}/policy"), "duplicate period", json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"budgets":repeated}), false).await;
+    // Names are limited in UTF-8 bytes; maxLength counts characters.
+    let sa_path = format!("{ws}/service-accounts");
+    let sa_template = "/api/v1/workspaces/{ws}/service-accounts";
+    body_vector(
+        &w,
+        &owner,
+        "POST",
+        keys_template,
+        &keys_path,
+        "key name 120 bytes",
+        json!({"name":multibyte(60),"expires_in_days":30}),
+        true,
+    )
+    .await;
+    body_vector(
+        &w,
+        &owner,
+        "POST",
+        keys_template,
+        &keys_path,
+        "key name 122 bytes",
+        json!({"name":multibyte(61),"expires_in_days":30}),
+        false,
+    )
+    .await;
+    body_vector(
+        &w,
+        &owner,
+        "POST",
+        sa_template,
+        &sa_path,
+        "service account name 120 bytes",
+        json!({"name":multibyte(60)}),
+        true,
+    )
+    .await;
+    body_vector(
+        &w,
+        &owner,
+        "POST",
+        sa_template,
+        &sa_path,
+        "service account name 122 bytes",
+        json!({"name":multibyte(61)}),
+        false,
+    )
+    .await;
+    // Admin token allowlists.
+    let tokens = "/api/v1/platform/admin-tokens";
+    for (label, entry, expressible) in [
+        ("allowlist bad octet", "999.1.1.1", true),
+        ("allowlist leading zero", "010.0.0.0/8", true),
+        ("allowlist v4 prefix 33", "10.0.0.0/33", true),
+        ("allowlist v4 prefix 0", "10.0.0.0/0", true),
+        ("allowlist v6 prefix 129", "::1/129", true),
+        ("allowlist v6 prefix 0", "::/0", true),
+        ("allowlist not an address", "example.invalid", true),
+        ("allowlist v4 network", "10.0.0.0/8", true),
+        ("allowlist v4 address", "192.0.2.1", true),
+        ("allowlist v6 network", "2001:db8::/32", true),
+        ("allowlist host bits", "10.0.0.1/8", false),
+        ("allowlist mapped v6", "::ffff:102:304", false),
+    ] {
+        let body = json!({"name":"vector","scopes":["platform:read"],"expires_in_days":30,"ip_allowlist":[entry]});
+        body_vector(&w, &admin, "POST", tokens, tokens, label, body, expressible).await;
+    }
+    // String query parameters.
+    let requests = "/api/v1/platform/logs/requests";
+    let sessions = "/api/v1/platform/logs/sessions";
+    let uuid = "00000000-0000-4000-8000-000000000000";
+    for (label, name, value, expressible) in [
+        ("model control", "model", "a\u{1}b".to_owned(), true),
+        ("model 200 bytes", "model", multibyte(100), true),
+        ("model 202 bytes", "model", multibyte(101), false),
+        ("session leading space", "session_id", " a".to_owned(), true),
+        (
+            "session trailing space",
+            "session_id",
+            "a ".to_owned(),
+            true,
+        ),
+        ("session control", "session_id", "a\u{1}b".to_owned(), true),
+        ("session inner space", "session_id", "a b".to_owned(), true),
+        ("session 128 characters", "session_id", multibyte(128), true),
+    ] {
+        query_vector(
+            &w,
+            &admin,
+            "/api/v1/platform/logs/requests",
+            requests,
+            name,
+            label,
+            &value,
+            expressible,
+        )
+        .await;
+    }
+    for (label, value, expressible) in [
+        ("cursor odd hex", format!("1_{uuid}_616"), true),
+        ("cursor even hex", format!("1_{uuid}_6162"), true),
+        ("cursor not utf-8", format!("1_{uuid}_ff"), false),
+    ] {
+        query_vector(
+            &w,
+            &admin,
+            "/api/v1/platform/logs/sessions",
+            sessions,
+            "cursor",
+            label,
+            &value,
+            expressible,
+        )
+        .await;
+    }
+    for (label, value) in [
+        ("keys q control", "a\u{1}b"),
+        ("keys q nul", "abc\u{0}"),
+        ("keys q padded", " \n abc\t"),
+        ("keys q 200", &"a".repeat(200)),
+        ("keys q 201", &"a".repeat(201)),
+    ] {
+        query_vector(
+            &w,
+            &owner,
+            keys_template,
+            &keys_path,
+            "q",
+            label,
+            value,
+            true,
+        )
+        .await;
+    }
     // Successful request controls precede extractor refusal probes.
     w.status(
         &owner,
