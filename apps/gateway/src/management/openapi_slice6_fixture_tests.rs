@@ -913,6 +913,7 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
     .await;
     realtime_response(&pool, compacted, 1, "settled").await;
     realtime_response(&pool, compacted, 2, "settled_unreported").await;
+    let envelope_root = Uuid::new_v4();
     // H2: a compacted gateway-run batch envelope. Only a native batch pins a
     // price (`governance::batch`), so the envelope's reservation has none and
     // `close_batch` settles it at a known zero with zero tokens.
@@ -934,7 +935,7 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
                 actual: 0,
                 price: None,
             },
-            ..Ex::rich(f.team, log_key, deployment, Uuid::new_v4(), 50)
+            ..Ex::rich(f.team, log_key, deployment, envelope_root, 50)
         },
     )
     .await;
@@ -1661,7 +1662,25 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
     fresh_waits(&pool).await;
     // Every request's detail, to its owner and to the platform reader.
     for r in [
-        a, b_root, c, d, e, rt_root, g, h, k, jb0, jb1, jb2, jb3, jb4, jv1, jv2, j5root,
+        a,
+        b_root,
+        c,
+        d,
+        e,
+        rt_root,
+        closed_root,
+        envelope_root,
+        g,
+        h,
+        k,
+        jb0,
+        jb1,
+        jb2,
+        jb3,
+        jb4,
+        jv1,
+        jv2,
+        j5root,
     ] {
         let v = w
             .json(&owner, "GET", &format!("{ws}/requests/{r}"), None)
