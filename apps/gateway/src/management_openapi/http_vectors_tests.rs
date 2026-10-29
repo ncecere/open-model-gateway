@@ -1366,7 +1366,7 @@ async fn management_openapi_http_vectors_unbounded_patterns_need_candidates_or_a
         "properties":{"n":{"type":"string","pattern":"^(0|[1-9][0-9]*)$"}}}),
     );
     let mut with_refusal = candidate_values();
-    with_refusal.push(("/n".to_owned(), json!("007")));
+    with_refusal.push(("/n".to_owned(), json!("01")));
     let text = message(run_with_candidates(&judge(capped_at_15), &open, &with_refusal).await);
     assert!(
         text.contains("supplied candidate") && text.contains("schema accepts but handler refuses"),
@@ -1420,7 +1420,7 @@ fn management_openapi_http_vectors_candidates_are_checked() {
     );
     assert!(text.contains("/zzz"), "{text}");
     // Both sides present: the verdict of each comes from the schema.
-    let ok = plan(&[("/n", json!("0")), ("/n", json!("1".repeat(16)))]).unwrap();
+    let ok = plan(&[("/n", json!("1".repeat(15))), ("/n", json!("1".repeat(16)))]).unwrap();
     let verdict = |digits: usize| {
         ok.cases
             .iter()
@@ -1430,7 +1430,7 @@ fn management_openapi_http_vectors_candidates_are_checked() {
             })
             .map(|c| c.accept)
     };
-    assert_eq!((verdict(1), verdict(16)), (Some(true), Some(false)));
+    assert_eq!((verdict(15), verdict(16)), (Some(true), Some(false)));
 }
 
 #[test]
@@ -1464,12 +1464,23 @@ fn management_openapi_http_vectors_unbounded_query_patterns_need_candidates_too(
         "{text}"
     );
     let sixteen = "1".repeat(16);
-    let good = plan(&open, &[("n", "0"), ("n", sixteen.as_str())]).unwrap();
+    let fifteen = "1".repeat(15);
+    let good = plan(&open, &[("n", fifteen.as_str()), ("n", sixteen.as_str())]).unwrap();
     assert!(good.cases.iter().any(|c| c.kind == "supplied candidate"
         && matches!(&c.edit, Edit::Set(r) if r.len() == 16)
         && !c.accept));
     assert!(plan(&open, &[("n", "0"), ("n", "7")]).is_err());
-    assert!(plan(&open, &[("zzz", "0"), ("n", "0"), ("n", sixteen.as_str())]).is_err());
+    assert!(
+        plan(
+            &open,
+            &[
+                ("zzz", "0"),
+                ("n", fifteen.as_str()),
+                ("n", sixteen.as_str())
+            ]
+        )
+        .is_err()
+    );
     plan(
         &document(json!({"x-omg-pattern-boundaries":"Covered by the handler's unit tests."})),
         &[],
@@ -2095,4 +2106,84 @@ fn management_openapi_http_vectors_arrays_without_a_buildable_element_fail() {
         let excused = property(schema, Some(("x-omg-unsendable-boundary", REASON)));
         cases_of(&excused, &valid, &[]).unwrap_or_else(|e| panic!("{label}: {e:#}"));
     }
+}
+
+// ----- round 3: the candidate gate ----
+
+#[test]
+fn management_openapi_http_vectors_a_min_length_alone_does_not_bound_a_pattern() {
+    let plan = |extra: Value| {
+        let document = unbounded_pattern(extra);
+        super::http_vectors::body_plan(
+            &document,
+            &document["paths"][TEMPLATE]["post"],
+            &json!({"n":"15"}),
+            &[],
+            &[],
+        )
+        .map(|_| ())
+    };
+    // RED: `minLength` states no upper bound, yet it used to excuse the pattern.
+    let text = format!("{:#}", plan(json!({"minLength":1})).unwrap_err());
+    assert!(text.contains("no derivable length bounds"), "{text}");
+    // `maxLength` and a reviewed byte limit do bound it.
+    plan(json!({"maxLength":15})).unwrap();
+    plan(json!({"x-omg-max-bytes":15})).unwrap();
+}
+
+#[test]
+fn management_openapi_http_vectors_candidates_must_straddle_the_boundary() {
+    let document = unbounded_pattern(json!({}));
+    let plan = |candidates: &[(&str, Value)]| {
+        let candidates: Vec<(String, Value)> = candidates
+            .iter()
+            .map(|(p, v)| ((*p).to_owned(), v.clone()))
+            .collect();
+        super::http_vectors::body_plan(
+            &document,
+            &document["paths"][TEMPLATE]["post"],
+            &json!({"n":"15"}),
+            &[],
+            &candidates,
+        )
+        .map(|_| ())
+    };
+    // RED: `0` is accepted and sixteen digits refused, but they are far apart.
+    let far = [("/n", json!("0")), ("/n", json!("1".repeat(16)))];
+    let text = format!("{:#}", plan(&far).unwrap_err());
+    assert!(text.contains("straddle") && text.contains("/n"), "{text}");
+    // GREEN: fifteen and sixteen digits differ by one character.
+    plan(&[("/n", json!("1".repeat(15))), ("/n", json!("1".repeat(16)))]).unwrap();
+    // A changed character straddles too: "0" accepted, "00" refused (one added).
+    plan(&[("/n", json!("0")), ("/n", json!("00"))]).unwrap();
+}
+
+#[test]
+fn management_openapi_http_vectors_query_candidates_must_straddle_too() {
+    let mut schema = json!({"type":"string","pattern":"^(0|[1-9][0-9]{0,14})$"});
+    schema["description"] = json!("a number");
+    let document = json!({"openapi":"3.1.0","paths":{TEMPLATE:{"get":{"parameters":[
+        parameter("n", true, schema)],"responses":{"200":{"description":"ok"}}}}},
+        "components":{"schemas":{}}});
+    let plan = |candidates: &[(&str, &str)]| {
+        let candidates: Vec<(String, String)> = candidates
+            .iter()
+            .map(|(n, v)| ((*n).to_owned(), (*v).to_owned()))
+            .collect();
+        super::http_vectors::query_plan(
+            &document,
+            &document["paths"][TEMPLATE]["get"],
+            &[("n".to_owned(), "15".to_owned())],
+            &[],
+            &candidates,
+        )
+        .map(|_| ())
+    };
+    let sixteen = "1".repeat(16);
+    let text = format!(
+        "{:#}",
+        plan(&[("n", "0"), ("n", sixteen.as_str())]).unwrap_err()
+    );
+    assert!(text.contains("straddle"), "{text}");
+    plan(&[("n", "111111111111111"), ("n", sixteen.as_str())]).unwrap();
 }

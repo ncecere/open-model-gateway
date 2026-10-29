@@ -801,6 +801,38 @@ fn string_bounds(
     Ok(())
 }
 
+const STRADDLE: &str = "supplied candidates must straddle the boundary: include a value the schema accepts and one it refuses that differs from it by ONE character added, removed or changed";
+
+/// Do the `(candidate, schema verdict)` pairs hold an accepted value and a
+/// refused one within edit distance 1 of it? Two candidates far apart (`0` and
+/// sixteen digits) prove nothing about WHERE the boundary lies.
+fn straddles(verdicts: &[(String, bool)]) -> bool {
+    fn one_edit(a: &str, b: &str) -> bool {
+        let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+        let (short, long) = if a.len() <= b.len() {
+            (&a, &b)
+        } else {
+            (&b, &a)
+        };
+        match long.len() - short.len() {
+            0 => short.iter().zip(long).filter(|(x, y)| x != y).count() == 1,
+            1 => (0..long.len()).any(|skip| {
+                long.iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i != skip)
+                    .map(|(_, c)| c)
+                    .eq(short.iter())
+            }),
+            _ => false,
+        }
+    }
+    verdicts.iter().any(|(accepted, ok)| {
+        *ok && verdicts
+            .iter()
+            .any(|(refused, ok)| !*ok && one_edit(accepted, refused))
+    })
+}
+
 /// The candidates of one location and the decisive kinds it could not produce.
 struct Mutations {
     vectors: Vec<(&'static str, Value)>,
@@ -973,10 +1005,11 @@ fn scalar_mutations(
         string_bounds(document, schema, nodes, seed, &mut out, &mut evidence)?;
         dropped.append(&mut evidence.dropped);
         if let Some(pattern) = first(nodes, "pattern").and_then(Value::as_str) {
+            // A pattern is bounded by its own shape, or by `maxLength` /
+            // `x-omg-max-bytes` (a `minLength` alone bounds nothing from above),
+            // or by a reviewed reason.
             let bounded = simple_bounds(pattern).is_some()
-                || ["minLength", "maxLength"]
-                    .iter()
-                    .any(|key| first(nodes, key).is_some())
+                || !distinct_u64(nodes, "maxLength").is_empty()
                 || nodes.iter().any(|node| {
                     node.get(MAX_BYTES).is_some() || node.get(PATTERN_BOUNDARIES).is_some()
                 });
@@ -1195,12 +1228,17 @@ pub(super) fn query_plan(
         if !supplied.is_empty() {
             let verdicts = supplied
                 .iter()
-                .map(|v| accepts(document, schema, &coerce(&kinds, v)))
+                .map(|v| {
+                    Ok((
+                        v.to_string(),
+                        accepts(document, schema, &coerce(&kinds, v))?,
+                    ))
+                })
                 .collect::<Result<Vec<_>>>()?;
-            if !(verdicts.contains(&true) && verdicts.contains(&false)) {
-                notes.problems.push(format!(
-                    "query parameter {name}: supplied candidates must include a value the schema accepts and one it refuses"
-                ));
+            if !straddles(&verdicts) {
+                notes
+                    .problems
+                    .push(format!("query parameter {name}: {STRADDLE}"));
             }
             mutations
                 .vectors
@@ -1762,12 +1800,15 @@ impl Walk<'_> {
             self.candidates_used.insert(here.clone());
             let verdicts = supplied
                 .iter()
-                .map(|candidate| accepts(self.document, schema, candidate))
+                .map(|candidate| {
+                    Ok((
+                        render(candidate),
+                        accepts(self.document, schema, candidate)?,
+                    ))
+                })
                 .collect::<Result<Vec<_>>>()?;
-            if !(verdicts.contains(&true) && verdicts.contains(&false)) {
-                self.notes.problems.push(format!(
-                    "{here}: supplied candidates must include a value the schema accepts and one it refuses"
-                ));
+            if !straddles(&verdicts) {
+                self.notes.problems.push(format!("{here}: {STRADDLE}"));
             }
             for candidate in supplied {
                 self.push(path, "supplied candidate", Some(candidate))?;
