@@ -1,10 +1,20 @@
 //! Every Slice 2 operation is executed over the real loopback serving stack.
 //! Fixture credentials stay in memory; neither tokens nor response bodies are logged.
+//!
+//! Data comes from the real API wherever a slice 2 operation produces it and
+//! from rows written exactly as the producing code writes them otherwise
+//! (`lifecycle::apply_group_grants`, `disable_for_entitlement_loss`, the
+//! engine's execution and reservation rows, an accepted invitation). Boundary
+//! vectors run last because their accepted variants change state.
 use super::*;
+use futures::FutureExt;
+use openapi::http_vectors::{Probe, body_vectors_http, query_vectors, query_vectors_fixed};
 use openapi::responses::{Captured, PositiveFixtures, SLICE2_AREAS, capture_http};
 use sha2::{Digest, Sha256};
+use std::cell::RefCell;
 
 const ORIGIN: &str = "http://127.0.0.1:3000";
+const ISSUER: &str = "https://issuer.example.test";
 struct Server(tokio::task::JoinHandle<()>);
 impl Drop for Server {
     fn drop(&mut self) {
@@ -23,48 +33,99 @@ async fn browser(pool: &PgPool, user: &BrowserPrincipal) -> Browser {
         .bind(Sha256::digest(csrf.as_bytes()).as_slice()).bind(&user.email).execute(pool).await.unwrap();
     Browser { token, csrf }
 }
+fn target(path: &str, query: &str) -> String {
+    if query.is_empty() {
+        path.to_owned()
+    } else {
+        format!("{path}?{query}")
+    }
+}
+fn pairs(values: &[(&str, &str)]) -> Vec<(String, String)> {
+    values
+        .iter()
+        .map(|(n, v)| ((*n).to_owned(), (*v).to_owned()))
+        .collect()
+}
 struct Client {
     http: reqwest::Client,
     base: String,
-    observed: PositiveFixtures,
+    observed: RefCell<PositiveFixtures>,
+    failures: RefCell<Vec<String>>,
 }
 impl Client {
-    async fn send(
-        &mut self,
+    /// One request, captured and schema-checked against its documented
+    /// operation, with no status or coverage bookkeeping (vectors and setup).
+    async fn raw(
+        &self,
         who: &Browser,
         method: &str,
         path: &str,
         input: Option<Value>,
-        expected: StatusCode,
-    ) -> Value {
+        headers: &[(&str, &str)],
+    ) -> Captured {
         let mut request = self
             .http
             .request(method.parse().unwrap(), format!("{}{path}", self.base))
             .header("origin", ORIGIN)
             .header("cookie", format!("omg_session={}", who.token))
             .header("x-csrf-token", &who.csrf);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
         if let Some(input) = input {
-            if expected == StatusCode::OK {
-                openapi::responses::check_request(method, path, &input).unwrap();
-            }
             request = request.json(&input);
         }
-        let r: Captured = capture_http(method, path, request.send().await.unwrap()).await;
-        assert_eq!(r.status, expected, "{method} {path}");
-        self.observed.observe(&r);
+        capture_http(method, path, request.send().await.unwrap()).await
+    }
+    async fn send_with(
+        &self,
+        who: &Browser,
+        method: &str,
+        path: &str,
+        input: Option<Value>,
+        expected: StatusCode,
+        headers: &[(&str, &str)],
+    ) -> Value {
+        if let Some(input) = &input
+            && expected == StatusCode::OK
+        {
+            openapi::responses::check_request(method, path, input).unwrap();
+        }
+        let r = self.raw(who, method, path, input, headers).await;
+        assert_eq!(
+            r.status.as_u16(),
+            expected.as_u16(),
+            "{method}: unexpected status"
+        );
+        self.observed.borrow_mut().observe(&r);
         serde_json::from_slice(&r.bytes).unwrap_or(Value::Null)
     }
-    async fn ok(&mut self, who: &Browser, method: &str, path: &str, input: Option<Value>) -> Value {
+    async fn send(
+        &self,
+        who: &Browser,
+        method: &str,
+        path: &str,
+        input: Option<Value>,
+        expected: StatusCode,
+    ) -> Value {
+        self.send_with(who, method, path, input, expected, &[])
+            .await
+    }
+    async fn ok(&self, who: &Browser, method: &str, path: &str, input: Option<Value>) -> Value {
         self.send(who, method, path, input, StatusCode::OK).await
     }
-    /// A refused body, pinned against the documented request schema: a
-    /// STRUCTURAL refusal (wrong type, null, unknown field, wrong root) must
-    /// also be rejected by the schema (`schema_accepts == false`); a SEMANTIC
-    /// refusal (value rules the handler applies after parsing) is accepted by
-    /// the schema and listed with `schema_accepts == true`. Only the verdict
-    /// is compared; the body is never printed.
+    /// Fixture preparation through an operation owned by another slice or
+    /// area: executed for real, never counted toward this slice's coverage.
+    async fn setup(&self, who: &Browser, method: &str, path: &str, input: Option<Value>) -> Value {
+        let r = self.raw(who, method, path, input, &[]).await;
+        assert_eq!(r.status, StatusCode::OK, "{method}: setup status");
+        serde_json::from_slice(&r.bytes).unwrap_or(Value::Null)
+    }
+    /// A refused body, pinned against the documented request schema: the
+    /// schema's verdict must equal the handler's class (`schema_accepts`).
+    /// Only the verdict is compared; the body is never printed.
     async fn refused(
-        &mut self,
+        &self,
         who: &Browser,
         method: &str,
         path: &str,
@@ -75,10 +136,116 @@ impl Client {
         assert_eq!(
             openapi::responses::check_request(method, path, &body).is_ok(),
             schema_accepts,
-            "{method} {path} {status}: request schema verdict disagrees with the handler class"
+            "{method} {status}: request schema verdict disagrees with the handler class"
         );
         self.send(who, method, path, Some(body), status).await;
     }
+    /// Run one boundary-vector set, recording (never printing) a failure so a
+    /// single run reports every disagreeing operation.
+    async fn guarded(&self, label: &str, work: impl std::future::Future<Output = ()>) {
+        if let Err(panic) = std::panic::AssertUnwindSafe(work).catch_unwind().await {
+            let message = panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+                .unwrap_or_else(|| "panicked".to_owned());
+            self.failures
+                .borrow_mut()
+                .push(format!("{label}: {message}"));
+        }
+    }
+}
+
+/// Create one mapping through the real API and return its id.
+async fn create_mapping_row(c: &Client, admin: &Browser, body: Value) -> Uuid {
+    id(&c
+        .ok(
+            admin,
+            "POST",
+            "/api/v1/platform/oidc/group-mappings",
+            Some(body),
+        )
+        .await)
+}
+fn render(filters: &[(&str, String)], extra: &[(&str, &str)]) -> String {
+    filters
+        .iter()
+        .map(|(n, v)| (*n, v.as_str()))
+        .chain(extra.iter().copied())
+        .map(|(n, v)| format!("{n}={v}"))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+async fn plain_user(pool: &PgPool, name: &str) -> Uuid {
+    let id = Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,email) VALUES($1,$2)")
+        .bind(id)
+        .bind(format!("{name}@example.test"))
+        .execute(pool)
+        .await
+        .unwrap();
+    id
+}
+/// The profile fields a sign-in records.
+async fn profile(pool: &PgPool, id: Uuid, display_name: Option<&str>, signed_in: bool) {
+    sqlx::query("UPDATE users SET display_name=$2,first_signed_in_at=CASE WHEN $3 THEN now()-interval '3 days' END,last_signed_in_at=CASE WHEN $3 THEN now()-interval '1 hour' END WHERE id=$1")
+        .bind(id)
+        .bind(display_name)
+        .bind(signed_in)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+/// `lifecycle::apply_group_grants`' platform insert.
+async fn group_role(pool: &PgPool, user: Uuid, role: &str, mapping: Uuid) {
+    sqlx::query("INSERT INTO platform_role_grants(id,user_id,role,source,mapping_id) VALUES(gen_random_uuid(),$1,$2,'group',$3)")
+        .bind(user)
+        .bind(role)
+        .bind(mapping)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+/// `lifecycle::apply_group_grants`' workspace insert.
+async fn group_member(pool: &PgPool, user: Uuid, ws: Uuid, role: &str, mapping: Uuid) {
+    sqlx::query("INSERT INTO workspace_membership_grants(id,workspace_id,user_id,role,source,mapping_id) VALUES(gen_random_uuid(),$1,$2,$3,'group',$4)")
+        .bind(ws)
+        .bind(user)
+        .bind(role)
+        .bind(mapping)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+/// One engine attempt of a client session: the execution row and its
+/// reservation, as the engine writes them. `settled` carries tokens and cost,
+/// otherwise the usage is unknown (null tokens, no actual cost).
+#[allow(clippy::too_many_arguments)]
+async fn attempt(
+    pool: &PgPool,
+    ws: Uuid,
+    key: Uuid,
+    deployment: Uuid,
+    session: &str,
+    app: Option<&str>,
+    settled: bool,
+) -> Uuid {
+    let execution = Uuid::new_v4();
+    let tokens: (Option<i64>, Option<i64>) = if settled {
+        (Some(10), Some(5))
+    } else {
+        (None, None)
+    };
+    sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,client_session_id,client_app,finish_reason,input_tokens,output_tokens,completed_at,elapsed_ms) VALUES($1,$2,$3,$4,'contract-access-model','openai',false,'succeeded',$1,$5,$6,'stop',$7,$8,clock_timestamp(),250)")
+        .bind(execution).bind(ws).bind(key).bind(deployment).bind(session).bind(app).bind(tokens.0).bind(tokens.1)
+        .execute(pool).await.unwrap();
+    if settled {
+        sqlx::query("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,actual_microusd,unbounded_cost,input_tokens,output_tokens) SELECT $1,$2,$3,$4,e.started_at,date_trunc('minute',e.started_at,'UTC'),date_trunc('month',e.started_at,'UTC'),e.started_at,'settled',7,false,10,5 FROM inference_executions e WHERE e.id=$1")
+            .bind(execution).bind(ws).bind(key).bind(deployment)
+            .execute(pool).await.unwrap();
+    }
+    execution
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
@@ -104,15 +271,50 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
     let _server = Server(tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap()
     }));
-    let mut c = Client {
+    let c = Client {
         http: reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap(),
         base,
-        observed: PositiveFixtures::default(),
+        observed: RefCell::new(PositiveFixtures::default()),
+        failures: RefCell::new(Vec::new()),
     };
+    let c = &c;
+
+    // Profiles as a sign-in records them, and one cost center (platform-owned).
+    profile(&pool, f.member.user_id, Some("Member Person"), true).await;
+    profile(&pool, f.owner.user_id, Some("Owner Person"), true).await;
+    let cost_center = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO cost_centers(id,name,code) VALUES($1,'Contract cost center','CC-100')",
+    )
+    .bind(cost_center)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Shared workspaces: the main one, a second active one and one that gets disabled.
+    let mut shared = Vec::new();
+    for (name, kind) in [
+        ("Contract shared", "project"),
+        ("Contract second", "team"),
+        ("Contract disabled", "project"),
+    ] {
+        let created = c
+            .ok(
+                &admin,
+                "POST",
+                "/api/v1/platform/workspaces",
+                Some(json!({"name":name,"kind":kind,"owner_user_id":f.owner.user_id})),
+            )
+            .await;
+        shared.push(id(&created));
+    }
+    let (ws, ws2, wsd) = (shared[0], shared[1], shared[2]);
+    let platform = format!("/api/v1/platform/workspaces/{ws}");
+    let own = format!("/api/v1/workspaces/{ws}");
 
     // User directory, lifecycle and role provenance. The last Admin is protected.
     let created = c
@@ -141,9 +343,14 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         Some(json!({"oidc_link_allowed":false})),
     )
     .await;
-    let users = c.ok(&auditor, "GET", "/api/v1/platform/users", None).await;
-    assert!(!users["data"].as_array().unwrap().is_empty());
-    c.ok(&auditor, "GET", &up, None).await;
+    // A shared membership that cleanup later revokes (an export row with revoked_at).
+    c.ok(
+        &admin,
+        "POST",
+        &format!("{platform}/members"),
+        Some(json!({"user_id":new_user,"role":"member"})),
+    )
+    .await;
     c.ok(
         &admin,
         "POST",
@@ -203,19 +410,6 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
     .await;
 
     // Shared and owner-private workspace roots are different closed representations.
-    let created = c
-        .ok(
-            &admin,
-            "POST",
-            "/api/v1/platform/workspaces",
-            Some(
-                json!({"name":"Contract shared","kind":"project","owner_user_id":f.owner.user_id}),
-            ),
-        )
-        .await;
-    let ws = id(&created);
-    let platform = format!("/api/v1/platform/workspaces/{ws}");
-    let own = format!("/api/v1/workspaces/{ws}");
     assert!(
         !c.ok(&auditor, "GET", "/api/v1/platform/workspaces", None)
             .await["data"]
@@ -228,7 +422,18 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         &admin,
         "PATCH",
         &platform,
-        Some(json!({"name":"Contract renamed","disabled":false,"cost_center_id":null})),
+        Some(json!({"name":"Contract renamed","disabled":false,"cost_center_id":cost_center})),
+    )
+    .await;
+    // The platform-owned allocation applies to a personal workspace too (#400).
+    let personal_path = format!("/api/v1/workspaces/{}", f.personal);
+    let before = c.ok(&owner, "GET", &personal_path, None).await;
+    assert!(before["cost_center"].is_null());
+    c.ok(
+        &admin,
+        "PATCH",
+        &format!("/api/v1/platform/workspaces/{}", f.personal),
+        Some(json!({"cost_center_id":cost_center})),
     )
     .await;
     c.ok(
@@ -241,16 +446,18 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
     let context = c.ok(&owner, "GET", &own, None).await;
     assert_eq!(context["role"], "owner");
     assert_eq!(context["object_visibility"], "workspace");
+    assert!(context["cost_center"].is_object());
+    c.ok(
+        &owner,
+        "GET",
+        &format!("/api/v1/workspaces/{}", f.project),
+        None,
+    )
+    .await;
     assert!(c.ok(&auditor, "GET", &own, None).await["role"].is_null());
-    let personal = c
-        .ok(
-            &owner,
-            "GET",
-            &format!("/api/v1/workspaces/{}", f.personal),
-            None,
-        )
-        .await;
+    let personal = c.ok(&owner, "GET", &personal_path, None).await;
     assert!(personal.get("object_visibility").is_none());
+    assert!(personal["cost_center"].is_object());
     for principal in [&admin, &auditor, &owner] {
         c.send(
             principal,
@@ -276,7 +483,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
     c.send(
         &owner,
         "PATCH",
-        &format!("/api/v1/workspaces/{}", f.personal),
+        &personal_path,
         Some(json!({"name":"not allowed"})),
         StatusCode::CONFLICT,
     )
@@ -317,7 +524,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
     .await;
 
     // Mapping CRUD and both preview kinds, with real mixed-source grants.
-    let mapping_body = json!({"issuer":"https://issuer.example.test","group_value":"contract-group","target_kind":"workspace","platform_role":null,"workspace_id":ws,"workspace_role":"member","enabled":true});
+    let mapping_body = json!({"issuer":ISSUER,"group_value":"contract-group","target_kind":"workspace","platform_role":null,"workspace_id":ws,"workspace_role":"member","enabled":true});
     let mapping = id(&c
         .ok(
             &admin,
@@ -338,49 +545,31 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         StatusCode::UNSUPPORTED_MEDIA_TYPE,
     )
     .await;
-    // Structural refusals of the manual PATCH parser: the schema must reject
-    // each of them too. `{"enabled":null}`/`{"issuer":null}` are rejected because
-    // PATCH merges and re-deserializes MappingInput (only the three role/workspace
-    // fields are nullable); the semantic rows are accepted by the schema.
-    for (probe, status, schema_accepts) in [
+    // Every refusal below is also refused by the documented schema.
+    for (probe, status) in [
         (
             json!({"unexpected_configuration":true}),
             StatusCode::UNPROCESSABLE_ENTITY,
-            false,
         ),
         (
             json!({"enabled":{"unexpected_configuration":true}}),
             StatusCode::BAD_REQUEST,
-            false,
         ),
-        (json!({"enabled":null}), StatusCode::BAD_REQUEST, false),
-        (json!({"enabled":"true"}), StatusCode::BAD_REQUEST, false),
-        (json!({"issuer":null}), StatusCode::BAD_REQUEST, false),
-        (json!({"group_value":null}), StatusCode::BAD_REQUEST, false),
-        (json!({"target_kind":null}), StatusCode::BAD_REQUEST, false),
+        (json!({"enabled":null}), StatusCode::BAD_REQUEST),
+        (json!({"enabled":"true"}), StatusCode::BAD_REQUEST),
+        (json!({"issuer":null}), StatusCode::BAD_REQUEST),
+        (json!({"group_value":null}), StatusCode::BAD_REQUEST),
+        (json!({"target_kind":null}), StatusCode::BAD_REQUEST),
+        (json!({"target_kind":"bogus"}), StatusCode::BAD_REQUEST),
         (
             json!({"workspace_id":"not-a-uuid"}),
             StatusCode::BAD_REQUEST,
-            false,
         ),
-        (json!([]), StatusCode::BAD_REQUEST, false),
-        (Value::Null, StatusCode::BAD_REQUEST, false),
-        // Semantic: a well-typed target_kind the handler refuses.
-        (
-            json!({"target_kind":"bogus"}),
-            StatusCode::BAD_REQUEST,
-            true,
-        ),
+        (json!([]), StatusCode::BAD_REQUEST),
+        (Value::Null, StatusCode::BAD_REQUEST),
     ] {
-        c.refused(
-            &admin,
-            "PATCH",
-            &mapping_path,
-            probe,
-            status,
-            schema_accepts,
-        )
-        .await;
+        c.refused(&admin, "PATCH", &mapping_path, probe, status, false)
+            .await;
     }
     let preview_path = format!("{mapping_path}/preview");
     c.ok(&admin, "POST", &preview_path, Some(json!({}))).await;
@@ -392,46 +581,31 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         StatusCode::UNSUPPORTED_MEDIA_TYPE,
     )
     .await;
-    for (probe, status, schema_accepts) in [
+    for (probe, status) in [
         (
             json!({"unexpected_configuration":true}),
             StatusCode::UNPROCESSABLE_ENTITY,
-            false,
         ),
-        (json!({"delete":null}), StatusCode::BAD_REQUEST, false),
-        (json!({"delete":[]}), StatusCode::BAD_REQUEST, false),
-        (json!({"delete":"true"}), StatusCode::BAD_REQUEST, false),
-        (json!({"enabled":null}), StatusCode::BAD_REQUEST, false),
-        (json!({"issuer":null}), StatusCode::BAD_REQUEST, false),
+        (json!({"delete":null}), StatusCode::BAD_REQUEST),
+        (json!({"delete":[]}), StatusCode::BAD_REQUEST),
+        (json!({"delete":"true"}), StatusCode::BAD_REQUEST),
+        (json!({"enabled":null}), StatusCode::BAD_REQUEST),
+        (json!({"issuer":null}), StatusCode::BAD_REQUEST),
         (
             json!({"enabled":{"unexpected_configuration":true}}),
             StatusCode::BAD_REQUEST,
-            false,
         ),
-        (json!([]), StatusCode::BAD_REQUEST, false),
-        (Value::Null, StatusCode::BAD_REQUEST, false),
-        // Semantic: a well-typed target_kind the shared merge validator refuses.
-        (
-            json!({"target_kind":"bogus"}),
-            StatusCode::BAD_REQUEST,
-            true,
-        ),
+        (json!({"target_kind":"bogus"}), StatusCode::BAD_REQUEST),
+        (json!([]), StatusCode::BAD_REQUEST),
+        (Value::Null, StatusCode::BAD_REQUEST),
     ] {
-        c.refused(
-            &admin,
-            "POST",
-            &preview_path,
-            probe,
-            status,
-            schema_accepts,
-        )
-        .await;
+        c.refused(&admin, "POST", &preview_path, probe, status, false)
+            .await;
     }
-    // The NEW-mapping preview is a typed DTO whose fields are all Option: null is
-    // structurally accepted (schema accepts) and the handler then refuses the
-    // missing required value (semantic 400), unlike the merge-based bodies above.
+    // The NEW-mapping preview is a full replacement like create: a null or
+    // missing required value is refused by the handler and by the schema.
     for field in ["issuer", "group_value", "target_kind", "enabled"] {
-        let mut body = json!({"issuer":"https://issuer.example.test","group_value":"contract-group","target_kind":"platform","platform_role":"user","workspace_id":null,"workspace_role":null,"enabled":true});
+        let mut body = json!({"issuer":ISSUER,"group_value":"contract-group","target_kind":"platform","platform_role":"user","workspace_id":null,"workspace_role":null,"enabled":true});
         body[field] = Value::Null;
         c.refused(
             &admin,
@@ -439,7 +613,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             "/api/v1/platform/oidc/group-mappings/preview",
             body,
             StatusCode::BAD_REQUEST,
-            true,
+            false,
         )
         .await;
     }
@@ -488,6 +662,29 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
     )
     .await;
     sqlx::query("INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source,mapping_id) VALUES($1,$2,'member','group',$3)").bind(ws).bind(f.member.user_id).bind(mapping).execute(&pool).await.unwrap();
+    // A member whose account is then suspended: listed with a null effective role.
+    let suspended_member = user(&pool, "suspended-member", "user").await;
+    profile(
+        &pool,
+        suspended_member.user_id,
+        Some("Suspended Member"),
+        true,
+    )
+    .await;
+    c.ok(
+        &owner,
+        "POST",
+        &format!("{own}/members"),
+        Some(json!({"user_id":suspended_member.user_id,"role":"member"})),
+    )
+    .await;
+    c.ok(
+        &admin,
+        "PATCH",
+        &format!("/api/v1/platform/users/{}", suspended_member.user_id),
+        Some(json!({"disabled":true})),
+    )
+    .await;
     for (who, path) in [
         (&owner, format!("{own}/members")),
         (&auditor, format!("{platform}/members")),
@@ -501,7 +698,59 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             .unwrap();
         assert_eq!(member["membership_source"], "mixed");
         assert_eq!(member["grants"].as_array().unwrap().len(), 2);
+        let disabled = value["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["user_id"] == json!(suspended_member.user_id))
+            .unwrap();
+        assert!(disabled["role"].is_null());
+        assert!(!disabled["disabled_at"].is_null());
     }
+
+    // Group-derived access as the producers write it: platform mappings, workspace
+    // mappings sharing a group, a user suspended for entitlement loss, and
+    // holders with and without profile names.
+    let m_pl = create_mapping_row(c, &admin, json!({"issuer":ISSUER,"group_value":"pl-group","target_kind":"platform","platform_role":"auditor","workspace_id":null,"workspace_role":null,"enabled":true})).await;
+    let m_wsp = create_mapping_row(c, &admin, json!({"issuer":ISSUER,"group_value":"pl-group","target_kind":"workspace","platform_role":null,"workspace_id":ws2,"workspace_role":"member","enabled":true})).await;
+    let m_wsa = create_mapping_row(c, &admin, json!({"issuer":ISSUER,"group_value":"ws-group","target_kind":"workspace","platform_role":null,"workspace_id":ws,"workspace_role":"member","enabled":true})).await;
+    let m_wsb = create_mapping_row(c, &admin, json!({"issuer":ISSUER,"group_value":"ws-admin-group","target_kind":"workspace","platform_role":null,"workspace_id":ws,"workspace_role":"admin","enabled":true})).await;
+    // B and B2 hold only the group's platform role (B has a name, B2 none); C also a manual role.
+    let b = plain_user(&pool, "group-b").await;
+    profile(&pool, b, Some("Bea Auditor"), true).await;
+    let b2 = plain_user(&pool, "group-b2").await;
+    let cc = user(&pool, "group-c", "user").await;
+    profile(&pool, cc.user_id, Some("Cy Manual"), false).await;
+    for who in [b, b2, cc.user_id] {
+        group_role(&pool, who, "auditor", m_pl).await;
+    }
+    for who in [b, b2] {
+        member(&pool, ws, who, "member").await;
+    }
+    // Suspended for entitlement loss (`disable_for_entitlement_loss`), still holding
+    // a workspace group grant from a sign-in that matched only the workspace mapping.
+    let d = plain_user(&pool, "group-d").await;
+    sqlx::query("UPDATE users SET disabled_at=now(),cleanup_due_at=now()+interval '30 days',disable_reason='entitlement_loss' WHERE id=$1").bind(d).execute(&pool).await.unwrap();
+    group_member(&pool, d, ws2, "member", m_wsp).await;
+    let a2 = user(&pool, "group-a2", "user").await;
+    profile(&pool, a2.user_id, Some("Ann Member"), false).await;
+    let e = user(&pool, "group-e", "user").await;
+    member(&pool, ws2, e.user_id, "member").await;
+    let fu = user(&pool, "group-f", "user").await;
+    for who in [a2.user_id, e.user_id] {
+        group_member(&pool, who, ws, "member", m_wsa).await;
+    }
+    group_member(&pool, fu.user_id, ws, "admin", m_wsb).await;
+    // B belongs to a team that is later disabled (a disabled_at in the user's memberships).
+    member(&pool, wsd, b, "member").await;
+    c.ok(
+        &admin,
+        "PATCH",
+        &format!("/api/v1/platform/workspaces/{wsd}"),
+        Some(json!({"disabled":true})),
+    )
+    .await;
+
     assert!(
         !c.ok(
             &auditor,
@@ -514,7 +763,9 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             .unwrap()
             .is_empty()
     );
-    let preview=c.ok(&admin,"POST","/api/v1/platform/oidc/group-mappings/preview",Some(json!({"issuer":"https://issuer.example.test","group_value":"contract-group","target_kind":"platform","platform_role":"admin","workspace_id":null,"workspace_role":null,"enabled":true}))).await;
+    // NEW mapping previews: a platform role for the pl-group roster, then a workspace role.
+    let new_preview = "/api/v1/platform/oidc/group-mappings/preview";
+    let preview = c.ok(&admin, "POST", new_preview, Some(json!({"issuer":ISSUER,"group_value":"pl-group","target_kind":"platform","platform_role":"admin","workspace_id":null,"workspace_role":null,"enabled":true}))).await;
     assert!(preview["digest"].is_null());
     assert!(
         !preview["diff"]["platform_role_gained"]
@@ -522,11 +773,26 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             .unwrap()
             .is_empty()
     );
+    assert!(
+        !preview["diff"]["workspace_membership_gained"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let preview = c.ok(&admin, "POST", new_preview, Some(json!({"issuer":ISSUER,"group_value":"ws-group","target_kind":"workspace","platform_role":null,"workspace_id":ws2,"workspace_role":"admin","enabled":true}))).await;
+    assert!(
+        !preview["diff"]["workspace_membership_gained"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    // Existing-mapping previews. A delete first: digest and the exact If-Match flow.
+    let existing = |m: Uuid| format!("/api/v1/platform/oidc/group-mappings/{m}");
     let preview = c
         .ok(
             &admin,
             "POST",
-            &format!("/api/v1/platform/oidc/group-mappings/{mapping}/preview"),
+            &format!("{}/preview", existing(mapping)),
             Some(json!({"delete":true})),
         )
         .await;
@@ -537,10 +803,31 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             .unwrap()
             .is_empty()
     );
+    let digest = preview["digest"].as_str().unwrap().to_owned();
+    assert_eq!(digest.len(), 64);
+    for (m, body) in [
+        (m_pl, json!({"delete":true})),
+        (m_pl, json!({"platform_role":"admin"})),
+        (m_wsa, json!({"workspace_role":"admin"})),
+        (m_wsa, json!({"workspace_id":ws2})),
+        (m_wsb, json!({"workspace_role":"member"})),
+        (m_wsa, json!({"enabled":true})),
+        (m_wsa, json!({"delete":true})),
+    ] {
+        let value = c
+            .ok(
+                &admin,
+                "POST",
+                &format!("{}/preview", existing(m)),
+                Some(body),
+            )
+            .await;
+        assert_eq!(value["digest"].as_str().unwrap().len(), 64);
+    }
     c.send(
         &auditor,
         "POST",
-        "/api/v1/platform/oidc/group-mappings/preview",
+        new_preview,
         Some(mapping_body),
         StatusCode::FORBIDDEN,
     )
@@ -584,18 +871,47 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         StatusCode::CONFLICT,
     )
     .await;
-    c.ok(
+    // A stale digest is refused; the preview's own digest is a positive precondition.
+    let stale = format!("\"{}\"", "0".repeat(64));
+    c.send_with(
         &admin,
         "PATCH",
-        &format!("/api/v1/platform/oidc/group-mappings/{mapping}"),
+        &mapping_path,
         Some(json!({"enabled":false})),
+        StatusCode::PRECONDITION_FAILED,
+        &[("if-match", stale.as_str())],
     )
     .await;
-    c.ok(
+    let current = format!("\"{digest}\"");
+    c.send_with(
+        &admin,
+        "PATCH",
+        &mapping_path,
+        Some(json!({"enabled":false})),
+        StatusCode::OK,
+        &[("if-match", current.as_str())],
+    )
+    .await;
+    // The delete precondition follows the stored state: preview, then delete with its digest.
+    let digest = c
+        .ok(
+            &admin,
+            "POST",
+            &format!("{mapping_path}/preview"),
+            Some(json!({"enabled":false})),
+        )
+        .await["digest"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let current = format!("\"{digest}\"");
+    c.send_with(
         &admin,
         "DELETE",
-        &format!("/api/v1/platform/oidc/group-mappings/{mapping}"),
+        &mapping_path,
         None,
+        StatusCode::OK,
+        &[("if-match", current.as_str())],
     )
     .await;
 
@@ -609,6 +925,35 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         )
         .await;
     assert_eq!(invite["token"].as_str().unwrap().len(), 64);
+    let revoked = c
+        .ok(
+            &owner,
+            "POST",
+            &format!("{own}/invitations"),
+            Some(json!({"email":"invitee-revoked@example.test","role":"admin"})),
+        )
+        .await;
+    c.ok(
+        &owner,
+        "DELETE",
+        &format!("{own}/invitations/{}", id(&revoked)),
+        None,
+    )
+    .await;
+    let accepted = c
+        .ok(
+            &owner,
+            "POST",
+            &format!("{own}/invitations"),
+            Some(json!({"email":"invitee-accepted@example.test","role":"member"})),
+        )
+        .await;
+    // What accepting an invitation records (members.rs accept path).
+    sqlx::query("UPDATE workspace_invitations SET accepted_at=now() WHERE id=$1")
+        .bind(id(&accepted))
+        .execute(&pool)
+        .await
+        .unwrap();
     let invites = c
         .ok(&owner, "GET", &format!("{own}/invitations"), None)
         .await;
@@ -623,8 +968,9 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
     )
     .await;
 
-    // Access requests: both queues and all four decision operations, including
-    // current-eligibility redaction and the requester-private decision projection.
+    // Access requests: both queues and all four decision operations, with and
+    // without a reason and a profile name, including current-eligibility
+    // redaction and the requester-private decision projection.
     c.ok(
         &admin,
         "PUT",
@@ -632,92 +978,120 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         Some(json!({"discoverable":true})),
     )
     .await;
-    for (i, scope, outcome) in [
-        (0, "platform", "approve"),
-        (1, "platform", "deny"),
-        (2, "workspace", "approve"),
-        (3, "workspace", "deny"),
-    ] {
-        let requester = user(&pool, &format!("requester-{i}"), "user").await;
-        let request_browser = browser(&pool, &requester).await;
-        let request=id(&c.ok(&request_browser,"POST","/api/v1/me/access-requests",Some(json!({"workspace_id":ws,"reason":"Contract request","idempotency_key":format!("slice2-{i}")}))).await);
-        for (who, path) in [
-            (&auditor, "/api/v1/platform/access-requests".to_owned()),
-            (&owner, format!("{own}/access-requests")),
-        ] {
-            let queue = c.ok(who, "GET", &path, None).await;
-            assert!(
-                queue["data"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|v| v["requester_email"] == requester.email)
-            );
-        }
-        let decision = if scope == "platform" {
-            format!("/api/v1/platform/access-requests/{request}/{outcome}")
-        } else {
-            format!("{own}/access-requests/{request}/{outcome}")
-        };
-        c.send(
-            &auditor,
-            "POST",
-            &format!("/api/v1/platform/access-requests/{request}/{outcome}"),
-            None,
-            StatusCode::FORBIDDEN,
-        )
-        .await;
-        c.send(
-            &owner,
-            "POST",
-            &format!(
-                "/api/v1/workspaces/{}/access-requests/{request}/{outcome}",
-                f.project
-            ),
-            None,
-            StatusCode::NOT_FOUND,
-        )
-        .await;
-        let value = c
-            .ok(
-                if scope == "platform" { &admin } else { &owner },
-                "POST",
-                &decision,
-                None,
-            )
-            .await;
-        assert_eq!(
-            value["status"],
-            if outcome == "approve" {
-                "approved"
-            } else {
-                "denied"
+    let mut requesters = Vec::new();
+    for (i, (scope, outcome)) in [
+        ("platform", "approve"),
+        ("platform", "deny"),
+        ("workspace", "approve"),
+        ("workspace", "deny"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for named in [true, false] {
+            let n = i * 2 + usize::from(named);
+            let requester = user(&pool, &format!("requester-{n}"), "user").await;
+            if named {
+                profile(&pool, requester.user_id, Some("Requester Named"), false).await;
             }
-        );
-        assert!(value.get("requester_email").is_none());
-        if i == 3 {
-            c.ok(
-                &admin,
-                "PATCH",
-                &format!("/api/v1/platform/users/{}", requester.user_id),
-                Some(json!({"disabled":true})),
-            )
-            .await;
+            let request_browser = browser(&pool, &requester).await;
+            let reason = named.then_some("Contract request");
+            let request=id(&c.ok(&request_browser,"POST","/api/v1/me/access-requests",Some(json!({"workspace_id":ws,"reason":reason,"idempotency_key":format!("slice2-{n}")}))).await);
             for (who, path) in [
                 (&auditor, "/api/v1/platform/access-requests".to_owned()),
                 (&owner, format!("{own}/access-requests")),
             ] {
-                let value = c.ok(who, "GET", &path, None).await;
-                let redacted = value["data"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .find(|v| v["id"] == json!(request))
-                    .unwrap();
-                assert!(redacted["requester_email"].is_null());
-                assert!(redacted["requester_display_name"].is_null());
+                let queue = c.ok(who, "GET", &path, None).await;
+                assert!(
+                    queue["data"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|v| v["requester_email"] == requester.email)
+                );
+            }
+            let decision = if scope == "platform" {
+                format!("/api/v1/platform/access-requests/{request}/{outcome}")
+            } else {
+                format!("{own}/access-requests/{request}/{outcome}")
+            };
+            c.send(
+                &auditor,
+                "POST",
+                &format!("/api/v1/platform/access-requests/{request}/{outcome}"),
+                None,
+                StatusCode::FORBIDDEN,
+            )
+            .await;
+            c.send(
+                &owner,
+                "POST",
+                &format!(
+                    "/api/v1/workspaces/{}/access-requests/{request}/{outcome}",
+                    f.project
+                ),
+                None,
+                StatusCode::NOT_FOUND,
+            )
+            .await;
+            let value = c
+                .ok(
+                    if scope == "platform" { &admin } else { &owner },
+                    "POST",
+                    &decision,
+                    None,
+                )
+                .await;
+            assert_eq!(
+                value["status"],
+                if outcome == "approve" {
+                    "approved"
+                } else {
+                    "denied"
+                }
+            );
+            assert!(value.get("requester_email").is_none());
+            requesters.push((requester.user_id, request));
+            if i == 3 && named {
+                c.ok(
+                    &admin,
+                    "PATCH",
+                    &format!("/api/v1/platform/users/{}", requester.user_id),
+                    Some(json!({"disabled":true})),
+                )
+                .await;
+                for (who, path) in [
+                    (&auditor, "/api/v1/platform/access-requests".to_owned()),
+                    (&owner, format!("{own}/access-requests")),
+                ] {
+                    let value = c.ok(who, "GET", &path, None).await;
+                    let redacted = value["data"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|v| v["id"] == json!(request))
+                        .unwrap();
+                    assert!(redacted["requester_email"].is_null());
+                    assert!(redacted["requester_display_name"].is_null());
+                }
             }
         }
+    }
+    // Two requests left pending, one with a reason and one without.
+    let mut pending = Vec::new();
+    for (n, reason) in [("pending-a", Some("Waiting")), ("pending-b", None)] {
+        let requester = user(&pool, n, "user").await;
+        let request_browser = browser(&pool, &requester).await;
+        c.ok(
+            &request_browser,
+            "POST",
+            "/api/v1/me/access-requests",
+            Some(
+                json!({"workspace_id":ws,"reason":reason,"idempotency_key":format!("slice2-{n}")}),
+            ),
+        )
+        .await;
+        pending.push(requester.user_id);
     }
 
     // Catalog and policy layers: populated replacement/default lists, never a union.
@@ -728,6 +1102,23 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         .await
         .unwrap();
     let m = model(&pool, "contract-access-model").await;
+    let access = format!("{own}/access");
+    // Every layer empty first: the whole access view is unset.
+    c.ok(&owner, "GET", &access, None).await;
+    assert!(
+        c.ok(
+            &auditor,
+            "GET",
+            "/api/v1/platform/workspace-types/team/policy",
+            None
+        )
+        .await["policy"]["requests_per_minute"]
+            .is_null()
+    );
+    let bare = c
+        .ok(&auditor, "GET", &format!("{platform}/policy"), None)
+        .await;
+    assert!(bare["effective"]["requests_per_minute"].is_null());
     c.ok(
         &admin,
         "PUT",
@@ -747,29 +1138,6 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             .unwrap()
             .is_empty()
     );
-    c.ok(
-        &admin,
-        "PUT",
-        &format!("{platform}/catalogs"),
-        Some(json!({"mode":"replace","catalog_ids":[catalog]})),
-    )
-    .await;
-    assert!(
-        !c.ok(&auditor, "GET", &format!("{platform}/catalogs"), None)
-            .await["effective_catalog_ids"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
-    c.ok(&admin, "DELETE", &format!("{platform}/catalogs"), None)
-        .await;
-    c.ok(
-        &admin,
-        "POST",
-        &format!("{platform}/models"),
-        Some(json!({"model_id":m})),
-    )
-    .await;
     let limits = json!({"requests_per_minute":100,"tokens_per_minute":1000,"concurrent_requests":4,"concurrent_jobs":2,"storage_bytes":4096,"key_issuances_per_holder":10,"key_issuances_per_workspace":100,"budgets":[{"period":"month","amount_microusd":"9007199254740993"}]});
     c.ok(
         &admin,
@@ -790,8 +1158,47 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         policy["policy"]["budgets"][0]["amount_microusd"],
         "9007199254740993"
     );
-    c.ok(&admin, "PUT", &format!("{platform}/policy"), Some(limits))
-        .await;
+    // Type default only: the override layer is absent.
+    c.ok(&owner, "GET", &access, None).await;
+    // A partial override (only requests_per_minute), then the access view with it.
+    c.ok(
+        &admin,
+        "PUT",
+        &format!("{platform}/catalogs"),
+        Some(json!({"mode":"replace","catalog_ids":[catalog]})),
+    )
+    .await;
+    assert!(
+        !c.ok(&auditor, "GET", &format!("{platform}/catalogs"), None)
+            .await["effective_catalog_ids"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    c.ok(
+        &admin,
+        "PUT",
+        &format!("{platform}/policy"),
+        Some(json!({"requests_per_minute":50,"tokens_per_minute":null,"concurrent_requests":null,"monthly_budget_microusd":null})),
+    )
+    .await;
+    c.ok(&owner, "GET", &access, None).await;
+    // A workspace-local policy (set by the owner through the workspace route).
+    c.setup(
+        &owner,
+        "PUT",
+        &format!("{own}/policy"),
+        Some(json!({"requests_per_minute":10,"tokens_per_minute":500,"concurrent_requests":2,"concurrent_jobs":1,"storage_bytes":2048,"key_issuances_per_holder":5,"key_issuances_per_workspace":50,"budgets":[{"period":"month","amount_microusd":"5000000"},{"period":"lifetime","amount_microusd":"9000000"}]})),
+    )
+    .await;
+    // The full override replaces the partial one.
+    c.ok(
+        &admin,
+        "PUT",
+        &format!("{platform}/policy"),
+        Some(limits.clone()),
+    )
+    .await;
     assert!(
         !c.ok(&auditor, "GET", &format!("{platform}/policy"), None)
             .await["budgets"]
@@ -799,33 +1206,67 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             .unwrap()
             .is_empty()
     );
-    assert!(
-        !c.ok(&owner, "GET", &format!("{own}/access"), None).await["models"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    c.ok(
+        &admin,
+        "POST",
+        &format!("{platform}/models"),
+        Some(json!({"model_id":m})),
+    )
+    .await;
+    let full = c.ok(&owner, "GET", &access, None).await;
+    assert!(!full["models"].as_array().unwrap().is_empty());
+    c.ok(
+        &owner,
+        "GET",
+        &target(&access, &format!("model_id={m}")),
+        None,
+    )
+    .await;
     c.ok(&admin, "DELETE", &format!("{platform}/policy"), None)
+        .await;
+    c.ok(&admin, "DELETE", &format!("{platform}/catalogs"), None)
         .await;
     c.ok(&admin, "DELETE", &format!("{platform}/models/{m}"), None)
         .await;
 
-    // Nonempty inference session reads with unknown usage, including own-vs-wide refusal.
+    // Nonempty inference session reads: unknown usage and settled usage,
+    // including own-vs-wide refusal.
     let connection = Uuid::new_v4();
     let deployment = Uuid::new_v4();
     sqlx::query("INSERT INTO provider_connections(id,name,provider,credential_ref) VALUES($1,'Contract mock','openai','env:UNUSED')").bind(connection).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model) VALUES($1,$2,$3,'mock')").bind(deployment).bind(m).bind(connection).execute(&pool).await.unwrap();
     let (status, key_value) = key(&f, &f.owner, f.team, Value::Null).await;
     assert_eq!(status, StatusCode::OK);
-    let execution = Uuid::new_v4();
-    sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,client_session_id) VALUES($1,$2,$3,$4,'contract-access-model','openai',false,'succeeded',$1,'contract-session')").bind(execution).bind(f.team).bind(id(&key_value)).bind(deployment).execute(&pool).await.unwrap();
+    let key_id = id(&key_value);
+    let unknown = attempt(
+        &pool,
+        f.team,
+        key_id,
+        deployment,
+        "contract-session",
+        None,
+        false,
+    )
+    .await;
+    // A newer session with tokens, a settled cost and an application label.
+    attempt(
+        &pool,
+        f.team,
+        key_id,
+        deployment,
+        "contract-session-b",
+        Some("Contract Agent"),
+        true,
+    )
+    .await;
     let session_path = format!("/api/v1/workspaces/{}/sessions", f.team);
-    assert!(
-        !c.ok(&owner, "GET", &session_path, None).await["data"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    let page = c
+        .ok(&owner, "GET", &target(&session_path, "limit=1"), None)
+        .await;
+    assert_eq!(page["data"].as_array().unwrap().len(), 1);
+    let cursor = page["next_cursor"].as_str().unwrap().to_owned();
+    let all = c.ok(&owner, "GET", &session_path, None).await;
+    assert_eq!(all["data"].as_array().unwrap().len(), 2);
     let session = c
         .ok(
             &owner,
@@ -836,6 +1277,16 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         .await;
     assert!(session["cost_microusd"].is_null());
     assert!(session["input_tokens"].is_null());
+    let session_b = c
+        .ok(
+            &owner,
+            "GET",
+            &format!("{session_path}/contract-session-b"),
+            None,
+        )
+        .await;
+    assert_eq!(session_b["cost_microusd"], "7");
+    assert_eq!(session_b["input_tokens"], "10");
     c.send(
         &regular,
         "GET",
@@ -860,8 +1311,54 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         StatusCode::NOT_FOUND,
     )
     .await;
+    // Every filter at once, valid for the older session (the cursor is the newer page's).
+    let today = chrono::Utc::now().date_naive();
+    let start = (today - chrono::TimeDelta::days(1)).to_string();
+    let end = (today + chrono::TimeDelta::days(1)).to_string();
+    let prefix = unknown.to_string()[..8].to_owned();
+    let key_text = key_id.to_string();
+    let filters: Vec<(&str, String)> = vec![
+        ("start_date", start),
+        ("end_date", end),
+        ("model", "contract-access-model".into()),
+        ("status", "succeeded".into()),
+        ("q", prefix),
+        ("finish_reason", "stop".into()),
+        ("workload", "generation".into()),
+        ("key_id", key_text),
+        ("streamed", "false".into()),
+    ];
+    let list = c
+        .ok(
+            &owner,
+            "GET",
+            &target(
+                &session_path,
+                &render(
+                    &filters,
+                    &[
+                        ("session_id", "contract-session"),
+                        ("cursor", cursor.as_str()),
+                        ("limit", "1"),
+                    ],
+                ),
+            ),
+            None,
+        )
+        .await;
+    assert_eq!(list["data"].as_array().unwrap().len(), 1);
+    let detail_path = format!("{session_path}/contract-session");
+    let detail = c
+        .ok(
+            &owner,
+            "GET",
+            &target(&detail_path, &render(&filters, &[])),
+            None,
+        )
+        .await;
+    assert_eq!(detail["session_id"], "contract-session");
 
-    // Platform subject export is a distinct, closed privacy projection.
+    // Platform subject exports are distinct, closed privacy projections.
     let export = c
         .ok(
             &auditor,
@@ -881,5 +1378,546 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         assert!(export.get(private).is_none());
     }
     assert!(!export.to_string().contains(&f.personal.to_string()));
-    c.observed.finish(SLICE2_AREAS);
+    // A cleaned-up person (cleaned, null address, system audit), an Admin whose
+    // audit rows have no resource, a group-role holder with a name and sign-ins,
+    // a decided request and two pending ones (with and without a reason).
+    for who in [
+        new_user,
+        f.admin.user_id,
+        b,
+        requesters[0].0,
+        requesters[1].0,
+        pending[0],
+        pending[1],
+    ] {
+        c.ok(
+            &auditor,
+            "GET",
+            &format!("/api/v1/platform/users/{who}/export"),
+            None,
+        )
+        .await;
+    }
+
+    // Directory reads over the seeded identities.
+    let users = "/api/v1/platform/users";
+    assert!(
+        !c.ok(&auditor, "GET", users, None).await["data"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    c.ok(&auditor, "GET", &target(users, "status=suspended"), None)
+        .await;
+    c.ok(&auditor, "GET", &target(users, "role=none"), None)
+        .await;
+    c.ok(
+        &auditor,
+        "GET",
+        &target(users, "limit=50&offset=0&q=group&role=any&status=active"),
+        None,
+    )
+    .await;
+    for who in [b, new_user, cc.user_id, f.member.user_id] {
+        c.ok(
+            &auditor,
+            "GET",
+            &format!("/api/v1/platform/users/{who}"),
+            None,
+        )
+        .await;
+    }
+    c.ok(
+        &auditor,
+        "GET",
+        &target(
+            "/api/v1/platform/workspaces",
+            "limit=50&offset=0&q=contract&kind=project&status=active",
+        ),
+        None,
+    )
+    .await;
+    c.ok(
+        &auditor,
+        "GET",
+        &target("/api/v1/platform/workspaces", "status=disabled"),
+        None,
+    )
+    .await;
+    c.ok(
+        &auditor,
+        "GET",
+        &format!("/api/v1/platform/workspaces/{wsd}"),
+        None,
+    )
+    .await;
+    c.ok(&auditor, "GET", &platform, None).await;
+    for (who, path) in [
+        (&owner, format!("{own}/members")),
+        (&auditor, format!("{platform}/members")),
+    ] {
+        c.ok(
+            who,
+            "GET",
+            &target(&path, "limit=50&offset=0&q=group"),
+            None,
+        )
+        .await;
+    }
+    for (who, path) in [
+        (&auditor, "/api/v1/platform/access-requests".to_owned()),
+        (&owner, format!("{own}/access-requests")),
+        (&owner, format!("{own}/invitations")),
+        (&auditor, "/api/v1/platform/oidc/group-mappings".to_owned()),
+    ] {
+        c.ok(who, "GET", &target(&path, "limit=50&offset=0"), None)
+            .await;
+    }
+
+    // HTTP boundary vectors: query parameters, then request bodies. A failing set
+    // is recorded and reported with the rest, never printed with a value.
+    let page_base = || pairs(&[("limit", "50"), ("offset", "0")]);
+    {
+        let mut o = c.observed.borrow_mut();
+        c.guarded(
+            "GET /platform/users",
+            query_vectors_fixed(
+                &mut o,
+                "GET",
+                "/api/v1/platform/users",
+                &[
+                    ("limit", "50"),
+                    ("offset", "0"),
+                    ("q", "group"),
+                    ("role", "any"),
+                    ("status", "active"),
+                ],
+                async |q| {
+                    c.raw(
+                        &auditor,
+                        "GET",
+                        &target("/api/v1/platform/users", &q),
+                        None,
+                        &[],
+                    )
+                    .await
+                },
+            ),
+        )
+        .await;
+        c.guarded(
+            "GET /platform/workspaces",
+            query_vectors_fixed(
+                &mut o,
+                "GET",
+                "/api/v1/platform/workspaces",
+                &[
+                    ("limit", "50"),
+                    ("offset", "0"),
+                    ("q", "contract"),
+                    ("kind", "project"),
+                    ("status", "active"),
+                ],
+                async |q| {
+                    c.raw(
+                        &auditor,
+                        "GET",
+                        &target("/api/v1/platform/workspaces", &q),
+                        None,
+                        &[],
+                    )
+                    .await
+                },
+            ),
+        )
+        .await;
+        for (label, template, who, path) in [
+            (
+                "GET /platform/workspaces/{ws}/members",
+                "/api/v1/platform/workspaces/{ws}/members",
+                &auditor,
+                format!("{platform}/members"),
+            ),
+            (
+                "GET /workspaces/{ws}/members",
+                "/api/v1/workspaces/{ws}/members",
+                &owner,
+                format!("{own}/members"),
+            ),
+        ] {
+            c.guarded(
+                label,
+                query_vectors_fixed(
+                    &mut o,
+                    "GET",
+                    template,
+                    &[("limit", "50"), ("offset", "0"), ("q", "group")],
+                    async |q| c.raw(who, "GET", &target(&path, &q), None, &[]).await,
+                ),
+            )
+            .await;
+        }
+        for (label, template, who, path) in [
+            (
+                "GET /platform/workspaces/{ws}/member-candidates",
+                "/api/v1/platform/workspaces/{ws}/member-candidates",
+                &auditor,
+                format!("{platform}/member-candidates"),
+            ),
+            (
+                "GET /workspaces/{ws}/member-candidates",
+                "/api/v1/workspaces/{ws}/member-candidates",
+                &owner,
+                format!("{own}/member-candidates"),
+            ),
+        ] {
+            c.guarded(
+                label,
+                query_vectors_fixed(&mut o, "GET", template, &[("q", "member")], async |q| {
+                    c.raw(who, "GET", &target(&path, &q), None, &[]).await
+                }),
+            )
+            .await;
+        }
+        for (label, template, who, path) in [
+            (
+                "GET /platform/access-requests",
+                "/api/v1/platform/access-requests",
+                &auditor,
+                "/api/v1/platform/access-requests".to_owned(),
+            ),
+            (
+                "GET /workspaces/{ws}/access-requests",
+                "/api/v1/workspaces/{ws}/access-requests",
+                &owner,
+                format!("{own}/access-requests"),
+            ),
+            (
+                "GET /workspaces/{ws}/invitations",
+                "/api/v1/workspaces/{ws}/invitations",
+                &owner,
+                format!("{own}/invitations"),
+            ),
+            (
+                "GET /platform/oidc/group-mappings",
+                "/api/v1/platform/oidc/group-mappings",
+                &auditor,
+                "/api/v1/platform/oidc/group-mappings".to_owned(),
+            ),
+        ] {
+            c.guarded(
+                label,
+                query_vectors(
+                    &mut o,
+                    "GET",
+                    template,
+                    async || ((), page_base()),
+                    async |_: &(), q| {
+                        Probe::from(c.raw(who, "GET", &target(&path, &q), None, &[]).await)
+                    },
+                ),
+            )
+            .await;
+        }
+        let model_text = m.to_string();
+        c.guarded(
+            "GET /workspaces/{ws}/access",
+            query_vectors_fixed(
+                &mut o,
+                "GET",
+                "/api/v1/workspaces/{ws}/access",
+                &[("model_id", model_text.as_str())],
+                async |q| c.raw(&owner, "GET", &target(&access, &q), None, &[]).await,
+            ),
+        )
+        .await;
+        let mut base: Vec<(&str, String)> = filters.clone();
+        base.extend([
+            ("session_id", "contract-session".to_owned()),
+            ("cursor", cursor.clone()),
+            ("limit", "1".to_owned()),
+        ]);
+        let list_base: Vec<(String, String)> = base
+            .iter()
+            .map(|(n, v)| ((*n).to_owned(), v.clone()))
+            .collect();
+        c.guarded(
+            "GET /workspaces/{ws}/sessions",
+            query_vectors(
+                &mut o,
+                "GET",
+                "/api/v1/workspaces/{ws}/sessions",
+                async || ((), list_base.clone()),
+                async |_: &(), q| {
+                    Probe::from(
+                        c.raw(&owner, "GET", &target(&session_path, &q), None, &[])
+                            .await,
+                    )
+                },
+            ),
+        )
+        .await;
+        let detail_base: Vec<(String, String)> = filters
+            .iter()
+            .map(|(n, v)| ((*n).to_owned(), v.clone()))
+            .collect();
+        c.guarded(
+            "GET /workspaces/{ws}/sessions/{session}",
+            query_vectors(
+                &mut o,
+                "GET",
+                "/api/v1/workspaces/{ws}/sessions/{session}",
+                async || ((), detail_base.clone()),
+                async |_: &(), q| {
+                    Probe::from(
+                        c.raw(&owner, "GET", &target(&detail_path, &q), None, &[])
+                            .await,
+                    )
+                },
+            ),
+        )
+        .await;
+    }
+
+    // Request bodies. Targets are fresh so each vector set starts from known state.
+    let vector_user = user(&pool, "vector-user", "user").await;
+    let vector_role_user = user(&pool, "vector-role", "user").await;
+    let vector_member = user(&pool, "vector-member", "user").await;
+    let vector_member2 = user(&pool, "vector-member2", "user").await;
+    let vector_ws = id(&c
+        .ok(
+            &admin,
+            "POST",
+            "/api/v1/platform/workspaces",
+            Some(json!({"name":"Vector shared","kind":"project","owner_user_id":f.owner.user_id})),
+        )
+        .await);
+    let vector_mapping = id(&c
+        .ok(
+            &admin,
+            "POST",
+            "/api/v1/platform/oidc/group-mappings",
+            Some(json!({"issuer":ISSUER,"group_value":"vector-group","target_kind":"platform","platform_role":"user","workspace_id":null,"workspace_role":null,"enabled":true})),
+        )
+        .await);
+    let vector_path = format!("/api/v1/workspaces/{vector_ws}");
+    let vector_platform = format!("/api/v1/platform/workspaces/{vector_ws}");
+    macro_rules! body {
+        ($label:expr, $method:expr, $template:expr, $who:expr, $path:expr, $valid:expr) => {{
+            let path: String = $path;
+            let mut o = c.observed.borrow_mut();
+            c.guarded(
+                $label,
+                body_vectors_http(&mut o, $method, $template, $valid, async |body| {
+                    Probe::from(c.raw($who, $method, &path, Some(body), &[]).await)
+                }),
+            )
+            .await;
+        }};
+    }
+    body!(
+        "POST /platform/users",
+        "POST",
+        "/api/v1/platform/users",
+        &admin,
+        "/api/v1/platform/users".to_owned(),
+        json!({"email":"vector-created@example.test","platform_role":"user"})
+    );
+    body!(
+        "PATCH /platform/users/{user}",
+        "PATCH",
+        "/api/v1/platform/users/{user}",
+        &admin,
+        format!("/api/v1/platform/users/{}", vector_user.user_id),
+        json!({"email":"vector-patched@example.test","disabled":false,"oidc_link_allowed":true})
+    );
+    body!(
+        "POST /platform/users/{user}/roles",
+        "POST",
+        "/api/v1/platform/users/{user}/roles",
+        &admin,
+        format!("/api/v1/platform/users/{}/roles", vector_role_user.user_id),
+        json!({"role":"user"})
+    );
+    body!(
+        "POST /platform/workspaces",
+        "POST",
+        "/api/v1/platform/workspaces",
+        &admin,
+        "/api/v1/platform/workspaces".to_owned(),
+        json!({"name":"Vector created","kind":"project","owner_user_id":f.owner.user_id})
+    );
+    body!(
+        "PATCH /platform/workspaces/{ws}",
+        "PATCH",
+        "/api/v1/platform/workspaces/{ws}",
+        &admin,
+        vector_platform.clone(),
+        json!({"name":"Vector renamed","disabled":false,"cost_center_id":cost_center})
+    );
+    body!(
+        "PATCH /workspaces/{ws}",
+        "PATCH",
+        "/api/v1/workspaces/{ws}",
+        &owner,
+        vector_path.clone(),
+        json!({"name":"Vector own","object_visibility":"workspace"})
+    );
+    body!(
+        "PUT /platform/workspaces/{ws}/discoverable",
+        "PUT",
+        "/api/v1/platform/workspaces/{ws}/discoverable",
+        &admin,
+        format!("{vector_platform}/discoverable"),
+        json!({"discoverable":true})
+    );
+    body!(
+        "POST /platform/workspaces/{ws}/members",
+        "POST",
+        "/api/v1/platform/workspaces/{ws}/members",
+        &admin,
+        format!("{vector_platform}/members"),
+        json!({"user_id":vector_member.user_id,"role":"member"})
+    );
+    body!(
+        "POST /workspaces/{ws}/members",
+        "POST",
+        "/api/v1/workspaces/{ws}/members",
+        &owner,
+        format!("{vector_path}/members"),
+        json!({"user_id":vector_member2.user_id,"role":"member"})
+    );
+    body!(
+        "POST /workspaces/{ws}/invitations",
+        "POST",
+        "/api/v1/workspaces/{ws}/invitations",
+        &owner,
+        format!("{vector_path}/invitations"),
+        json!({"email":"vector-invite@example.test","role":"member"})
+    );
+    body!(
+        "POST /platform/workspaces/{ws}/models",
+        "POST",
+        "/api/v1/platform/workspaces/{ws}/models",
+        &admin,
+        format!("{vector_platform}/models"),
+        json!({"model_id":m})
+    );
+    body!(
+        "PUT /platform/workspaces/{ws}/catalogs",
+        "PUT",
+        "/api/v1/platform/workspaces/{ws}/catalogs",
+        &admin,
+        format!("{vector_platform}/catalogs"),
+        json!({"mode":"replace","catalog_ids":[catalog]})
+    );
+    body!(
+        "PUT /platform/workspace-types/{kind}/catalogs",
+        "PUT",
+        "/api/v1/platform/workspace-types/{kind}/catalogs",
+        &admin,
+        "/api/v1/platform/workspace-types/team/catalogs".to_owned(),
+        json!({"catalog_ids":[catalog]})
+    );
+    for (label, template, path) in [
+        (
+            "PUT /platform/workspace-types/{kind}/policy (budgets)",
+            "/api/v1/platform/workspace-types/{kind}/policy",
+            "/api/v1/platform/workspace-types/team/policy".to_owned(),
+        ),
+        (
+            "PUT /platform/workspaces/{ws}/policy (budgets)",
+            "/api/v1/platform/workspaces/{ws}/policy",
+            format!("{vector_platform}/policy"),
+        ),
+    ] {
+        body!(
+            label,
+            "PUT",
+            template,
+            &admin,
+            path,
+            json!({"requests_per_minute":null,"tokens_per_minute":100,"concurrent_requests":3,"concurrent_jobs":null,"storage_bytes":1024,"key_issuances_per_holder":3,"key_issuances_per_workspace":9,"budgets":[{"period":"month","amount_microusd":"9007199254740993"}]})
+        );
+    }
+    for (label, template, path) in [
+        (
+            "PUT /platform/workspace-types/{kind}/policy (monthly)",
+            "/api/v1/platform/workspace-types/{kind}/policy",
+            "/api/v1/platform/workspace-types/team/policy".to_owned(),
+        ),
+        (
+            "PUT /platform/workspaces/{ws}/policy (monthly)",
+            "/api/v1/platform/workspaces/{ws}/policy",
+            format!("{vector_platform}/policy"),
+        ),
+    ] {
+        body!(
+            label,
+            "PUT",
+            template,
+            &admin,
+            path,
+            json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"monthly_budget_microusd":"5000","budget_period":"month"})
+        );
+    }
+    for (kind, valid) in [
+        (
+            "platform",
+            json!({"issuer":ISSUER,"group_value":"vector-created","target_kind":"platform","platform_role":"user","workspace_id":null,"workspace_role":null,"enabled":true}),
+        ),
+        (
+            "workspace",
+            json!({"issuer":ISSUER,"group_value":"vector-created","target_kind":"workspace","platform_role":null,"workspace_id":vector_ws,"workspace_role":"member","enabled":true}),
+        ),
+    ] {
+        body!(
+            &format!("POST /platform/oidc/group-mappings ({kind})"),
+            "POST",
+            "/api/v1/platform/oidc/group-mappings",
+            &admin,
+            "/api/v1/platform/oidc/group-mappings".to_owned(),
+            valid.clone()
+        );
+        body!(
+            &format!("POST /platform/oidc/group-mappings/preview ({kind})"),
+            "POST",
+            "/api/v1/platform/oidc/group-mappings/preview",
+            &admin,
+            "/api/v1/platform/oidc/group-mappings/preview".to_owned(),
+            valid
+        );
+    }
+    body!(
+        "PATCH /platform/oidc/group-mappings/{id}",
+        "PATCH",
+        "/api/v1/platform/oidc/group-mappings/{id}",
+        &admin,
+        format!("/api/v1/platform/oidc/group-mappings/{vector_mapping}"),
+        json!({"enabled":true})
+    );
+    body!(
+        "POST /platform/oidc/group-mappings/{id}/preview",
+        "POST",
+        "/api/v1/platform/oidc/group-mappings/{id}/preview",
+        &admin,
+        format!("/api/v1/platform/oidc/group-mappings/{vector_mapping}/preview"),
+        json!({"enabled":true,"delete":false})
+    );
+
+    let mut failures = c.failures.borrow().clone();
+    // The coverage gates last: they judge every positive and vector set above.
+    let gates = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        c.observed.borrow().finish(SLICE2_AREAS);
+    }));
+    if let Err(panic) = gates {
+        failures.push(
+            panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+                .unwrap_or_else(|| "gates panicked".to_owned()),
+        );
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

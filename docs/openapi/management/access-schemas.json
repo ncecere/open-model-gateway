@@ -82,7 +82,8 @@
           "$ref": "#/components/schemas/IdentityUuid"
         },
         "email": {
-          "$ref": "#/components/schemas/IdentityNullableString"
+          "type": "string",
+          "description": "Never null: a cleaned-up user's grants are all revoked before the address is cleared (lifecycle.rs cleanup_user), and the member list only returns unrevoked grants."
         },
         "display_name": {
           "$ref": "#/components/schemas/IdentityNullableString"
@@ -804,22 +805,29 @@
           "type": "object",
           "properties": {
             "issuer": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 2048,
+              "pattern": "^https://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{1,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+              "description": "An https URL without credentials, query or fragment (directory.rs mapping_valid), at most 2048 bytes. A development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host."
             },
             "group_value": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "OIDC group value: 1 to 512 bytes (the schema bound counts characters), no control characters."
             },
             "target_kind": {
-              "type": "string"
+              "const": "platform"
             },
             "platform_role": {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "$ref": "#/components/schemas/IdentityRole"
             },
             "workspace_id": {
-              "$ref": "#/components/schemas/IdentityNullableUuid"
+              "type": "null"
             },
             "workspace_role": {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "type": "null"
             },
             "enabled": {
               "type": "boolean"
@@ -829,6 +837,52 @@
             "issuer",
             "group_value",
             "target_kind",
+            "platform_role",
+            "enabled"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "issuer": {
+              "type": "string",
+              "maxLength": 2048,
+              "pattern": "^https://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{1,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+              "description": "An https URL without credentials, query or fragment (directory.rs mapping_valid), at most 2048 bytes. A development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host."
+            },
+            "group_value": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "OIDC group value: 1 to 512 bytes (the schema bound counts characters), no control characters."
+            },
+            "target_kind": {
+              "const": "workspace"
+            },
+            "platform_role": {
+              "type": "null"
+            },
+            "workspace_id": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            },
+            "workspace_role": {
+              "enum": [
+                "admin",
+                "member"
+              ]
+            },
+            "enabled": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "issuer",
+            "group_value",
+            "target_kind",
+            "workspace_id",
+            "workspace_role",
             "enabled"
           ],
           "additionalProperties": false
@@ -837,22 +891,49 @@
           "type": "array",
           "prefixItems": [
             {
-              "type": "string"
+              "type": "string",
+              "maxLength": 2048,
+              "pattern": "^https://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{1,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+              "description": "An https URL without credentials, query or fragment (directory.rs mapping_valid), at most 2048 bytes. A development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host."
             },
             {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "OIDC group value: 1 to 512 bytes (the schema bound counts characters), no control characters."
             },
             {
-              "type": "string"
+              "enum": [
+                "platform",
+                "workspace"
+              ]
             },
             {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/IdentityRole"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             {
               "$ref": "#/components/schemas/IdentityNullableUuid"
             },
             {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "anyOf": [
+                {
+                  "enum": [
+                    "admin",
+                    "member"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             {
               "type": "boolean"
@@ -863,174 +944,114 @@
           "items": false
         }
       ],
-      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+      "description": "A complete mapping (create, and the preview of a not-yet-saved mapping): target_kind platform requires platform_role and no workspace fields; target_kind workspace requires workspace_id and workspace_role (admin or member) and no platform_role (directory.rs mapping_valid, the oidc_group_mappings CHECK). The positional array form does not repeat the cross-field rule. The preview handler refuses a null or missing required value exactly like create."
     },
     "AccessMappingPreviewInput": {
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "issuer": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "group_value": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "target_kind": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "platform_role": {
-              "$ref": "#/components/schemas/IdentityNullableString"
-            },
-            "workspace_id": {
-              "$ref": "#/components/schemas/IdentityNullableUuid"
-            },
-            "workspace_role": {
-              "$ref": "#/components/schemas/IdentityNullableString"
-            },
-            "enabled": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            }
-          },
-          "required": [],
-          "additionalProperties": false
-        },
-        {
-          "type": "array",
-          "prefixItems": [
-            {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            {
-              "$ref": "#/components/schemas/IdentityNullableString"
-            },
-            {
-              "$ref": "#/components/schemas/IdentityNullableUuid"
-            },
-            {
-              "$ref": "#/components/schemas/IdentityNullableString"
-            },
-            {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            }
-          ],
-          "minItems": 7,
-          "maxItems": 7,
-          "items": false
-        }
-      ],
-      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+      "$ref": "#/components/schemas/AccessMappingInput"
     },
     "AccessMappingPatch": {
       "type": "object",
       "properties": {
         "issuer": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^https://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{1,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+          "description": "An https URL without credentials, query or fragment (directory.rs mapping_valid), at most 2048 bytes. A development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host."
         },
         "group_value": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+          "description": "OIDC group value: 1 to 512 bytes (the schema bound counts characters), no control characters."
         },
         "target_kind": {
-          "type": "string"
+          "enum": [
+            "platform",
+            "workspace"
+          ]
         },
         "platform_role": {
-          "$ref": "#/components/schemas/IdentityNullableString"
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/IdentityRole"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "workspace_id": {
           "$ref": "#/components/schemas/IdentityNullableUuid"
         },
         "workspace_role": {
-          "$ref": "#/components/schemas/IdentityNullableString"
+          "anyOf": [
+            {
+              "enum": [
+                "admin",
+                "member"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "enabled": {
           "type": "boolean"
         }
       },
       "required": [],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Fields merged onto the stored mapping (an omitted field keeps its value, an explicit null clears platform_role, workspace_id or workspace_role) and then validated as a complete mapping; the cross-field rule therefore depends on the stored row."
     },
     "AccessMappingExistingPreview": {
       "type": "object",
       "properties": {
         "issuer": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^https://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{1,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+          "description": "An https URL without credentials, query or fragment (directory.rs mapping_valid), at most 2048 bytes. A development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host."
         },
         "group_value": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+          "description": "OIDC group value: 1 to 512 bytes (the schema bound counts characters), no control characters."
         },
         "target_kind": {
-          "type": "string"
+          "enum": [
+            "platform",
+            "workspace"
+          ]
         },
         "platform_role": {
-          "$ref": "#/components/schemas/IdentityNullableString"
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/IdentityRole"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "workspace_id": {
           "$ref": "#/components/schemas/IdentityNullableUuid"
         },
         "workspace_role": {
-          "$ref": "#/components/schemas/IdentityNullableString"
+          "anyOf": [
+            {
+              "enum": [
+                "admin",
+                "member"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "enabled": {
           "type": "boolean"
@@ -1040,7 +1061,8 @@
         }
       },
       "required": [],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "The same merge body as PATCH, or delete:true (an empty object also previews a delete)."
     },
     "AccessMapping": {
       "oneOf": [
@@ -1067,116 +1089,18 @@
         },
         "digest": {
           "type": "null",
-          "description": "A preview of a NOT-YET-SAVED mapping has no stored state to confirm, so the digest is always null (group_mapping_preview.rs preview_new_mapping)."
+          "description": "A preview of a NOT-YET-SAVED mapping has no stored state to confirm, so the digest is always null."
         },
         "immediate": {
-          "type": "object",
-          "properties": {
-            "applies": {
-              "type": "boolean"
-            },
-            "blocked_by_last_admin": {
-              "type": "boolean"
-            },
-            "platform_role_revoked": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "user_id": {
-                    "$ref": "#/components/schemas/IdentityUuid"
-                  },
-                  "email": {
-                    "$ref": "#/components/schemas/IdentityNullableString"
-                  },
-                  "display_name": {
-                    "$ref": "#/components/schemas/IdentityNullableString"
-                  },
-                  "role": {
-                    "$ref": "#/components/schemas/IdentityRole"
-                  }
-                },
-                "required": [
-                  "user_id",
-                  "email",
-                  "display_name",
-                  "role"
-                ],
-                "additionalProperties": false
-              }
-            },
-            "workspace_membership_revoked": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "user_id": {
-                    "$ref": "#/components/schemas/IdentityUuid"
-                  },
-                  "email": {
-                    "$ref": "#/components/schemas/IdentityNullableString"
-                  },
-                  "display_name": {
-                    "$ref": "#/components/schemas/IdentityNullableString"
-                  },
-                  "role": {
-                    "enum": [
-                      "owner",
-                      "admin",
-                      "member"
-                    ]
-                  },
-                  "workspace_id": {
-                    "$ref": "#/components/schemas/IdentityUuid"
-                  }
-                },
-                "required": [
-                  "user_id",
-                  "email",
-                  "display_name",
-                  "role",
-                  "workspace_id"
-                ],
-                "additionalProperties": false
-              }
-            },
-            "users_suspended": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "user_id": {
-                    "$ref": "#/components/schemas/IdentityUuid"
-                  },
-                  "email": {
-                    "$ref": "#/components/schemas/IdentityNullableString"
-                  },
-                  "display_name": {
-                    "$ref": "#/components/schemas/IdentityNullableString"
-                  }
-                },
-                "required": [
-                  "user_id",
-                  "email",
-                  "display_name"
-                ],
-                "additionalProperties": false
-              }
-            },
-            "keys_revoked_count": {
-              "type": "integer",
-              "minimum": 0
-            }
+          "const": {
+            "applies": false,
+            "blocked_by_last_admin": false,
+            "platform_role_revoked": [],
+            "workspace_membership_revoked": [],
+            "users_suspended": [],
+            "keys_revoked_count": 0
           },
-          "required": [
-            "applies",
-            "blocked_by_last_admin",
-            "platform_role_revoked",
-            "workspace_membership_revoked",
-            "users_suspended",
-            "keys_revoked_count"
-          ],
-          "additionalProperties": false
+          "description": "A not-yet-saved mapping has no grants to revoke; the evaluator's fixed default (group_mapping_preview.rs)."
         },
         "diff": {
           "type": "object",
@@ -1190,7 +1114,7 @@
                     "$ref": "#/components/schemas/IdentityUuid"
                   },
                   "email": {
-                    "$ref": "#/components/schemas/IdentityNullableString"
+                    "type": "string"
                   },
                   "display_name": {
                     "$ref": "#/components/schemas/IdentityNullableString"
@@ -1206,14 +1130,7 @@
                     ]
                   },
                   "after": {
-                    "anyOf": [
-                      {
-                        "$ref": "#/components/schemas/IdentityRole"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                    "$ref": "#/components/schemas/IdentityRole"
                   },
                   "workspace_id": {
                     "type": "null"
@@ -1239,61 +1156,7 @@
               }
             },
             "platform_role_lost": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "user_id": {
-                    "$ref": "#/components/schemas/IdentityUuid"
-                  },
-                  "email": {
-                    "$ref": "#/components/schemas/IdentityNullableString"
-                  },
-                  "display_name": {
-                    "$ref": "#/components/schemas/IdentityNullableString"
-                  },
-                  "before": {
-                    "anyOf": [
-                      {
-                        "$ref": "#/components/schemas/IdentityRole"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "after": {
-                    "anyOf": [
-                      {
-                        "$ref": "#/components/schemas/IdentityRole"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "workspace_id": {
-                    "type": "null"
-                  },
-                  "reactivated": {
-                    "type": "boolean"
-                  },
-                  "would_be_suspended": {
-                    "type": "boolean"
-                  }
-                },
-                "required": [
-                  "user_id",
-                  "email",
-                  "display_name",
-                  "before",
-                  "after",
-                  "workspace_id",
-                  "reactivated",
-                  "would_be_suspended"
-                ],
-                "additionalProperties": false
-              }
+              "const": []
             },
             "workspace_membership_gained": {
               "type": "array",
@@ -1304,7 +1167,7 @@
                     "$ref": "#/components/schemas/IdentityUuid"
                   },
                   "email": {
-                    "$ref": "#/components/schemas/IdentityNullableString"
+                    "type": "string"
                   },
                   "display_name": {
                     "$ref": "#/components/schemas/IdentityNullableString"
@@ -1324,17 +1187,10 @@
                     ]
                   },
                   "after": {
-                    "anyOf": [
-                      {
-                        "enum": [
-                          "owner",
-                          "admin",
-                          "member"
-                        ]
-                      },
-                      {
-                        "type": "null"
-                      }
+                    "enum": [
+                      "owner",
+                      "admin",
+                      "member"
                     ]
                   },
                   "workspace_id": {
@@ -1353,61 +1209,7 @@
               }
             },
             "workspace_membership_lost": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "user_id": {
-                    "$ref": "#/components/schemas/IdentityUuid"
-                  },
-                  "email": {
-                    "$ref": "#/components/schemas/IdentityNullableString"
-                  },
-                  "display_name": {
-                    "$ref": "#/components/schemas/IdentityNullableString"
-                  },
-                  "before": {
-                    "anyOf": [
-                      {
-                        "enum": [
-                          "owner",
-                          "admin",
-                          "member"
-                        ]
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "after": {
-                    "anyOf": [
-                      {
-                        "enum": [
-                          "owner",
-                          "admin",
-                          "member"
-                        ]
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "workspace_id": {
-                    "$ref": "#/components/schemas/IdentityUuid"
-                  }
-                },
-                "required": [
-                  "user_id",
-                  "email",
-                  "display_name",
-                  "before",
-                  "after",
-                  "workspace_id"
-                ],
-                "additionalProperties": false
-              }
+              "const": []
             }
           },
           "required": [
@@ -1416,7 +1218,8 @@
             "workspace_membership_gained",
             "workspace_membership_lost"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "email is never null: preview rows exclude cleaned-up users (lifecycle.rs preview_platform_effect/preview_workspace_effect: usr.cleaned_at IS NULL) and an immediate row names only unrevoked grants, which cleanup revokes before clearing the address. A new mapping can only add access: grants are compared with the existing ones, never removed (existing_mapping_id is null), so the *_lost lists are always empty."
         },
         "counts": {
           "type": "object",
@@ -1476,113 +1279,129 @@
           "description": "Lowercase hex SHA-256 of the stored mapping (directory.rs mapping_digest), the value a later If-Match must quote."
         },
         "immediate": {
-          "type": "object",
-          "properties": {
-            "applies": {
-              "type": "boolean"
+          "oneOf": [
+            {
+              "const": {
+                "applies": false,
+                "blocked_by_last_admin": false,
+                "platform_role_revoked": [],
+                "workspace_membership_revoked": [],
+                "users_suspended": [],
+                "keys_revoked_count": 0
+              },
+              "description": "No stored grant changes (an unchanged merge): the default of evaluate()."
             },
-            "blocked_by_last_admin": {
-              "type": "boolean"
-            },
-            "platform_role_revoked": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "user_id": {
-                    "$ref": "#/components/schemas/IdentityUuid"
-                  },
-                  "email": {
-                    "$ref": "#/components/schemas/IdentityNullableString"
-                  },
-                  "display_name": {
-                    "$ref": "#/components/schemas/IdentityNullableString"
-                  },
-                  "role": {
-                    "$ref": "#/components/schemas/IdentityRole"
+            {
+              "type": "object",
+              "properties": {
+                "applies": {
+                  "const": true
+                },
+                "blocked_by_last_admin": {
+                  "type": "boolean"
+                },
+                "platform_role_revoked": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "user_id": {
+                        "$ref": "#/components/schemas/IdentityUuid"
+                      },
+                      "email": {
+                        "type": "string"
+                      },
+                      "display_name": {
+                        "$ref": "#/components/schemas/IdentityNullableString"
+                      },
+                      "role": {
+                        "$ref": "#/components/schemas/IdentityRole"
+                      }
+                    },
+                    "required": [
+                      "user_id",
+                      "email",
+                      "display_name",
+                      "role"
+                    ],
+                    "additionalProperties": false
                   }
                 },
-                "required": [
-                  "user_id",
-                  "email",
-                  "display_name",
-                  "role"
-                ],
-                "additionalProperties": false
-              }
-            },
-            "workspace_membership_revoked": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "user_id": {
-                    "$ref": "#/components/schemas/IdentityUuid"
-                  },
-                  "email": {
-                    "$ref": "#/components/schemas/IdentityNullableString"
-                  },
-                  "display_name": {
-                    "$ref": "#/components/schemas/IdentityNullableString"
-                  },
-                  "role": {
-                    "enum": [
-                      "owner",
-                      "admin",
-                      "member"
-                    ]
-                  },
-                  "workspace_id": {
-                    "$ref": "#/components/schemas/IdentityUuid"
+                "workspace_membership_revoked": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "user_id": {
+                        "$ref": "#/components/schemas/IdentityUuid"
+                      },
+                      "email": {
+                        "type": "string"
+                      },
+                      "display_name": {
+                        "$ref": "#/components/schemas/IdentityNullableString"
+                      },
+                      "role": {
+                        "enum": [
+                          "owner",
+                          "admin",
+                          "member"
+                        ]
+                      },
+                      "workspace_id": {
+                        "$ref": "#/components/schemas/IdentityUuid"
+                      }
+                    },
+                    "required": [
+                      "user_id",
+                      "email",
+                      "display_name",
+                      "role",
+                      "workspace_id"
+                    ],
+                    "additionalProperties": false
                   }
                 },
-                "required": [
-                  "user_id",
-                  "email",
-                  "display_name",
-                  "role",
-                  "workspace_id"
-                ],
-                "additionalProperties": false
-              }
-            },
-            "users_suspended": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "user_id": {
-                    "$ref": "#/components/schemas/IdentityUuid"
-                  },
-                  "email": {
-                    "$ref": "#/components/schemas/IdentityNullableString"
-                  },
-                  "display_name": {
-                    "$ref": "#/components/schemas/IdentityNullableString"
+                "users_suspended": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "user_id": {
+                        "$ref": "#/components/schemas/IdentityUuid"
+                      },
+                      "email": {
+                        "type": "string"
+                      },
+                      "display_name": {
+                        "$ref": "#/components/schemas/IdentityNullableString"
+                      }
+                    },
+                    "required": [
+                      "user_id",
+                      "email",
+                      "display_name"
+                    ],
+                    "additionalProperties": false
                   }
                 },
-                "required": [
-                  "user_id",
-                  "email",
-                  "display_name"
-                ],
-                "additionalProperties": false
-              }
-            },
-            "keys_revoked_count": {
-              "type": "integer",
-              "minimum": 0
+                "keys_revoked_count": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "applies",
+                "blocked_by_last_admin",
+                "platform_role_revoked",
+                "workspace_membership_revoked",
+                "users_suspended",
+                "keys_revoked_count"
+              ],
+              "additionalProperties": false
             }
-          },
-          "required": [
-            "applies",
-            "blocked_by_last_admin",
-            "platform_role_revoked",
-            "workspace_membership_revoked",
-            "users_suspended",
-            "keys_revoked_count"
           ],
-          "additionalProperties": false
+          "description": "The management write's own immediate effect, present with applies:true only when the write would revoke grants (a delete, or a merge that changes a field)."
         },
         "diff": {
           "type": "object",
@@ -1596,7 +1415,7 @@
                     "$ref": "#/components/schemas/IdentityUuid"
                   },
                   "email": {
-                    "$ref": "#/components/schemas/IdentityNullableString"
+                    "type": "string"
                   },
                   "display_name": {
                     "$ref": "#/components/schemas/IdentityNullableString"
@@ -1612,14 +1431,7 @@
                     ]
                   },
                   "after": {
-                    "anyOf": [
-                      {
-                        "$ref": "#/components/schemas/IdentityRole"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                    "$ref": "#/components/schemas/IdentityRole"
                   },
                   "workspace_id": {
                     "type": "null"
@@ -1653,20 +1465,13 @@
                     "$ref": "#/components/schemas/IdentityUuid"
                   },
                   "email": {
-                    "$ref": "#/components/schemas/IdentityNullableString"
+                    "type": "string"
                   },
                   "display_name": {
                     "$ref": "#/components/schemas/IdentityNullableString"
                   },
                   "before": {
-                    "anyOf": [
-                      {
-                        "$ref": "#/components/schemas/IdentityRole"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                    "$ref": "#/components/schemas/IdentityRole"
                   },
                   "after": {
                     "anyOf": [
@@ -1710,7 +1515,7 @@
                     "$ref": "#/components/schemas/IdentityUuid"
                   },
                   "email": {
-                    "$ref": "#/components/schemas/IdentityNullableString"
+                    "type": "string"
                   },
                   "display_name": {
                     "$ref": "#/components/schemas/IdentityNullableString"
@@ -1730,17 +1535,10 @@
                     ]
                   },
                   "after": {
-                    "anyOf": [
-                      {
-                        "enum": [
-                          "owner",
-                          "admin",
-                          "member"
-                        ]
-                      },
-                      {
-                        "type": "null"
-                      }
+                    "enum": [
+                      "owner",
+                      "admin",
+                      "member"
                     ]
                   },
                   "workspace_id": {
@@ -1767,23 +1565,16 @@
                     "$ref": "#/components/schemas/IdentityUuid"
                   },
                   "email": {
-                    "$ref": "#/components/schemas/IdentityNullableString"
+                    "type": "string"
                   },
                   "display_name": {
                     "$ref": "#/components/schemas/IdentityNullableString"
                   },
                   "before": {
-                    "anyOf": [
-                      {
-                        "enum": [
-                          "owner",
-                          "admin",
-                          "member"
-                        ]
-                      },
-                      {
-                        "type": "null"
-                      }
+                    "enum": [
+                      "owner",
+                      "admin",
+                      "member"
                     ]
                   },
                   "after": {
@@ -1822,7 +1613,8 @@
             "workspace_membership_gained",
             "workspace_membership_lost"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "email is never null: preview rows exclude cleaned-up users (lifecycle.rs preview_platform_effect/preview_workspace_effect: usr.cleaned_at IS NULL) and an immediate row names only unrevoked grants, which cleanup revokes before clearing the address. A row is `gained` when the after rank is above the before rank (so after is never null) and `lost` when it is below (so before is never null)"
         },
         "counts": {
           "type": "object",
@@ -1873,8 +1665,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 2147483647
                 },
                 {
                   "type": "null"
@@ -1885,8 +1677,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 2147483647
                 },
                 {
                   "type": "null"
@@ -1897,8 +1689,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 2147483647
                 },
                 {
                   "type": "null"
@@ -1909,8 +1701,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 2147483647
                 },
                 {
                   "type": "null"
@@ -1921,8 +1713,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 1125899906842624
                 },
                 {
                   "type": "null"
@@ -1933,8 +1725,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 10000
                 },
                 {
                   "type": "null"
@@ -1945,8 +1737,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 10000
                 },
                 {
                   "type": "null"
@@ -1954,23 +1746,58 @@
               ]
             },
             "monthly_budget_microusd": {
-              "$ref": "#/components/schemas/IdentityNullableDecimal"
+              "anyOf": [
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                    },
+                    {
+                      "not": {
+                        "const": "0"
+                      }
+                    },
+                    {
+                      "maxLength": 19
+                    }
+                  ],
+                  "description": "Exact positive integer micro-USD amount, canonical (no leading zeros), at most 19 digits and at most 9223372036854775807 (governance.rs money(positive=true), which also tolerates leading zeros that the contract does not document)."
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "budget_period": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityPeriod"
             },
             "budgets": {
               "type": "array",
+              "maxItems": 4,
+              "uniqueItems": true,
               "items": {
                 "oneOf": [
                   {
                     "type": "object",
                     "properties": {
                       "period": {
-                        "type": "string"
+                        "$ref": "#/components/schemas/IdentityPeriod"
                       },
                       "amount_microusd": {
-                        "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                          },
+                          {
+                            "not": {
+                              "const": "0"
+                            }
+                          },
+                          {
+                            "maxLength": 19
+                          }
+                        ],
+                        "description": "Exact positive integer micro-USD amount, canonical (no leading zeros), at most 19 digits and at most 9223372036854775807 (governance.rs money(positive=true), which also tolerates leading zeros that the contract does not document)."
                       }
                     },
                     "required": [
@@ -1983,10 +1810,23 @@
                     "type": "array",
                     "prefixItems": [
                       {
-                        "type": "string"
+                        "$ref": "#/components/schemas/IdentityPeriod"
                       },
                       {
-                        "type": "string"
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                          },
+                          {
+                            "not": {
+                              "const": "0"
+                            }
+                          },
+                          {
+                            "maxLength": 19
+                          }
+                        ],
+                        "description": "Exact positive integer micro-USD amount, canonical (no leading zeros), at most 19 digits and at most 9223372036854775807 (governance.rs money(positive=true), which also tolerates leading zeros that the contract does not document)."
                       }
                     ],
                     "minItems": 2,
@@ -1994,8 +1834,9 @@
                     "items": false
                   }
                 ],
-                "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
-              }
+                "description": "Closed serde object or positional struct array in declared field order."
+              },
+              "description": "Full replacement set of stacked budgets, at most one per period (day, week, month, lifetime); a repeated period is refused."
             }
           },
           "required": [
@@ -2003,7 +1844,38 @@
             "tokens_per_minute",
             "concurrent_requests"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "required": [
+                "budgets"
+              ],
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "monthly_budget_microusd"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "budget_period"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "required": [
+                "monthly_budget_microusd"
+              ],
+              "not": {
+                "required": [
+                  "budgets"
+                ]
+              }
+            }
+          ]
         },
         {
           "type": "array",
@@ -2012,8 +1884,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 2147483647
                 },
                 {
                   "type": "null"
@@ -2024,8 +1896,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 2147483647
                 },
                 {
                   "type": "null"
@@ -2036,8 +1908,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 2147483647
                 },
                 {
                   "type": "null"
@@ -2048,8 +1920,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 2147483647
                 },
                 {
                   "type": "null"
@@ -2060,8 +1932,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 1125899906842624
                 },
                 {
                   "type": "null"
@@ -2072,8 +1944,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 10000
                 },
                 {
                   "type": "null"
@@ -2084,8 +1956,8 @@
               "anyOf": [
                 {
                   "type": "integer",
-                  "minimum": -9223372036854775808,
-                  "maximum": 9223372036854775807
+                  "minimum": 1,
+                  "maximum": 10000
                 },
                 {
                   "type": "null"
@@ -2093,23 +1965,58 @@
               ]
             },
             {
-              "$ref": "#/components/schemas/IdentityNullableDecimal"
+              "anyOf": [
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                    },
+                    {
+                      "not": {
+                        "const": "0"
+                      }
+                    },
+                    {
+                      "maxLength": 19
+                    }
+                  ],
+                  "description": "Exact positive integer micro-USD amount, canonical (no leading zeros), at most 19 digits and at most 9223372036854775807 (governance.rs money(positive=true), which also tolerates leading zeros that the contract does not document)."
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityPeriod"
             },
             {
               "type": "array",
+              "maxItems": 4,
+              "uniqueItems": true,
               "items": {
                 "oneOf": [
                   {
                     "type": "object",
                     "properties": {
                       "period": {
-                        "type": "string"
+                        "$ref": "#/components/schemas/IdentityPeriod"
                       },
                       "amount_microusd": {
-                        "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                          },
+                          {
+                            "not": {
+                              "const": "0"
+                            }
+                          },
+                          {
+                            "maxLength": 19
+                          }
+                        ],
+                        "description": "Exact positive integer micro-USD amount, canonical (no leading zeros), at most 19 digits and at most 9223372036854775807 (governance.rs money(positive=true), which also tolerates leading zeros that the contract does not document)."
                       }
                     },
                     "required": [
@@ -2122,10 +2029,23 @@
                     "type": "array",
                     "prefixItems": [
                       {
-                        "type": "string"
+                        "$ref": "#/components/schemas/IdentityPeriod"
                       },
                       {
-                        "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                          },
+                          {
+                            "not": {
+                              "const": "0"
+                            }
+                          },
+                          {
+                            "maxLength": 19
+                          }
+                        ],
+                        "description": "Exact positive integer micro-USD amount, canonical (no leading zeros), at most 19 digits and at most 9223372036854775807 (governance.rs money(positive=true), which also tolerates leading zeros that the contract does not document)."
                       }
                     ],
                     "minItems": 2,
@@ -2133,8 +2053,9 @@
                     "items": false
                   }
                 ],
-                "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
-              }
+                "description": "Closed serde object or positional struct array in declared field order."
+              },
+              "description": "Full replacement set of stacked budgets, at most one per period (day, week, month, lifetime); a repeated period is refused."
             }
           ],
           "minItems": 3,
@@ -2142,7 +2063,7 @@
           "items": false
         }
       ],
-      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+      "description": "Rates are required-nullable (null clears) for requests_per_minute, tokens_per_minute and concurrent_requests and optional-nullable for the other four; every number is positive within the stated bound. EXACTLY ONE of budgets (the stacked form) or monthly_budget_microusd with an optional budget_period (the deprecated single-budget form) must be present: both, or neither, or budget_period with budgets, are refused. Money is a canonical positive integer micro-USD string. The positional array form does not repeat the exclusivity rule."
     },
     "AccessBudget": {
       "type": "object",
@@ -2354,7 +2275,7 @@
         "budgets": {
           "type": "array",
           "items": {
-            "$ref": "#/components/schemas/IdentityBudgetWindow"
+            "$ref": "#/components/schemas/AccessBudgetWindow"
           }
         }
       },
@@ -3354,10 +3275,13 @@
           "type": "object",
           "properties": {
             "email": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 320,
+              "pattern": "^\\s*[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+\\s*$",
+              "description": "Trimmed and lower-cased by the handler (directory.rs email_valid): exactly one '@' with a non-empty local part and domain, at most 320 characters, no interior whitespace or control characters. Length is counted after trimming."
             },
             "platform_role": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityRole"
             }
           },
           "required": [
@@ -3370,10 +3294,13 @@
           "type": "array",
           "prefixItems": [
             {
-              "type": "string"
+              "type": "string",
+              "maxLength": 320,
+              "pattern": "^\\s*[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+\\s*$",
+              "description": "Trimmed and lower-cased by the handler (directory.rs email_valid): exactly one '@' with a non-empty local part and domain, at most 320 characters, no interior whitespace or control characters. Length is counted after trimming."
             },
             {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityRole"
             }
           ],
           "minItems": 2,
@@ -3381,7 +3308,7 @@
           "items": false
         }
       ],
-      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies."
     },
     "AccessUserUpdate": {
       "oneOf": [
@@ -3389,7 +3316,17 @@
           "type": "object",
           "properties": {
             "email": {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 320,
+                  "pattern": "^\\s*[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+\\s*$",
+                  "description": "Trimmed and lower-cased by the handler (directory.rs email_valid): exactly one '@' with a non-empty local part and domain, at most 320 characters, no interior whitespace or control characters. Length is counted after trimming."
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "disabled": {
               "anyOf": [
@@ -3419,7 +3356,17 @@
           "type": "array",
           "prefixItems": [
             {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 320,
+                  "pattern": "^\\s*[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+\\s*$",
+                  "description": "Trimmed and lower-cased by the handler (directory.rs email_valid): exactly one '@' with a non-empty local part and domain, at most 320 characters, no interior whitespace or control characters. Length is counted after trimming."
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             {
               "anyOf": [
@@ -3447,7 +3394,7 @@
           "items": false
         }
       ],
-      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies."
     },
     "AccessRoleInput": {
       "oneOf": [
@@ -3455,7 +3402,7 @@
           "type": "object",
           "properties": {
             "role": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityRole"
             }
           },
           "required": [
@@ -3467,7 +3414,7 @@
           "type": "array",
           "prefixItems": [
             {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityRole"
             }
           ],
           "minItems": 1,
@@ -3475,7 +3422,7 @@
           "items": false
         }
       ],
-      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies."
     },
     "AccessNewWorkspace": {
       "oneOf": [
@@ -3483,10 +3430,16 @@
           "type": "object",
           "properties": {
             "name": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 120,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "description": "Workspace name (mod.rs valid_name): not blank after trimming, at most 120 UTF-8 bytes (the schema bound counts characters), no control characters."
             },
             "kind": {
-              "type": "string"
+              "enum": [
+                "team",
+                "project"
+              ]
             },
             "owner_user_id": {
               "$ref": "#/components/schemas/IdentityUuid"
@@ -3503,10 +3456,16 @@
           "type": "array",
           "prefixItems": [
             {
-              "type": "string"
+              "type": "string",
+              "maxLength": 120,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "description": "Workspace name (mod.rs valid_name): not blank after trimming, at most 120 UTF-8 bytes (the schema bound counts characters), no control characters."
             },
             {
-              "type": "string"
+              "enum": [
+                "team",
+                "project"
+              ]
             },
             {
               "$ref": "#/components/schemas/IdentityUuid"
@@ -3517,7 +3476,7 @@
           "items": false
         }
       ],
-      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies."
     },
     "AccessWorkspaceUpdate": {
       "oneOf": [
@@ -3525,7 +3484,17 @@
           "type": "object",
           "properties": {
             "name": {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 120,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+                  "description": "Workspace name (mod.rs valid_name): not blank after trimming, at most 120 UTF-8 bytes (the schema bound counts characters), no control characters."
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "disabled": {
               "anyOf": [
@@ -3548,7 +3517,17 @@
           "type": "array",
           "prefixItems": [
             {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 120,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+                  "description": "Workspace name (mod.rs valid_name): not blank after trimming, at most 120 UTF-8 bytes (the schema bound counts characters), no control characters."
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             {
               "anyOf": [
@@ -3569,7 +3548,7 @@
           "items": false
         }
       ],
-      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies."
     },
     "AccessOwnWorkspaceUpdate": {
       "oneOf": [
@@ -3577,7 +3556,17 @@
           "type": "object",
           "properties": {
             "name": {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 120,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+                  "description": "Workspace name (mod.rs valid_name): not blank after trimming, at most 120 UTF-8 bytes (the schema bound counts characters), no control characters."
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "object_visibility": {
               "enum": [
@@ -3594,7 +3583,17 @@
           "type": "array",
           "prefixItems": [
             {
-              "$ref": "#/components/schemas/IdentityNullableString"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 120,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+                  "description": "Workspace name (mod.rs valid_name): not blank after trimming, at most 120 UTF-8 bytes (the schema bound counts characters), no control characters."
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             {
               "enum": [
@@ -3609,7 +3608,7 @@
           "items": false
         }
       ],
-      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies."
     },
     "AccessMemberInput": {
       "oneOf": [
@@ -3620,7 +3619,11 @@
               "$ref": "#/components/schemas/IdentityUuid"
             },
             "role": {
-              "type": "string"
+              "enum": [
+                "owner",
+                "admin",
+                "member"
+              ]
             }
           },
           "required": [
@@ -3636,7 +3639,11 @@
               "$ref": "#/components/schemas/IdentityUuid"
             },
             {
-              "type": "string"
+              "enum": [
+                "owner",
+                "admin",
+                "member"
+              ]
             }
           ],
           "minItems": 2,
@@ -3644,7 +3651,7 @@
           "items": false
         }
       ],
-      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies."
     },
     "AccessInviteInput": {
       "oneOf": [
@@ -3652,10 +3659,16 @@
           "type": "object",
           "properties": {
             "email": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 320,
+              "pattern": "^\\s*[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+\\s*$",
+              "description": "Trimmed and lower-cased by the handler (directory.rs email_valid): exactly one '@' with a non-empty local part and domain, at most 320 characters, no interior whitespace or control characters. Length is counted after trimming."
             },
             "role": {
-              "type": "string"
+              "enum": [
+                "admin",
+                "member"
+              ]
             }
           },
           "required": [
@@ -3668,10 +3681,16 @@
           "type": "array",
           "prefixItems": [
             {
-              "type": "string"
+              "type": "string",
+              "maxLength": 320,
+              "pattern": "^\\s*[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+\\s*$",
+              "description": "Trimmed and lower-cased by the handler (directory.rs email_valid): exactly one '@' with a non-empty local part and domain, at most 320 characters, no interior whitespace or control characters. Length is counted after trimming."
             },
             {
-              "type": "string"
+              "enum": [
+                "admin",
+                "member"
+              ]
             }
           ],
           "minItems": 2,
@@ -3679,7 +3698,7 @@
           "items": false
         }
       ],
-      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies."
     },
     "AccessDiscoverable": {
       "oneOf": [
@@ -3716,9 +3735,11 @@
           "properties": {
             "catalog_ids": {
               "type": "array",
+              "maxItems": 200,
               "items": {
                 "$ref": "#/components/schemas/IdentityUuid"
-              }
+              },
+              "description": "At most 200 distinct catalog ids (duplicates collapse)."
             }
           },
           "required": [
@@ -3731,9 +3752,11 @@
           "prefixItems": [
             {
               "type": "array",
+              "maxItems": 200,
               "items": {
                 "$ref": "#/components/schemas/IdentityUuid"
-              }
+              },
+              "description": "At most 200 distinct catalog ids (duplicates collapse)."
             }
           ],
           "minItems": 1,
@@ -3741,7 +3764,7 @@
           "items": false
         }
       ],
-      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies."
     },
     "AccessCatalogOverride": {
       "oneOf": [
@@ -3749,13 +3772,15 @@
           "type": "object",
           "properties": {
             "mode": {
-              "type": "string"
+              "const": "replace"
             },
             "catalog_ids": {
               "type": "array",
+              "maxItems": 200,
               "items": {
                 "$ref": "#/components/schemas/IdentityUuid"
-              }
+              },
+              "description": "At most 200 distinct catalog ids (duplicates collapse)."
             }
           },
           "required": [
@@ -3768,13 +3793,15 @@
           "type": "array",
           "prefixItems": [
             {
-              "type": "string"
+              "const": "replace"
             },
             {
               "type": "array",
+              "maxItems": 200,
               "items": {
                 "$ref": "#/components/schemas/IdentityUuid"
-              }
+              },
+              "description": "At most 200 distinct catalog ids (duplicates collapse)."
             }
           ],
           "minItems": 2,
@@ -3782,7 +3809,7 @@
           "items": false
         }
       ],
-      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies."
+      "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies."
     },
     "AccessDirectModel": {
       "oneOf": [
@@ -4486,6 +4513,173 @@
       },
       "additionalProperties": false,
       "description": "Decision response of a deny call: requester-private projection (no requester identity) after the decision. decided_by and decided_at are always set; a denial never carries a membership grant."
+    },
+    "AccessBudgetWindow": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "layer": {
+              "enum": [
+                "platform",
+                "local"
+              ]
+            },
+            "period": {
+              "$ref": "#/components/schemas/IdentityPeriod"
+            },
+            "amount_microusd": {
+              "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+            },
+            "monthly_budget_microusd": {
+              "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+            },
+            "budget_period": {
+              "$ref": "#/components/schemas/IdentityPeriod"
+            },
+            "window_start": {
+              "$ref": "#/components/schemas/IdentityTime"
+            },
+            "window_end": {
+              "$ref": "#/components/schemas/IdentityNullableTime"
+            },
+            "usage_visible": {
+              "const": true
+            },
+            "used_microusd": {
+              "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+            },
+            "unresolved_usage": {
+              "type": "boolean"
+            },
+            "exhausted": {
+              "type": "boolean"
+            },
+            "settled_microusd": {
+              "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+            },
+            "pending_held_microusd": {
+              "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+            },
+            "unknown_held_microusd": {
+              "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+            },
+            "unknown_cost_requests": {
+              "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+            },
+            "remaining_microusd": {
+              "$ref": "#/components/schemas/IdentityNullableDecimal"
+            },
+            "headroom_status": {
+              "enum": [
+                "known",
+                "unknown"
+              ]
+            }
+          },
+          "required": [
+            "layer",
+            "period",
+            "amount_microusd",
+            "monthly_budget_microusd",
+            "budget_period",
+            "window_start",
+            "window_end",
+            "usage_visible",
+            "used_microusd",
+            "unresolved_usage",
+            "exhausted",
+            "settled_microusd",
+            "pending_held_microusd",
+            "unknown_held_microusd",
+            "unknown_cost_requests",
+            "remaining_microusd",
+            "headroom_status"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "layer": {
+              "enum": [
+                "platform",
+                "local"
+              ]
+            },
+            "period": {
+              "$ref": "#/components/schemas/IdentityPeriod"
+            },
+            "amount_microusd": {
+              "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+            },
+            "monthly_budget_microusd": {
+              "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+            },
+            "budget_period": {
+              "$ref": "#/components/schemas/IdentityPeriod"
+            },
+            "window_start": {
+              "$ref": "#/components/schemas/IdentityTime"
+            },
+            "window_end": {
+              "$ref": "#/components/schemas/IdentityNullableTime"
+            },
+            "usage_visible": {
+              "const": true
+            },
+            "used_microusd": {
+              "type": "null"
+            },
+            "unresolved_usage": {
+              "type": "null"
+            },
+            "exhausted": {
+              "type": "null"
+            },
+            "settled_microusd": {
+              "type": "null"
+            },
+            "pending_held_microusd": {
+              "type": "null"
+            },
+            "unknown_held_microusd": {
+              "type": "null"
+            },
+            "unknown_cost_requests": {
+              "type": "null"
+            },
+            "remaining_microusd": {
+              "type": "null"
+            },
+            "headroom_status": {
+              "const": "unknown"
+            }
+          },
+          "required": [
+            "layer",
+            "period",
+            "amount_microusd",
+            "monthly_budget_microusd",
+            "budget_period",
+            "window_start",
+            "window_end",
+            "usage_visible",
+            "used_microusd",
+            "unresolved_usage",
+            "exhausted",
+            "settled_microusd",
+            "pending_held_microusd",
+            "unknown_held_microusd",
+            "unknown_cost_requests",
+            "remaining_microusd",
+            "headroom_status"
+          ],
+          "additionalProperties": false,
+          "x-omg-unobserved-branch": "The accounting report is unavailable only when read_budget_report returns None for a budget_totals row whose counters are negative or mutually inconsistent (governance/totals.rs read_budget_report). The budget_totals_maintain trigger (0015_budget_totals.sql) never writes such a row, so the branch needs corrupted accounting data that no production path or test fixture can produce."
+        }
+      ],
+      "description": "One budget window as a platform reader sees it: usage is always visible; the figures are all null only when the accounting totals are unreadable."
     }
   }
 }

@@ -1237,10 +1237,12 @@
             "in": "query",
             "schema": {
               "type": "string",
-              "minLength": 1
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^\\s*[^\\s\\u0000-\\u001f\\u007f-\\u009f](?:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?\\s*$"
             },
             "required": true,
-            "description": "Trimmed nonempty email fragment of at most 200 characters without controls; at most 20 active, entitled nonmembers."
+            "description": "Trimmed nonempty email fragment of at most 200 characters (counted after trimming) without control characters; at most 20 active, entitled nonmembers."
           }
         ]
       },
@@ -1313,9 +1315,11 @@
             "name": "q",
             "in": "query",
             "schema": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 200,
+              "pattern": "^\\s*(?:[^\\s\\u0000-\\u001f\\u007f-\\u009f](?:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?)?\\s*$"
             },
-            "description": "Trimmed search of at most 200 characters without controls; an empty trimmed value is ignored."
+            "description": "Trimmed name or email search of at most 200 characters (counted after trimming) without control characters; an empty trimmed value is ignored."
           }
         ]
       },
@@ -3350,9 +3354,11 @@
             "name": "q",
             "in": "query",
             "schema": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 200,
+              "pattern": "^\\s*(?:[^\\s\\u0000-\\u001f\\u007f-\\u009f](?:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?)?\\s*$"
             },
-            "description": "Trimmed search of at most 200 characters without controls; an empty trimmed value is ignored."
+            "description": "Trimmed name or email search of at most 200 characters (counted after trimming) without control characters; an empty trimmed value is ignored."
           }
         ]
       },
@@ -3546,10 +3552,12 @@
             "in": "query",
             "schema": {
               "type": "string",
-              "minLength": 1
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^\\s*[^\\s\\u0000-\\u001f\\u007f-\\u009f](?:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?\\s*$"
             },
             "required": true,
-            "description": "Trimmed nonempty email fragment of at most 200 characters without controls; at most 20 active, entitled nonmembers."
+            "description": "Trimmed nonempty email fragment of at most 200 characters (counted after trimming) without control characters; at most 20 active, entitled nonmembers."
           }
         ]
       },
@@ -3602,50 +3610,79 @@
             "name": "start_date",
             "in": "query",
             "schema": {
-              "type": "string"
-            }
+              "type": "string",
+              "format": "date",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+            },
+            "description": "Inclusive UTC start date (YYYY-MM-DD); the window [start_date, end_date) is 1 to 93 days; default end_date minus 30 days."
           },
           {
             "name": "end_date",
             "in": "query",
             "schema": {
-              "type": "string"
-            }
+              "type": "string",
+              "format": "date",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+            },
+            "description": "Exclusive UTC end date (YYYY-MM-DD), at most tomorrow; default tomorrow."
           },
           {
             "name": "model",
             "in": "query",
             "schema": {
-              "type": "string"
-            }
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+            },
+            "description": "Public model name: 1 to 200 bytes (the schema counts characters), no control characters."
           },
           {
             "name": "status",
             "in": "query",
             "schema": {
-              "type": "string"
-            }
+              "type": "string",
+              "pattern": "^(?:succeeded|failed|cancelled|indeterminate|in_progress)(?:,(?:succeeded|failed|cancelled|indeterminate|in_progress))*$"
+            },
+            "description": "Comma-separated attempt statuses: succeeded, failed, cancelled, indeterminate, in_progress."
           },
           {
             "name": "q",
             "in": "query",
             "schema": {
-              "type": "string"
-            }
+              "type": "string",
+              "pattern": "^\\s*(?:[0-9a-fA-F-]{4,36})?\\s*$"
+            },
+            "description": "Trimmed request/attempt id prefix of 4 to 36 hexadecimal characters or hyphens; blank is ignored."
           },
           {
             "name": "finish_reason",
             "in": "query",
             "schema": {
-              "type": "string"
-            }
+              "type": "string",
+              "pattern": "^(?:stop|length|tool_calls|content_filter|error|cancelled|unknown)(?:,(?:stop|length|tool_calls|content_filter|error|cancelled|unknown))*$"
+            },
+            "description": "Comma-separated finish reasons: stop, length, tool_calls, content_filter, error, cancelled, unknown."
           },
           {
             "name": "workload",
             "in": "query",
             "schema": {
-              "type": "string"
-            }
+              "enum": [
+                "jobs",
+                "generation",
+                "embeddings",
+                "images",
+                "audio_transcriptions",
+                "audio_speech",
+                "rerank",
+                "systemone",
+                "realtime",
+                "videos",
+                "batches"
+              ]
+            },
+            "description": "A workload kind, or jobs for asynchronous video and batch jobs."
           },
           {
             "name": "key_id",
@@ -3672,8 +3709,10 @@
             "name": "cursor",
             "in": "query",
             "schema": {
-              "type": "string"
-            }
+              "type": "string",
+              "pattern": "^-?[0-9]{1,19}_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}_(?:[0-9a-fA-F]{2}){1,512}$"
+            },
+            "description": "Opaque next_cursor of the previous page: last-activity microseconds, workspace id and the hex-encoded session id."
           },
           {
             "name": "limit",
@@ -3736,50 +3775,79 @@
             "name": "start_date",
             "in": "query",
             "schema": {
-              "type": "string"
-            }
+              "type": "string",
+              "format": "date",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+            },
+            "description": "Inclusive UTC start date (YYYY-MM-DD); the window [start_date, end_date) is 1 to 93 days; default end_date minus 30 days."
           },
           {
             "name": "end_date",
             "in": "query",
             "schema": {
-              "type": "string"
-            }
+              "type": "string",
+              "format": "date",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+            },
+            "description": "Exclusive UTC end date (YYYY-MM-DD), at most tomorrow; default tomorrow."
           },
           {
             "name": "model",
             "in": "query",
             "schema": {
-              "type": "string"
-            }
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+            },
+            "description": "Public model name: 1 to 200 bytes (the schema counts characters), no control characters."
           },
           {
             "name": "status",
             "in": "query",
             "schema": {
-              "type": "string"
-            }
+              "type": "string",
+              "pattern": "^(?:succeeded|failed|cancelled|indeterminate|in_progress)(?:,(?:succeeded|failed|cancelled|indeterminate|in_progress))*$"
+            },
+            "description": "Comma-separated attempt statuses: succeeded, failed, cancelled, indeterminate, in_progress."
           },
           {
             "name": "q",
             "in": "query",
             "schema": {
-              "type": "string"
-            }
+              "type": "string",
+              "pattern": "^\\s*(?:[0-9a-fA-F-]{4,36})?\\s*$"
+            },
+            "description": "Trimmed request/attempt id prefix of 4 to 36 hexadecimal characters or hyphens; blank is ignored."
           },
           {
             "name": "finish_reason",
             "in": "query",
             "schema": {
-              "type": "string"
-            }
+              "type": "string",
+              "pattern": "^(?:stop|length|tool_calls|content_filter|error|cancelled|unknown)(?:,(?:stop|length|tool_calls|content_filter|error|cancelled|unknown))*$"
+            },
+            "description": "Comma-separated finish reasons: stop, length, tool_calls, content_filter, error, cancelled, unknown."
           },
           {
             "name": "workload",
             "in": "query",
             "schema": {
-              "type": "string"
-            }
+              "enum": [
+                "jobs",
+                "generation",
+                "embeddings",
+                "images",
+                "audio_transcriptions",
+                "audio_speech",
+                "rerank",
+                "systemone",
+                "realtime",
+                "videos",
+                "batches"
+              ]
+            },
+            "description": "A workload kind, or jobs for asynchronous video and batch jobs."
           },
           {
             "name": "key_id",

@@ -70,11 +70,39 @@ pub(super) struct PreviewInput {
 #[cfg(test)]
 #[test]
 fn management_openapi_slice2_mapping_preview_request_vectors() {
-    super::openapi::requests::vectors::<PreviewInput>(
-        "POST",
-        "/api/v1/platform/oidc/group-mappings/preview",
+    use crate::management::openapi_semantic::Checked;
+    // A not-yet-saved mapping is a full replacement: the schema is the create
+    // schema, and a null or missing required field is refused like create.
+    for body in [
         json!({"issuer":"https://issuer.example.test","group_value":"fixture","target_kind":"platform","platform_role":"user","workspace_id":null,"workspace_role":null,"enabled":true}),
-    );
+        json!({"issuer":"https://issuer.example.test","group_value":"fixture","target_kind":"workspace","platform_role":null,"workspace_id":Uuid::nil(),"workspace_role":"member","enabled":true}),
+    ] {
+        super::openapi::requests::vectors::<Checked<PreviewInput>>(
+            "POST",
+            "/api/v1/platform/oidc/group-mappings/preview",
+            body,
+        );
+    }
+}
+/// The handler's non-database acceptance rule: `into_mapping` plus `mapping_valid`.
+#[cfg(test)]
+impl crate::management::openapi_semantic::Semantic for PreviewInput {
+    fn accepted(&self) -> bool {
+        let complete = self.issuer.is_some()
+            && self.group_value.is_some()
+            && self.target_kind.is_some()
+            && self.enabled.is_some();
+        complete
+            && super::directory::mapping_valid(&MappingInput {
+                issuer: self.issuer.clone().unwrap_or_default(),
+                group_value: self.group_value.clone().unwrap_or_default(),
+                target_kind: self.target_kind.clone().unwrap_or_default(),
+                platform_role: self.platform_role.clone(),
+                workspace_id: self.workspace_id,
+                workspace_role: self.workspace_role.clone(),
+                enabled: self.enabled.unwrap_or_default(),
+            })
+    }
 }
 
 impl PreviewInput {

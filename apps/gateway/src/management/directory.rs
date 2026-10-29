@@ -5,17 +5,21 @@ use axum::http::HeaderMap;
 #[test]
 fn management_openapi_slice2_directory_request_vectors() {
     use crate::management::openapi::requests::vectors;
-    vectors::<NewUser>(
+    use crate::management::openapi_semantic::Checked;
+    // The handler's value rules (email shape, role/kind vocabulary, the mapping
+    // cross-field constraint) are documented in the schema, so the real DTO is
+    // wrapped in the predicate the handler itself calls.
+    vectors::<Checked<NewUser>>(
         "POST",
         "/api/v1/platform/users",
         json!({"email":"fixture@example.test","platform_role":"user"}),
     );
-    vectors::<UserUpdate>(
+    vectors::<Checked<UserUpdate>>(
         "PATCH",
         "/api/v1/platform/users/{user}",
         json!({"email":"fixture@example.test","disabled":false,"oidc_link_allowed":true}),
     );
-    vectors::<RoleInput>(
+    vectors::<Checked<RoleInput>>(
         "POST",
         "/api/v1/platform/users/{user}/roles",
         json!({"role":"user"}),
@@ -29,7 +33,7 @@ fn management_openapi_slice2_directory_request_vectors() {
         "/api/v1/workspaces/{ws}",
         json!({"name":"Fixture","object_visibility":"workspace"}),
     );
-    vectors::<NewWorkspace>(
+    vectors::<Checked<NewWorkspace>>(
         "POST",
         "/api/v1/platform/workspaces",
         json!({"name":"Fixture","kind":"team","owner_user_id":Uuid::nil()}),
@@ -39,11 +43,12 @@ fn management_openapi_slice2_directory_request_vectors() {
         "/api/v1/platform/workspaces/{ws}",
         json!({"name":"Fixture","disabled":false,"cost_center_id":Uuid::nil()}),
     );
-    vectors::<MappingInput>(
-        "POST",
-        "/api/v1/platform/oidc/group-mappings",
+    for body in [
         json!({"issuer":"https://issuer.example.test","group_value":"fixture","target_kind":"platform","platform_role":"user","workspace_id":null,"workspace_role":null,"enabled":true}),
-    );
+        json!({"issuer":"https://issuer.example.test","group_value":"fixture","target_kind":"workspace","platform_role":null,"workspace_id":Uuid::nil(),"workspace_role":"member","enabled":true}),
+    ] {
+        vectors::<Checked<MappingInput>>("POST", "/api/v1/platform/oidc/group-mappings", body);
+    }
     crate::management::openapi::requests::manual_fields(
         "PATCH",
         "/api/v1/platform/oidc/group-mappings/{id}",
@@ -54,6 +59,41 @@ fn management_openapi_slice2_directory_request_vectors() {
         "/api/v1/platform/oidc/group-mappings/{id}/preview",
         &[MAPPING_PATCH_FIELDS.as_slice(), &["delete"]].concat(),
     );
+}
+
+/// The handlers' non-database acceptance rules, for the DTO-level vectors.
+#[cfg(test)]
+mod slice2_semantic {
+    use super::*;
+    use crate::management::openapi_semantic::Semantic;
+    fn email_ok(email: &str) -> bool {
+        email_valid(&email.trim().to_lowercase())
+    }
+    impl Semantic for NewUser {
+        fn accepted(&self) -> bool {
+            email_ok(&self.email) && platform_role_valid(&self.platform_role)
+        }
+    }
+    impl Semantic for UserUpdate {
+        fn accepted(&self) -> bool {
+            self.email.as_deref().is_none_or(email_ok)
+        }
+    }
+    impl Semantic for RoleInput {
+        fn accepted(&self) -> bool {
+            platform_role_valid(&self.role)
+        }
+    }
+    impl Semantic for NewWorkspace {
+        fn accepted(&self) -> bool {
+            valid_name(&self.name) && shared(&self.kind)
+        }
+    }
+    impl Semantic for MappingInput {
+        fn accepted(&self) -> bool {
+            mapping_valid(self)
+        }
+    }
 }
 
 /// Test-only wire mirror of [`OwnWorkspaceUpdate`] with object_visibility typed

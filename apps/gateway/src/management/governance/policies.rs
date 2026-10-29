@@ -61,13 +61,31 @@ mod slice2_wire {
     impl<'de> Deserialize<'de> for Money {
         fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
             let v = String::deserialize(d)?;
-            let canonical = v == "0"
-                || (v.as_bytes().first().is_some_and(|b| (b'1'..=b'9').contains(b))
-                    && v.bytes().all(|b| b.is_ascii_digit()));
+            // A canonical positive integer within i64 (governance.rs money(.., true)).
+            let canonical = v
+                .as_bytes()
+                .first()
+                .is_some_and(|b| (b'1'..=b'9').contains(b))
+                && v.bytes().all(|b| b.is_ascii_digit())
+                && v.parse::<i64>().is_ok();
             if canonical {
                 Ok(Self(v))
             } else {
-                Err(serde::de::Error::custom("not a canonical integer string"))
+                Err(serde::de::Error::custom(
+                    "not a canonical positive integer string",
+                ))
+            }
+        }
+    }
+    /// A budget period spelled exactly as `BudgetPeriod::parse` accepts it.
+    pub(super) struct Period(#[allow(dead_code)] String);
+    impl<'de> Deserialize<'de> for Period {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            let v = String::deserialize(d)?;
+            if BudgetPeriod::parse(&v).is_some() {
+                Ok(Self(v))
+            } else {
+                Err(serde::de::Error::custom("unknown budget period"))
             }
         }
     }
@@ -75,7 +93,7 @@ mod slice2_wire {
     #[serde(deny_unknown_fields)]
     pub(super) struct BudgetWire {
         #[allow(dead_code)]
-        period: String,
+        period: Period,
         #[allow(dead_code)]
         amount_microusd: Money,
     }
@@ -108,10 +126,21 @@ mod slice2_wire {
         monthly_budget_microusd: Option<Option<Money>>,
         #[serde(default, deserialize_with = "present")]
         #[allow(dead_code)]
-        budget_period: Option<String>,
+        budget_period: Option<Period>,
         #[serde(default, deserialize_with = "present")]
         #[allow(dead_code)]
         budgets: Option<Vec<BudgetWire>>,
+    }
+    /// `Policy::limits`: exactly one of `budgets` or `monthly_budget_microusd`;
+    /// `budget_period` only accompanies the monthly form.
+    impl crate::management::openapi_semantic::Semantic for PolicyWire {
+        fn accepted(&self) -> bool {
+            match (&self.budgets, &self.monthly_budget_microusd) {
+                (Some(_), None) => self.budget_period.is_none(),
+                (None, Some(_)) => true,
+                _ => false,
+            }
+        }
     }
     /// Compile-time field-inventory binding to the real DTOs.
     #[allow(dead_code)]
@@ -137,17 +166,18 @@ mod slice2_wire {
 #[cfg(test)]
 #[test]
 fn management_openapi_slice2_policy_request_vectors() {
+    use crate::management::openapi_semantic::Checked;
     use slice2_wire::{BudgetWire, PolicyWire};
     for path in [
         "/api/v1/platform/workspace-types/{kind}/policy",
         "/api/v1/platform/workspaces/{ws}/policy",
     ] {
-        crate::management::openapi::requests::vectors::<PolicyWire>(
+        crate::management::openapi::requests::vectors::<Checked<PolicyWire>>(
             "PUT",
             path,
             json!({"requests_per_minute":null,"tokens_per_minute":100,"concurrent_requests":3,"concurrent_jobs":null,"storage_bytes":1024,"key_issuances_per_holder":3,"key_issuances_per_workspace":9,"budgets":[{"period":"month","amount_microusd":"9007199254740993"}]}),
         );
-        crate::management::openapi::requests::vectors::<PolicyWire>(
+        crate::management::openapi::requests::vectors::<Checked<PolicyWire>>(
             "PUT",
             path,
             json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"monthly_budget_microusd":null,"budget_period":"month"}),

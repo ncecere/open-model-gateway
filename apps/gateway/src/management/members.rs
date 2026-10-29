@@ -5,17 +5,40 @@ use sha2::{Digest, Sha256};
 #[test]
 fn management_openapi_slice2_members_request_vectors() {
     use crate::management::openapi::requests::vectors;
+    use crate::management::openapi_semantic::Checked;
     for path in [
         "/api/v1/platform/workspaces/{ws}/members",
         "/api/v1/workspaces/{ws}/members",
     ] {
-        vectors::<MemberInput>("POST", path, json!({"user_id":Uuid::nil(),"role":"member"}));
+        vectors::<Checked<MemberInput>>(
+            "POST",
+            path,
+            json!({"user_id":Uuid::nil(),"role":"member"}),
+        );
     }
-    vectors::<InviteInput>(
+    vectors::<Checked<InviteInput>>(
         "POST",
         "/api/v1/workspaces/{ws}/invitations",
         json!({"email":"fixture@example.test","role":"member"}),
     );
+}
+
+/// The handlers' non-database acceptance rules, for the DTO-level vectors.
+#[cfg(test)]
+mod slice2_semantic {
+    use super::*;
+    use crate::management::openapi_semantic::Semantic;
+    impl Semantic for MemberInput {
+        fn accepted(&self) -> bool {
+            valid_role(&self.role)
+        }
+    }
+    impl Semantic for InviteInput {
+        fn accepted(&self) -> bool {
+            directory::email_valid(&self.email.trim().to_lowercase())
+                && matches!(self.role.as_str(), "admin" | "member")
+        }
+    }
 }
 
 const MEMBERS_SQL: &str = "SELECT jsonb_build_object('user_id',g.user_id,'email',u.email,'display_name',u.display_name,'role',m.role,'disabled_at',u.disabled_at,'membership_source',CASE WHEN count(DISTINCT g.source)>1 THEN 'mixed' ELSE min(g.source) END,'grants',jsonb_agg(jsonb_build_object('id',g.id,'role',g.role,'source',g.source,'mapping_id',g.mapping_id) ORDER BY g.source,g.id)) FROM workspace_membership_grants g JOIN users u ON u.id=g.user_id LEFT JOIN effective_workspace_memberships m ON m.workspace_id=g.workspace_id AND m.user_id=g.user_id WHERE g.workspace_id=$1 AND g.revoked_at IS NULL AND ($4::text IS NULL OR strpos(lower(coalesce(u.email,'')||' '||coalesce(u.display_name,'')),lower($4))>0) GROUP BY g.user_id,u.email,u.display_name,u.disabled_at,m.role ORDER BY u.email,g.user_id LIMIT $2 OFFSET $3";
