@@ -2099,6 +2099,22 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
             ],
             Some("content"),
         ),
+        (vec![("purpose", "bogus")], Some("content")),
+        (
+            vec![
+                ("purpose", "user_data"),
+                ("expires_after[anchor]", "created_at"),
+            ],
+            Some("content"),
+        ),
+        (
+            vec![
+                ("purpose", "user_data"),
+                ("expires_after[anchor]", "created_at"),
+                ("expires_after[seconds]", "3599"),
+            ],
+            Some("content"),
+        ),
         (vec![], Some("content")),
         (vec![("purpose", "user_data")], None),
         (vec![("purpose", "user_data")], Some("")),

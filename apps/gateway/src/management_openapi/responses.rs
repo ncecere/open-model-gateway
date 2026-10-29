@@ -582,6 +582,9 @@ fn json_media(headers: &HeaderMap) -> bool {
         .is_some_and(|media| media == "application/json" || media.ends_with("+json"))
 }
 
+/// Reviewed excuse, on a non-JSON `requestBody`, from JSON-derived boundary vectors.
+pub(crate) const NO_BOUNDARY_VECTORS: &str = "x-omg-no-boundary-vectors";
+
 /// What real handlers were seen to do. Positive observations earn operation,
 /// query-parameter, array-population and union-branch coverage; executed HTTP
 /// boundary vectors are recorded per operation exactly like positives.
@@ -620,10 +623,26 @@ impl PositiveFixtures {
                     "{key}: documented query parameters have no executed HTTP boundary vectors (call http_vectors::query_vectors)"
                 ));
             }
-            if op.get("requestBody").is_some() && !has("body") {
-                failures.push(format!(
-                    "{key}: the request body has no executed HTTP boundary vectors (call http_vectors::body_vectors_http)"
-                ));
+            if let Some(body) = op.get("requestBody") {
+                // JSON-derived vectors cannot decide a non-JSON body (multipart
+                // parts read by a streaming parser): only a reviewed reason on
+                // that body excuses them. A JSON body always owes its vectors.
+                let json = body["content"]
+                    .as_object()
+                    .is_some_and(|c| c.contains_key("application/json"));
+                let excuse = body.get(NO_BOUNDARY_VECTORS);
+                if let Some(reason) = excuse
+                    && (json || !reason.as_str().is_some_and(|r| !r.trim().is_empty()))
+                {
+                    failures.push(format!(
+                        "{key}: {NO_BOUNDARY_VECTORS} needs a reason and is valid only on a non-JSON request body"
+                    ));
+                }
+                if !has("body") && (json || excuse.is_none()) {
+                    failures.push(format!(
+                        "{key}: the request body has no executed HTTP boundary vectors (call http_vectors::body_vectors_http)"
+                    ));
+                }
             }
         }
         ensure!(failures.is_empty(), "{}", failures.join("\n"));
