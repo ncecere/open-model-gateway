@@ -2050,3 +2050,49 @@ async fn management_openapi_http_vectors_byte_limits_are_probed_at_the_exact_byt
         );
     }
 }
+
+// ----- round 3: an array whose bounds cannot be probed is not skipped ----
+
+#[test]
+fn management_openapi_http_vectors_arrays_without_a_buildable_element_fail() {
+    let property = |schema: Value, annotation: Option<(&str, &str)>| {
+        let mut schema = schema;
+        if let Some((key, reason)) = annotation {
+            schema[key] = json!(reason);
+        }
+        property_document(schema)
+    };
+    for (label, schema, valid) in [
+        (
+            "an empty valid array",
+            json!({"type":"array","minItems":0,"maxItems":3,"items":{"type":"string"}}),
+            json!({"big":[]}),
+        ),
+        (
+            "no items schema",
+            json!({"type":"array","maxItems":3}),
+            json!({"big":["a"]}),
+        ),
+    ] {
+        // RED: the maxItems vectors were silently skipped.
+        let error = cases_of(&property(schema.clone(), None), &valid, &[])
+            .err()
+            .unwrap_or_else(|| panic!("{label}: skipped silently"));
+        let text = format!("{error:#}");
+        assert!(
+            text.contains("maxItems")
+                && text.contains("/big")
+                && text.contains("x-omg-unsendable-boundary"),
+            "{label}: {text}"
+        );
+        // The unprobed-location exemption must not hide it.
+        let hidden = property(
+            schema.clone(),
+            Some(("x-omg-unprobed-location", "Not carried by any valid body.")),
+        );
+        assert!(cases_of(&hidden, &valid, &[]).is_err(), "{label}");
+        // GREEN: only the reviewed unsendable-boundary reason excuses it.
+        let excused = property(schema, Some(("x-omg-unsendable-boundary", REASON)));
+        cases_of(&excused, &valid, &[]).unwrap_or_else(|e| panic!("{label}: {e:#}"));
+    }
+}

@@ -1641,14 +1641,14 @@ impl Walk<'_> {
         items: &[Value],
         path: &mut Vec<Step>,
     ) -> Result<()> {
-        if items.is_empty() {
-            return Ok(());
-        }
         let mins = distinct_u64(nodes, "minItems");
         let maxs = distinct_u64(nodes, "maxItems");
         let unique = nodes
             .iter()
             .any(|node| node.get("uniqueItems") == Some(&Value::Bool(true)));
+        let described = nodes
+            .iter()
+            .any(|node| node.get("items").is_some() || node.get("prefixItems").is_some());
         let mut evidence = Evidence::default();
         let mut plan: Vec<(&'static str, &'static str, u64, Option<usize>, usize)> = Vec::new();
         for &min in mins.iter().filter(|min| **min > 0) {
@@ -1684,7 +1684,9 @@ impl Walk<'_> {
             let (Some(at), over) = (at, over) else {
                 continue;
             };
-            if at.max(over) as u64 > MAX_ITEMS {
+            // An array whose elements no schema describes cannot be filled with
+            // valid elements: nothing says what a valid one is.
+            if !described || at.max(over) as u64 > MAX_ITEMS {
                 evidence.settle(kinds, bound, None, dominated);
                 continue;
             }
