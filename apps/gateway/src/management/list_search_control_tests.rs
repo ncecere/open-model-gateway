@@ -25,14 +25,18 @@ async fn list_search_refuses_control_characters(pool: PgPool) {
         for q in ["%00", "%07", "a%0Ab", "a%00", "%00a", "a%7Fb"] {
             let (status, body) =
                 call(&f.s, who, "GET", &format!("{path}?q={q}"), Value::Null).await;
-            let envelope = body["error"]["code"] == "400"
-                && body["error"]["message"] == "Invalid request";
+            let envelope =
+                body["error"]["code"] == "400" && body["error"]["message"] == "Invalid request";
             if status != StatusCode::BAD_REQUEST || !envelope {
                 wrong.push(format!("{path} q={q}: {status} {body}"));
             }
         }
     }
-    assert!(wrong.is_empty(), "not refused with 400:\n{}", wrong.join("\n"));
+    assert!(
+        wrong.is_empty(),
+        "not refused with 400:\n{}",
+        wrong.join("\n")
+    );
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
