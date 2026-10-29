@@ -74,13 +74,13 @@ fn management_openapi_coverage_every_array_location_is_populated_once() {
     let empty_inner = json!({"data":[{"outcomes":[]}]});
     let full = json!({"data":[{"outcomes":["a"]}]});
     // RED: the outer array is empty, so the nested location was never seen.
-    let gap = message(run(&document, &[empty_outer.clone()], &[]));
+    let gap = message(run(&document, std::slice::from_ref(&empty_outer), &[]));
     assert!(
         gap.contains("/data") && gap.contains("/data/*/outcomes"),
         "{gap}"
     );
     // RED: outer populated but the nested array was always empty.
-    let gap = message(run(&document, &[empty_inner.clone()], &[]));
+    let gap = message(run(&document, std::slice::from_ref(&empty_inner), &[]));
     assert!(
         gap.contains("/data/*/outcomes") && !gap.contains("array /data "),
         "{gap}"
@@ -160,7 +160,7 @@ fn management_openapi_coverage_every_union_branch_matches_an_observed_value() {
     let a = json!({"note":"text","kind":{"k":"a"}});
     let b_null = json!({"note":null,"kind":{"k":"b","extra":1}});
     // RED: neither the null nor the B branch was ever the matching branch.
-    let gap = message(run(&document, &[a.clone()], &[]));
+    let gap = message(run(&document, std::slice::from_ref(&a), &[]));
     assert!(gap.contains("/note") && gap.contains("/kind"), "{gap}");
     // RED: B and null observed, but the string branch of /note never matched.
     let gap = message(run(
@@ -192,7 +192,7 @@ fn management_openapi_coverage_unobserved_branch_exemption_needs_a_reason() {
     let null_a = json!({"note":null,"kind":{"k":"a"}});
     run(&document, &[a.clone(), null_a.clone()], &[]).unwrap();
     // The exemption is for the one annotated branch only.
-    assert!(message(run(&document, &[a.clone()], &[])).contains("/note"));
+    assert!(message(run(&document, std::slice::from_ref(&a), &[])).contains("/note"));
     schema["properties"]["kind"]["oneOf"][1]["x-omg-unobserved-branch"] = json!("   ");
     let document = doc(op(schema, json!([])), branches());
     assert!(message(run(&document, &[a, null_a], &[])).contains("/kind"));
