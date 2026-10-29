@@ -212,11 +212,12 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
-                  }
+                  },
+                  "description": "Canonical decimal digits only (no leading zeros, at most 9223372036854775807). The handler's money()/counter parsing is more lenient and also accepts zero-padded forms such as \"007\" up to 19 characters (governance.rs:98, billing.rs counter); that leniency is not part of the contract. null is unknown, never zero."
                 },
                 {
                   "type": "null"
@@ -227,11 +228,12 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
-                  }
+                  },
+                  "description": "Canonical decimal digits only (no leading zeros, at most 9223372036854775807). The handler's money()/counter parsing is more lenient and also accepts zero-padded forms such as \"007\" up to 19 characters (governance.rs:98, billing.rs counter); that leniency is not part of the contract. null is unknown, never zero."
                 },
                 {
                   "type": "null"
@@ -242,11 +244,12 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
-                  }
+                  },
+                  "description": "Canonical decimal digits only (no leading zeros, at most 9223372036854775807). The handler's money()/counter parsing is more lenient and also accepts zero-padded forms such as \"007\" up to 19 characters (governance.rs:98, billing.rs counter); that leniency is not part of the contract. null is unknown, never zero."
                 },
                 {
                   "type": "null"
@@ -257,11 +260,12 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
-                  }
+                  },
+                  "description": "Canonical decimal digits only (no leading zeros, at most 9223372036854775807). The handler's money()/counter parsing is more lenient and also accepts zero-padded forms such as \"007\" up to 19 characters (governance.rs:98, billing.rs counter); that leniency is not part of the contract. null is unknown, never zero."
                 },
                 {
                   "type": "null"
@@ -272,11 +276,12 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
-                  }
+                  },
+                  "description": "Canonical decimal digits only (no leading zeros, at most 9223372036854775807). The handler's money()/counter parsing is more lenient and also accepts zero-padded forms such as \"007\" up to 19 characters (governance.rs:98, billing.rs counter); that leniency is not part of the contract. null is unknown, never zero."
                 },
                 {
                   "type": "null"
@@ -287,11 +292,12 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
-                  }
+                  },
+                  "description": "Canonical decimal digits only (no leading zeros, at most 9223372036854775807). The handler's money()/counter parsing is more lenient and also accepts zero-padded forms such as \"007\" up to 19 characters (governance.rs:98, billing.rs counter); that leniency is not part of the contract. null is unknown, never zero."
                 },
                 {
                   "type": "null"
@@ -302,11 +308,12 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
-                  }
+                  },
+                  "description": "Canonical decimal digits only (no leading zeros, at most 9223372036854775807). The handler's money()/counter parsing is more lenient and also accepts zero-padded forms such as \"007\" up to 19 characters (governance.rs:98, billing.rs counter); that leniency is not part of the contract. null is unknown, never zero."
                 },
                 {
                   "type": "null"
@@ -332,7 +339,7 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
@@ -347,7 +354,7 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
@@ -362,7 +369,7 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
@@ -377,7 +384,7 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
@@ -392,7 +399,7 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
@@ -407,7 +414,7 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
@@ -422,7 +429,7 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
@@ -540,11 +547,12 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
-                  }
+                  },
+                  "description": "Canonical decimal digits only (no leading zeros, at most 9223372036854775807). The handler's money()/counter parsing is more lenient and also accepts zero-padded forms such as \"007\" up to 19 characters (governance.rs:98, billing.rs counter); that leniency is not part of the contract. null is unknown, never zero."
                 },
                 {
                   "type": "null"
@@ -555,11 +563,12 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
-                  }
+                  },
+                  "description": "Canonical decimal digits only (no leading zeros, at most 9223372036854775807). The handler's money()/counter parsing is more lenient and also accepts zero-padded forms such as \"007\" up to 19 characters (governance.rs:98, billing.rs counter); that leniency is not part of the contract. null is unknown, never zero."
                 },
                 {
                   "type": "null"
@@ -570,11 +579,12 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
-                  }
+                  },
+                  "description": "Canonical decimal digits only (no leading zeros, at most 9223372036854775807). The handler's money()/counter parsing is more lenient and also accepts zero-padded forms such as \"007\" up to 19 characters (governance.rs:98, billing.rs counter); that leniency is not part of the contract. null is unknown, never zero."
                 },
                 {
                   "type": "null"
@@ -585,11 +595,12 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
-                  }
+                  },
+                  "description": "Canonical decimal digits only (no leading zeros, at most 9223372036854775807). The handler's money()/counter parsing is more lenient and also accepts zero-padded forms such as \"007\" up to 19 characters (governance.rs:98, billing.rs counter); that leniency is not part of the contract. null is unknown, never zero."
                 },
                 {
                   "type": "null"
@@ -600,11 +611,12 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
-                  }
+                  },
+                  "description": "Canonical decimal digits only (no leading zeros, at most 9223372036854775807). The handler's money()/counter parsing is more lenient and also accepts zero-padded forms such as \"007\" up to 19 characters (governance.rs:98, billing.rs counter); that leniency is not part of the contract. null is unknown, never zero."
                 },
                 {
                   "type": "null"
@@ -615,11 +627,12 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
-                  }
+                  },
+                  "description": "Canonical decimal digits only (no leading zeros, at most 9223372036854775807). The handler's money()/counter parsing is more lenient and also accepts zero-padded forms such as \"007\" up to 19 characters (governance.rs:98, billing.rs counter); that leniency is not part of the contract. null is unknown, never zero."
                 },
                 {
                   "type": "null"
@@ -630,11 +643,12 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
-                  }
+                  },
+                  "description": "Canonical decimal digits only (no leading zeros, at most 9223372036854775807). The handler's money()/counter parsing is more lenient and also accepts zero-padded forms such as \"007\" up to 19 characters (governance.rs:98, billing.rs counter); that leniency is not part of the contract. null is unknown, never zero."
                 },
                 {
                   "type": "null"
@@ -659,7 +673,7 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
@@ -674,7 +688,7 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
@@ -689,7 +703,7 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
@@ -704,7 +718,7 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
@@ -719,7 +733,7 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
@@ -734,7 +748,7 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
@@ -749,7 +763,7 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
@@ -1061,7 +1075,8 @@
           "anyOf": [
             {
               "type": "string",
-              "pattern": "^(0|[1-9][0-9]*)$"
+              "pattern": "^(0|[1-9][0-9]*)$",
+              "description": "Canonical decimal digits only (no leading zeros, at most 9223372036854775807). The handler's money()/counter parsing is more lenient and also accepts zero-padded forms such as \"007\" up to 19 characters (governance.rs:98, billing.rs counter); that leniency is not part of the contract. Optional; a stored value may be repeated but never changed or erased."
             },
             {
               "type": "null"
@@ -1243,19 +1258,21 @@
           "properties": {
             "input_tokens": {
               "type": "string",
-              "pattern": "^[0-9]{1,19}$",
+              "pattern": "^(0|[1-9][0-9]{0,18})$",
               "not": {
                 "type": "string",
                 "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
-              }
+              },
+              "description": "Canonical decimal digits only (no leading zeros, at most 9223372036854775807). The handler's money()/counter parsing is more lenient and also accepts zero-padded forms such as \"007\" up to 19 characters (governance.rs:98, billing.rs counter); that leniency is not part of the contract."
             },
             "output_tokens": {
               "type": "string",
-              "pattern": "^[0-9]{1,19}$",
+              "pattern": "^(0|[1-9][0-9]{0,18})$",
               "not": {
                 "type": "string",
                 "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
-              }
+              },
+              "description": "Canonical decimal digits only (no leading zeros, at most 9223372036854775807). The handler's money()/counter parsing is more lenient and also accepts zero-padded forms such as \"007\" up to 19 characters (governance.rs:98, billing.rs counter); that leniency is not part of the contract."
             },
             "billing_usage": {
               "anyOf": [
@@ -1271,7 +1288,8 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "description": "Characters, not bytes (resolve_usage counts chars().count() <= 200; no control characters, not blank). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
             },
             "meter_usage": {
               "anyOf": [
@@ -1302,7 +1320,8 @@
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
-                  }
+                  },
+                  "description": "Canonical decimal digits only (no leading zeros, at most 9223372036854775807). The handler's money()/counter parsing is more lenient and also accepts zero-padded forms such as \"007\" up to 19 characters (governance.rs:98, billing.rs counter); that leniency is not part of the contract. Optional; a stored value may be repeated but never changed or erased."
                 },
                 {
                   "type": "null"
@@ -1323,7 +1342,7 @@
           "prefixItems": [
             {
               "type": "string",
-              "pattern": "^[0-9]{1,19}$",
+              "pattern": "^(0|[1-9][0-9]{0,18})$",
               "not": {
                 "type": "string",
                 "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
@@ -1331,7 +1350,7 @@
             },
             {
               "type": "string",
-              "pattern": "^[0-9]{1,19}$",
+              "pattern": "^(0|[1-9][0-9]{0,18})$",
               "not": {
                 "type": "string",
                 "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
@@ -1351,7 +1370,8 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "description": "Characters, not bytes (resolve_usage counts chars().count() <= 200; no control characters, not blank). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
             },
             {
               "anyOf": [
@@ -1378,7 +1398,7 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
@@ -1443,13 +1463,15 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 120,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
             },
             "code": {
               "type": "string",
               "minLength": 1,
               "maxLength": 120,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
             }
           },
           "required": [
@@ -1465,13 +1487,15 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 120,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
             },
             {
               "type": "string",
               "minLength": 1,
               "maxLength": 120,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
             }
           ],
           "items": false,
@@ -2239,7 +2263,8 @@
                 "change_ratio",
                 "daily"
               ],
-              "additionalProperties": false
+              "additionalProperties": false,
+              "description": "Decimal rate, micro-USD per million tokens (rounded to four fractional digits, trailing zeros trimmed), not a whole-micro-USD amount; null when no priced tokens exist."
             }
           },
           "required": [
@@ -2297,7 +2322,8 @@
                       {
                         "type": "null"
                       }
-                    ]
+                    ],
+                    "description": "Decimal rate, micro-USD per million tokens (rounded to four fractional digits, trailing zeros trimmed), not a whole-micro-USD amount; null when no priced tokens exist."
                   },
                   "model_id": {
                     "anyOf": [
@@ -2368,7 +2394,8 @@
                       {
                         "type": "null"
                       }
-                    ]
+                    ],
+                    "description": "Decimal rate, micro-USD per million tokens (rounded to four fractional digits, trailing zeros trimmed), not a whole-micro-USD amount; null when no priced tokens exist."
                   }
                 },
                 "required": [
@@ -2436,7 +2463,8 @@
                           {
                             "type": "null"
                           }
-                        ]
+                        ],
+                        "description": "Decimal rate, micro-USD per million tokens (rounded to four fractional digits, trailing zeros trimmed), not a whole-micro-USD amount; null when no priced tokens exist."
                       }
                     },
                     "required": [
@@ -2519,7 +2547,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Decimal rate, micro-USD per million tokens (rounded to four fractional digits, trailing zeros trimmed), not a whole-micro-USD amount; null when no priced tokens exist."
         }
       },
       "required": [
@@ -2575,7 +2604,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Decimal rate, micro-USD per million tokens (rounded to four fractional digits, trailing zeros trimmed), not a whole-micro-USD amount; null when no priced tokens exist."
         }
       },
       "required": [
@@ -2998,7 +3028,8 @@
                 "change_ratio",
                 "daily"
               ],
-              "additionalProperties": false
+              "additionalProperties": false,
+              "description": "Decimal rate, micro-USD per million tokens (rounded to four fractional digits, trailing zeros trimmed), not a whole-micro-USD amount; null when no priced tokens exist."
             }
           },
           "required": [
@@ -3056,7 +3087,8 @@
                       {
                         "type": "null"
                       }
-                    ]
+                    ],
+                    "description": "Decimal rate, micro-USD per million tokens (rounded to four fractional digits, trailing zeros trimmed), not a whole-micro-USD amount; null when no priced tokens exist."
                   },
                   "model_id": {
                     "anyOf": [
@@ -3147,7 +3179,8 @@
                       {
                         "type": "null"
                       }
-                    ]
+                    ],
+                    "description": "Decimal rate, micro-USD per million tokens (rounded to four fractional digits, trailing zeros trimmed), not a whole-micro-USD amount; null when no priced tokens exist."
                   }
                 },
                 "required": [
@@ -3988,14 +4021,7 @@
                 "type": "boolean"
               },
               "delivery": {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/MoneyReportDelivery"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "$ref": "#/components/schemas/MoneyReportDelivery"
               },
               "skipped_intervals": {
                 "type": "string",
@@ -4013,7 +4039,8 @@
               "delivery",
               "skipped_intervals"
             ],
-            "additionalProperties": false
+            "additionalProperties": false,
+            "description": "delivery is always present (see MoneyWorkspaceReportRun)."
           }
         },
         "outcomes": {
@@ -4089,12 +4116,14 @@
             "starting_at": {
               "type": "string",
               "format": "date-time",
-              "maxLength": 40
+              "maxLength": 40,
+              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide."
             },
             "ending_at": {
               "type": "string",
               "format": "date-time",
-              "maxLength": 40
+              "maxLength": 40,
+              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide."
             },
             "bucket_width": {
               "const": "1d"
@@ -4133,12 +4162,14 @@
             {
               "type": "string",
               "format": "date-time",
-              "maxLength": 40
+              "maxLength": 40,
+              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide."
             },
             {
               "type": "string",
               "format": "date-time",
-              "maxLength": 40
+              "maxLength": 40,
+              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide."
             },
             {
               "const": "1d"
@@ -4288,7 +4319,11 @@
               "type": "string",
               "maxLength": 64,
               "pattern": "^-?[0-9]+(\\.[0-9]{1,18})?$",
-              "description": "Decimal cents as supplied by the provider (exact; never a float)."
+              "description": "Decimal cents as supplied by the provider (exact; never a float). At most 64 characters and 18 fractional digits. The whole part (leading zeros allowed) must be at most 17014118346046923173168730371588410: cents() converts to micro-USD in i128 (checked_mul by 10000) and refuses larger values. The boundary value itself is additionally refused when its first four fractional digits exceed 5727 (or round up past i128::MAX), which the pattern does not express.",
+              "not": {
+                "type": "string",
+                "pattern": "^-?0*(?:[1-9][0-9]{35,}|[2-9][0-9]{34}|1[8-9][0-9]{33}|17[1-9][0-9]{32}|170[2-9][0-9]{31}|1701[5-9][0-9]{30}|17014[2-9][0-9]{29}|170141[2-9][0-9]{28}|17014119[0-9]{27}|17014118[4-9][0-9]{26}|170141183[5-9][0-9]{25}|1701411834[7-9][0-9]{24}|17014118346[1-9][0-9]{23}|170141183460[5-9][0-9]{22}|1701411834604[7-9][0-9]{21}|170141183460469[3-9][0-9]{19}|1701411834604692[4-9][0-9]{18}|17014118346046923[2-9][0-9]{17}|170141183460469231[8-9][0-9]{16}|1701411834604692317[4-9][0-9]{15}|17014118346046923173[2-9][0-9]{14}|170141183460469231731[7-9][0-9]{13}|17014118346046923173169[0-9]{12}|17014118346046923173168[8-9][0-9]{11}|170141183460469231731687[4-9][0-9]{10}|1701411834604692317316873[1-9][0-9]{9}|17014118346046923173168730[4-9][0-9]{8}|170141183460469231731687303[8-9][0-9]{7}|1701411834604692317316873037[2-9][0-9]{6}|17014118346046923173168730371[6-9][0-9]{5}|1701411834604692317316873037159[0-9]{4}|17014118346046923173168730371589[0-9]{3}|17014118346046923173168730371588[5-9][0-9]{2}|170141183460469231731687303715884[2-9][0-9]{1}|1701411834604692317316873037158841[1-9][0-9]{0})(?:\\.[0-9]+)?$"
+              }
             },
             "currency": {
               "const": "USD"
@@ -4299,7 +4334,8 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
                 },
                 {
                   "type": "null"
@@ -4312,7 +4348,8 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
                 },
                 {
                   "type": "null"
@@ -4325,7 +4362,8 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
                 },
                 {
                   "type": "null"
@@ -4338,7 +4376,8 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
                 },
                 {
                   "type": "null"
@@ -4351,7 +4390,8 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
                 },
                 {
                   "type": "null"
@@ -4364,7 +4404,8 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
                 },
                 {
                   "type": "null"
@@ -4377,7 +4418,8 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
                 },
                 {
                   "type": "null"
@@ -4390,7 +4432,8 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
                 },
                 {
                   "type": "null"
@@ -4403,7 +4446,8 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
                 },
                 {
                   "type": "null"
@@ -4424,7 +4468,11 @@
               "type": "string",
               "maxLength": 64,
               "pattern": "^-?[0-9]+(\\.[0-9]{1,18})?$",
-              "description": "Decimal cents as supplied by the provider (exact; never a float)."
+              "description": "Decimal cents as supplied by the provider (exact; never a float). At most 64 characters and 18 fractional digits. The whole part (leading zeros allowed) must be at most 17014118346046923173168730371588410: cents() converts to micro-USD in i128 (checked_mul by 10000) and refuses larger values. The boundary value itself is additionally refused when its first four fractional digits exceed 5727 (or round up past i128::MAX), which the pattern does not express.",
+              "not": {
+                "type": "string",
+                "pattern": "^-?0*(?:[1-9][0-9]{35,}|[2-9][0-9]{34}|1[8-9][0-9]{33}|17[1-9][0-9]{32}|170[2-9][0-9]{31}|1701[5-9][0-9]{30}|17014[2-9][0-9]{29}|170141[2-9][0-9]{28}|17014119[0-9]{27}|17014118[4-9][0-9]{26}|170141183[5-9][0-9]{25}|1701411834[7-9][0-9]{24}|17014118346[1-9][0-9]{23}|170141183460[5-9][0-9]{22}|1701411834604[7-9][0-9]{21}|170141183460469[3-9][0-9]{19}|1701411834604692[4-9][0-9]{18}|17014118346046923[2-9][0-9]{17}|170141183460469231[8-9][0-9]{16}|1701411834604692317[4-9][0-9]{15}|17014118346046923173[2-9][0-9]{14}|170141183460469231731[7-9][0-9]{13}|17014118346046923173169[0-9]{12}|17014118346046923173168[8-9][0-9]{11}|170141183460469231731687[4-9][0-9]{10}|1701411834604692317316873[1-9][0-9]{9}|17014118346046923173168730[4-9][0-9]{8}|170141183460469231731687303[8-9][0-9]{7}|1701411834604692317316873037[2-9][0-9]{6}|17014118346046923173168730371[6-9][0-9]{5}|1701411834604692317316873037159[0-9]{4}|17014118346046923173168730371589[0-9]{3}|17014118346046923173168730371588[5-9][0-9]{2}|170141183460469231731687303715884[2-9][0-9]{1}|1701411834604692317316873037158841[1-9][0-9]{0})(?:\\.[0-9]+)?$"
+              }
             },
             {
               "const": "USD"
@@ -4435,7 +4483,8 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
                 },
                 {
                   "type": "null"
@@ -4448,7 +4497,8 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
                 },
                 {
                   "type": "null"
@@ -4461,7 +4511,8 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
                 },
                 {
                   "type": "null"
@@ -4474,7 +4525,8 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
                 },
                 {
                   "type": "null"
@@ -4487,7 +4539,8 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
                 },
                 {
                   "type": "null"
@@ -4500,7 +4553,8 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
                 },
                 {
                   "type": "null"
@@ -4513,7 +4567,8 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
                 },
                 {
                   "type": "null"
@@ -4526,7 +4581,8 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
                 },
                 {
                   "type": "null"
@@ -4539,7 +4595,8 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
                 },
                 {
                   "type": "null"
@@ -4561,12 +4618,14 @@
             "starting_at": {
               "type": "string",
               "format": "date-time",
-              "maxLength": 40
+              "maxLength": 40,
+              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide."
             },
             "ending_at": {
               "type": "string",
               "format": "date-time",
-              "maxLength": 40
+              "maxLength": 40,
+              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide."
             },
             "results": {
               "type": "array",
@@ -4588,12 +4647,14 @@
             {
               "type": "string",
               "format": "date-time",
-              "maxLength": 40
+              "maxLength": 40,
+              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide."
             },
             {
               "type": "string",
               "format": "date-time",
-              "maxLength": 40
+              "maxLength": 40,
+              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide."
             },
             {
               "type": "array",
@@ -4630,7 +4691,8 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
                 },
                 {
                   "type": "null"
@@ -4667,7 +4729,8 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 4096,
-                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
               }
             }
           },
@@ -4713,7 +4776,8 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 4096,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
             }
           ],
           "items": false,
@@ -4731,18 +4795,21 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
             },
             "evidence_reference": {
               "type": "string",
               "minLength": 1,
               "maxLength": 256,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
             },
             "exported_at": {
               "type": "string",
               "format": "date-time",
-              "maxLength": 40
+              "maxLength": 40,
+              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide."
             },
             "supersedes": {
               "anyOf": [
@@ -4783,18 +4850,21 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
             },
             {
               "type": "string",
               "minLength": 1,
               "maxLength": 256,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
             },
             {
               "type": "string",
               "format": "date-time",
-              "maxLength": 40
+              "maxLength": 40,
+              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide."
             },
             {
               "anyOf": [
@@ -4834,13 +4904,15 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 512,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 512 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
             },
             "upstream_model": {
               "type": "string",
               "minLength": 1,
               "maxLength": 512,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 512 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
             }
           },
           "required": [
@@ -4856,13 +4928,15 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 512,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 512 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
             },
             {
               "type": "string",
               "minLength": 1,
               "maxLength": 512,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 512 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
             }
           ],
           "items": false,
@@ -4882,7 +4956,8 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
                 },
                 {
                   "type": "null"
@@ -4937,7 +5012,8 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 256,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
             },
             "model_mappings": {
               "type": "array",
@@ -4994,7 +5070,8 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
                 },
                 {
                   "type": "null"
@@ -5049,7 +5126,8 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 256,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
             },
             {
               "type": "array",
@@ -5072,7 +5150,8 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
                 },
                 {
                   "type": "null"
@@ -5120,7 +5199,8 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 256,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
             },
             {
               "type": "array",
@@ -5240,7 +5320,8 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
             },
             "supersedes": {
               "anyOf": [
@@ -5257,7 +5338,8 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 256,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
             },
             "bindings": {
               "type": "array",
@@ -5281,7 +5363,8 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
             },
             {
               "anyOf": [
@@ -5298,7 +5381,8 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 256,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
             },
             {
               "type": "array",
@@ -5734,7 +5818,13 @@
         },
         "original_amount": {
           "type": "string",
-          "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+          "maxLength": 64,
+          "pattern": "^-?[0-9]+(\\.[0-9]{1,18})?$",
+          "description": "The provider's decimal cents exactly as imported: At most 64 characters and 18 fractional digits. The whole part (leading zeros allowed) must be at most 17014118346046923173168730371588410: cents() converts to micro-USD in i128 (checked_mul by 10000) and refuses larger values. The boundary value itself is additionally refused when its first four fractional digits exceed 5727 (or round up past i128::MAX), which the pattern does not express.",
+          "not": {
+            "type": "string",
+            "pattern": "^-?0*(?:[1-9][0-9]{35,}|[2-9][0-9]{34}|1[8-9][0-9]{33}|17[1-9][0-9]{32}|170[2-9][0-9]{31}|1701[5-9][0-9]{30}|17014[2-9][0-9]{29}|170141[2-9][0-9]{28}|17014119[0-9]{27}|17014118[4-9][0-9]{26}|170141183[5-9][0-9]{25}|1701411834[7-9][0-9]{24}|17014118346[1-9][0-9]{23}|170141183460[5-9][0-9]{22}|1701411834604[7-9][0-9]{21}|170141183460469[3-9][0-9]{19}|1701411834604692[4-9][0-9]{18}|17014118346046923[2-9][0-9]{17}|170141183460469231[8-9][0-9]{16}|1701411834604692317[4-9][0-9]{15}|17014118346046923173[2-9][0-9]{14}|170141183460469231731[7-9][0-9]{13}|17014118346046923173169[0-9]{12}|17014118346046923173168[8-9][0-9]{11}|170141183460469231731687[4-9][0-9]{10}|1701411834604692317316873[1-9][0-9]{9}|17014118346046923173168730[4-9][0-9]{8}|170141183460469231731687303[8-9][0-9]{7}|1701411834604692317316873037[2-9][0-9]{6}|17014118346046923173168730371[6-9][0-9]{5}|1701411834604692317316873037159[0-9]{4}|17014118346046923173168730371589[0-9]{3}|17014118346046923173168730371588[5-9][0-9]{2}|170141183460469231731687303715884[2-9][0-9]{1}|1701411834604692317316873037158841[1-9][0-9]{0})(?:\\.[0-9]+)?$"
+          }
         },
         "amount_microusd": {
           "type": "string",
@@ -5742,7 +5832,8 @@
         },
         "conversion_residual_microusd": {
           "type": "string",
-          "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+          "pattern": "^(0|-?0\\.[0-9]*[1-9])$",
+          "description": "Decimal fractional micro-USD remainder of the cents conversion (unrounded minus rounded micro-USD), a rate-like decimal and never a whole amount: \"0\" or a signed fraction below one without trailing zeros, exactly as cents() writes it."
         }
       },
       "required": [
@@ -6307,13 +6398,15 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 120,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
             },
             "code": {
               "type": "string",
               "minLength": 1,
               "maxLength": 120,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
             }
           },
           "required": [
@@ -6329,13 +6422,15 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 120,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
             },
             {
               "type": "string",
               "minLength": 1,
               "maxLength": 120,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
             }
           ],
           "items": false,
@@ -6364,13 +6459,15 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 120,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
             },
             "code": {
               "type": "string",
               "minLength": 1,
               "maxLength": 120,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
             }
           },
           "required": [
@@ -6386,13 +6483,15 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 120,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
             },
             {
               "type": "string",
               "minLength": 1,
               "maxLength": 120,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
             }
           ],
           "items": false,
@@ -6701,18 +6800,21 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
             },
             "evidence_reference": {
               "type": "string",
               "minLength": 1,
               "maxLength": 256,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
             },
             "exported_at": {
               "type": "string",
               "format": "date-time",
-              "maxLength": 40
+              "maxLength": 40,
+              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide."
             },
             "supersedes": {
               "anyOf": [
@@ -6753,18 +6855,21 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
             },
             {
               "type": "string",
               "minLength": 1,
               "maxLength": 256,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
             },
             {
               "type": "string",
               "format": "date-time",
-              "maxLength": 40
+              "maxLength": 40,
+              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide."
             },
             {
               "anyOf": [
@@ -6859,7 +6964,8 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
             },
             "supersedes": {
               "anyOf": [
@@ -6876,7 +6982,8 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 256,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
             },
             "bindings": {
               "type": "array",
@@ -6900,7 +7007,8 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
             },
             {
               "anyOf": [
@@ -6917,7 +7025,8 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 256,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
             },
             {
               "type": "array",
@@ -7081,19 +7190,21 @@
           "properties": {
             "input_tokens": {
               "type": "string",
-              "pattern": "^[0-9]{1,19}$",
+              "pattern": "^(0|[1-9][0-9]{0,18})$",
               "not": {
                 "type": "string",
                 "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
-              }
+              },
+              "description": "Canonical decimal digits only (no leading zeros, at most 9223372036854775807). The handler's money()/counter parsing is more lenient and also accepts zero-padded forms such as \"007\" up to 19 characters (governance.rs:98, billing.rs counter); that leniency is not part of the contract."
             },
             "output_tokens": {
               "type": "string",
-              "pattern": "^[0-9]{1,19}$",
+              "pattern": "^(0|[1-9][0-9]{0,18})$",
               "not": {
                 "type": "string",
                 "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
-              }
+              },
+              "description": "Canonical decimal digits only (no leading zeros, at most 9223372036854775807). The handler's money()/counter parsing is more lenient and also accepts zero-padded forms such as \"007\" up to 19 characters (governance.rs:98, billing.rs counter); that leniency is not part of the contract."
             },
             "billing_usage": {
               "anyOf": [
@@ -7109,7 +7220,8 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "description": "Characters, not bytes (resolve_usage counts chars().count() <= 200; no control characters, not blank). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
             },
             "meter_usage": {
               "anyOf": [
@@ -7140,7 +7252,8 @@
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
-                  }
+                  },
+                  "description": "Canonical decimal digits only (no leading zeros, at most 9223372036854775807). The handler's money()/counter parsing is more lenient and also accepts zero-padded forms such as \"007\" up to 19 characters (governance.rs:98, billing.rs counter); that leniency is not part of the contract. Optional; a stored value may be repeated but never changed or erased."
                 },
                 {
                   "type": "null"
@@ -7161,7 +7274,7 @@
           "prefixItems": [
             {
               "type": "string",
-              "pattern": "^[0-9]{1,19}$",
+              "pattern": "^(0|[1-9][0-9]{0,18})$",
               "not": {
                 "type": "string",
                 "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
@@ -7169,7 +7282,7 @@
             },
             {
               "type": "string",
-              "pattern": "^[0-9]{1,19}$",
+              "pattern": "^(0|[1-9][0-9]{0,18})$",
               "not": {
                 "type": "string",
                 "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
@@ -7189,7 +7302,8 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "description": "Characters, not bytes (resolve_usage counts chars().count() <= 200; no control characters, not blank). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
             },
             {
               "anyOf": [
@@ -7216,7 +7330,7 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "pattern": "^[0-9]{1,19}$",
+                  "pattern": "^(0|[1-9][0-9]{0,18})$",
                   "not": {
                     "type": "string",
                     "pattern": "^(?:9[3-9][0-9]{17}|92[3-9][0-9]{16}|922[4-9][0-9]{15}|9223[4-9][0-9]{14}|92233[8-9][0-9]{13}|922337[3-9][0-9]{12}|9223372[1-9][0-9]{11}|92233720[4-9][0-9]{10}|922337203[7-9][0-9]{9}|9223372036[9][0-9]{8}|92233720368[6-9][0-9]{7}|922337203685[5-9][0-9]{6}|9223372036854[8-9][0-9]{5}|92233720368547[8-9][0-9]{4}|922337203685477[6-9][0-9]{3}|9223372036854775[9][0-9]{2}|92233720368547758[1-9][0-9]|922337203685477580[8-9])$"
@@ -7604,7 +7718,8 @@
         "id",
         "name"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Any other identified group: a workspace, model, provider, cost center, key, member or day."
     },
     "MoneyPlatformExploreUnidentified": {
       "type": "object",
@@ -7627,10 +7742,13 @@
       "additionalProperties": false
     },
     "MoneyPlatformExploreIdentity": {
-      "description": "Group identity. Personal workspaces appear by id and \"Personal \u00b7 <owner>\" name under group_by=workspace (their usage totals are visible to Platform Admins and Auditors); their keys never do.",
-      "oneOf": [
+      "description": "Group identity. anyOf, not oneOf: a personal-workspace row (id and \"Personal \u00b7 <owner>\" name; usage totals only, never its keys, request or execution details) also satisfies the generic identified row, and workspace names are free text, so a shared workspace may legally carry the same prefix.",
+      "anyOf": [
         {
           "$ref": "#/components/schemas/MoneyPlatformExploreRedactedKey"
+        },
+        {
+          "$ref": "#/components/schemas/MoneyPlatformExplorePersonalWorkspace"
         },
         {
           "$ref": "#/components/schemas/MoneyPlatformExploreIdentified"
@@ -12531,14 +12649,7 @@
           "type": "boolean"
         },
         "delivery": {
-          "anyOf": [
-            {
-              "$ref": "#/components/schemas/MoneyReportDelivery"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/components/schemas/MoneyReportDelivery"
         },
         "configuration_revision": {
           "type": "string",
@@ -12592,7 +12703,7 @@
           }
         }
       },
-      "description": "snapshot is null exactly when expired is true (run_value: the snapshot is projected only while both the run and its payload are unexpired)."
+      "description": "delivery is always present: a run, its snapshot and its delivery envelope are written in one transaction (scheduled_reports.rs:306-313, delivery::enqueue), and deliveries are never deleted (alert_deliveries_no_delete), so the scalar subquery of run_value/list_runs cannot be null. snapshot is null exactly when expired is true; a clock race between the run's and the payload's expiry instants can break that equality on the wire and is tracked in #406 (production bug, not a contract exception)."
     },
     "MoneyWorkspaceReportRun": {
       "type": "object",
@@ -12625,14 +12736,7 @@
           "type": "boolean"
         },
         "delivery": {
-          "anyOf": [
-            {
-              "$ref": "#/components/schemas/MoneyReportDelivery"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/components/schemas/MoneyReportDelivery"
         },
         "configuration_revision": {
           "type": "string",
@@ -12686,7 +12790,26 @@
           }
         }
       },
-      "description": "snapshot is null exactly when expired is true (run_value: the snapshot is projected only while both the run and its payload are unexpired)."
+      "description": "delivery is always present: a run, its snapshot and its delivery envelope are written in one transaction (scheduled_reports.rs:306-313, delivery::enqueue), and deliveries are never deleted (alert_deliveries_no_delete), so the scalar subquery of run_value/list_runs cannot be null. snapshot is null exactly when expired is true; a clock race between the run's and the payload's expiry instants can break that equality on the wire and is tracked in #406 (production bug, not a contract exception)."
+    },
+    "MoneyPlatformExplorePersonalWorkspace": {
+      "type": "object",
+      "description": "A personal workspace as a group (group_by or then_by = workspace): its workspace id and the \"Personal \u00b7 <owner>\" label that BASE builds for platform scope (reports/usage BASE: 'Personal \u00b7 '||display name, email or 'former user'). Platform Admins and Auditors see this identity with usage and cost totals only; the workspace's keys are collapsed into the redacted key row and its requests, executions, prompts and owner choices are never exposed.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^Personal \u00b7 "
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "additionalProperties": false
     }
   }
 }
