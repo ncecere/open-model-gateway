@@ -923,7 +923,7 @@
     "DELETE /api/v1/platform/workspaces/{ws}/catalogs": {
       "access": "PlatformWrite",
       "operation": {
-        "description": "Live type defaults and replacement workspace overrides are separate. Empty replacement is deny-all, DELETE restores inheritance. Removed catalog selections never resurrect. Platform readers can read allocation metadata for personal/disabled workspaces without any keys or request detail.",
+        "description": "Live type defaults and replacement workspace overrides are separate. Empty replacement is deny-all, DELETE restores inheritance. Removed catalog selections never resurrect. Platform readers can read allocation metadata for personal/disabled workspaces without any keys or request detail. Personal workspaces are deliberately addressable on this route (#400 Option A, not a hidden-404 gap): Platform Admins/Auditors may see a personal workspace's identity with usage, cost and storage totals and manage its platform-controlled configuration (policy limits, catalog overrides, direct model assignment), but never its keys, request or execution details, prompts, sessions, file contents or owner choices.",
         "responses": {
           "200": {
             "description": "Successful handler representation",
@@ -978,7 +978,7 @@
     "GET /api/v1/platform/workspaces/{ws}/catalogs": {
       "access": "PlatformRead",
       "operation": {
-        "description": "Live type defaults and replacement workspace overrides are separate. Empty replacement is deny-all, DELETE restores inheritance. Removed catalog selections never resurrect. Platform readers can read allocation metadata for personal/disabled workspaces without any keys or request detail.",
+        "description": "Live type defaults and replacement workspace overrides are separate. Empty replacement is deny-all, DELETE restores inheritance. Removed catalog selections never resurrect. Platform readers can read allocation metadata for personal/disabled workspaces without any keys or request detail. Personal workspaces are deliberately addressable on this route (#400 Option A, not a hidden-404 gap): Platform Admins/Auditors may see a personal workspace's identity with usage, cost and storage totals and manage its platform-controlled configuration (policy limits, catalog overrides, direct model assignment), but never its keys, request or execution details, prompts, sessions, file contents or owner choices.",
         "responses": {
           "200": {
             "description": "Successful handler representation",
@@ -1023,7 +1023,7 @@
     "PUT /api/v1/platform/workspaces/{ws}/catalogs": {
       "access": "PlatformWrite",
       "operation": {
-        "description": "Live type defaults and replacement workspace overrides are separate. Empty replacement is deny-all, DELETE restores inheritance. Removed catalog selections never resurrect. Platform readers can read allocation metadata for personal/disabled workspaces without any keys or request detail.",
+        "description": "Live type defaults and replacement workspace overrides are separate. Empty replacement is deny-all, DELETE restores inheritance. Removed catalog selections never resurrect. Platform readers can read allocation metadata for personal/disabled workspaces without any keys or request detail. Personal workspaces are deliberately addressable on this route (#400 Option A, not a hidden-404 gap): Platform Admins/Auditors may see a personal workspace's identity with usage, cost and storage totals and manage its platform-controlled configuration (policy limits, catalog overrides, direct model assignment), but never its keys, request or execution details, prompts, sessions, file contents or owner choices.",
         "responses": {
           "200": {
             "description": "Successful handler representation",
@@ -1465,7 +1465,7 @@
     "POST /api/v1/platform/workspaces/{ws}/models": {
       "access": "PlatformWrite",
       "operation": {
-        "description": "Platform Admin direct assignment is independent of catalog eligibility; removing it never restores an old catalog selection.",
+        "description": "Platform Admin direct assignment is independent of catalog eligibility; removing it never restores an old catalog selection. Personal workspaces are deliberately addressable on this route (#400 Option A, not a hidden-404 gap): Platform Admins/Auditors may see a personal workspace's identity with usage, cost and storage totals and manage its platform-controlled configuration (policy limits, catalog overrides, direct model assignment), but never its keys, request or execution details, prompts, sessions, file contents or owner choices.",
         "responses": {
           "200": {
             "description": "Successful handler representation",
@@ -1550,7 +1550,7 @@
     "DELETE /api/v1/platform/workspaces/{ws}/models/{model}": {
       "access": "PlatformWrite",
       "operation": {
-        "description": "Live authorization and current grant provenance are rechecked. Platform Auditor authority is read-only; independent workspace membership remains usable. Inference keys are never management credentials.",
+        "description": "Live authorization and current grant provenance are rechecked. Platform Auditor authority is read-only; independent workspace membership remains usable. Inference keys are never management credentials. Personal workspaces are deliberately addressable on this route (#400 Option A, not a hidden-404 gap): Platform Admins/Auditors may see a personal workspace's identity with usage, cost and storage totals and manage its platform-controlled configuration (policy limits, catalog overrides, direct model assignment), but never its keys, request or execution details, prompts, sessions, file contents or owner choices.",
         "responses": {
           "200": {
             "description": "Successful handler representation",
@@ -1605,7 +1605,7 @@
     "DELETE /api/v1/platform/workspaces/{ws}/policy": {
       "access": "PlatformWrite",
       "operation": {
-        "description": "Live type default or replacement workspace policy, never installation-wide limits. Policy rates are required nullable fields; supplied fields distinguish omission (keep) from null (clear); present budgets/budget_period reject null. Budgets replace the full period set; deprecated monthly form is mutually exclusive. Money is exact micro-USD strings. Platform totals are permitted without request details.",
+        "description": "Live type default or replacement workspace policy, never installation-wide limits. Policy rates are required nullable fields; supplied fields distinguish omission (keep) from null (clear); present budgets/budget_period reject null. Budgets replace the full period set; deprecated monthly form is mutually exclusive. Money is exact micro-USD strings. Platform totals are permitted without request details. Personal workspaces are deliberately addressable on this route (#400 Option A, not a hidden-404 gap): Platform Admins/Auditors may see a personal workspace's identity with usage, cost and storage totals and manage its platform-controlled configuration (policy limits, catalog overrides, direct model assignment), but never its keys, request or execution details, prompts, sessions, file contents or owner choices.",
         "responses": {
           "200": {
             "description": "Successful handler representation",
@@ -1660,7 +1660,7 @@
     "GET /api/v1/platform/workspaces/{ws}/policy": {
       "access": "PlatformRead",
       "operation": {
-        "description": "Live type default or replacement workspace policy, never installation-wide limits. Policy rates are required nullable fields; supplied fields distinguish omission (keep) from null (clear); present budgets/budget_period reject null. Budgets replace the full period set; deprecated monthly form is mutually exclusive. Money is exact micro-USD strings. Platform totals are permitted without request details.",
+        "description": "Live type default or replacement workspace policy, never installation-wide limits. Policy rates are required nullable fields; supplied fields distinguish omission (keep) from null (clear); present budgets/budget_period reject null. Budgets replace the full period set; deprecated monthly form is mutually exclusive. Money is exact micro-USD strings. Platform totals are permitted without request details. Personal workspaces are deliberately addressable on this route (#400 Option A, not a hidden-404 gap): Platform Admins/Auditors may see a personal workspace's identity with usage, cost and storage totals and manage its platform-controlled configuration (policy limits, catalog overrides, direct model assignment), but never its keys, request or execution details, prompts, sessions, file contents or owner choices.",
         "responses": {
           "200": {
             "description": "Successful handler representation",
@@ -1705,7 +1705,7 @@
     "PUT /api/v1/platform/workspaces/{ws}/policy": {
       "access": "PlatformWrite",
       "operation": {
-        "description": "Live type default or replacement workspace policy, never installation-wide limits. Policy rates are required nullable fields; supplied fields distinguish omission (keep) from null (clear); present budgets/budget_period reject null. Budgets replace the full period set; deprecated monthly form is mutually exclusive. Money is exact micro-USD strings. Platform totals are permitted without request details.",
+        "description": "Live type default or replacement workspace policy, never installation-wide limits. Policy rates are required nullable fields; supplied fields distinguish omission (keep) from null (clear); present budgets/budget_period reject null. Budgets replace the full period set; deprecated monthly form is mutually exclusive. Money is exact micro-USD strings. Platform totals are permitted without request details. Personal workspaces are deliberately addressable on this route (#400 Option A, not a hidden-404 gap): Platform Admins/Auditors may see a personal workspace's identity with usage, cost and storage totals and manage its platform-controlled configuration (policy limits, catalog overrides, direct model assignment), but never its keys, request or execution details, prompts, sessions, file contents or owner choices.",
         "responses": {
           "200": {
             "description": "Successful handler representation",

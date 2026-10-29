@@ -1066,7 +1066,414 @@
           "type": "boolean"
         },
         "digest": {
-          "$ref": "#/components/schemas/IdentityNullableString"
+          "type": "null",
+          "description": "A preview of a NOT-YET-SAVED mapping has no stored state to confirm, so the digest is always null (group_mapping_preview.rs preview_new_mapping)."
+        },
+        "immediate": {
+          "type": "object",
+          "properties": {
+            "applies": {
+              "type": "boolean"
+            },
+            "blocked_by_last_admin": {
+              "type": "boolean"
+            },
+            "platform_role_revoked": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  },
+                  "email": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  },
+                  "display_name": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  },
+                  "role": {
+                    "$ref": "#/components/schemas/IdentityRole"
+                  }
+                },
+                "required": [
+                  "user_id",
+                  "email",
+                  "display_name",
+                  "role"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "workspace_membership_revoked": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  },
+                  "email": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  },
+                  "display_name": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  },
+                  "role": {
+                    "enum": [
+                      "owner",
+                      "admin",
+                      "member"
+                    ]
+                  },
+                  "workspace_id": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  }
+                },
+                "required": [
+                  "user_id",
+                  "email",
+                  "display_name",
+                  "role",
+                  "workspace_id"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "users_suspended": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  },
+                  "email": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  },
+                  "display_name": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  }
+                },
+                "required": [
+                  "user_id",
+                  "email",
+                  "display_name"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "keys_revoked_count": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "applies",
+            "blocked_by_last_admin",
+            "platform_role_revoked",
+            "workspace_membership_revoked",
+            "users_suspended",
+            "keys_revoked_count"
+          ],
+          "additionalProperties": false
+        },
+        "diff": {
+          "type": "object",
+          "properties": {
+            "platform_role_gained": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  },
+                  "email": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  },
+                  "display_name": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  },
+                  "before": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/IdentityRole"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "after": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/IdentityRole"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "workspace_id": {
+                    "type": "null"
+                  },
+                  "reactivated": {
+                    "type": "boolean"
+                  },
+                  "would_be_suspended": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "user_id",
+                  "email",
+                  "display_name",
+                  "before",
+                  "after",
+                  "workspace_id",
+                  "reactivated",
+                  "would_be_suspended"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "platform_role_lost": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  },
+                  "email": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  },
+                  "display_name": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  },
+                  "before": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/IdentityRole"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "after": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/IdentityRole"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "workspace_id": {
+                    "type": "null"
+                  },
+                  "reactivated": {
+                    "type": "boolean"
+                  },
+                  "would_be_suspended": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "user_id",
+                  "email",
+                  "display_name",
+                  "before",
+                  "after",
+                  "workspace_id",
+                  "reactivated",
+                  "would_be_suspended"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "workspace_membership_gained": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  },
+                  "email": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  },
+                  "display_name": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  },
+                  "before": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "owner",
+                          "admin",
+                          "member"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "after": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "owner",
+                          "admin",
+                          "member"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "workspace_id": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  }
+                },
+                "required": [
+                  "user_id",
+                  "email",
+                  "display_name",
+                  "before",
+                  "after",
+                  "workspace_id"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "workspace_membership_lost": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "user_id": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  },
+                  "email": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  },
+                  "display_name": {
+                    "$ref": "#/components/schemas/IdentityNullableString"
+                  },
+                  "before": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "owner",
+                          "admin",
+                          "member"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "after": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "owner",
+                          "admin",
+                          "member"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "workspace_id": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  }
+                },
+                "required": [
+                  "user_id",
+                  "email",
+                  "display_name",
+                  "before",
+                  "after",
+                  "workspace_id"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "platform_role_gained",
+            "platform_role_lost",
+            "workspace_membership_gained",
+            "workspace_membership_lost"
+          ],
+          "additionalProperties": false
+        },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "gained": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "lost": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "gained",
+            "lost",
+            "truncated"
+          ],
+          "additionalProperties": false
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "membership_basis",
+        "complete",
+        "digest",
+        "immediate",
+        "diff",
+        "counts",
+        "warnings"
+      ],
+      "additionalProperties": false
+    },
+    "AccessMappingExistingResult": {
+      "type": "object",
+      "properties": {
+        "membership_basis": {
+          "enum": [
+            "scim",
+            "last_sign_in_derived"
+          ]
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Lowercase hex SHA-256 of the stored mapping (directory.rs mapping_digest), the value a later If-Match must quote."
         },
         "immediate": {
           "type": "object",
@@ -2762,7 +3169,11 @@
                     "$ref": "#/components/schemas/IdentityRole"
                   },
                   "source": {
-                    "type": "string"
+                    "enum": [
+                      "manual",
+                      "group",
+                      "bootstrap"
+                    ]
                   },
                   "created_at": {
                     "$ref": "#/components/schemas/IdentityTime"
@@ -2821,7 +3232,11 @@
                     ]
                   },
                   "source": {
-                    "type": "string"
+                    "enum": [
+                      "manual",
+                      "group"
+                    ],
+                    "description": "Team/Project rows only: the personal 'personal' source is filtered out by the platform export query (subject_export.rs, kind IN ('team','project'))."
                   },
                   "created_at": {
                     "$ref": "#/components/schemas/IdentityTime"
@@ -3706,7 +4121,7 @@
       "$ref": "#/components/schemas/AccessMappingExistingPreview"
     },
     "post_api_v1_platform_oidc_group_mappings_by_id_previewResponse": {
-      "$ref": "#/components/schemas/AccessMappingPreview"
+      "$ref": "#/components/schemas/AccessMappingExistingResult"
     },
     "get_api_v1_workspaces_by_wsRequest": false,
     "get_api_v1_workspaces_by_wsResponse": {
