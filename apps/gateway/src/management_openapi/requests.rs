@@ -35,70 +35,183 @@ impl<'de> serde::Deserializer<'de> for &Fields {
 /// rules, so against serde alone it may be STRICTER, never looser. Each entry is a
 /// reviewed claim; `finish()` still demands executed HTTP boundary vectors for
 /// the operation, which compare the schema with the real handler exactly.
-pub(crate) const SEMANTIC_REFINEMENTS: &[(&str, &str, &str)] = &[
+pub(crate) const SEMANTIC_REFINEMENTS: &[(&str, &str, &[&str], &str)] = &[
     (
         "POST",
         "/api/v1/platform/alerts/rules",
+        &[
+            "name",
+            "kind",
+            "budget_layers",
+            "thresholds",
+            "spike_factor_percent",
+            "min_spend_microusd",
+            "window_minutes",
+            "error_rate_percent",
+            "min_requests",
+            "consecutive_failures",
+            "provider_connection_id",
+            "spend_period",
+            "spend_amount_microusd",
+            "ceiling_requests_per_second",
+            "ceiling_lock_wait_ms",
+            "notify_emails",
+            "notify_workspace_admins",
+            "notify_platform_admins",
+        ],
         "the kind decides which fields are required and which are refused, with ranges, enums and at most ten emails",
     ),
     (
         "PUT",
         "/api/v1/platform/alerts/rules/{id}",
+        &[
+            "name",
+            "kind",
+            "budget_layers",
+            "thresholds",
+            "spike_factor_percent",
+            "min_spend_microusd",
+            "window_minutes",
+            "error_rate_percent",
+            "min_requests",
+            "consecutive_failures",
+            "provider_connection_id",
+            "spend_period",
+            "spend_amount_microusd",
+            "ceiling_requests_per_second",
+            "ceiling_lock_wait_ms",
+            "notify_emails",
+            "notify_workspace_admins",
+            "notify_platform_admins",
+        ],
         "the kind decides which fields are required and which are refused, with ranges, enums and at most ten emails",
     ),
     (
         "POST",
         "/api/v1/workspaces/{ws}/alerts/rules",
+        &[
+            "name",
+            "kind",
+            "budget_layers",
+            "thresholds",
+            "spike_factor_percent",
+            "min_spend_microusd",
+            "window_minutes",
+            "error_rate_percent",
+            "min_requests",
+            "consecutive_failures",
+            "provider_connection_id",
+            "spend_period",
+            "spend_amount_microusd",
+            "ceiling_requests_per_second",
+            "ceiling_lock_wait_ms",
+            "notify_emails",
+            "notify_workspace_admins",
+            "notify_platform_admins",
+        ],
         "the kind decides which fields are required and which are refused, with ranges, enums and at most ten emails",
     ),
     (
         "PUT",
         "/api/v1/workspaces/{ws}/alerts/rules/{id}",
+        &[
+            "name",
+            "kind",
+            "budget_layers",
+            "thresholds",
+            "spike_factor_percent",
+            "min_spend_microusd",
+            "window_minutes",
+            "error_rate_percent",
+            "min_requests",
+            "consecutive_failures",
+            "provider_connection_id",
+            "spend_period",
+            "spend_amount_microusd",
+            "ceiling_requests_per_second",
+            "ceiling_lock_wait_ms",
+            "notify_emails",
+            "notify_workspace_admins",
+            "notify_platform_admins",
+        ],
         "the kind decides which fields are required and which are refused, with ranges, enums and at most ten emails",
     ),
     (
         "PUT",
         "/api/v1/platform/settings/general",
+        &[
+            "display_name",
+            "support_url",
+            "logo_url",
+            "human_key_max_lifetime_days",
+        ],
         "display name 1 to 120 characters without control characters, https URLs without credentials, lifetime 1 to 365 days",
     ),
     (
         "PUT",
         "/api/v1/platform/settings/privacy",
+        &["openrouter_data_collection", "request_log_retention_days"],
         "data collection is deny or allow; retention is absent or 30 to 3650 days",
     ),
     (
         "PUT",
         "/api/v1/platform/settings/email",
+        &[
+            "host",
+            "port",
+            "tls",
+            "username",
+            "password_ref",
+            "from_address",
+            "from_name",
+        ],
         "either every field absent, or host, port 1-65535, tls enum, sender and a username with its password reference; plaintext only to loopback",
     ),
     (
         "PUT",
         "/api/v1/platform/settings/storage",
+        &["batch", "video", "user_files", "export", "retention_days"],
         "every retention is 1 to 365 days",
     ),
     (
         "POST",
         "/api/v1/platform/alerts/webhooks",
+        &["label", "url", "current_secret_ref"],
         "a trimmed label of at most 120 characters, an approved https URL and an env: reference",
     ),
     (
         "PATCH",
         "/api/v1/platform/alerts/webhooks/{id}",
+        &[
+            "label",
+            "current_secret_ref",
+            "previous_secret_ref",
+            "previous_secret_until",
+        ],
         "the same value rules as create; a rotation reference and its expiry end together",
     ),
 ];
 
-/// May the contract's verdict differ from serde's? Equal always passes; a
-/// stricter contract passes only for a reviewed semantic refinement; a looser
-/// contract (accepting what serde rejects) never does.
-pub(super) fn agrees(refined: bool, contract: bool, serde: bool) -> bool {
-    contract == serde || (refined && !contract)
+/// May the contract's verdict differ from serde's? Equal always passes. A
+/// STRICTER contract passes only for a probe on one of the operation's reviewed
+/// refined fields (`field` is the top-level field the probe touches; `None` for a
+/// structural probe such as unknown fields, positional or root-type probes, which
+/// must always agree exactly). A looser contract never passes.
+pub(super) fn agrees(refined: &[&str], field: Option<&str>, contract: bool, serde: bool) -> bool {
+    contract == serde || (!contract && field.is_some_and(|field| refined.contains(&field)))
 }
 
-fn refined(method: &str, template: &str) -> bool {
+/// The contract must accept the known-valid body unconditionally: the one-way
+/// tolerance for refined fields never applies to the positive control.
+pub(super) fn positive_accepted(contract: bool) -> bool {
+    contract
+}
+
+fn refined(method: &str, template: &str) -> &'static [&'static str] {
     SEMANTIC_REFINEMENTS
         .iter()
-        .any(|(m, t, _)| *m == method && *t == template)
+        .find(|(m, t, _, _)| *m == method && *t == template)
+        .map_or(&[], |(_, _, fields, _)| *fields)
 }
 
 pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: Value) {
@@ -129,7 +242,7 @@ fn boundary_vectors<T: DeserializeOwned>(
     template: &str,
     schema: &Value,
     valid: Value,
-    refined: bool,
+    refined: &[&str],
 ) {
     let document = super::responses::artifact();
     let fields = Fields::default();
@@ -162,17 +275,21 @@ fn boundary_vectors<T: DeserializeOwned>(
         serde_json::from_value::<T>(valid.clone()).is_ok(),
         "real deserialization positive control"
     );
-    let compare = |label: &str, value: Value| {
+    let compare = |label: &str, field: Option<&str>, value: Value| {
         let actual = serde_json::from_value::<T>(value.clone()).is_ok();
         let contract = super::responses::validate_value(document, schema, &value).is_ok();
         assert!(
-            agrees(refined, contract, actual),
+            agrees(refined, field, contract, actual),
             "{method} {template}: {label}: contract {} but serde {}",
             if contract { "accepts" } else { "refuses" },
             if actual { "accepts" } else { "refuses" },
         );
     };
-    compare("positive", valid.clone());
+    assert!(
+        positive_accepted(super::responses::validate_value(document, schema, &valid).is_ok()),
+        "{method} {template}: the contract must accept the valid body"
+    );
+    compare("positive", None, valid.clone());
     // Recursively probe nested DTOs as well as their parent field's type.
     // Nested schemas must bind unknown/missing/null boundaries, not merely
     // reject replacement of the entire nested object with a scalar.
@@ -193,9 +310,10 @@ fn boundary_vectors<T: DeserializeOwned>(
     let mut nested = Vec::new();
     nested_objects(&valid, "", &mut nested);
     for path in nested {
+        let top = path.split('/').nth(1);
         let mut unknown = valid.clone();
         unknown.pointer_mut(&path).unwrap()["unexpected_configuration"] = json!(true);
-        compare("nested object unknown field", unknown);
+        compare("nested object unknown field", None, unknown);
         for field in valid.pointer(&path).unwrap().as_object().unwrap().keys() {
             let mut missing = valid.clone();
             missing
@@ -204,7 +322,7 @@ fn boundary_vectors<T: DeserializeOwned>(
                 .as_object_mut()
                 .unwrap()
                 .remove(field);
-            compare("nested missing field", missing);
+            compare("nested missing field", top, missing);
             for wrong in [
                 Value::Null,
                 json!("wrong"),
@@ -215,7 +333,7 @@ fn boundary_vectors<T: DeserializeOwned>(
             ] {
                 let mut probe = valid.clone();
                 probe.pointer_mut(&path).unwrap()[field] = wrong;
-                compare("nested wrong-type/null", probe);
+                compare("nested wrong-type/null", top, probe);
             }
         }
     }
@@ -225,20 +343,24 @@ fn boundary_vectors<T: DeserializeOwned>(
         .iter()
         .map(|name| valid.get(*name).cloned().unwrap_or(Value::Null))
         .collect::<Vec<_>>();
-    compare("serde positional struct representation", json!(positional));
+    compare(
+        "serde positional struct representation",
+        None,
+        json!(positional),
+    );
     for length in 0..positional.len() {
-        compare("positional omission", json!(&positional[..length]));
+        compare("positional omission", None, json!(&positional[..length]));
     }
     let mut extra = positional;
     extra.push(json!({"unexpected_configuration":true}));
-    compare("positional unknown extra item", json!(extra));
+    compare("positional unknown extra item", None, json!(extra));
     let mut unknown = valid.clone();
     unknown["unexpected_configuration"] = json!(true);
-    compare("unknown", unknown);
+    compare("unknown", None, unknown);
     for field in valid.as_object().unwrap().keys() {
         let mut missing = valid.clone();
         missing.as_object_mut().unwrap().remove(field);
-        compare(&format!("missing/omission {field}"), missing);
+        compare(&format!("missing/omission {field}"), Some(field), missing);
         for wrong in [
             Value::Null,
             json!(true),
@@ -255,7 +377,7 @@ fn boundary_vectors<T: DeserializeOwned>(
             }
             let mut probe = valid.clone();
             probe[field] = wrong;
-            compare(&format!("wrong-type/null {field}"), probe);
+            compare(&format!("wrong-type/null {field}"), Some(field), probe);
         }
         // These DTOs have no nested object DTO. Inject one at each scalar or
         // array-item boundary so a future nested shape cannot be silently loose.
@@ -269,7 +391,7 @@ fn boundary_vectors<T: DeserializeOwned>(
         } else {
             nested[field] = json!({"unexpected_configuration":true});
         }
-        compare(&format!("nested-unknown {field}"), nested);
+        compare(&format!("nested-unknown {field}"), Some(field), nested);
     }
     for value in [
         Value::Null,
@@ -278,7 +400,7 @@ fn boundary_vectors<T: DeserializeOwned>(
         json!("wrong"),
         json!([]),
     ] {
-        compare("wrong root type / JSON null is not omission", value);
+        compare("wrong root type / JSON null is not omission", None, value);
     }
     if valid.get("previous_secret_until").is_some() {
         for value in [
@@ -292,7 +414,11 @@ fn boundary_vectors<T: DeserializeOwned>(
         ] {
             let mut probe = valid.clone();
             probe["previous_secret_until"] = json!(value);
-            compare("chrono serde timestamp boundary", probe);
+            compare(
+                "chrono serde timestamp boundary",
+                Some("previous_secret_until"),
+                probe,
+            );
         }
     }
     // UUID serde deliberately accepts all these spellings. JSON Schema format
@@ -313,7 +439,7 @@ fn boundary_vectors<T: DeserializeOwned>(
                 } else {
                     json!(value)
                 };
-                compare("UUID parser boundary", probe);
+                compare("UUID parser boundary", Some(field), probe);
             }
         }
     }

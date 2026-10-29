@@ -1687,7 +1687,7 @@
     "PUT /api/v1/platform/settings/storage": {
       "access": "PlatformWrite",
       "operation": {
-        "description": "Updates per-group enablement and retention. Enabling customer content requires a configured healthy backend (409 otherwise); a server with storage off refuses the update. Platform Admin only.",
+        "description": "Updates per-group enablement and retention. Only turning a group ON requires a configured, healthy backend (409 otherwise, including when storage is off); retention changes and switching groups off are accepted whatever the backend. Platform Admin only.",
         "responses": {
           "200": {
             "description": "Actual handler representation",

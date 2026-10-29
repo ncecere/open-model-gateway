@@ -806,7 +806,7 @@ pub(super) struct BinaryCase {
 /// The schema's verdict on a raw body of declared `media`: the documented length
 /// bounds and, where the schema asks for it, the real image inspection (the same
 /// rule responses.rs applies to binary representations).
-fn binary_accepts(schema: &Value, media: &str, bytes: &[u8]) -> bool {
+pub(crate) fn binary_accepts(schema: &Value, media: &str, bytes: &[u8]) -> bool {
     bytes.len() as u64 >= schema["minLength"].as_u64().unwrap_or(0)
         && schema["maxLength"]
             .as_u64()

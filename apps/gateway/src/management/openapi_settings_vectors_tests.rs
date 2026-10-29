@@ -5,7 +5,7 @@
 //! rule, a created destination, a rate-limited test) are fresh per vector set.
 use super::*;
 use openapi::http_vectors::{
-    Probe, binary_body_vectors_http, body_vectors_http, query_vectors_fixed,
+    Probe, binary_accepts, binary_body_vectors_http, body_vectors_http, query_vectors_fixed,
 };
 
 const WORKSPACES: &str = "/api/v1/workspaces";
@@ -333,10 +333,156 @@ pub(super) async fn events(
     .await;
 }
 
-/// The logo upload: raw bytes under each documented image type.
+/// The handler's verdict on a logo upload from its status alone. A refusal of the
+/// INPUT is 400 (malformed or out-of-range image), 413 (over the size limit) or 415
+/// (not a PNG, JPEG or WebP image); 2xx accepts. Anything else (authentication,
+/// authorization, conflict, throttling, server failure) says nothing about the
+/// input, so it fails the vector instead of counting as a refusal.
+fn logo_verdict(status: StatusCode) -> bool {
+    match status.as_u16() {
+        400 | 413 | 415 => false,
+        200..=299 => true,
+        other => panic!("logo upload: status {other} is not a verdict about the input"),
+    }
+}
+
+/// A valid PNG of exactly `total` bytes: an ancillary chunk of zeros before IEND.
+fn padded_png(total: usize) -> Vec<u8> {
+    let mut bytes = branding::fixtures::png(64, 64);
+    let pad = total - bytes.len() - 12;
+    let mut chunk = u32::try_from(pad).unwrap().to_be_bytes().to_vec();
+    chunk.extend_from_slice(b"zzzz");
+    chunk.extend(std::iter::repeat_n(0u8, pad));
+    chunk.extend_from_slice(&[0; 4]);
+    let iend = bytes.len() - 12;
+    bytes.splice(iend..iend, chunk);
+    bytes
+}
+
+/// The independent expectations for the logo gate: (label, declared media type,
+/// bytes, accepted). Written from the documented rules (PNG, JPEG and WebP only,
+/// 16 to 4096 pixels per side, at most 524288 bytes, no markup, no trailing data,
+/// the declared type must be the real one), NOT from the inspector the schema
+/// oracle runs, so a mistake shared by the inspector and the oracle cannot hide.
+fn logo_table() -> Vec<(&'static str, &'static str, Vec<u8>, bool)> {
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"></svg>"#.to_vec();
+    let mut text_chunk = branding::fixtures::png(64, 64);
+    let iend = text_chunk.len() - 12;
+    let payload = b"Comment\0<html><script>alert(1)</script>";
+    let mut chunk = u32::try_from(payload.len()).unwrap().to_be_bytes().to_vec();
+    chunk.extend_from_slice(b"tEXt");
+    chunk.extend_from_slice(payload);
+    chunk.extend_from_slice(&[0; 4]);
+    text_chunk.splice(iend..iend, chunk);
+    let trailing = |mut image: Vec<u8>| {
+        image.extend_from_slice(b"<script>alert(1)</script>");
+        image
+    };
+    let jpeg = branding::fixtures::jpeg(64, 64);
+    let mut rows = vec![
+        ("png", "image/png", branding::fixtures::png(64, 64), true),
+        ("jpeg", "image/jpeg", jpeg.clone(), true),
+        (
+            "webp",
+            "image/webp",
+            branding::fixtures::webp_lossless(64, 64),
+            true,
+        ),
+        ("svg", "image/svg+xml", svg.clone(), false),
+        ("svg declared png", "image/png", svg, false),
+        (
+            "gif",
+            "image/gif",
+            b"GIF89a\x40\0\x40\0\0\0\0;".to_vec(),
+            false,
+        ),
+        (
+            "gif declared png",
+            "image/png",
+            b"GIF89a\x40\0\x40\0\0\0\0;".to_vec(),
+            false,
+        ),
+        (
+            "png polyglot",
+            "image/png",
+            trailing(branding::fixtures::png(64, 64)),
+            false,
+        ),
+        ("jpeg polyglot", "image/jpeg", trailing(jpeg.clone()), false),
+        (
+            "webp polyglot",
+            "image/webp",
+            trailing(branding::fixtures::webp_lossless(64, 64)),
+            false,
+        ),
+        ("png with html in a chunk", "image/png", text_chunk, false),
+        (
+            "truncated jpeg",
+            "image/jpeg",
+            jpeg[..jpeg.len() - 2].to_vec(),
+            false,
+        ),
+        (
+            "png declared jpeg",
+            "image/jpeg",
+            branding::fixtures::png(64, 64),
+            false,
+        ),
+        ("jpeg declared png", "image/png", jpeg, false),
+        (
+            "unrelated media type",
+            "application/octet-stream",
+            branding::fixtures::png(64, 64),
+            false,
+        ),
+        ("size at the limit", "image/png", padded_png(524_288), true),
+        (
+            "size over the limit",
+            "image/png",
+            padded_png(524_289),
+            false,
+        ),
+    ];
+    // Each side at its documented bounds, in every container: 16 and 4096 pass,
+    // 15 and 4097 do not.
+    for (side, accepted) in [(15u32, false), (16, true), (4096, true), (4097, false)] {
+        let png = |w: u32, h: u32| branding::fixtures::png(w, h);
+        let jpeg = |w: u32, h: u32| branding::fixtures::jpeg(w as u16, h as u16);
+        let webp = |w: u32, h: u32| branding::fixtures::webp_lossless(w, h);
+        for (label, media, image) in [
+            ("png width", "image/png", png(side, 64)),
+            ("png height", "image/png", png(64, side)),
+            ("jpeg width", "image/jpeg", jpeg(side, 64)),
+            ("jpeg height", "image/jpeg", jpeg(64, side)),
+            ("webp width", "image/webp", webp(side, 64)),
+            ("webp height", "image/webp", webp(64, side)),
+        ] {
+            rows.push((label, media, image, accepted));
+        }
+    }
+    rows
+}
+
+/// Every row of the independent table against the real handler, before any
+/// oracle-based vector. Names the row label and the status only.
+async fn logo_gate(g: &Gateway, admin: &Browser, path: &str) {
+    for (label, media, bytes, accepted) in logo_table() {
+        let r = g.raw(Some(admin), "PUT", path, media, bytes).await;
+        assert_eq!(
+            logo_verdict(r.status),
+            accepted,
+            "logo upload row `{label}`: status {}",
+            r.status
+        );
+    }
+}
+
+/// The logo upload: the independent table first, then raw bytes under each
+/// documented image type.
 pub(super) async fn logo(g: &Gateway, pool: &PgPool, observed: &mut PositiveFixtures) {
     let admin = fresh_admin(pool, "vector-logo").await;
     let path = format!("{SETTINGS}/general/logo");
+    logo_gate(g, &admin, &path).await;
     for (media, bytes) in [
         ("image/png", branding::fixtures::png(64, 64)),
         ("image/jpeg", branding::fixtures::jpeg(64, 64)),
@@ -355,11 +501,437 @@ pub(super) async fn logo(g: &Gateway, pool: &PgPool, observed: &mut PositiveFixt
             ],
             async |declared: String, body: Vec<u8>| {
                 let r = g.raw(Some(&admin), "PUT", &path, &declared, body).await;
-                // Input refusals here are 400, 413 and 415: the status alone decides.
-                let accepted = r.status.is_success();
+                // Input refusals are 400, 413 and 415; every other status fails.
+                let accepted = logo_verdict(r.status);
                 Probe::decided(r, accepted)
             },
         )
         .await;
     }
+}
+
+/// Controls for the logo harness pieces, so a vacuous gate cannot pass.
+#[cfg(test)]
+mod logo_controls {
+    use super::*;
+
+    #[test]
+    fn verdict_maps_input_statuses_and_nothing_else() {
+        for refused in [400, 413, 415] {
+            assert!(!logo_verdict(StatusCode::from_u16(refused).unwrap()));
+        }
+        for accepted in [200, 201, 204] {
+            assert!(logo_verdict(StatusCode::from_u16(accepted).unwrap()));
+        }
+    }
+    #[test]
+    fn verdict_fails_on_every_other_status() {
+        for other in [401u16, 403, 404, 409, 429, 500, 503] {
+            let caught =
+                std::panic::catch_unwind(|| logo_verdict(StatusCode::from_u16(other).unwrap()));
+            assert!(caught.is_err(), "status {other} must fail the vector");
+        }
+    }
+    #[test]
+    fn table_is_independent_and_covers_every_documented_rule() {
+        let rows = logo_table();
+        let accepted = rows.iter().filter(|r| r.3).count();
+        assert!(accepted >= 9 && rows.len() - accepted >= 17);
+        for label in [
+            "svg",
+            "gif",
+            "png polyglot",
+            "truncated jpeg",
+            "png declared jpeg",
+            "size at the limit",
+            "size over the limit",
+        ] {
+            assert!(rows.iter().any(|r| r.0 == label), "{label}");
+        }
+        // The limit rows are exactly the documented size and one more.
+        let size = |label: &str| rows.iter().find(|r| r.0 == label).unwrap().2.len();
+        assert_eq!(size("size at the limit"), 524_288);
+        assert_eq!(size("size over the limit"), 524_289);
+    }
+    /// The schema oracle's image branch must really inspect the bytes: with the
+    /// flag it refuses what the documented rules refuse and accepts valid images,
+    /// without the flag only the length bounds apply.
+    #[test]
+    fn binary_oracle_inspects_images_only_when_flagged() {
+        let flagged = json!({"type":"string","format":"binary","minLength":1,"maxLength":524_288,"x-omg-validate-image":true});
+        let plain = json!({"type":"string","format":"binary","minLength":1,"maxLength":524_288});
+        let table = logo_table();
+        let row = |label: &str| table.iter().find(|r| r.0 == label).unwrap();
+        for label in ["png", "jpeg", "webp"] {
+            let (_, media, bytes, _) = row(label);
+            assert!(binary_accepts(&flagged, media, bytes), "{label}");
+        }
+        for label in [
+            "svg",
+            "gif",
+            "png polyglot",
+            "png declared jpeg",
+            "truncated jpeg",
+        ] {
+            let (_, media, bytes, _) = row(label);
+            assert!(!binary_accepts(&flagged, media, bytes), "{label}");
+            // Unflagged, the same bytes are only length-checked.
+            assert!(binary_accepts(&plain, media, bytes), "{label}");
+        }
+        let (_, media, bytes, _) = row("size over the limit");
+        assert!(!binary_accepts(&flagged, media, bytes));
+        assert!(!binary_accepts(&plain, media, bytes));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pinned schema-versus-handler verdicts the derived vectors cannot generate
+// ---------------------------------------------------------------------------
+
+/// Send one input and pin BOTH verdicts: the handler's (400/422 refuse, 2xx accept,
+/// anything else fails) and the request schema's. A row where they differ is a
+/// documented divergence, pinned so a later change to either side is noticed.
+/// Messages name the method, the template and the row label only.
+#[allow(clippy::too_many_arguments)]
+async fn pin(
+    g: &Gateway,
+    actor: &Browser,
+    method: &str,
+    template: &str,
+    path: &str,
+    label: &str,
+    body: Value,
+    (handler_accepts, schema_accepts): (bool, bool),
+) {
+    let r = g.send(actor, method, path, body.clone()).await;
+    let handler = match r.status.as_u16() {
+        400 | 422 => false,
+        200..=299 => true,
+        other => panic!("{method} {template}: {label}: status {other} is not an input verdict"),
+    };
+    let document = openapi::responses::artifact();
+    let schema = &document["paths"][template][method.to_ascii_lowercase()]["requestBody"]["content"]
+        ["application/json"]["schema"];
+    let schema = openapi::responses::validate_value(document, schema, &body).is_ok();
+    assert_eq!(
+        handler, handler_accepts,
+        "{method} {template}: {label}: handler verdict"
+    );
+    assert_eq!(
+        schema, schema_accepts,
+        "{method} {template}: {label}: schema verdict"
+    );
+}
+
+/// Settings and rule bodies at the byte, spelling and range rules the derived
+/// vectors cannot generate (multibyte text, alternative IP spellings, a float
+/// port, more distinct thresholds than the handler allows).
+pub(super) async fn pinned(g: &Gateway, pool: &PgPool, mail_port: u16) {
+    let admin = fresh_admin(pool, "pinned-settings").await;
+    let general = format!("{SETTINGS}/general");
+    let general_template = "/api/v1/platform/settings/general";
+    let base = json!({"display_name":"Contract Gateway","support_url":null,"logo_url":null,"human_key_max_lifetime_days":30});
+    let with = |field: &str, value: Value| {
+        let mut body = base.clone();
+        body[field] = value;
+        body
+    };
+    // Names are limited in BYTES by the handler, in characters by the schema.
+    let rows = [
+        (
+            "name of 120 ASCII characters",
+            with("display_name", json!("a".repeat(120))),
+            (true, true),
+        ),
+        (
+            "name of 100 two-byte characters",
+            with("display_name", json!("\u{e9}".repeat(100))),
+            (false, true),
+        ),
+        (
+            "name of 60 two-byte characters",
+            with("display_name", json!("\u{e9}".repeat(60))),
+            (true, true),
+        ),
+        (
+            "URL of 2048 ASCII bytes",
+            with(
+                "support_url",
+                json!(format!(
+                    "https://support.example.test/{}",
+                    "a".repeat(2048 - 29)
+                )),
+            ),
+            (true, true),
+        ),
+        (
+            "URL of 2049 ASCII bytes",
+            with(
+                "support_url",
+                json!(format!(
+                    "https://support.example.test/{}",
+                    "a".repeat(2049 - 29)
+                )),
+            ),
+            (false, false),
+        ),
+        (
+            "URL of 1100 two-byte characters",
+            with(
+                "support_url",
+                json!(format!(
+                    "https://support.example.test/{}",
+                    "\u{e9}".repeat(1100)
+                )),
+            ),
+            (false, true),
+        ),
+    ];
+    for (label, body, verdicts) in rows {
+        pin(
+            g,
+            &admin,
+            "PUT",
+            general_template,
+            &general,
+            label,
+            body,
+            verdicts,
+        )
+        .await;
+    }
+    let email = format!("{SETTINGS}/email");
+    let email_template = "/api/v1/platform/settings/email";
+    let relay = json!({"host":"127.0.0.1","port":mail_port,"tls":"none","from_address":"gateway@example.test"});
+    let credentials = json!({"host":"127.0.0.1","port":mail_port,"tls":"none","username":"smtp-user","password_ref":"env:CONTRACT_SMTP_PASSWORD","from_address":"gateway@example.test"});
+    let edit = |base: &Value, field: &str, value: Value| {
+        let mut body = base.clone();
+        body[field] = value;
+        body
+    };
+    let local = |host: &str| edit(&relay, "host", json!(host));
+    let long_address = format!("a@{}.test", vec!["d".repeat(60); 6].join("."));
+    assert!(long_address.len() > 320);
+    let rows = [
+        // The handler trims the TLS mode; the schema models the trimmed spelling.
+        (
+            "tls with surrounding spaces",
+            edit(&relay, "tls", json!(" none ")),
+            (true, true),
+        ),
+        // Plaintext is accepted for any spelling of a loopback address.
+        (
+            "loopback 127.255.255.255",
+            local("127.255.255.255"),
+            (true, true),
+        ),
+        ("loopback IPv6 0::1", local("0::1"), (true, true)),
+        (
+            "loopback IPv6 full spelling",
+            local("0:0:0:0:0:0:0:1"),
+            (true, true),
+        ),
+        ("loopback IPv6 in brackets", local("[::1]"), (true, true)),
+        (
+            "loopback IPv4 in brackets",
+            local("[127.0.0.1]"),
+            (true, true),
+        ),
+        ("loopback with upper case", local("LOCALHOST"), (true, true)),
+        // An IPv4-tail spelling of ::1: accepted by the handler, not modelled.
+        (
+            "loopback IPv6 with an IPv4 tail",
+            local("::0.0.0.1"),
+            (true, false),
+        ),
+        // Not loopback: a fourth octet out of range is a name, not an address.
+        ("octet out of range", local("127.999.0.1"), (false, false)),
+        ("remote IPv6", local("2001:db8::1"), (false, false)),
+        // A float port is refused by the integer deserializer; the validator
+        // treats 25.0 as an integer.
+        (
+            "port written as 25.0",
+            edit(&relay, "port", json!(25.0)),
+            (false, true),
+        ),
+        // Byte limits the schema cannot count.
+        (
+            "username of 200 two-byte characters",
+            edit(&credentials, "username", json!("\u{e9}".repeat(200))),
+            (false, true),
+        ),
+        (
+            "username of 256 ASCII bytes",
+            edit(&credentials, "username", json!("u".repeat(256))),
+            (true, true),
+        ),
+        (
+            "sender address over 320 bytes",
+            edit(&relay, "from_address", json!(long_address)),
+            (false, true),
+        ),
+    ];
+    for (label, body, verdicts) in rows {
+        pin(
+            g,
+            &admin,
+            "PUT",
+            email_template,
+            &email,
+            label,
+            body,
+            verdicts,
+        )
+        .await;
+    }
+    // Rule bodies: the name limit is in bytes, the distinct thresholds at most five.
+    let rules = format!("{ALERTS}/rules");
+    let rule_template = "/api/v1/platform/alerts/rules";
+    let rule = full(
+        json!({"name":"Pinned budget","kind":"budget_threshold","budget_layers":["type"],"thresholds":[80]}),
+    );
+    let rows = [
+        (
+            "rule name of 100 two-byte characters",
+            edit(&rule, "name", json!("\u{e9}".repeat(100))),
+            (false, true),
+        ),
+        (
+            "six distinct thresholds",
+            edit(&rule, "thresholds", json!([10, 20, 30, 40, 50, 60])),
+            (false, true),
+        ),
+        (
+            "five thresholds with repeats",
+            edit(&rule, "thresholds", json!([10, 10, 20, 30, 40, 50, 50])),
+            (true, true),
+        ),
+    ];
+    let since: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    for (label, body, verdicts) in rows {
+        pin(
+            g,
+            &admin,
+            "POST",
+            rule_template,
+            &rules,
+            label,
+            body,
+            verdicts,
+        )
+        .await;
+    }
+    forget_rules(pool, since).await;
+}
+
+/// The webhook PATCH rotation fields against a destination without and with a
+/// rotation: a lone null is a no-op on the first and refused on the second,
+/// which only the stored state can tell, so the schema accepts it in both.
+pub(super) async fn pinned_webhooks(g: &Gateway, pool: &PgPool) {
+    let admin = fresh_admin(pool, "pinned-hooks").await;
+    let keep = live_webhooks(pool).await;
+    let template = "/api/v1/platform/alerts/webhooks/{id}";
+    let made = g
+        .send(
+            &admin,
+            "POST",
+            WEBHOOKS,
+            json!({"label":"Pinned rotation","url":HOOK_URL,"current_secret_ref":"env:HOOK_CURRENT"}),
+        )
+        .await;
+    let path = format!("{WEBHOOKS}/{}", id_of(&made));
+    // No rotation stored.
+    for (label, body) in [
+        (
+            "lone null reference, no rotation",
+            json!({"previous_secret_ref":null}),
+        ),
+        (
+            "lone null expiry, no rotation",
+            json!({"previous_secret_until":null}),
+        ),
+        (
+            "both null, no rotation",
+            json!({"previous_secret_ref":null,"previous_secret_until":null}),
+        ),
+    ] {
+        pin(
+            g,
+            &admin,
+            "PATCH",
+            template,
+            &path,
+            label,
+            body,
+            (true, true),
+        )
+        .await;
+    }
+    // A mismatched pair is refused whatever is stored, and the schema says so.
+    let until = (chrono::Utc::now() + chrono::Duration::hours(1))
+        .format("%Y-%m-%d %H:%M:%SZ")
+        .to_string();
+    for (label, body) in [
+        (
+            "null reference with an expiry",
+            json!({"previous_secret_ref":null,"previous_secret_until":until}),
+        ),
+        (
+            "reference with a null expiry",
+            json!({"previous_secret_ref":"env:HOOK_PREVIOUS","previous_secret_until":null}),
+        ),
+    ] {
+        pin(
+            g,
+            &admin,
+            "PATCH",
+            template,
+            &path,
+            label,
+            body,
+            (false, false),
+        )
+        .await;
+    }
+    // Rotation stored.
+    let rotate = json!({"previous_secret_ref":"env:HOOK_PREVIOUS","previous_secret_until":until});
+    let rotating = g.send(&admin, "PATCH", &path, rotate).await;
+    assert!(rotating.status.is_success());
+    for (label, body) in [
+        (
+            "lone null reference, rotation stored",
+            json!({"previous_secret_ref":null}),
+        ),
+        (
+            "lone null expiry, rotation stored",
+            json!({"previous_secret_until":null}),
+        ),
+    ] {
+        pin(
+            g,
+            &admin,
+            "PATCH",
+            template,
+            &path,
+            label,
+            body,
+            (false, true),
+        )
+        .await;
+    }
+    pin(
+        g,
+        &admin,
+        "PATCH",
+        template,
+        &path,
+        "both null, rotation stored",
+        json!({"previous_secret_ref":null,"previous_secret_until":null}),
+        (true, true),
+    )
+    .await;
+    forget_webhooks(g, pool, &admin, &keep).await;
 }

@@ -14,14 +14,15 @@
             "display_name": {
               "type": "string",
               "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
-              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+              "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused."
             },
             "support_url": {
               "anyOf": [
                 {
                   "type": "string",
                   "pattern": "^\\s*([Hh][Tt][Tt][Pp][Ss]://[^/@?#\\s]+([/?][^#\\s]*)?)?\\s*$",
-                  "description": "Blank means none; otherwise an absolute https URL without credentials or fragment, at most 2048 characters."
+                  "description": "Blank means none; otherwise an absolute https URL without credentials or fragment. The handler limits the trimmed value to 2048 BYTES (settings.rs https_url: value.len()); maxLength counts characters, so a multibyte URL within 2048 characters can still be refused.",
+                  "maxLength": 2048
                 },
                 {
                   "type": "null"
@@ -33,7 +34,8 @@
                 {
                   "type": "string",
                   "pattern": "^\\s*([Hh][Tt][Tt][Pp][Ss]://[^/@?#\\s]+([/?][^#\\s]*)?)?\\s*$",
-                  "description": "Blank means none; otherwise an absolute https URL without credentials or fragment, at most 2048 characters."
+                  "description": "Blank means none; otherwise an absolute https URL without credentials or fragment. The handler limits the trimmed value to 2048 BYTES (settings.rs https_url: value.len()); maxLength counts characters, so a multibyte URL within 2048 characters can still be refused.",
+                  "maxLength": 2048
                 },
                 {
                   "type": "null"
@@ -58,14 +60,15 @@
             {
               "type": "string",
               "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
-              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+              "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused."
             },
             {
               "anyOf": [
                 {
                   "type": "string",
                   "pattern": "^\\s*([Hh][Tt][Tt][Pp][Ss]://[^/@?#\\s]+([/?][^#\\s]*)?)?\\s*$",
-                  "description": "Blank means none; otherwise an absolute https URL without credentials or fragment, at most 2048 characters."
+                  "description": "Blank means none; otherwise an absolute https URL without credentials or fragment. The handler limits the trimmed value to 2048 BYTES (settings.rs https_url: value.len()); maxLength counts characters, so a multibyte URL within 2048 characters can still be refused.",
+                  "maxLength": 2048
                 },
                 {
                   "type": "null"
@@ -77,7 +80,8 @@
                 {
                   "type": "string",
                   "pattern": "^\\s*([Hh][Tt][Tt][Pp][Ss]://[^/@?#\\s]+([/?][^#\\s]*)?)?\\s*$",
-                  "description": "Blank means none; otherwise an absolute https URL without credentials or fragment, at most 2048 characters."
+                  "description": "Blank means none; otherwise an absolute https URL without credentials or fragment. The handler limits the trimmed value to 2048 BYTES (settings.rs https_url: value.len()); maxLength counts characters, so a multibyte URL within 2048 characters can still be refused.",
+                  "maxLength": 2048
                 },
                 {
                   "type": "null"
@@ -170,11 +174,9 @@
               "maximum": 65535
             },
             "tls": {
-              "enum": [
-                "starttls",
-                "implicit",
-                "none"
-              ]
+              "type": "string",
+              "pattern": "^\\s*(starttls|implicit|none)\\s*$",
+              "description": "starttls, implicit or none; the handler trims surrounding whitespace (text()) before matching, so ` none ` is accepted. Responses always carry the bare value."
             },
             "username": {
               "type": [
@@ -192,7 +194,8 @@
             },
             "from_address": {
               "type": "string",
-              "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$"
+              "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$",
+              "description": "A mailbox address: at most 320 BYTES after trimming (directory.rs email_valid) and parseable as a mailbox (lettre Address; the local part at most 64 characters). The schema checks the shape only."
             },
             "from_name": {
               "anyOf": [
@@ -213,11 +216,11 @@
             "from_address"
           ],
           "additionalProperties": false,
-          "description": "A relay without credentials: host, port 1-65535, tls and a sender address; plaintext (`none`) only to a loopback host.",
+          "description": "A relay without credentials: host, port 1-65535, tls and a sender address; plaintext (`none`) only to a loopback host. Plaintext (`none`) is accepted only for the handler's loopback rule (email.rs is_loopback_host): `localhost` in any case, or an IP literal (optionally bracketed) that parses as 127.0.0.0/8 or as IPv6 ::1 in any spelling (`0::1`, `0:0:0:0:0:0:0:1`); the IPv4-tail spelling `::0.0.0.1` is also accepted by the handler and is not modelled.",
           "if": {
             "properties": {
               "tls": {
-                "const": "none"
+                "pattern": "^\\s*none\\s*$"
               }
             },
             "required": [
@@ -228,7 +231,7 @@
             "properties": {
               "host": {
                 "type": "string",
-                "pattern": "^\\s*((?i:localhost)|\\[?::1\\]?|127(\\.[0-9]{1,3}){3})\\s*$"
+                "pattern": "^\\s*((?i:localhost)|(127(\\.(0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])){3}|((0{1,4}:){7}0{0,3}1|::(0{1,4}:){0,6}0{0,3}1|(0{1,4}:){0}0{1,4}::(0{1,4}:){0,5}0{0,3}1|(0{1,4}:){1}0{1,4}::(0{1,4}:){0,4}0{0,3}1|(0{1,4}:){2}0{1,4}::(0{1,4}:){0,3}0{0,3}1|(0{1,4}:){3}0{1,4}::(0{1,4}:){0,2}0{0,3}1|(0{1,4}:){4}0{1,4}::(0{1,4}:){0,1}0{0,3}1|(0{1,4}:){5}0{1,4}::(0{1,4}:){0,0}0{0,3}1))|\\[(127(\\.(0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])){3}|((0{1,4}:){7}0{0,3}1|::(0{1,4}:){0,6}0{0,3}1|(0{1,4}:){0}0{1,4}::(0{1,4}:){0,5}0{0,3}1|(0{1,4}:){1}0{1,4}::(0{1,4}:){0,4}0{0,3}1|(0{1,4}:){2}0{1,4}::(0{1,4}:){0,3}0{0,3}1|(0{1,4}:){3}0{1,4}::(0{1,4}:){0,2}0{0,3}1|(0{1,4}:){4}0{1,4}::(0{1,4}:){0,1}0{0,3}1|(0{1,4}:){5}0{1,4}::(0{1,4}:){0,0}0{0,3}1))\\])\\s*$"
               }
             }
           }
@@ -246,16 +249,14 @@
               "maximum": 65535
             },
             "tls": {
-              "enum": [
-                "starttls",
-                "implicit",
-                "none"
-              ]
+              "type": "string",
+              "pattern": "^\\s*(starttls|implicit|none)\\s*$",
+              "description": "starttls, implicit or none; the handler trims surrounding whitespace (text()) before matching, so ` none ` is accepted. Responses always carry the bare value."
             },
             "username": {
               "type": "string",
               "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,254}[^\\p{Cc}\\s])?\\s*$",
-              "description": "Trimmed, at most 256 bytes, no control characters."
+              "description": "Trimmed, at most 256 BYTES (handler: u.len() > 256), no control characters; the pattern counts characters, so a multibyte username within 255 characters can still be refused."
             },
             "password_ref": {
               "type": "string",
@@ -264,7 +265,8 @@
             },
             "from_address": {
               "type": "string",
-              "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$"
+              "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$",
+              "description": "A mailbox address: at most 320 BYTES after trimming (directory.rs email_valid) and parseable as a mailbox (lettre Address; the local part at most 64 characters). The schema checks the shape only."
             },
             "from_name": {
               "anyOf": [
@@ -287,11 +289,11 @@
             "password_ref"
           ],
           "additionalProperties": false,
-          "description": "A relay with credentials: username and an allowlisted env: password reference together.",
+          "description": "A relay with credentials: username and an allowlisted env: password reference together. Plaintext (`none`) is accepted only for the handler's loopback rule (email.rs is_loopback_host): `localhost` in any case, or an IP literal (optionally bracketed) that parses as 127.0.0.0/8 or as IPv6 ::1 in any spelling (`0::1`, `0:0:0:0:0:0:0:1`); the IPv4-tail spelling `::0.0.0.1` is also accepted by the handler and is not modelled.",
           "if": {
             "properties": {
               "tls": {
-                "const": "none"
+                "pattern": "^\\s*none\\s*$"
               }
             },
             "required": [
@@ -302,7 +304,7 @@
             "properties": {
               "host": {
                 "type": "string",
-                "pattern": "^\\s*((?i:localhost)|\\[?::1\\]?|127(\\.[0-9]{1,3}){3})\\s*$"
+                "pattern": "^\\s*((?i:localhost)|(127(\\.(0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])){3}|((0{1,4}:){7}0{0,3}1|::(0{1,4}:){0,6}0{0,3}1|(0{1,4}:){0}0{1,4}::(0{1,4}:){0,5}0{0,3}1|(0{1,4}:){1}0{1,4}::(0{1,4}:){0,4}0{0,3}1|(0{1,4}:){2}0{1,4}::(0{1,4}:){0,3}0{0,3}1|(0{1,4}:){3}0{1,4}::(0{1,4}:){0,2}0{0,3}1|(0{1,4}:){4}0{1,4}::(0{1,4}:){0,1}0{0,3}1|(0{1,4}:){5}0{1,4}::(0{1,4}:){0,0}0{0,3}1))|\\[(127(\\.(0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])){3}|((0{1,4}:){7}0{0,3}1|::(0{1,4}:){0,6}0{0,3}1|(0{1,4}:){0}0{1,4}::(0{1,4}:){0,5}0{0,3}1|(0{1,4}:){1}0{1,4}::(0{1,4}:){0,4}0{0,3}1|(0{1,4}:){2}0{1,4}::(0{1,4}:){0,3}0{0,3}1|(0{1,4}:){3}0{1,4}::(0{1,4}:){0,2}0{0,3}1|(0{1,4}:){4}0{1,4}::(0{1,4}:){0,1}0{0,3}1|(0{1,4}:){5}0{1,4}::(0{1,4}:){0,0}0{0,3}1))\\])\\s*$"
               }
             }
           }
@@ -399,7 +401,7 @@
           "items": false
         }
       ],
-      "description": "Closed serde struct object, or positional array [host, port, tls, username, password_ref, from_address, from_name] whose element types are deserialization-level only (the handler applies the same rules). Trimmed blanks mean absent; the host is lowercased; a username and its password reference come together."
+      "description": "Closed serde struct object, or positional array [host, port, tls, username, password_ref, from_address, from_name] whose element types are deserialization-level only (the handler applies the same rules). Trimmed blanks mean absent; the host is lowercased; a username and its password reference come together. Byte rules the schema cannot count: the username is limited to 256 BYTES and the sender address to 320 BYTES (and must parse as a mailbox address, so a local part over 64 characters is refused), while the patterns count characters."
     },
     "SettingsStorageGroupInput": {
       "oneOf": [
@@ -628,7 +630,8 @@
                   }
                 },
                 "required": [
-                  "previous_secret_ref"
+                  "previous_secret_ref",
+                  "previous_secret_until"
                 ]
               },
               "then": {
@@ -636,10 +639,7 @@
                   "previous_secret_until": {
                     "type": "null"
                   }
-                },
-                "required": [
-                  "previous_secret_until"
-                ]
+                }
               }
             },
             {
@@ -650,6 +650,7 @@
                   }
                 },
                 "required": [
+                  "previous_secret_ref",
                   "previous_secret_until"
                 ]
               },
@@ -658,10 +659,7 @@
                   "previous_secret_ref": {
                     "type": "null"
                   }
-                },
-                "required": [
-                  "previous_secret_ref"
-                ]
+                }
               }
             }
           ]
@@ -703,7 +701,7 @@
           "items": false
         }
       ],
-      "description": "Manually decoded JSON via serde_json::from_slice, independent of Content-Type. Positional array order is [label, enabled, current_secret_ref, previous_secret_ref, previous_secret_until], with trailing elements omittable. No URL update field. Omitted fields retain saved values. Explicit null is rejected for label/enabled/current_secret_ref, but clears previous_secret_ref/previous_secret_until; both rotation fields must be jointly present/absent in the resulting state. References must be allowlisted env:NAME references, never secret values. A rotation (previous reference plus expiry no later than 24 hours ahead) needs both fields; ending one ends both. Whether a lone non-null rotation field is acceptable depends on the stored state (it must leave the destination with both or neither)."
+      "description": "Manually decoded JSON via serde_json::from_slice, independent of Content-Type. Positional array order is [label, enabled, current_secret_ref, previous_secret_ref, previous_secret_until], with trailing elements omittable. No URL update field. Omitted fields retain saved values. Explicit null is rejected for label/enabled/current_secret_ref, but clears previous_secret_ref/previous_secret_until; the rotation fields must end up both set or both cleared in the resulting state. References must be allowlisted env:NAME references, never secret values. A rotation (previous reference plus expiry no later than 24 hours ahead) needs both fields; ending one ends both. Whether a lone non-null rotation field is acceptable depends on the stored state (it must leave the destination with both or neither). When BOTH rotation fields are sent they must be both null or both non-null (the schema enforces this). A LONE rotation field is judged against the stored state and is not refused by the schema: a lone `previous_secret_ref: null` or `previous_secret_until: null` is a 200 no-op on a destination that has no rotation and a 400 on one that has."
     },
     "SettingsGeneral": {
       "type": "object",
@@ -1386,12 +1384,16 @@
                   "$ref": "#/components/schemas/IdentityTime"
                 },
                 "last_failure_at": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "format": "date-time",
-                  "x-omg-unobserved-branch": "Set only after a failed JWKS refresh, which needs a controllable clock beyond the unknown-key and failure backoff intervals; the cache unit tests in identity/jwks.rs cover it and the HTTP surface cannot fail the refresh."
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "string",
+                      "format": "date-time",
+                      "x-omg-unobserved-branch": "Set only after a failed JWKS refresh, which needs a controllable clock beyond the unknown-key and failure backoff intervals; the cache unit tests in identity/jwks.rs cover it and the HTTP surface cannot fail the refresh."
+                    }
+                  ]
                 },
                 "state": {
                   "enum": [
@@ -1726,7 +1728,7 @@
           "anyOf": [
             {
               "type": "null",
-              "x-omg-unobserved-branch": "Shared closed envelope: the concrete event variants refine this property to the alternatives reachable for them and each variant observes those; this base alternative is deliberately not an observation obligation of its own."
+              "x-omg-unobserved-branch": "Coverage-engine limitation, not unreachable: the engine demands that every alternative of this SHARED envelope is observed in every operation that embeds it, while each concrete event variant pins the alternative exactly and observes both of its own (for example the workspace history never carries a connection, the installation history never carries a personal workspace reference); both alternatives of every property are observed per variant."
             },
             {
               "type": "object",
@@ -1754,7 +1756,7 @@
                 "deleted"
               ],
               "additionalProperties": false,
-              "x-omg-unobserved-branch": "Shared closed envelope: the concrete event variants refine this property to the alternatives reachable for them and each variant observes those; this base alternative is deliberately not an observation obligation of its own."
+              "x-omg-unobserved-branch": "Coverage-engine limitation, not unreachable: the engine demands that every alternative of this SHARED envelope is observed in every operation that embeds it, while each concrete event variant pins the alternative exactly and observes both of its own (for example the workspace history never carries a connection, the installation history never carries a personal workspace reference); both alternatives of every property are observed per variant."
             }
           ]
         },
@@ -1801,24 +1803,24 @@
           "maxLength": 200
         },
         "details": {
-          "$comment": "EVENT_JSON returns non-ceiling alert_events.details verbatim as stored producer-specific JSON; monetary refinements apply and ceiling variants refine it with the closed SettingsCeilingDetails schemas.",
+          "$comment": "EVENT_JSON returns alert_events.details verbatim as stored producer-specific JSON; monetary refinements apply on this shared base, and every concrete event variant refines it with the closed schema of its kind (Settings*Details).",
           "type": "object",
           "patternProperties": {
             "(^|_)microusd$": {
               "$ref": "#/components/schemas/IdentityNullableDecimal"
             }
           },
-          "description": "Stored JSON incident payload, not a serde DTO. Fields vary by producer/kind; readers do not deserialize or close this map. Monetary fields remain integer micro-USD strings. Admission-ceiling incidents additionally refine it with the closed SettingsCeilingDetails* variants."
+          "description": "Stored JSON incident payload, not a serde DTO; its fields depend on the kind. Every event variant binds it to the closed Settings*Details schema of that kind, so an identity can never be added silently. Monetary fields remain integer micro-USD strings."
         },
         "workspace": {
           "anyOf": [
             {
               "type": "null",
-              "x-omg-unobserved-branch": "Shared closed envelope: the concrete event variants refine this property to the alternatives reachable for them and each variant observes those; this base alternative is deliberately not an observation obligation of its own."
+              "x-omg-unobserved-branch": "Coverage-engine limitation, not unreachable: the engine demands that every alternative of this SHARED envelope is observed in every operation that embeds it, while each concrete event variant pins the alternative exactly and observes both of its own (for example the workspace history never carries a connection, the installation history never carries a personal workspace reference); both alternatives of every property are observed per variant."
             },
             {
               "$ref": "#/components/schemas/IdentityWorkspaceRef",
-              "x-omg-unobserved-branch": "Shared closed envelope: the concrete event variants refine this property to the alternatives reachable for them and each variant observes those; this base alternative is deliberately not an observation obligation of its own."
+              "x-omg-unobserved-branch": "Coverage-engine limitation, not unreachable: the engine demands that every alternative of this SHARED envelope is observed in every operation that embeds it, while each concrete event variant pins the alternative exactly and observes both of its own (for example the workspace history never carries a connection, the installation history never carries a personal workspace reference); both alternatives of every property are observed per variant."
             }
           ]
         },
@@ -1826,11 +1828,11 @@
           "anyOf": [
             {
               "type": "null",
-              "x-omg-unobserved-branch": "Shared closed envelope: the concrete event variants refine this property to the alternatives reachable for them and each variant observes those; this base alternative is deliberately not an observation obligation of its own."
+              "x-omg-unobserved-branch": "Coverage-engine limitation, not unreachable: the engine demands that every alternative of this SHARED envelope is observed in every operation that embeds it, while each concrete event variant pins the alternative exactly and observes both of its own (for example the workspace history never carries a connection, the installation history never carries a personal workspace reference); both alternatives of every property are observed per variant."
             },
             {
               "$ref": "#/components/schemas/SettingsConnectionRef",
-              "x-omg-unobserved-branch": "Shared closed envelope: the concrete event variants refine this property to the alternatives reachable for them and each variant observes those; this base alternative is deliberately not an observation obligation of its own."
+              "x-omg-unobserved-branch": "Coverage-engine limitation, not unreachable: the engine demands that every alternative of this SHARED envelope is observed in every operation that embeds it, while each concrete event variant pins the alternative exactly and observes both of its own (for example the workspace history never carries a connection, the installation history never carries a personal workspace reference); both alternatives of every property are observed per variant."
             }
           ]
         },
@@ -1855,19 +1857,12 @@
           ]
         },
         "email": {
-          "anyOf": [
-            {
-              "$ref": "#/components/schemas/IdentityDelivery"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/components/schemas/SettingsAlertDelivery"
         },
         "cleared_email": {
           "anyOf": [
             {
-              "$ref": "#/components/schemas/IdentityDelivery"
+              "$ref": "#/components/schemas/SettingsAlertDelivery"
             },
             {
               "type": "null"
@@ -1876,7 +1871,32 @@
         }
       },
       "additionalProperties": false,
-      "description": "Closed envelope shared by every alert incident variant: identity and lifecycle fields. The variants (installation rule, built-in, aged hold, admission ceiling, workspace rule, personal built-in) pin rule, workspace, connection, kind and details exactly; this base `details` is the reviewed stored producer-specific JSON."
+      "description": "Closed envelope shared by every alert incident variant: identity and lifecycle fields. Every incident has its `fired` email delivery (each producer inserts it in the incident's own transaction, deliveries are immutable), so `email` is never null. `cleared_email` exists only for a cleared incident (alerts.rs resolve: superseded and rule_disabled never enqueue one, and a silently cleared key-expiry reminder has none). The variants (installation rules by kind, built-ins, aged holds, admission ceilings, workspace rules by kind, personal budget, key expiry) pin rule, workspace, connection, kind and the closed per-kind details exactly; this base `details` is the reviewed stored producer-specific JSON.",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "resolution": {
+                "enum": [
+                  "superseded",
+                  "rule_disabled",
+                  null
+                ]
+              }
+            },
+            "required": [
+              "resolution"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cleared_email": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
     },
     "SettingsRedactedCeilingEvent": {
       "allOf": [
@@ -1949,7 +1969,18 @@
           "$ref": "#/components/schemas/IdentityNullableTime"
         },
         "last_error": {
-          "$ref": "#/components/schemas/IdentityNullableString"
+          "enum": [
+            "credential",
+            "connection",
+            "tls",
+            "rejected",
+            "timeout",
+            "interrupted",
+            "host_not_allowed",
+            "destination_policy",
+            null
+          ],
+          "description": "The category of the latest failed delivery attempt (alert_webhook_outbox.last_error CHECK, migration 0057); null when none failed."
         }
       },
       "required": [
@@ -2009,7 +2040,18 @@
           "$ref": "#/components/schemas/IdentityNullableTime"
         },
         "last_error": {
-          "$ref": "#/components/schemas/IdentityNullableString"
+          "enum": [
+            "credential",
+            "connection",
+            "tls",
+            "rejected",
+            "timeout",
+            "interrupted",
+            "host_not_allowed",
+            "destination_policy",
+            null
+          ],
+          "description": "The category of the latest failed delivery attempt (alert_webhook_outbox.last_error CHECK, migration 0057); null when none failed."
         },
         "url": {
           "type": "string",
@@ -2174,7 +2216,18 @@
                 "$ref": "#/components/schemas/IdentityNullableTime"
               },
               "last_error": {
-                "$ref": "#/components/schemas/IdentityNullableString"
+                "enum": [
+                  "credential",
+                  "connection",
+                  "tls",
+                  "rejected",
+                  "timeout",
+                  "interrupted",
+                  "host_not_allowed",
+                  "destination_policy",
+                  null
+                ],
+                "description": "The category of the latest failed delivery attempt (alert_webhook_outbox.last_error CHECK, migration 0057); null when none failed."
               }
             },
             "required": [
@@ -2777,9 +2830,10 @@
                     "authentication",
                     "rejected",
                     "timeout",
+                    "host_not_allowed",
                     null
                   ],
-                  "description": "Delivery category of the last failed test; null when it succeeded."
+                  "description": "Delivery category of the last failed test (email.rs DeliveryError::as_str); host_not_allowed when the operator's relay allowlist does not list the host; null when it succeeded."
                 }
               },
               "required": [
@@ -3931,86 +3985,6 @@
       "additionalProperties": false,
       "description": "The caller's own personal workspace (only its owner is ever shown it)."
     },
-    "SettingsInstallationRuleEvent": {
-      "allOf": [
-        {
-          "$ref": "#/components/schemas/SettingsAlertEvent"
-        },
-        {
-          "properties": {
-            "builtin": {
-              "const": false
-            },
-            "kind": {
-              "enum": [
-                "budget_threshold",
-                "spend_threshold",
-                "spend_spike",
-                "error_rate",
-                "provider_failing",
-                "batch_failed",
-                "batch_stalled"
-              ]
-            },
-            "rule": {
-              "$ref": "#/components/schemas/SettingsInstallationRuleRef"
-            },
-            "workspace": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/SettingsSharedWorkspaceRef"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "connection": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/SettingsConnectionRef"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            }
-          }
-        }
-      ],
-      "description": "An incident raised by an installation rule. Budget incidents name the Team/Project they concern; provider incidents name the connection."
-    },
-    "SettingsInstallationBuiltinEvent": {
-      "allOf": [
-        {
-          "$ref": "#/components/schemas/SettingsAlertEvent"
-        },
-        {
-          "properties": {
-            "builtin": {
-              "const": true
-            },
-            "kind": {
-              "enum": [
-                "scim_last_admin",
-                "partitions_missing",
-                "history_orphans"
-              ]
-            },
-            "rule": {
-              "type": "null"
-            },
-            "workspace": {
-              "type": "null"
-            },
-            "connection": {
-              "type": "null"
-            }
-          }
-        }
-      ],
-      "description": "A built-in installation incident (last administrator via SCIM, missing partitions, history orphans): no rule, workspace or connection."
-    },
     "SettingsAgedHoldEvent": {
       "allOf": [
         {
@@ -4039,11 +4013,80 @@
             },
             "connection": {
               "type": "null"
+            },
+            "details": {
+              "$ref": "#/components/schemas/SettingsAgedHoldDetails"
+            },
+            "level": {
+              "enum": [
+                1,
+                2
+              ]
             }
-          }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "level": {
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "level"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "severity": {
+                    "const": "warning"
+                  },
+                  "summary": {
+                    "const": "Holds with unknown cost are over 24 hours old"
+                  },
+                  "details": {
+                    "properties": {
+                      "threshold_hours": {
+                        "const": 24
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "level": {
+                    "const": 2
+                  }
+                },
+                "required": [
+                  "level"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "severity": {
+                    "const": "critical"
+                  },
+                  "summary": {
+                    "const": "Holds with unknown cost are over 168 hours old"
+                  },
+                  "details": {
+                    "properties": {
+                      "threshold_hours": {
+                        "const": 168
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
         }
       ],
-      "description": "Holds with unknown cost over the age threshold. A Team/Project incident names the workspace; a personal scope is only counted, never named, so its workspace is null."
+      "description": "Holds with unknown cost over the age threshold, exactly as constraint alert_events_aged_shape fixes it: level 1 is a warning for 24 hours, level 2 a critical for 168 hours, each with its fixed summary and details {threshold_hours}. A Team/Project incident names the workspace (never a personal one); a personal scope is only counted, never named, so its workspace is null."
     },
     "SettingsCeilingDetailsTeam": {
       "type": "object",
@@ -4429,10 +4472,34 @@
           "items": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/SettingsInstallationRuleEvent"
+                "$ref": "#/components/schemas/SettingsInstallationBudgetEvent"
               },
               {
-                "$ref": "#/components/schemas/SettingsInstallationBuiltinEvent"
+                "$ref": "#/components/schemas/SettingsInstallationSpendEvent"
+              },
+              {
+                "$ref": "#/components/schemas/SettingsInstallationSpikeEvent"
+              },
+              {
+                "$ref": "#/components/schemas/SettingsInstallationErrorRateEvent"
+              },
+              {
+                "$ref": "#/components/schemas/SettingsInstallationProviderEvent"
+              },
+              {
+                "$ref": "#/components/schemas/SettingsInstallationBatchFailedEvent"
+              },
+              {
+                "$ref": "#/components/schemas/SettingsInstallationBatchStalledEvent"
+              },
+              {
+                "$ref": "#/components/schemas/SettingsScimLastAdminEvent"
+              },
+              {
+                "$ref": "#/components/schemas/SettingsPartitionsMissingEvent"
+              },
+              {
+                "$ref": "#/components/schemas/SettingsHistoryOrphansEvent"
               },
               {
                 "$ref": "#/components/schemas/SettingsAgedHoldEvent"
@@ -4458,7 +4525,7 @@
         "has_more"
       ],
       "additionalProperties": false,
-      "description": "Installation history, newest first: installation-rule incidents, built-in installation incidents and aged-hold incidents; admission-ceiling identities follow the reader's role."
+      "description": "Installation history, newest first: installation-rule incidents by kind, built-in installation incidents and aged-hold incidents; admission-ceiling identities follow the reader's role. Every variant binds its kind to the closed details of that kind."
     },
     "SettingsWorkspaceRuleEvent": {
       "allOf": [
@@ -4514,41 +4581,14 @@
             },
             "connection": {
               "type": "null"
+            },
+            "details": {
+              "$ref": "#/components/schemas/SettingsBudgetDetails"
             }
           }
         }
       ],
       "description": "The built-in personal budget alert, shown to the personal workspace's owner only."
-    },
-    "SettingsWorkspaceSystemEvent": {
-      "allOf": [
-        {
-          "$ref": "#/components/schemas/SettingsAlertEvent"
-        },
-        {
-          "properties": {
-            "builtin": {
-              "const": false
-            },
-            "kind": {
-              "enum": [
-                "key_expiring",
-                "aged_unknown_hold"
-              ]
-            },
-            "rule": {
-              "type": "null"
-            },
-            "workspace": {
-              "$ref": "#/components/schemas/IdentityWorkspaceRef"
-            },
-            "connection": {
-              "type": "null"
-            }
-          }
-        }
-      ],
-      "description": "A key-expiry reminder or aged-unknown-hold incident of the workspace; neither has a rule."
     },
     "SettingsWorkspaceEvents": {
       "type": "object",
@@ -4558,13 +4598,28 @@
           "items": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/SettingsWorkspaceRuleEvent"
+                "$ref": "#/components/schemas/SettingsWorkspaceBudgetEvent"
+              },
+              {
+                "$ref": "#/components/schemas/SettingsWorkspaceSpikeEvent"
+              },
+              {
+                "$ref": "#/components/schemas/SettingsWorkspaceErrorRateEvent"
+              },
+              {
+                "$ref": "#/components/schemas/SettingsWorkspaceBatchFailedEvent"
+              },
+              {
+                "$ref": "#/components/schemas/SettingsWorkspaceBatchStalledEvent"
               },
               {
                 "$ref": "#/components/schemas/SettingsPersonalBudgetEvent"
               },
               {
-                "$ref": "#/components/schemas/SettingsWorkspaceSystemEvent"
+                "$ref": "#/components/schemas/SettingsWorkspaceKeyExpiryEvent"
+              },
+              {
+                "$ref": "#/components/schemas/SettingsWorkspaceAgedHoldEvent"
               }
             ]
           }
@@ -4664,7 +4719,7 @@
             "name": {
               "type": "string",
               "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
-              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+              "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused."
             },
             "kind": {
               "const": "budget_threshold"
@@ -4760,7 +4815,7 @@
             "name": {
               "type": "string",
               "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
-              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+              "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused."
             },
             "kind": {
               "const": "spend_threshold"
@@ -4856,7 +4911,7 @@
             "name": {
               "type": "string",
               "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
-              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+              "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused."
             },
             "kind": {
               "const": "spend_spike"
@@ -4947,7 +5002,7 @@
             "name": {
               "type": "string",
               "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
-              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+              "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused."
             },
             "kind": {
               "const": "error_rate"
@@ -5035,7 +5090,7 @@
             "name": {
               "type": "string",
               "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
-              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+              "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused."
             },
             "kind": {
               "const": "provider_failing"
@@ -5132,7 +5187,7 @@
             "name": {
               "type": "string",
               "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
-              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+              "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused."
             },
             "kind": {
               "const": "provider_failing"
@@ -5217,7 +5272,7 @@
             "name": {
               "type": "string",
               "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
-              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+              "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused."
             },
             "kind": {
               "const": "batch_failed"
@@ -5296,7 +5351,7 @@
             "name": {
               "type": "string",
               "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
-              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+              "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused."
             },
             "kind": {
               "const": "batch_stalled"
@@ -5378,7 +5433,7 @@
             "name": {
               "type": "string",
               "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
-              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+              "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused."
             },
             "kind": {
               "const": "admission_ceiling"
@@ -5478,7 +5533,7 @@
             "name": {
               "type": "string",
               "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
-              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+              "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused."
             },
             "kind": {
               "const": "admission_ceiling"
@@ -5731,7 +5786,7 @@
             "name": {
               "type": "string",
               "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
-              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+              "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused."
             },
             "kind": {
               "const": "budget_threshold"
@@ -5827,7 +5882,7 @@
             "name": {
               "type": "string",
               "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
-              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+              "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused."
             },
             "kind": {
               "const": "spend_spike"
@@ -5918,7 +5973,7 @@
             "name": {
               "type": "string",
               "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
-              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+              "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused."
             },
             "kind": {
               "const": "error_rate"
@@ -6006,7 +6061,7 @@
             "name": {
               "type": "string",
               "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
-              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+              "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused."
             },
             "kind": {
               "const": "batch_failed"
@@ -6085,7 +6140,7 @@
             "name": {
               "type": "string",
               "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
-              "description": "Trimmed, 1 to 120 characters (bytes in the handler), no control characters."
+              "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused."
             },
             "kind": {
               "const": "batch_stalled"
@@ -6320,6 +6375,1225 @@
         }
       ],
       "description": "Workspace alert rule input: a closed object per rule kind (fields foreign to the kind are null or absent), or the positional serde array [name, kind, enabled, budget_layers, thresholds, spike_factor_percent, min_spend_microusd, window_minutes, error_rate_percent, min_requests, consecutive_failures, provider_connection_id, spend_period, spend_amount_microusd, ceiling_requests_per_second, ceiling_lock_wait_ms, notify_workspace_admins, notify_platform_admins, notify_emails] whose element types are deserialization-level only (the handler applies the per-kind rules to it too). Thresholds are at most five distinct values; a provider connection must exist (400)."
+    },
+    "SettingsBudgetDetails": {
+      "type": "object",
+      "properties": {
+        "layer": {
+          "enum": [
+            "type",
+            "override",
+            "local",
+            "key"
+          ]
+        },
+        "period": {
+          "$ref": "#/components/schemas/IdentityPeriod"
+        },
+        "threshold_percent": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "used_percent": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$",
+          "description": "Whole percent of the amount used, rounded down; it can exceed 100."
+        },
+        "used_microusd": {
+          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+        },
+        "budget_microusd": {
+          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+        },
+        "unknown_cost_requests": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "window_start": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "window_end": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        }
+      },
+      "required": [
+        "layer",
+        "period",
+        "threshold_percent",
+        "used_percent",
+        "used_microusd",
+        "budget_microusd",
+        "unknown_cost_requests",
+        "window_start",
+        "window_end"
+      ],
+      "additionalProperties": false,
+      "description": "alerts.rs budget_condition: one workspace or key budget layer that reached a threshold. The window is the current UTC window of the period and is null exactly for the lifetime period. Nothing here identifies a key or an owner. Unknown-cost requests are counted, never treated as zero spend.",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "period": {
+                "const": "lifetime"
+              }
+            },
+            "required": [
+              "period"
+            ]
+          },
+          "then": {
+            "properties": {
+              "window_start": {
+                "type": "null"
+              },
+              "window_end": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "window_start": {
+                "type": "string"
+              },
+              "window_end": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "SettingsSpendDetails": {
+      "type": "object",
+      "properties": {
+        "period": {
+          "$ref": "#/components/schemas/IdentityPeriod"
+        },
+        "threshold_percent": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "used_percent": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$",
+          "description": "Whole percent of the amount used, rounded down; it can exceed 100."
+        },
+        "used_microusd": {
+          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+        },
+        "pending_microusd": {
+          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+        },
+        "spend_amount_microusd": {
+          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+        },
+        "unknown_cost_requests": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "window_start": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "window_end": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        }
+      },
+      "required": [
+        "period",
+        "threshold_percent",
+        "used_percent",
+        "used_microusd",
+        "pending_microusd",
+        "spend_amount_microusd",
+        "unknown_cost_requests",
+        "window_start",
+        "window_end"
+      ],
+      "additionalProperties": false,
+      "description": "alerts.rs spend_conditions: installation-wide spend against the rule's reference amount for its period. The window is null exactly for the lifetime period.",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "period": {
+                "const": "lifetime"
+              }
+            },
+            "required": [
+              "period"
+            ]
+          },
+          "then": {
+            "properties": {
+              "window_start": {
+                "type": "null"
+              },
+              "window_end": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "window_start": {
+                "type": "string"
+              },
+              "window_end": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "SettingsSpikeDetails": {
+      "type": "object",
+      "properties": {
+        "current_microusd": {
+          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+        },
+        "baseline_total_microusd": {
+          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+        },
+        "baseline_hourly_microusd": {
+          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+        },
+        "ratio": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9]+\\.[0-9]$",
+          "description": "Last hour over the trailing hourly average in tenths (spike_ratio); null when there is no baseline spend."
+        },
+        "factor_percent": {
+          "type": "integer",
+          "minimum": 110,
+          "maximum": 100000
+        },
+        "min_spend_microusd": {
+          "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+        },
+        "unknown_cost_requests": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "current_microusd",
+        "baseline_total_microusd",
+        "baseline_hourly_microusd",
+        "ratio",
+        "factor_percent",
+        "min_spend_microusd",
+        "unknown_cost_requests"
+      ],
+      "additionalProperties": false,
+      "description": "alerts.rs spike_conditions: settled spend of the last hour against the 7-day baseline; unknown-cost attempts are counted, never treated as zero.",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "baseline_total_microusd": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                  },
+                  {
+                    "const": "0"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "baseline_total_microusd"
+            ]
+          },
+          "then": {
+            "properties": {
+              "ratio": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "ratio": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "SettingsErrorRateDetails": {
+      "type": "object",
+      "properties": {
+        "failed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "finished": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "observed_percent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "threshold_percent": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "min_requests": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "window_minutes": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 1440
+        }
+      },
+      "required": [
+        "failed",
+        "finished",
+        "observed_percent",
+        "threshold_percent",
+        "min_requests",
+        "window_minutes"
+      ],
+      "additionalProperties": false,
+      "description": "alerts.rs error_rate_conditions: failed and finished attempts in the window against the rule's threshold."
+    },
+    "SettingsProviderDetails": {
+      "type": "object",
+      "properties": {
+        "consecutive_failures": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "finished": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "window_minutes": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 1440
+        },
+        "threshold_consecutive": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 100
+        },
+        "threshold_percent": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 100
+        }
+      },
+      "required": [
+        "consecutive_failures",
+        "failed",
+        "finished",
+        "window_minutes",
+        "threshold_consecutive",
+        "threshold_percent"
+      ],
+      "additionalProperties": false,
+      "description": "alerts.rs provider_conditions: upstream failures of one connection. consecutive_failures is null when the incident fired by error rate; each threshold is null when the rule does not set it."
+    },
+    "SettingsBatchFailedDetails": {
+      "type": "object",
+      "properties": {
+        "batch_id": {
+          "type": "string",
+          "pattern": "^batch_[0-9a-f]{32}$"
+        },
+        "state": {
+          "enum": [
+            "failed",
+            "expired"
+          ]
+        },
+        "error_code": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-z_0-9]{1,64}$"
+        },
+        "mode": {
+          "enum": [
+            "native",
+            "gateway"
+          ]
+        },
+        "total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "completed": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "failed": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      },
+      "required": [
+        "batch_id",
+        "state",
+        "error_code",
+        "mode",
+        "total",
+        "completed",
+        "failed"
+      ],
+      "additionalProperties": false,
+      "description": "alerts.rs batch_failed_conditions: one batch that ended failed or expired; the client batch id only."
+    },
+    "SettingsBatchStalledDetails": {
+      "type": "object",
+      "properties": {
+        "batch_id": {
+          "type": "string",
+          "pattern": "^batch_[0-9a-f]{32}$"
+        },
+        "mode": {
+          "enum": [
+            "native",
+            "gateway"
+          ]
+        },
+        "total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "done": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "minutes_without_progress": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "window_minutes": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 1440
+        }
+      },
+      "required": [
+        "batch_id",
+        "mode",
+        "total",
+        "done",
+        "minutes_without_progress",
+        "window_minutes"
+      ],
+      "additionalProperties": false,
+      "description": "alerts.rs batch_stalled_conditions: one unfinished batch without progress for the window."
+    },
+    "SettingsKeyExpiryDetails": {
+      "type": "object",
+      "properties": {
+        "expires_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "threshold_days": {
+          "enum": [
+            1,
+            7
+          ]
+        }
+      },
+      "required": [
+        "expires_at",
+        "threshold_days"
+      ],
+      "additionalProperties": false,
+      "description": "alerts.rs key_expiring_tick: when the key expires and which band fired; never the key id, name or holder."
+    },
+    "SettingsAgedHoldDetails": {
+      "type": "object",
+      "properties": {
+        "threshold_hours": {
+          "enum": [
+            24,
+            168
+          ]
+        }
+      },
+      "required": [
+        "threshold_hours"
+      ],
+      "additionalProperties": false,
+      "description": "alerts.rs aged_hold / constraint alert_events_aged_shape: exactly {threshold_hours} (24 for level 1, 168 for level 2)."
+    },
+    "SettingsScimDetails": {
+      "type": "object",
+      "properties": {
+        "resource": {
+          "enum": [
+            "user",
+            "group"
+          ]
+        }
+      },
+      "required": [
+        "resource"
+      ],
+      "additionalProperties": false,
+      "description": "alerts.rs fire_scim_last_admin: the kind of SCIM resource whose change was refused; no names, emails or ids."
+    },
+    "SettingsPartitionsDetails": {
+      "type": "object",
+      "properties": {
+        "tables": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "table": {
+                "type": "string"
+              },
+              "covered_until": {
+                "$ref": "#/components/schemas/IdentityTime"
+              },
+              "months_ahead": {
+                "type": "integer",
+                "minimum": -1,
+                "maximum": 1
+              }
+            },
+            "required": [
+              "table",
+              "covered_until",
+              "months_ahead"
+            ],
+            "additionalProperties": false,
+            "description": "One partitioned history table below the alert threshold (partitions.rs Coverage)."
+          }
+        },
+        "creation_error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "action": {
+          "const": "run `open-model-gateway partitions ensure` with the schema owner"
+        }
+      },
+      "required": [
+        "tables",
+        "creation_error",
+        "action"
+      ],
+      "additionalProperties": false,
+      "description": "partitions.rs reconcile_alert: the history tables with fewer than two future monthly partitions and why creating them failed, if it did."
+    },
+    "SettingsHistoryDetails": {
+      "type": "object",
+      "properties": {
+        "since": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "findings": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "check": {
+                "type": "string"
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "sample_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/IdentityUuid"
+                },
+                "maxItems": 5
+              }
+            },
+            "required": [
+              "check",
+              "count",
+              "sample_ids"
+            ],
+            "additionalProperties": false,
+            "description": "One kind of finding with its count and up to five example execution or reservation ids (history.rs Finding)."
+          }
+        },
+        "action": {
+          "const": "run `open-model-gateway history verify` and investigate; never delete history"
+        }
+      },
+      "required": [
+        "since",
+        "findings",
+        "action"
+      ],
+      "additionalProperties": false,
+      "description": "history.rs reconcile_alert: the lower bound of the scanned window (null: all history) and the findings of the verification."
+    },
+    "SettingsAlertDelivery": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/IdentityDelivery"
+        },
+        {
+          "properties": {
+            "status": {
+              "enum": [
+                "pending",
+                "sent",
+                "partial",
+                "failed",
+                "not_configured",
+                "no_recipients",
+                "suppressed"
+              ]
+            },
+            "error": {
+              "enum": [
+                "credential",
+                "address",
+                "connection",
+                "tls",
+                "authentication",
+                "rejected",
+                "timeout",
+                "interrupted",
+                "host_not_allowed",
+                null
+              ]
+            },
+            "suppression_reason": {
+              "enum": [
+                "workspace_generation_limit",
+                null
+              ]
+            }
+          }
+        }
+      ],
+      "description": "One email delivery of an incident transition (the shared IdentityDelivery shape). Refines its free strings to the stored values: alert_deliveries_status_check (an incident's delivery is never report_pending), alert_deliveries_error_check (0049) and alert_deliveries_suppression_check (0059)."
+    },
+    "SettingsInstallationBudgetEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "builtin": {
+              "const": false
+            },
+            "kind": {
+              "const": "budget_threshold"
+            },
+            "rule": {
+              "$ref": "#/components/schemas/SettingsInstallationRuleRef"
+            },
+            "workspace": {
+              "$ref": "#/components/schemas/SettingsSharedWorkspaceRef"
+            },
+            "connection": {
+              "type": "null"
+            },
+            "details": {
+              "$ref": "#/components/schemas/SettingsBudgetDetails"
+            }
+          }
+        }
+      ],
+      "description": "A budget threshold reached by a Team/Project, raised by an installation rule."
+    },
+    "SettingsInstallationSpendEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "builtin": {
+              "const": false
+            },
+            "kind": {
+              "const": "spend_threshold"
+            },
+            "rule": {
+              "$ref": "#/components/schemas/SettingsInstallationRuleRef"
+            },
+            "workspace": {
+              "type": "null"
+            },
+            "connection": {
+              "type": "null"
+            },
+            "details": {
+              "$ref": "#/components/schemas/SettingsSpendDetails"
+            }
+          }
+        }
+      ],
+      "description": "Installation-wide spend against an installation rule's reference amount; it concerns no single workspace."
+    },
+    "SettingsInstallationSpikeEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "builtin": {
+              "const": false
+            },
+            "kind": {
+              "const": "spend_spike"
+            },
+            "rule": {
+              "$ref": "#/components/schemas/SettingsInstallationRuleRef"
+            },
+            "workspace": {
+              "type": "null"
+            },
+            "connection": {
+              "type": "null"
+            },
+            "details": {
+              "$ref": "#/components/schemas/SettingsSpikeDetails"
+            }
+          }
+        }
+      ],
+      "description": "An installation-wide spend spike (alerts.rs spike_conditions): an installation rule has no workspace."
+    },
+    "SettingsInstallationErrorRateEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "builtin": {
+              "const": false
+            },
+            "kind": {
+              "const": "error_rate"
+            },
+            "rule": {
+              "$ref": "#/components/schemas/SettingsInstallationRuleRef"
+            },
+            "workspace": {
+              "type": "null"
+            },
+            "connection": {
+              "type": "null"
+            },
+            "details": {
+              "$ref": "#/components/schemas/SettingsErrorRateDetails"
+            }
+          }
+        }
+      ],
+      "description": "An installation-wide error rate (alerts.rs error_rate_conditions): an installation rule has no workspace."
+    },
+    "SettingsInstallationProviderEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "builtin": {
+              "const": false
+            },
+            "kind": {
+              "const": "provider_failing"
+            },
+            "rule": {
+              "$ref": "#/components/schemas/SettingsInstallationRuleRef"
+            },
+            "workspace": {
+              "type": "null"
+            },
+            "connection": {
+              "$ref": "#/components/schemas/SettingsConnectionRef"
+            },
+            "details": {
+              "$ref": "#/components/schemas/SettingsProviderDetails"
+            }
+          }
+        }
+      ],
+      "description": "A failing provider connection; it names the connection and no workspace."
+    },
+    "SettingsInstallationBatchFailedEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "builtin": {
+              "const": false
+            },
+            "kind": {
+              "const": "batch_failed"
+            },
+            "rule": {
+              "$ref": "#/components/schemas/SettingsInstallationRuleRef"
+            },
+            "workspace": {
+              "$ref": "#/components/schemas/SettingsSharedWorkspaceRef"
+            },
+            "connection": {
+              "type": "null"
+            },
+            "details": {
+              "$ref": "#/components/schemas/SettingsBatchFailedDetails"
+            }
+          }
+        }
+      ],
+      "description": "A batch of a Team/Project that failed or expired (personal batches are private)."
+    },
+    "SettingsInstallationBatchStalledEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "builtin": {
+              "const": false
+            },
+            "kind": {
+              "const": "batch_stalled"
+            },
+            "rule": {
+              "$ref": "#/components/schemas/SettingsInstallationRuleRef"
+            },
+            "workspace": {
+              "$ref": "#/components/schemas/SettingsSharedWorkspaceRef"
+            },
+            "connection": {
+              "type": "null"
+            },
+            "details": {
+              "$ref": "#/components/schemas/SettingsBatchStalledDetails"
+            }
+          }
+        }
+      ],
+      "description": "A batch of a Team/Project without progress (personal batches are private)."
+    },
+    "SettingsScimLastAdminEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "builtin": {
+              "const": true
+            },
+            "kind": {
+              "const": "scim_last_admin"
+            },
+            "rule": {
+              "type": "null"
+            },
+            "workspace": {
+              "type": "null"
+            },
+            "connection": {
+              "type": "null"
+            },
+            "details": {
+              "$ref": "#/components/schemas/SettingsScimDetails"
+            }
+          }
+        }
+      ],
+      "description": "Built-in: SCIM tried to remove the last Platform Admin. No rule, workspace or connection."
+    },
+    "SettingsPartitionsMissingEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "builtin": {
+              "const": true
+            },
+            "kind": {
+              "const": "partitions_missing"
+            },
+            "rule": {
+              "type": "null"
+            },
+            "workspace": {
+              "type": "null"
+            },
+            "connection": {
+              "type": "null"
+            },
+            "details": {
+              "$ref": "#/components/schemas/SettingsPartitionsDetails"
+            }
+          }
+        }
+      ],
+      "description": "Built-in: history tables are running out of monthly partitions. No rule, workspace or connection."
+    },
+    "SettingsHistoryOrphansEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "builtin": {
+              "const": true
+            },
+            "kind": {
+              "const": "history_orphans"
+            },
+            "rule": {
+              "type": "null"
+            },
+            "workspace": {
+              "type": "null"
+            },
+            "connection": {
+              "type": "null"
+            },
+            "details": {
+              "$ref": "#/components/schemas/SettingsHistoryDetails"
+            }
+          }
+        }
+      ],
+      "description": "Built-in: history verification found rows with missing or mismatched parents. No rule, workspace or connection."
+    },
+    "SettingsWorkspaceBudgetEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "builtin": {
+              "const": false
+            },
+            "kind": {
+              "const": "budget_threshold"
+            },
+            "rule": {
+              "$ref": "#/components/schemas/SettingsWorkspaceRuleRef"
+            },
+            "workspace": {
+              "$ref": "#/components/schemas/SettingsSharedWorkspaceRef"
+            },
+            "connection": {
+              "type": "null"
+            },
+            "details": {
+              "$ref": "#/components/schemas/SettingsBudgetDetails"
+            }
+          }
+        }
+      ],
+      "description": "A budget threshold reached by this Team/Project, raised by one of its rules (the rule may since have been deleted)."
+    },
+    "SettingsWorkspaceSpikeEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "builtin": {
+              "const": false
+            },
+            "kind": {
+              "const": "spend_spike"
+            },
+            "rule": {
+              "$ref": "#/components/schemas/SettingsWorkspaceRuleRef"
+            },
+            "workspace": {
+              "$ref": "#/components/schemas/SettingsSharedWorkspaceRef"
+            },
+            "connection": {
+              "type": "null"
+            },
+            "details": {
+              "$ref": "#/components/schemas/SettingsSpikeDetails"
+            }
+          }
+        }
+      ],
+      "description": "A spend spike of this Team/Project, raised by one of its rules."
+    },
+    "SettingsWorkspaceErrorRateEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "builtin": {
+              "const": false
+            },
+            "kind": {
+              "const": "error_rate"
+            },
+            "rule": {
+              "$ref": "#/components/schemas/SettingsWorkspaceRuleRef"
+            },
+            "workspace": {
+              "$ref": "#/components/schemas/SettingsSharedWorkspaceRef"
+            },
+            "connection": {
+              "type": "null"
+            },
+            "details": {
+              "$ref": "#/components/schemas/SettingsErrorRateDetails"
+            }
+          }
+        }
+      ],
+      "description": "An error rate of this Team/Project, raised by one of its rules."
+    },
+    "SettingsWorkspaceBatchFailedEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "builtin": {
+              "const": false
+            },
+            "kind": {
+              "const": "batch_failed"
+            },
+            "rule": {
+              "$ref": "#/components/schemas/SettingsWorkspaceRuleRef"
+            },
+            "workspace": {
+              "$ref": "#/components/schemas/SettingsSharedWorkspaceRef"
+            },
+            "connection": {
+              "type": "null"
+            },
+            "details": {
+              "$ref": "#/components/schemas/SettingsBatchFailedDetails"
+            }
+          }
+        }
+      ],
+      "description": "A batch of this Team/Project that failed or expired, raised by one of its rules."
+    },
+    "SettingsWorkspaceBatchStalledEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "builtin": {
+              "const": false
+            },
+            "kind": {
+              "const": "batch_stalled"
+            },
+            "rule": {
+              "$ref": "#/components/schemas/SettingsWorkspaceRuleRef"
+            },
+            "workspace": {
+              "$ref": "#/components/schemas/SettingsSharedWorkspaceRef"
+            },
+            "connection": {
+              "type": "null"
+            },
+            "details": {
+              "$ref": "#/components/schemas/SettingsBatchStalledDetails"
+            }
+          }
+        }
+      ],
+      "description": "A batch of this Team/Project without progress, raised by one of its rules."
+    },
+    "SettingsWorkspaceKeyExpiryEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "builtin": {
+              "const": false
+            },
+            "kind": {
+              "const": "key_expiring"
+            },
+            "rule": {
+              "type": "null"
+            },
+            "workspace": {
+              "$ref": "#/components/schemas/IdentityWorkspaceRef"
+            },
+            "connection": {
+              "type": "null"
+            },
+            "details": {
+              "$ref": "#/components/schemas/SettingsKeyExpiryDetails"
+            }
+          }
+        }
+      ],
+      "description": "A key-expiry reminder of the workspace; it has no rule and never names the key or its holder."
+    },
+    "SettingsWorkspaceAgedHoldEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "builtin": {
+              "const": false
+            },
+            "kind": {
+              "const": "aged_unknown_hold"
+            },
+            "rule": {
+              "type": "null"
+            },
+            "workspace": {
+              "$ref": "#/components/schemas/SettingsSharedWorkspaceRef"
+            },
+            "connection": {
+              "type": "null"
+            },
+            "details": {
+              "$ref": "#/components/schemas/SettingsAgedHoldDetails"
+            },
+            "level": {
+              "enum": [
+                1,
+                2
+              ]
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "level": {
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "level"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "severity": {
+                    "const": "warning"
+                  },
+                  "summary": {
+                    "const": "Holds with unknown cost are over 24 hours old"
+                  },
+                  "details": {
+                    "properties": {
+                      "threshold_hours": {
+                        "const": 24
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "level": {
+                    "const": 2
+                  }
+                },
+                "required": [
+                  "level"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "severity": {
+                    "const": "critical"
+                  },
+                  "summary": {
+                    "const": "Holds with unknown cost are over 168 hours old"
+                  },
+                  "details": {
+                    "properties": {
+                      "threshold_hours": {
+                        "const": 168
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "description": "An aged-unknown-hold incident of this Team/Project, with the same fixed shape (a personal scope is never attributed to a workspace, so it never appears in a workspace history)."
     }
   }
 }

@@ -149,31 +149,33 @@ impl Gateway {
 fn value(r: &Captured) -> Value {
     serde_json::from_slice(&r.bytes).unwrap()
 }
-fn positive(observed: &mut PositiveFixtures, r: &Captured, method: &str, path: &str) -> Value {
+fn positive(observed: &mut PositiveFixtures, r: &Captured, method: &str, template: &str) -> Value {
     assert!(
         r.status.is_success() || r.status == StatusCode::GONE,
-        "{method} {path}: {}: {}",
-        r.status,
-        String::from_utf8_lossy(&r.bytes)
+        "{method} {template}: unexpected status {}",
+        r.status
     );
     let body = value(r);
     // Every executed representation has independent anti-permissiveness controls.
-    for bad in [json!({}), json!(false), {
+    for (index, bad) in [json!({}), json!(false), {
         let mut leak = body.clone();
         leak["plaintext_inference_token"] = json!("must-not-leak");
         leak
-    }] {
+    }]
+    .into_iter()
+    .enumerate()
+    {
         assert!(
             openapi::responses::validate(
                 openapi::responses::artifact(),
                 method,
-                path,
+                template,
                 r.status,
                 &r.headers,
                 &serde_json::to_vec(&bad).unwrap()
             )
             .is_err(),
-            "accepted response mutation: {method} {path}: {bad}"
+            "accepted response mutation {index}: {method} {template}"
         );
     }
     observed.observe(r);
@@ -201,12 +203,13 @@ async fn reject_json_configuration(
 ) {
     let mut unknown = valid.clone();
     unknown["unexpected_configuration"] = json!({"nested":true});
-    for bad in [unknown, Value::Null, json!(false)] {
+    for (index, bad) in [unknown, Value::Null, json!(false)].into_iter().enumerate() {
         let r = g.send(actor, method, path, bad).await;
+        // The path of a request is never printed: name the method and the probe.
         assert_eq!(
             r.status,
             StatusCode::UNPROCESSABLE_ENTITY,
-            "{method} {path}"
+            "{method}: rejected configuration probe {index}"
         );
         assert!(
             r.headers["content-type"]
@@ -279,7 +282,11 @@ async fn management_openapi_slice5_fixtures(pool: PgPool) {
             let r = g
                 .raw(None, &method, &concrete, "application/json", b"{}".to_vec())
                 .await;
-            assert_eq!(r.status, StatusCode::UNAUTHORIZED, "{method} {path}");
+            assert_eq!(
+                r.status,
+                StatusCode::UNAUTHORIZED,
+                "{method} {path}: not refused without credentials"
+            );
         }
     }
     let (_, key) = key(&f, &f.owner, f.team, Value::Null).await;
@@ -444,6 +451,20 @@ async fn management_openapi_slice5_fixtures(pool: PgPool) {
     let input = json!({"batch":{"enabled":true,"retention_days":30},"video":{"enabled":false,"retention_days":30},"user_files":{"enabled":false,"retention_days":30},"export":{"retention_days":7}});
     assert_eq!(
         off.send(&admin, "PUT", &path, input.clone()).await.status,
+        StatusCode::CONFLICT
+    );
+    // Only turning a group on needs a backend: retention changes and switching groups
+    // off are accepted by a server with storage off.
+    let mut off_input = json!({"batch":{"enabled":false,"retention_days":45},"video":{"enabled":false,"retention_days":30},"user_files":{"enabled":false,"retention_days":30},"export":{"retention_days":7}});
+    assert_eq!(
+        off.send(&admin, "PUT", &path, off_input.clone())
+            .await
+            .status,
+        StatusCode::OK
+    );
+    off_input["batch"]["enabled"] = json!(true);
+    assert_eq!(
+        off.send(&admin, "PUT", &path, off_input).await.status,
         StatusCode::CONFLICT
     );
     good(&g, &mut observed, &admin, "PUT", &path, &path, input).await;
@@ -630,24 +651,33 @@ async fn management_openapi_slice5_fixtures(pool: PgPool) {
         );
         rules.push((id, prefix, template));
     }
-    // Persisted event and non-null delivery counters in both histories.
-    for (rule, ws) in [(rules[0].0, None), (rules[1].0, Some(f.team))] {
-        let event = Uuid::new_v4();
-        sqlx::query("INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary,details) VALUES($1,$2,'budget_threshold',$1::text,80,'warning',$3,'Budget threshold',jsonb_build_object('used_microusd','9007199254740993'))")
-            .bind(event).bind(rule).bind(ws).execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO alert_deliveries(id,event_id,transition,status,recipients,sent,failed,completed_at) VALUES($1,$2,'fired','sent',2,2,0,now())").bind(Uuid::new_v4()).bind(event).execute(&pool).await.unwrap();
+    // Persisted incidents with their fired email in both histories, each exactly as
+    // its producer writes it (a Team budget incident of an installation rule and of
+    // the Team's own rule; admission-ceiling incidents of the installation rule).
+    for rule in [rules[0].0, rules[1].0] {
+        alerts_states::seed(
+            &pool,
+            alerts_states::Seed::rule(rule, "budget_threshold", Some(f.team))
+                .details(alerts_states::budget_details("type", "month", 80))
+                .threshold(80),
+        )
+        .await;
     }
     let ceiling=good(&g,&mut observed,&admin,"POST",&format!("{ALERTS}/rules"),&format!("{ALERTS}/rules"),json!({"name":"Ceiling","kind":"admission_ceiling","window_minutes":5,"ceiling_requests_per_second":200,"notify_platform_admins":true})).await;
     for personal in [false, true] {
-        sqlx::query("INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary,details) VALUES($1,$2,'admission_ceiling',$1::text,1,'warning',$3,'Admission ceiling',$4)")
-            .bind(Uuid::new_v4()).bind(id(&ceiling)).bind(if personal{None}else{Some(f.team)}).bind(json!({
-                "scope":"workspace", "personal":personal,
-                "workspace_name":if personal{None}else{Some("Team")},
-                "workspace_kind":if personal{"personal"}else{"team"},
-                "window_minutes":5, "admissions":60000, "admissions_per_second":"200.0",
-                "by_rate":true, "by_lock_wait":false, "threshold_requests_per_second":200,
-                "lock_wait_p95_at_least_ms":null, "threshold_lock_wait_ms":null
-            })).execute(&pool).await.unwrap();
+        let mut s = alerts_states::Seed::rule(
+            id(&ceiling),
+            "admission_ceiling",
+            if personal { None } else { Some(f.team) },
+        );
+        s.details = alerts_states::ceiling_details(
+            personal,
+            "workspace",
+            if personal { "personal" } else { "team" },
+            Some(200),
+            None,
+        );
+        alerts_states::seed(&pool, s).await;
     }
     let platform_events = format!("{ALERTS}/events");
     for actor in [&admin, &auditor] {
@@ -993,14 +1023,14 @@ async fn management_openapi_slice5_fixtures(pool: PgPool) {
     alerts_states::webhooks(&g, &pool, &mut observed, &admin, &auditor).await;
     // Every documented branch of the settings responses, from real state.
     let mut extra = Vec::new();
-    for name in ["admin2", "admin3", "admin4", "admin5"] {
+    for name in ["admin2", "admin3", "admin4", "admin5", "admin6"] {
         let principal = user(&pool, name, "admin").await;
         extra.push(browser(&pool, &principal).await);
     }
     let nomail = states::admin_without_email(&pool).await;
     states::general_and_logo(&g, &mut observed, &admin, &auditor, &nomail).await;
     states::privacy(&g, &mut observed, &admin).await;
-    states::email(&g, &mut observed, &admin, &extra[0], port).await;
+    states::email(&g, &mut observed, &admin, &extra[0], &extra[4], port).await;
     states::storage(
         &pool,
         &f.s,
@@ -1060,5 +1090,7 @@ async fn management_openapi_slice5_fixtures(pool: PgPool) {
     vectors::webhooks(&g, &pool, &mut observed).await;
     vectors::logo(&g, &pool, &mut observed).await;
     vectors::settings(&g, &pool, &mut observed, port).await;
+    vectors::pinned(&g, &pool, port).await;
+    vectors::pinned_webhooks(&g, &pool).await;
     observed.finish(openapi::responses::SLICE5_AREAS);
 }

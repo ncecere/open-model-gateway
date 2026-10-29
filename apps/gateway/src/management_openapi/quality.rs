@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(super) const ARBITRARY_JSON: &[(&str, &str)] = &[
     (
         "/components/schemas/SettingsAlertEvent/properties/details",
-        "EVENT_JSON returns non-ceiling alert_events.details verbatim as stored producer-specific JSON; monetary refinements apply and ceiling variants refine it with the closed SettingsCeilingDetails schemas.",
+        "EVENT_JSON returns alert_events.details verbatim as stored producer-specific JSON; monetary refinements apply on this shared base, and every concrete event variant refines it with the closed schema of its kind (Settings*Details).",
     ),
     // alert_events.details is a stored jsonb object, not a deserialized DTO.
     // Its reviewed privacy refinements still constrain personal identities.
