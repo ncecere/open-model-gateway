@@ -129,13 +129,18 @@ async function setup({ policy = "deny", refuseOnce = false, freezeRefresh = fals
   };
 }
 type View = Awaited<ReturnType<typeof setup>>;
+// The first test in this file also pays the dashboard router's cold start
+// (module evaluation and lazy routes); with the whole suite on parallel workers
+// beside other CPU work that first render can exceed waitFor's 1 s default
+// (#402). An explicit bound keeps every assertion below exact.
+const SETTLE = { timeout: 5000 };
 async function stableDenied(view: View, probes: number) {
   await waitFor(() => {
     expect(view.sessionCalls).toHaveLength(probes);
     expect(screen.queryByText("Checking current access…")).toBeNull();
     expect(screen.queryAllByText(/^(Access denied|Access not available|You don't have access)$/).length).toBeGreaterThan(0);
     expect(view.client.isFetching()).toBe(0);
-  });
+  }, SETTLE);
   const requests = view.resourceCalls.length;
   await flushNotifications();
   expect(view.sessionCalls).toHaveLength(probes);
