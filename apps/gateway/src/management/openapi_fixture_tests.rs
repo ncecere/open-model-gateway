@@ -1283,8 +1283,10 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         // `ids: null` beside `all: true` is the all-arm's own shape (ReadInput.ids is
         // an Option): carrying it reaches that arm's `ids` location.
         (json!({"all":true,"ids":null}), vec![]),
+        // The boolean flip of position 1 sends `[[x], true]` (ids beside all: true).
+        // A seeded `[[x]] + /1: true` base is not a valid base for the maxItems
+        // vectors (its at-limit array is itself a refusal), so it is not a run.
         (json!([[first_event], false]), vec![]),
-        (json!([[first_event]]), vec![("/1", json!(true))]),
         (json!([null, true]), vec![]),
     ] {
         body_vectors_seeded(

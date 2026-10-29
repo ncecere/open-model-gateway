@@ -601,8 +601,12 @@ fn management_openapi_http_vectors_seeds_add_declared_absent_optionals() {
         {"type":"string","pattern":"^[0-9a-f]{4}$"},{"type":"boolean"}],
         "minItems":1,"maxItems":2,"items":false}));
     let cases = cases_of(&tuple, &json!(["abcd"]), &[("/1", json!(true))]).unwrap();
-    assert!(has(&cases, "/1", "optional added", true, |b| *b
-        == json!(["abcd", true])));
+    // (The seeded array is also the at-limit vector: the first kind names it.)
+    assert!(
+        cases
+            .iter()
+            .any(|c| c.accept && c.body == json!(["abcd", true]))
+    );
 }
 
 #[tokio::test]
@@ -820,7 +824,8 @@ async fn management_openapi_http_vectors_a_char_byte_mismatch_fails() {
     // A character-counting handler documented as a byte limit is looser.
     let text = message(run(byte_limited(true), by_chars).await);
     assert!(
-        text.contains("multibyte maxLength") && text.contains("schema refuses but handler accepts"),
+        text.contains("multibyte maxBytes+1")
+            && text.contains("schema refuses but handler accepts"),
         "{text}"
     );
     assert!(!text.contains('\u{e9}'), "{text}");
@@ -1028,7 +1033,7 @@ fn management_openapi_http_vectors_non_decisive_drops_are_counted_not_silent() {
     use super::http_vectors::Notes;
     let mut notes = Notes::default();
     // A pattern boundary past the cap is counted, never a failure.
-    notes.settle("/big", &["pattern length"], &[], false);
+    notes.settle("/big", &["pattern length"], &[] as &[&str], false);
     assert_eq!((notes.minor, notes.exempt, notes.unsent.len()), (1, 0, 0));
     notes.check().unwrap();
     // A decisive kind that was sent in another variant is only counted.
@@ -1040,9 +1045,9 @@ fn management_openapi_http_vectors_non_decisive_drops_are_counted_not_silent() {
     );
     assert_eq!((notes.minor, notes.unsent.len()), (2, 0));
     // A decisive kind with nothing sent is an exemption when reviewed, else a failure.
-    notes.settle("/big", &["maxItems"], &[], true);
+    notes.settle("/big", &["maxItems"], &[] as &[&str], true);
     assert_eq!((notes.exempt, notes.unsent.len()), (1, 0));
-    notes.settle("/big", &["maxItems"], &[], false);
+    notes.settle("/big", &["maxItems"], &[] as &[&str], false);
     let text = format!("{:#}", notes.check().unwrap_err());
     assert!(text.contains("maxItems at /big"), "{text}");
 }
@@ -1158,7 +1163,7 @@ fn management_openapi_http_vectors_report_map_values_never_carried() {
 #[test]
 fn management_openapi_http_vectors_report_array_elements_beyond_the_first() {
     let tuple = body_only(json!({"type":"array","prefixItems":[
-        {"type":"string"},{"type":"integer","maximum":9}],"minItems":1,"maxItems":2,"items":false}));
+        {"type":"string"},{"type":"integer","maximum":9}],"items":false}));
     let reached = reach_of(&tuple, &json!(["a"]), &[]);
     assert_eq!(
         unreached_in(&tuple, &reached),
@@ -1614,7 +1619,7 @@ fn management_openapi_http_vectors_probe_every_distinct_bound() {
         ("maxLength+1", 101),
         ("maxLength", 3),
         ("maxLength+1", 4),
-        ("minLength", 1),
+        ("minLength-1", 1),
     ] {
         assert!(
             cases.iter().any(|c| c.pointer == "/x"
@@ -1803,4 +1808,245 @@ async fn management_openapi_http_vectors_a_seeded_base_is_walked_in_full() {
             && text.contains("schema refuses but handler accepts"),
         "{text}"
     );
+}
+
+// ----- round 3: decisive vectors must be meaningful ----
+
+fn key_document(extra: Value) -> Value {
+    let mut key = json!({"type":"string","maxLength":64,"pattern":"^sk-[a-z0-9]+$"});
+    for (name, value) in extra.as_object().unwrap() {
+        key[name] = value.clone();
+    }
+    body_only(
+        json!({"type":"object","required":["key"],"additionalProperties":false,
+        "properties":{"key":key}}),
+    )
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Key {
+    key: String,
+}
+fn key_within(limit: usize, b: &Key) -> bool {
+    b.key.strip_prefix("sk-").is_some_and(|rest| {
+        !rest.is_empty()
+            && rest
+                .bytes()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    }) && b.key.chars().count() <= limit
+}
+fn key_64(b: &Key) -> bool {
+    key_within(64, b)
+}
+fn key_128(b: &Key) -> bool {
+    key_within(128, b)
+}
+
+#[tokio::test]
+async fn management_openapi_http_vectors_length_vectors_respect_the_other_constraints() {
+    let document = key_document(json!({}));
+    let valid = json!({"key":"sk-abc"});
+    let cases = cases_of(&document, &valid, &[]).unwrap();
+    let well_formed = |b: &Value, length: usize| {
+        b["key"].as_str().is_some_and(|k| {
+            k.chars().count() == length
+                && k.strip_prefix("sk-").is_some_and(|rest| {
+                    rest.bytes()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+                })
+        })
+    };
+    // The at-limit vector satisfies the pattern, and so does the one past it: the
+    // length bound alone refuses it.
+    assert!(has(&cases, "/key", "maxLength", true, |b| well_formed(
+        b, 64
+    )));
+    assert!(has(&cases, "/key", "maxLength+1", false, |b| well_formed(
+        b, 65
+    )));
+    run_judged(&judge::<Key>(key_64), &document, valid.clone(), &[])
+        .await
+        .unwrap();
+    // RED: a handler capped at 128 was never probed by a vector the pattern did not refuse.
+    let text = message(run_judged(&judge::<Key>(key_128), &document, valid, &[]).await);
+    assert!(
+        text.contains("maxLength+1")
+            && text.contains("/key")
+            && text.contains("schema refuses but handler accepts"),
+        "{text}"
+    );
+}
+
+#[test]
+fn management_openapi_http_vectors_implied_bounds_are_not_failures() {
+    // The pattern alone refuses everything past the limit: nothing could tell
+    // `maxLength` from the pattern, so the pair is sent and the run passes.
+    let document = body_only(
+        json!({"type":"object","required":["k"],"additionalProperties":false,"properties":{
+        "k":{"type":"string","maxLength":8,"pattern":"^[a-z]{1,8}$"},
+        "u":{"type":"string","maxLength":36,"format":"uuid"}}}),
+    );
+    let cases = cases_of(
+        &document,
+        &json!({"k":"abc","u":"123e4567-e89b-12d3-a456-426614174000"}),
+        &[],
+    )
+    .unwrap();
+    assert!(has(&cases, "/k", "maxLength", true, |b| b["k"]
+        .as_str()
+        .is_some_and(|k| k.len() == 8)));
+    assert!(has(&cases, "/k", "maxLength+1", false, |_| true));
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Ids {
+    ids: Vec<String>,
+}
+fn unique_ids(limit: usize, b: &Ids) -> bool {
+    let distinct: BTreeSet<&String> = b.ids.iter().collect();
+    (1..=limit).contains(&b.ids.len())
+        && distinct.len() == b.ids.len()
+        && b.ids.iter().all(|id| {
+            id.len() == 4
+                && id
+                    .bytes()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        })
+}
+fn unique_3(b: &Ids) -> bool {
+    unique_ids(3, b)
+}
+fn unique_5(b: &Ids) -> bool {
+    unique_ids(5, b)
+}
+fn unique_document() -> Value {
+    body_only(
+        json!({"type":"object","required":["ids"],"additionalProperties":false,"properties":{
+        "ids":{"type":"array","uniqueItems":true,"minItems":1,"maxItems":3,
+               "items":{"type":"string","pattern":"^[0-9a-f]{4}$"}}}}),
+    )
+}
+
+#[tokio::test]
+async fn management_openapi_http_vectors_item_vectors_use_distinct_elements_for_unique_items() {
+    let document = unique_document();
+    let valid = json!({"ids":["abcd"]});
+    let cases = cases_of(&document, &valid, &[]).unwrap();
+    let distinct = |b: &Value, length: usize| {
+        b["ids"].as_array().is_some_and(|ids| {
+            let all: BTreeSet<String> = ids.iter().map(Value::to_string).collect();
+            ids.len() == length && all.len() == length
+        })
+    };
+    assert!(has(&cases, "/ids", "maxItems", true, |b| distinct(b, 3)));
+    assert!(has(&cases, "/ids", "maxItems+1", false, |b| distinct(b, 4)));
+    run_judged(&judge::<Ids>(unique_3), &document, valid.clone(), &[])
+        .await
+        .unwrap();
+    // RED: a handler capped at 5 accepts four distinct elements the schema refuses.
+    let text = message(run_judged(&judge::<Ids>(unique_5), &document, valid, &[]).await);
+    assert!(
+        text.contains("maxItems+1") && text.contains("schema refuses but handler accepts"),
+        "{text}"
+    );
+}
+
+#[test]
+fn management_openapi_http_vectors_tuple_positions_need_valid_values() {
+    let tuple = body_only(json!({"type":"array","prefixItems":[
+        {"type":"string"},{"type":"integer","maximum":9}],"minItems":1,"maxItems":2,"items":false}));
+    // RED: nothing supplies a valid value for position 1, so the at-limit array
+    // cannot be built and the maxItems vectors would be silently skipped.
+    let text = format!("{:#}", cases_of(&tuple, &json!(["a"]), &[]).unwrap_err());
+    assert!(
+        text.contains("maxItems") && text.contains("x-omg-unsendable-boundary"),
+        "{text}"
+    );
+    // GREEN: a seeded value for the position, or a valid body that carries it.
+    let cases = cases_of(&tuple, &json!(["a"]), &[("/1", json!(3))]).unwrap();
+    assert!(
+        has(&cases, "", "maxItems", true, |b| *b == json!(["a", 3]))
+            || has(&cases, "(root)", "maxItems", true, |b| *b
+                == json!(["a", 3]))
+    );
+    assert!(has(&cases, "(root)", "maxItems+1", false, |b| b
+        .as_array()
+        .is_some_and(|a| a.len() == 3)));
+}
+
+fn bytes_document(limit: u64) -> Value {
+    body_only(
+        json!({"type":"object","required":["code"],"additionalProperties":false,"properties":{
+        "code":{"type":"string","minLength":1,"maxLength":limit,"x-omg-max-bytes":limit}}}),
+    )
+}
+fn bytes_within(limit: usize, b: &Code) -> bool {
+    !b.code.is_empty() && b.code.len() <= limit
+}
+fn at_most_9_bytes(b: &Code) -> bool {
+    bytes_within(9, b)
+}
+fn under_9_bytes(b: &Code) -> bool {
+    bytes_within(8, b)
+}
+fn at_most_10_bytes(b: &Code) -> bool {
+    bytes_within(10, b)
+}
+
+#[tokio::test]
+async fn management_openapi_http_vectors_byte_limits_are_probed_at_the_exact_byte_count() {
+    let document = bytes_document(9);
+    let valid = json!({"code":"abc"});
+    let cases = cases_of(&document, &valid, &[]).unwrap();
+    let bytes = |b: &Value, n: usize| b["code"].as_str().is_some_and(|c| c.len() == n);
+    let multibyte = |b: &Value| b["code"].as_str().is_some_and(|c| !c.is_ascii());
+    // Exactly the limit, and exactly one byte more, ASCII and multibyte.
+    // (A body sent under two kinds keeps the first kind's name.)
+    let any = |accept: bool, test: &dyn Fn(&Value) -> bool| {
+        cases
+            .iter()
+            .any(|c| c.pointer == "/code" && c.accept == accept && test(&c.body))
+    };
+    assert!(any(true, &|b| bytes(b, 9) && !multibyte(b)));
+    assert!(any(false, &|b| bytes(b, 10) && !multibyte(b)));
+    assert!(has(&cases, "/code", "multibyte maxBytes", true, |b| bytes(
+        b, 9
+    )
+        && multibyte(b)));
+    assert!(has(
+        &cases,
+        "/code",
+        "multibyte maxBytes+1",
+        false,
+        |b| bytes(b, 10) && multibyte(b)
+    ));
+    run_judged(
+        &judge::<Code>(at_most_9_bytes),
+        &document,
+        valid.clone(),
+        &[],
+    )
+    .await
+    .unwrap();
+    // RED: `>=` instead of `>` (an off-by-one at the limit) and a limit one too wide.
+    for (check, kind, side) in [
+        (
+            under_9_bytes as fn(&Code) -> bool,
+            "maxLength",
+            "schema accepts but handler refuses",
+        ),
+        (
+            at_most_10_bytes,
+            "maxLength+1",
+            "schema refuses but handler accepts",
+        ),
+    ] {
+        let text = message(run_judged(&judge::<Code>(check), &document, valid.clone(), &[]).await);
+        // (A body sent under two kinds is named by the first.)
+        assert!(
+            text.contains(kind) && text.contains("/code") && text.contains(side),
+            "{text}"
+        );
+    }
 }

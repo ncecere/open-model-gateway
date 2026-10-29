@@ -205,6 +205,8 @@ const DECISIVE: &[&str] = &[
     "maxLength+1",
     "multibyte maxLength",
     "multibyte maxLength+1",
+    "maxBytes",
+    "maxBytes+1",
     "multibyte maxBytes",
     "multibyte maxBytes+1",
     "minItems",
@@ -218,7 +220,7 @@ const DECISIVE: &[&str] = &[
 #[derive(Default)]
 pub(super) struct Notes {
     /// Decisive kinds with no sendable vector at all: `(kind, location)`.
-    pub(super) unsent: Vec<(&'static str, String)>,
+    pub(super) unsent: Vec<(String, String)>,
     /// Decisive drops excused by a reviewed [`UNSENDABLE`].
     pub(super) exempt: usize,
     /// Non-decisive candidates that were not sent (counted, never silent).
@@ -228,21 +230,25 @@ pub(super) struct Notes {
     pub(super) problems: Vec<String>,
 }
 impl Notes {
-    /// `dropped` candidates of one location; `sent` are the kinds that WERE sent.
-    pub(super) fn settle(
+    /// `dropped` candidates of one location; `sent` are the ones that WERE sent.
+    /// A label is a kind, optionally with the bound it probes (`maxLength+1@64`):
+    /// each bound is decisive on its own, so one bound's vectors never excuse
+    /// another's.
+    pub(super) fn settle<D: AsRef<str>, S: AsRef<str>>(
         &mut self,
         location: &str,
-        dropped: &[&'static str],
-        sent: &[&'static str],
+        dropped: &[D],
+        sent: &[S],
         exempt: bool,
     ) {
-        for kind in dropped {
-            if sent.contains(kind) || !DECISIVE.contains(kind) {
+        for label in dropped.iter().map(AsRef::as_ref) {
+            let kind = label.split('@').next().unwrap_or(label);
+            if sent.iter().any(|s| s.as_ref() == label) || !DECISIVE.contains(&kind) {
                 self.minor += 1;
             } else if exempt {
                 self.exempt += 1;
-            } else if !self.unsent.iter().any(|(k, l)| k == kind && l == location) {
-                self.unsent.push((kind, location.to_owned()));
+            } else if !self.unsent.iter().any(|(k, l)| k == label && l == location) {
+                self.unsent.push((label.to_owned(), location.to_owned()));
             }
         }
     }
@@ -371,7 +377,7 @@ fn simple_bounds(pattern: &str) -> Option<(usize, Option<usize>)> {
 /// Candidates around a pattern: shape violations, control characters,
 /// multibyte values and, for simple repetition patterns, the length boundaries
 /// m-1, m, n and n+1 built from the characters of the valid seed.
-fn pattern_candidates(pattern: &str, seed: &str, dropped: &mut Vec<&'static str>) -> Vec<String> {
+fn pattern_candidates(pattern: &str, seed: &str, dropped: &mut Vec<String>) -> Vec<String> {
     let mut replaced = seed.chars();
     replaced.next();
     let mut out = vec![
@@ -400,18 +406,409 @@ fn pattern_candidates(pattern: &str, seed: &str, dropped: &mut Vec<&'static str>
             if (length as u64) <= LONGEST {
                 out.push(repeat_to(seed, length));
             } else {
-                dropped.push("pattern length");
+                dropped.push("pattern length".to_owned());
             }
         }
     }
     out
 }
 
+// ---------------------------------------------------------------------------
+// Meaningful decisive vectors
+// ---------------------------------------------------------------------------
+//
+// A length or item bound counts as probed only by a PAIR of vectors: one AT the
+// limit that the schema accepts, one just PAST it that the schema refuses
+// BECAUSE OF THAT BOUND (the same candidate is accepted once that one keyword is
+// removed). Candidates are built from characters (or elements) that satisfy the
+// other constraints, so a `maxLength: 64` beside `^sk-[a-z0-9]+$` is probed with
+// an `sk-...` value of 64 and 65 characters, not with text the pattern refuses
+// anyway. When another constraint ALONE refuses every candidate past the limit
+// (`^[a-z]{1,8}$` beside `maxLength: 8`, a `format: uuid`), the bound is IMPLIED:
+// the pair is still sent, but no vector could tell the bound from the other
+// constraint. A bound with no such pair at all is reported (and fails unless the
+// location carries `x-omg-unsendable-boundary`).
+
+/// Decisive vectors of one location, by label (`kind@bound`).
+#[derive(Default)]
+struct Evidence {
+    labelled: Vec<(String, &'static str, Value)>,
+    dropped: Vec<String>,
+}
+
+/// An at-limit vector the schema accepts and the vector just past it.
+#[derive(Clone)]
+struct Pair {
+    at: Value,
+    over: Value,
+}
+
+fn label(kind: &str, bound: u64) -> String {
+    format!("{kind}@{bound}")
+}
+
+impl Evidence {
+    /// Record the pair found for one bound (or why there is none). A bound
+    /// another, stricter bound of the same kind dominates cannot be probed on its
+    /// own: its failure is only counted.
+    fn settle(
+        &mut self,
+        kinds: (&'static str, Option<&'static str>),
+        bound: u64,
+        found: Option<Pair>,
+        dominated: bool,
+    ) {
+        let all = [Some(kinds.0), kinds.1];
+        match found {
+            Some(pair) => {
+                self.labelled
+                    .push((label(kinds.0, bound), kinds.0, pair.at));
+                if let Some(over) = kinds.1 {
+                    self.labelled.push((label(over, bound), over, pair.over));
+                }
+            }
+            None => {
+                for kind in all.into_iter().flatten() {
+                    self.dropped.push(if dominated {
+                        format!("dominated {kind}@{bound}")
+                    } else {
+                        label(kind, bound)
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// The schema with every `key: bound` removed (the references it follows
+/// included): what the schema would say without that one bound.
+fn strip(node: &mut Value, key: &str, bound: &Value) {
+    match node {
+        Value::Object(map) => {
+            if map.get(key) == Some(bound) {
+                map.remove(key);
+            }
+            for child in map.values_mut() {
+                strip(child, key, bound);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                strip(child, key, bound);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn relaxed(
+    document: &Value,
+    schema: &Value,
+    key: &str,
+    bound: u64,
+) -> Result<std::sync::Arc<jsonschema::Validator>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::BTreeMap<String, std::sync::Arc<jsonschema::Validator>>>,
+    > = std::sync::OnceLock::new();
+    let bound = json!(bound);
+    let compile = || -> Result<std::sync::Arc<jsonschema::Validator>> {
+        let mut document = document.clone();
+        strip(&mut document, key, &bound);
+        let mut schema = schema.clone();
+        strip(&mut schema, key, &bound);
+        // A fresh document is never the artifact: this compiles without caching.
+        responses::validator(&document, &schema)
+    };
+    // Only the immutable committed artifact is cached (by value of the request).
+    if !std::ptr::eq(document, responses::artifact()) {
+        return compile();
+    }
+    let cache_key = format!("{key}={bound} {}", serde_json::to_string(schema)?);
+    if let Some(found) = CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .get(&cache_key)
+    {
+        return Ok(found.clone());
+    }
+    let validator = compile()?;
+    CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .insert(cache_key, validator.clone());
+    Ok(validator)
+}
+
+/// The first candidate pair the schema accepts at the limit and refuses past
+/// it, preferring one the bound ALONE refuses (`relaxed` accepts it). `None`
+/// when no candidate satisfies the schema at the limit.
+fn find_pair(
+    document: &Value,
+    schema: &Value,
+    relaxed: Option<&jsonschema::Validator>,
+    candidates: impl Iterator<Item = (Value, Value)>,
+) -> Result<Option<Pair>> {
+    let mut implied = None;
+    for (at, over) in candidates {
+        if !accepts(document, schema, &at)? || accepts(document, schema, &over)? {
+            continue;
+        }
+        let alone = match relaxed {
+            Some(relaxed) => relaxed.is_valid(&over),
+            None => valid(document, schema, &over)?,
+        };
+        if alone {
+            return Ok(Some(Pair { at, over }));
+        }
+        implied.get_or_insert(Pair { at, over });
+    }
+    Ok(implied)
+}
+
+const GLYPHS: [&str; 3] = ["\u{e9}", "\u{2713}", "\u{1F600}"];
+
+/// Printable ASCII, the last resort for a fill character a pattern allows.
+fn sweep() -> impl Iterator<Item = char> {
+    ' '..='~'
+}
+
+/// Strategies for a fill of `length` characters: the seed repeated, then the
+/// seed (truncated) padded with each of its own characters, then with every
+/// printable ASCII character. The pad keeps the seed's prefix and alphabet.
+fn strategy_count(seed: &str) -> usize {
+    1 + seed.chars().collect::<BTreeSet<_>>().len() + sweep().count()
+}
+fn fill(seed: &str, length: usize, strategy: usize) -> Option<String> {
+    if strategy == 0 {
+        return Some(repeat_to(seed, length));
+    }
+    let mut distinct: Vec<char> = Vec::new();
+    for c in seed.chars() {
+        if !distinct.contains(&c) {
+            distinct.push(c);
+        }
+    }
+    let pad = match strategy - 1 {
+        n if n < distinct.len() => distinct[n],
+        n => sweep().nth(n - distinct.len())?,
+    };
+    let head: String = seed.chars().take(length).collect();
+    let rest = length - head.chars().count();
+    Some(format!("{head}{}", pad.to_string().repeat(rest)))
+}
+fn ascii_pairs(seed: &str, at: usize, over: usize) -> impl Iterator<Item = (Value, Value)> + '_ {
+    (0..strategy_count(seed))
+        .filter_map(move |s| Some((json!(fill(seed, at, s)?), json!(fill(seed, over, s)?))))
+}
+
+/// `head` (a prefix of the seed) then `glyph` repeated to `chars` characters.
+fn glyph_value(seed: &str, head: usize, glyph: &str, chars: usize) -> Option<String> {
+    (chars > head).then(|| {
+        let head: String = seed.chars().take(head).collect();
+        format!("{head}{}", glyph.repeat(chars - head.chars().count()))
+    })
+}
+fn heads(seed: &str) -> std::ops::RangeInclusive<usize> {
+    0..=seed.chars().count().min(8)
+}
+/// Pairs of `chars` and `chars + 1` characters ending in `glyph`s.
+fn glyph_pairs<'a>(seed: &'a str, chars: usize) -> impl Iterator<Item = (Value, Value)> + 'a {
+    GLYPHS.into_iter().flat_map(move |glyph| {
+        heads(seed).filter_map(move |head| {
+            Some((
+                json!(glyph_value(seed, head, glyph, chars)?),
+                json!(glyph_value(seed, head, glyph, chars + 1)?),
+            ))
+        })
+    })
+}
+/// A value of exactly `bytes` UTF-8 bytes: `head`, `glyph`s, then ASCII `pad`.
+fn byte_value(seed: &str, head: usize, glyph: &str, pad: char, bytes: usize) -> Option<String> {
+    let head: String = seed.chars().take(head).collect();
+    let rest = bytes.checked_sub(head.len())?;
+    let glyphs = rest / glyph.len();
+    (glyphs > 0).then(|| {
+        format!(
+            "{head}{}{}",
+            glyph.repeat(glyphs),
+            pad.to_string().repeat(rest - glyphs * glyph.len())
+        )
+    })
+}
+/// Pairs of exactly `bytes` and `bytes + 1` bytes, multibyte, padded with ASCII
+/// so that `>=` and `>` are told apart.
+fn byte_pairs<'a>(seed: &'a str, bytes: usize) -> impl Iterator<Item = (Value, Value)> + 'a {
+    let mut pads: Vec<char> = seed.chars().filter(char::is_ascii).collect();
+    pads.extend(['a', '0', 'A', 'x']);
+    GLYPHS.into_iter().flat_map(move |glyph| {
+        let pads = pads.clone();
+        heads(seed).flat_map(move |head| {
+            pads.clone().into_iter().filter_map(move |pad| {
+                Some((
+                    json!(byte_value(seed, head, glyph, pad, bytes)?),
+                    json!(byte_value(seed, head, glyph, pad, bytes + 1)?),
+                ))
+            })
+        })
+    })
+}
+
+/// Can the schema hold a multibyte value at all (at its shortest length)?
+fn multibyte_possible(
+    document: &Value,
+    schema: &Value,
+    seed: &str,
+    shortest: usize,
+    longest: usize,
+) -> Result<bool> {
+    for glyph in GLYPHS {
+        for head in heads(seed) {
+            let chars = shortest.max(head + 1);
+            if chars <= longest
+                && let Some(candidate) = glyph_value(seed, head, glyph, chars)
+                && accepts(document, schema, &json!(candidate))?
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// The length vectors of a string location, one pair per DISTINCT bound.
+fn string_bounds(
+    document: &Value,
+    schema: &Value,
+    nodes: &[&Value],
+    seed: &str,
+    out: &mut Vec<(&'static str, Value)>,
+    evidence: &mut Evidence,
+) -> Result<()> {
+    let mins = distinct_u64(nodes, "minLength");
+    let maxs = distinct_u64(nodes, "maxLength");
+    let byte_limits = distinct_u64(nodes, MAX_BYTES);
+    for &min in mins.iter().filter(|min| **min > 0) {
+        let dominated = Some(&min) != mins.last();
+        if min > LONGEST {
+            evidence.settle(("minLength", Some("minLength-1")), min, None, dominated);
+            continue;
+        }
+        let validator = relaxed(document, schema, "minLength", min)?;
+        let found = find_pair(
+            document,
+            schema,
+            Some(&validator),
+            ascii_pairs(seed, min as usize, min as usize - 1),
+        )?;
+        if found.is_none() {
+            out.push(("minLength", json!(repeat_to(seed, min as usize))));
+            out.push(("minLength-1", json!(repeat_to(seed, min as usize - 1))));
+        }
+        evidence.settle(("minLength", Some("minLength-1")), min, found, dominated);
+    }
+    let shortest = mins.last().copied().unwrap_or(0) as usize;
+    for &max in &maxs {
+        let dominated = Some(&max) != maxs.first();
+        if max >= LONGEST {
+            evidence.settle(("maxLength", Some("maxLength+1")), max, None, dominated);
+        } else {
+            let validator = relaxed(document, schema, "maxLength", max)?;
+            let found = find_pair(
+                document,
+                schema,
+                Some(&validator),
+                ascii_pairs(seed, max as usize, max as usize + 1),
+            )?;
+            if found.is_none() {
+                out.push(("maxLength", json!(repeat_to(seed, max as usize))));
+                out.push(("maxLength+1", json!(repeat_to(seed, max as usize + 1))));
+            }
+            evidence.settle(("maxLength", Some("maxLength+1")), max, found, dominated);
+        }
+        // Characters, not bytes: `max` multibyte characters are within maxLength
+        // however many bytes they take. A byte limit below two bytes per
+        // character, or a schema that refuses multibyte text, leaves nothing
+        // to tell apart (counted, not decisive).
+        let kinds = ("multibyte maxLength", Some("multibyte maxLength+1"));
+        if byte_limits.iter().any(|limit| *limit < 2 * max)
+            || !multibyte_possible(document, schema, seed, shortest, max as usize)?
+        {
+            evidence.dropped.push("multibyte not applicable".to_owned());
+            // Still sent when small enough: the handler must agree with the
+            // schema (a byte limit refuses `max` two-byte characters).
+            if max <= 20_000 {
+                for glyph in ["\u{e9}", "\u{1F600}"] {
+                    out.push(("multibyte maxLength", json!(glyph.repeat(max as usize))));
+                    out.push((
+                        "multibyte maxLength+1",
+                        json!(glyph.repeat(max as usize + 1)),
+                    ));
+                }
+            }
+        } else if max > 20_000 {
+            evidence.settle(kinds, max, None, dominated);
+        } else {
+            let validator = relaxed(document, schema, "maxLength", max)?;
+            let found = find_pair(
+                document,
+                schema,
+                Some(&validator),
+                glyph_pairs(seed, max as usize),
+            )?;
+            evidence.settle(kinds, max, found, dominated);
+        }
+    }
+    // A reviewed byte limit (every distinct one): ASCII and multibyte values of
+    // EXACTLY the limit and of one byte more.
+    for &limit in &byte_limits {
+        let dominated = Some(&limit) != byte_limits.first();
+        if limit >= LONGEST {
+            evidence.settle(("maxBytes", Some("maxBytes+1")), limit, None, dominated);
+            evidence.settle(
+                ("multibyte maxBytes", Some("multibyte maxBytes+1")),
+                limit,
+                None,
+                dominated,
+            );
+            continue;
+        }
+        let ascii = find_pair(
+            document,
+            schema,
+            None,
+            ascii_pairs(seed, limit as usize, limit as usize + 1)
+                .filter(|(at, _)| at.as_str().is_some_and(|t| t.len() == limit as usize)),
+        )?;
+        let possible = multibyte_possible(document, schema, seed, shortest, usize::MAX)?;
+        let wide = if possible {
+            find_pair(document, schema, None, byte_pairs(seed, limit as usize))?
+        } else {
+            None
+        };
+        let exact = ascii.or_else(|| wide.clone());
+        evidence.settle(("maxBytes", Some("maxBytes+1")), limit, exact, dominated);
+        if possible {
+            evidence.settle(
+                ("multibyte maxBytes", Some("multibyte maxBytes+1")),
+                limit,
+                wide,
+                dominated,
+            );
+        }
+    }
+    Ok(())
+}
+
 /// The candidates of one location and the decisive kinds it could not produce.
 struct Mutations {
     vectors: Vec<(&'static str, Value)>,
-    /// Candidate kinds the harness refused to generate (past its caps).
-    dropped: Vec<&'static str>,
+    /// Decisive vectors of one bound, by label (`maxLength+1@64`): built from
+    /// candidates that satisfy the other constraints, see [`length_pair`].
+    labelled: Vec<(String, &'static str, Value)>,
+    /// Labels (or kinds) the harness could not send or build meaningfully.
+    dropped: Vec<String>,
     /// The location has a pattern with no derivable length bounds, no reviewed
     /// [`PATTERN_BOUNDARIES`] and no supplied candidates.
     needs_candidates: bool,
@@ -459,7 +856,8 @@ fn scalar_mutations(
     candidates: usize,
 ) -> Result<Mutations> {
     let mut out: Vec<(&'static str, Value)> = Vec::new();
-    let mut dropped: Vec<&'static str> = Vec::new();
+    let mut evidence = Evidence::default();
+    let mut dropped: Vec<String> = Vec::new();
     let mut needs_candidates = false;
     let kinds = types(nodes);
     if !query {
@@ -572,50 +970,8 @@ fn scalar_mutations(
     // String bounds are derived from the VALID value so the alphabet stays valid.
     if kinds.contains("string") {
         let seed = value.as_str().unwrap_or("a");
-        for min in distinct_u64(nodes, "minLength") {
-            if min <= LONGEST {
-                out.push(("minLength", json!(repeat_to(seed, min as usize))));
-                if min > 0 {
-                    out.push(("minLength-1", json!(repeat_to(seed, min as usize - 1))));
-                }
-            } else {
-                dropped.extend(["minLength", "minLength-1"]);
-            }
-        }
-        for max in distinct_u64(nodes, "maxLength") {
-            if max < LONGEST {
-                out.push(("maxLength", json!(repeat_to(seed, max as usize))));
-                out.push(("maxLength+1", json!(repeat_to(seed, max as usize + 1))));
-            } else {
-                dropped.extend(["maxLength", "maxLength+1"]);
-            }
-            // Characters, not bytes: a value of `max` multibyte characters is
-            // within maxLength however many bytes it takes.
-            if max <= 20_000 {
-                for glyph in ["\u{e9}", "\u{1F600}"] {
-                    out.push(("multibyte maxLength", json!(glyph.repeat(max as usize))));
-                    out.push((
-                        "multibyte maxLength+1",
-                        json!(glyph.repeat(max as usize + 1)),
-                    ));
-                }
-            } else {
-                dropped.extend(["multibyte maxLength", "multibyte maxLength+1"]);
-            }
-        }
-        // A reviewed byte limit (every distinct one): multibyte values at and
-        // just over it.
-        for limit in distinct_u64(nodes, MAX_BYTES) {
-            if limit < LONGEST {
-                for glyph in ["\u{e9}", "\u{2713}", "\u{1F600}"] {
-                    let fit = limit as usize / glyph.len();
-                    out.push(("multibyte maxBytes", json!(glyph.repeat(fit))));
-                    out.push(("multibyte maxBytes+1", json!(glyph.repeat(fit + 1))));
-                }
-            } else {
-                dropped.extend(["multibyte maxBytes", "multibyte maxBytes+1"]);
-            }
-        }
+        string_bounds(document, schema, nodes, seed, &mut out, &mut evidence)?;
+        dropped.append(&mut evidence.dropped);
         if let Some(pattern) = first(nodes, "pattern").and_then(Value::as_str) {
             let bounded = simple_bounds(pattern).is_some()
                 || ["minLength", "maxLength"]
@@ -657,6 +1013,7 @@ fn scalar_mutations(
     }
     Ok(Mutations {
         vectors: out,
+        labelled: evidence.labelled,
         dropped,
         needs_candidates,
     })
@@ -850,16 +1207,22 @@ pub(super) fn query_plan(
                 .extend(supplied.iter().map(|v| ("supplied candidate", json!(v))));
         }
         let mut dropped = mutations.dropped;
-        let mut sent: Vec<&'static str> = Vec::new();
-        for (kind, value) in mutations.vectors {
+        let mut sent: Vec<String> = Vec::new();
+        let all = mutations.labelled.into_iter().chain(
+            mutations
+                .vectors
+                .into_iter()
+                .map(|(kind, value)| (kind.to_owned(), kind, value)),
+        );
+        for (label, kind, value) in all {
             let raw = render(&value);
             // A request target is limited to 65534 bytes by the HTTP stack: the
             // REAL percent-encoded query string (not a worst-case estimate) must fit.
             if encode(&with_param(base, name, &raw)).len() > MAX_QUERY_BYTES {
-                dropped.push(kind);
+                dropped.push(label);
                 continue;
             }
-            sent.push(kind);
+            sent.push(label);
             if seen.insert(raw.clone()) {
                 let accept = accepts(document, schema, &coerce(&kinds, &raw))?;
                 out.push(QueryCase {
@@ -1213,6 +1576,153 @@ impl Walk<'_> {
         }
         Ok(())
     }
+    /// The array a vector sends with `length` elements: the valid array's own
+    /// elements first, then per-position values (a seeded positional value) or,
+    /// for the homogeneous tail, copies of a valid tail element (DISTINCT ones
+    /// under `uniqueItems`). `None` when no valid element can be built for a
+    /// position.
+    fn array_of(
+        &self,
+        nodes: &[&Value],
+        items: &[Value],
+        path: &[Step],
+        length: usize,
+        unique: bool,
+    ) -> Result<Option<Vec<Value>>> {
+        let mut out: Vec<Value> = items.iter().take(length).cloned().collect();
+        let start = out.len();
+        let tail_from = tail_start(nodes);
+        let template = items.get(tail_from).cloned();
+        let wanted = |i: usize| !positional(nodes, i) && element_schema(nodes, i).is_some();
+        let fresh = (start..length).filter(|i| wanted(*i)).count();
+        let mut variants = Vec::new();
+        if unique && fresh > 0 {
+            let (Some(template), Some(schema)) = (&template, element_schema(nodes, tail_from))
+            else {
+                return Ok(None);
+            };
+            let Some(found) = distinct_variants(self.document, &schema, template, items, fresh)?
+            else {
+                return Ok(None);
+            };
+            variants = found;
+        }
+        for i in start..length {
+            if positional(nodes, i) {
+                let mut at = path.to_vec();
+                at.push(Step::Index(i));
+                let Some(seed) = self.seeds.get(&pointer(&at)) else {
+                    return Ok(None);
+                };
+                out.push(seed.clone());
+            } else if element_schema(nodes, i).is_some() {
+                match (unique, &template) {
+                    (true, _) => out.extend(variants.pop()),
+                    (false, Some(template)) => out.push(template.clone()),
+                    (false, None) => return Ok(None),
+                }
+            } else {
+                // No schema governs this position (a closed tuple): any element
+                // is refused structurally; repeat the last one.
+                let Some(last) = out.last().cloned() else {
+                    return Ok(None);
+                };
+                out.push(last);
+            }
+        }
+        Ok(Some(out))
+    }
+
+    /// `minItems`/`maxItems` vectors, one meaningful pair per distinct bound.
+    fn array_bounds(
+        &mut self,
+        schema: &Value,
+        nodes: &[&Value],
+        items: &[Value],
+        path: &mut Vec<Step>,
+    ) -> Result<()> {
+        if items.is_empty() {
+            return Ok(());
+        }
+        let mins = distinct_u64(nodes, "minItems");
+        let maxs = distinct_u64(nodes, "maxItems");
+        let unique = nodes
+            .iter()
+            .any(|node| node.get("uniqueItems") == Some(&Value::Bool(true)));
+        let mut evidence = Evidence::default();
+        let mut plan: Vec<(&'static str, &'static str, u64, Option<usize>, usize)> = Vec::new();
+        for &min in mins.iter().filter(|min| **min > 0) {
+            plan.push((
+                "minItems",
+                "minItems-1",
+                min,
+                Some(min as usize),
+                min as usize - 1,
+            ));
+        }
+        for &max in &maxs {
+            plan.push((
+                "maxItems",
+                "maxItems+1",
+                max,
+                Some(max as usize),
+                max as usize + 1,
+            ));
+        }
+        for (at_kind, over_kind, bound, at, over) in plan {
+            let key = if at_kind == "minItems" {
+                "minItems"
+            } else {
+                "maxItems"
+            };
+            let dominated = if key == "minItems" {
+                Some(&bound) != mins.last()
+            } else {
+                Some(&bound) != maxs.first()
+            };
+            let kinds = (at_kind, Some(over_kind));
+            let (Some(at), over) = (at, over) else {
+                continue;
+            };
+            if at.max(over) as u64 > MAX_ITEMS {
+                evidence.settle(kinds, bound, None, dominated);
+                continue;
+            }
+            let built = (
+                self.array_of(nodes, items, path, at, unique)?,
+                self.array_of(nodes, items, path, over, unique)?,
+            );
+            let (Some(at), Some(over)) = built else {
+                evidence.settle(kinds, bound, None, dominated);
+                continue;
+            };
+            let validator = relaxed(self.document, schema, key, bound)?;
+            let found = find_pair(
+                self.document,
+                schema,
+                Some(&validator),
+                std::iter::once((Value::Array(at.clone()), Value::Array(over.clone()))),
+            )?;
+            if found.is_none() {
+                // Still sent: the handler must agree with the schema on them.
+                self.push(path, at_kind, Some(Value::Array(at)))?;
+                self.push(path, over_kind, Some(Value::Array(over)))?;
+            }
+            evidence.settle(kinds, bound, found, dominated);
+        }
+        let sent: Vec<&str> = evidence
+            .labelled
+            .iter()
+            .map(|(label, ..)| label.as_str())
+            .collect();
+        let exempt = nodes.iter().any(|node| node.get(UNSENDABLE).is_some());
+        self.notes
+            .settle(&pointer(path), &evidence.dropped, &sent, exempt);
+        for (_, kind, value) in evidence.labelled {
+            self.push(path, kind, Some(value))?;
+        }
+        Ok(())
+    }
     fn walk(&mut self, schema: &Value, value: &Value, path: &mut Vec<Step>) -> Result<()> {
         ensure!(path.len() < 12, "request body nesting too deep");
         self.walked
@@ -1231,9 +1741,18 @@ impl Walk<'_> {
                 "{here}: the pattern has no derivable length bounds; supply boundary candidates or annotate it with {PATTERN_BOUNDARIES}"
             ));
         }
-        let sent: Vec<&'static str> = mutations.vectors.iter().map(|(kind, _)| *kind).collect();
+        let sent: Vec<&str> = mutations
+            .vectors
+            .iter()
+            .map(|(kind, _)| *kind)
+            .chain(mutations.labelled.iter().map(|(label, ..)| label.as_str()))
+            .collect();
         let exempt = nodes.iter().any(|node| node.get(UNSENDABLE).is_some());
         self.notes.settle(&here, &mutations.dropped, &sent, exempt);
+        // Decisive kinds first: a body sent twice keeps the first kind's name.
+        for (_, kind, new) in mutations.labelled {
+            self.push(path, kind, Some(new))?;
+        }
         for (kind, new) in mutations.vectors {
             self.push(path, kind, Some(new))?;
         }
@@ -1286,33 +1805,7 @@ impl Walk<'_> {
                 }
             }
             Value::Array(items) => {
-                let element = items.first();
-                if let Some(first) = element {
-                    let mut dropped = Vec::new();
-                    let mut sent = Vec::new();
-                    let mut lengths: Vec<(&'static str, Option<u64>)> = Vec::new();
-                    for min in distinct_u64(&nodes, "minItems") {
-                        lengths.push(("minItems", Some(min)));
-                        lengths.push(("minItems-1", min.checked_sub(1)));
-                    }
-                    for max in distinct_u64(&nodes, "maxItems") {
-                        lengths.push(("maxItems", Some(max)));
-                        lengths.push(("maxItems+1", Some(max + 1)));
-                    }
-                    for (kind, length) in lengths {
-                        match length {
-                            Some(length) if length <= MAX_ITEMS => {
-                                sent.push(kind);
-                                let array = vec![first.clone(); length as usize];
-                                self.push(path, kind, Some(Value::Array(array)))?;
-                            }
-                            Some(_) => dropped.push(kind),
-                            None => {}
-                        }
-                    }
-                    let exempt = nodes.iter().any(|node| node.get(UNSENDABLE).is_some());
-                    self.notes.settle(&pointer(path), &dropped, &sent, exempt);
-                }
+                self.array_bounds(schema, &nodes, items, path)?;
                 self.push(path, "empty array", Some(json!([])))?;
                 // Every positional index, and one element of each distinct
                 // signature (the union arms and conditional branches it matches)
@@ -1399,6 +1892,92 @@ fn positional(nodes: &[&Value], index: usize) -> bool {
     nodes
         .iter()
         .any(|node| node["prefixItems"].get(index).is_some())
+}
+/// `need` NEW distinct values the `schema` accepts, none equal to `taken`,
+/// found by varying `template` (characters, numbers, flags, member values).
+/// `None` when the schema has too few distinct values (or the search gives up).
+fn distinct_variants(
+    document: &Value,
+    schema: &Value,
+    template: &Value,
+    taken: &[Value],
+    need: usize,
+) -> Result<Option<Vec<Value>>> {
+    const ALPHABET: &str = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    fn mutate(value: &Value) -> Vec<Value> {
+        match value {
+            Value::String(text) => {
+                let chars: Vec<char> = text.chars().collect();
+                let mut out = Vec::new();
+                for position in 0..chars.len().min(16) {
+                    for c in ALPHABET.chars().filter(|c| *c != chars[position]) {
+                        let mut changed = chars.clone();
+                        changed[position] = c;
+                        out.push(json!(changed.into_iter().collect::<String>()));
+                    }
+                }
+                for c in ALPHABET.chars() {
+                    out.push(json!(format!("{text}{c}")));
+                }
+                out
+            }
+            Value::Number(n) => {
+                let n = n.as_i64().unwrap_or(0);
+                (1..=8)
+                    .flat_map(|k| [json!(n.saturating_add(k)), json!(n.saturating_sub(k))])
+                    .collect()
+            }
+            Value::Bool(flag) => vec![json!(!flag)],
+            Value::Object(map) => map
+                .iter()
+                .flat_map(|(name, child)| {
+                    mutate(child).into_iter().map(move |changed| {
+                        let mut copy = map.clone();
+                        copy.insert(name.clone(), changed);
+                        Value::Object(copy)
+                    })
+                })
+                .collect(),
+            Value::Array(items) => items
+                .iter()
+                .enumerate()
+                .flat_map(|(i, child)| {
+                    mutate(child).into_iter().map(move |changed| {
+                        let mut copy = items.clone();
+                        copy[i] = changed;
+                        Value::Array(copy)
+                    })
+                })
+                .collect(),
+            Value::Null => Vec::new(),
+        }
+    }
+    let validator = responses::validator(document, schema)?;
+    let mut seen: BTreeSet<String> = taken
+        .iter()
+        .chain([template])
+        .map(serde_json::to_string)
+        .collect::<Result<_, _>>()?;
+    let mut queue: std::collections::VecDeque<Value> = taken.iter().cloned().collect();
+    queue.push_back(template.clone());
+    let mut found = Vec::new();
+    let mut budget = 50_000usize;
+    while found.len() < need
+        && budget > 0
+        && let Some(base) = queue.pop_front()
+    {
+        for candidate in mutate(&base) {
+            budget = budget.saturating_sub(1);
+            if found.len() >= need || !seen.insert(serde_json::to_string(&candidate)?) {
+                continue;
+            }
+            if validator.is_valid(&candidate) {
+                found.push(candidate.clone());
+                queue.push_back(candidate);
+            }
+        }
+    }
+    Ok((found.len() >= need).then_some(found))
 }
 /// The schema every element at `index` must satisfy: a positional schema, else
 /// the tail `items` schema.
