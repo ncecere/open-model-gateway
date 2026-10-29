@@ -30,7 +30,90 @@ impl<'de> serde::Deserializer<'de> for &Fields {
     }
 }
 
+/// Operations whose HANDLER refuses values serde accepts (documented value
+/// rules: length, alphabet, bounds, cross-field rules). The schema carries those
+/// rules, so against serde alone it may be STRICTER, never looser. Each entry is
+/// a reviewed claim; `finish()` still demands executed HTTP boundary vectors for
+/// the operation, which compare the schema with the real handler exactly.
+pub(crate) const SEMANTIC_REFINEMENTS: &[(&str, &str, &str)] = &[
+    (
+        "POST",
+        "/api/v1/platform/catalogs",
+        "catalog names are non-blank text without control characters of at most 120 bytes; descriptions at most 2000 bytes",
+    ),
+    (
+        "PATCH",
+        "/api/v1/platform/catalogs/{id}",
+        "catalog names are non-blank text without control characters of at most 120 bytes; descriptions at most 2000 bytes",
+    ),
+    (
+        "POST",
+        "/api/v1/platform/models",
+        "model aliases, display names, descriptions and protocol sets carry the handler's alphabet, length and one-workload rules",
+    ),
+    (
+        "PATCH",
+        "/api/v1/platform/models/{id}",
+        "model aliases, display names, descriptions and protocol sets carry the handler's alphabet, length and one-workload rules",
+    ),
+    (
+        "POST",
+        "/api/v1/platform/providers",
+        "provider kinds are a closed set and each kind constrains the credential reference, endpoint, region and AWS options",
+    ),
+    (
+        "PATCH",
+        "/api/v1/platform/providers/{id}",
+        "a restated credential reference is a non-empty reference",
+    ),
+    (
+        "POST",
+        "/api/v1/platform/deployments",
+        "the upstream model is non-blank text without control characters of at most 512 bytes",
+    ),
+    (
+        "POST",
+        "/api/v1/platform/model-setup",
+        "the nested model and route carry the same value rules as their own operations",
+    ),
+    (
+        "POST",
+        "/api/v1/platform/deployments/{deployment}/prices",
+        "the price version selects which rates, cache pricing and price lines are required; ceilings and line counts are bounded",
+    ),
+    (
+        "PUT",
+        "/api/v1/platform/deployments/{deployment}/routing",
+        "residency is a short lowercase token; weight, threshold and cooldown are bounded",
+    ),
+    (
+        "PUT",
+        "/api/v1/platform/models/{model}/routing",
+        "required residency is a short lowercase token; strategy and attempts are bounded",
+    ),
+    (
+        "PUT",
+        "/api/v1/platform/deployments/{deployment}/batch-scheduling",
+        "concurrency, thresholds, time zone, days and times are bounded",
+    ),
+    (
+        "PUT",
+        "/api/v1/workspaces/{ws}/policy",
+        "limits are positive and bounded; exactly one budget form is supplied",
+    ),
+];
+
+/// May the contract's verdict differ from serde's? Equal always passes; a
+/// stricter contract passes only for a reviewed semantic refinement; a looser
+/// contract (accepting what serde rejects) never does.
+pub(super) fn agrees(refined: bool, contract: bool, serde: bool) -> bool {
+    contract == serde || (refined && !contract)
+}
+
 pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: Value) {
+    let refined = SEMANTIC_REFINEMENTS
+        .iter()
+        .any(|(m, t, _)| *m == method && *t == template);
     let document = super::responses::artifact();
     let operation = &document["paths"][template][method.to_ascii_lowercase()];
     let schema = &operation["requestBody"]["content"]["application/json"]["schema"];
@@ -69,7 +152,12 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
     let compare = |label: &str, value: Value| {
         let actual = serde_json::from_value::<T>(value.clone()).is_ok();
         let contract = super::responses::validate_value(document, schema, &value).is_ok();
-        assert_eq!(contract, actual, "{method} {template}: {label}");
+        assert!(
+            agrees(refined, contract, actual),
+            "{method} {template}: {label}: contract {} but serde {}",
+            if contract { "accepts" } else { "refuses" },
+            if actual { "accepts" } else { "refuses" },
+        );
     };
     compare("positive", valid.clone());
     let positional = fields
