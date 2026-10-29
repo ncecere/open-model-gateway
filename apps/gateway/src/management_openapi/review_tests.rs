@@ -358,3 +358,56 @@ async fn management_openapi_review_capture_panics_never_echo_captured_values() {
         "{message}"
     );
 }
+
+/// Slice 6 patterns stay in the portable ECMA-262 subset that every client
+/// generator and the Rust validator read alike: no Unicode property escapes
+/// (`\p{..}`, `\P{..}`), no braced code points, no named groups, no flags. The
+/// control set is the explicit class that equals `char::is_control`.
+#[test]
+fn management_openapi_slice6_patterns_are_portable() {
+    fn walk(value: &Value, found: &mut Vec<String>, at: &str) {
+        match value {
+            Value::Object(map) => {
+                for (key, child) in map {
+                    if key == "pattern"
+                        && let Some(pattern) = child.as_str()
+                    {
+                        let banned = ["\\p", "\\P", "\\u{", "\\k<", "(?", "\\N{"];
+                        if banned.iter().any(|b| pattern.contains(b)) {
+                            found.push(at.to_owned());
+                        }
+                    }
+                    walk(child, found, &format!("{at}/{key}"));
+                }
+            }
+            Value::Array(items) => {
+                for (i, child) in items.iter().enumerate() {
+                    walk(child, found, &format!("{at}/{i}"));
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    for (name, text) in [
+        (
+            "operations",
+            include_str!(
+                "../../../../docs/openapi/management/activity-credentials-operations.json"
+            ),
+        ),
+        (
+            "schemas",
+            include_str!("../../../../docs/openapi/management/activity-credentials-schemas.json"),
+        ),
+    ] {
+        walk(&serde_json::from_str(text).unwrap(), &mut found, name);
+    }
+    assert!(found.is_empty(), "non-portable slice 6 patterns: {found:?}");
+    // The explicit class is exactly `char::is_control`.
+    let class = json!({"type":"string","pattern":"^[\\u0000-\\u001F\\u007F-\\u009F]$"});
+    for c in (0..=0x2FFu32).filter_map(char::from_u32) {
+        let matched = validate_value(artifact(), &class, &json!(c.to_string())).is_ok();
+        assert_eq!(matched, c.is_control(), "code point {}", c as u32);
+    }
+}
