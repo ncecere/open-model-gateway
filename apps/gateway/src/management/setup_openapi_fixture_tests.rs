@@ -176,8 +176,18 @@ fn judged(captured: openapi::responses::Captured, domain: &[&str]) -> Probe {
 /// A predictor of state-dependent domain refusals and the machine reasons that
 /// are domain refusals (see [`judged_when`]).
 type DomainRules<'a> = (&'a dyn Fn(&Value) -> bool, &'a [&'a str]);
-/// A divergence the contract documents: `(schema accepts, handler accepts)`.
-type Documented = Option<(bool, bool)>;
+/// The verdict a probe pins, written out literally: `(schema accepts, handler accepts)`.
+/// A probe never derives its expectation from what the handler answered, so a probe
+/// that stops discriminating (or a handler that changes) fails instead of agreeing.
+type Expected = (bool, bool);
+const BOTH_ACCEPT: Expected = (true, true);
+const BOTH_REFUSE: Expected = (false, false);
+/// A divergence the contract documents because the rule is not expressible: the
+/// schema accepts, the handler refuses.
+const SCHEMA_ONLY: Expected = (true, false);
+/// A divergence the contract documents the other way round: the handler is the more
+/// tolerant (non-canonical spellings, for example).
+const HANDLER_ONLY: Expected = (false, true);
 /// The request schema of an operation in the committed artifact.
 fn request_schema(method: &str, template: &str) -> &'static Value {
     &openapi::responses::artifact()["paths"][template][method.to_ascii_lowercase()]["requestBody"]["content"]
@@ -257,11 +267,11 @@ async fn body_set_when(
     )
     .await;
 }
-/// A handler-derived body vector the artifact-derived ones cannot generate. The
-/// schema's verdict must equal the handler's. `documented` states a divergence
-/// the contract cannot express (the rule needs a cross-item comparison, a byte
-/// count, arithmetic or server state): `(schema accepts, handler accepts)`, both
-/// asserted, so the description's claim stays tested.
+/// A handler-derived body vector the artifact-derived ones cannot generate. Both
+/// verdicts are pinned in `expected`: `BOTH_ACCEPT`/`BOTH_REFUSE` for agreement, and
+/// `SCHEMA_ONLY`/`HANDLER_ONLY` for a divergence the contract cannot express (a
+/// cross-item comparison, a byte count, arithmetic or server state), so the
+/// description's claim stays tested.
 #[allow(clippy::too_many_arguments)]
 async fn extra_body(
     j: &Journey<'_>,
@@ -271,7 +281,7 @@ async fn extra_body(
     path: &str,
     label: &str,
     body: Value,
-    documented: Option<(bool, bool)>,
+    expected: Expected,
 ) {
     let schema = schema_accepts(method, template, &body);
     let captured = send(&j.client, &j.base, Some(who), method, path, Some(body)).await;
@@ -283,7 +293,7 @@ async fn extra_body(
     let handler = handler_accepts(&captured, &[]);
     assert_eq!(
         (schema, handler),
-        documented.unwrap_or((handler, handler)),
+        expected,
         "{method} {template}: {label}: schema accepts {schema}, handler accepts {handler}"
     );
 }
@@ -310,7 +320,7 @@ async fn extra_query(
     param: &str,
     raw: &str,
     label: &str,
-    documented: Option<(bool, bool)>,
+    expected: Expected,
 ) {
     let schema = param_accepts(template, param, raw);
     let target = format!(
@@ -327,9 +337,84 @@ async fn extra_query(
     let handler = handler_accepts(&captured, &[]);
     assert_eq!(
         (schema, handler),
-        documented.unwrap_or((handler, handler)),
+        expected,
         "GET {template}: {param} {label}: schema accepts {schema}, handler accepts {handler}"
     );
+}
+const THRESHOLD_MISSING: &str = "Set at least one server load threshold.";
+const THRESHOLD_RANGE: &str = "A server load threshold is out of range.";
+const METRICS_URL: &str =
+    "The metrics URL must be /metrics on an approved local endpoint's origin.";
+/// Did the handler's threshold rules accept the body? `RouteSettings::validate` checks the
+/// thresholds BEFORE the metrics URL and the fixture gateway approves no local endpoint, so
+/// a 400 that is the URL rule proves the thresholds passed, and a 400 that is a threshold
+/// rule proves they did not: the handler's own message tells the two refusals apart (a
+/// bare status cannot).
+fn thresholds_accepted(captured: &openapi::responses::Captured) -> bool {
+    if captured.status.is_success() {
+        return true;
+    }
+    assert_eq!(
+        captured.status,
+        StatusCode::BAD_REQUEST,
+        "scheduling vector: status is not a scheduling verdict"
+    );
+    let refusal: Value = serde_json::from_slice(&captured.bytes).unwrap();
+    match refusal["error"]["message"].as_str() {
+        Some(THRESHOLD_MISSING | THRESHOLD_RANGE) => false,
+        Some(METRICS_URL) => true,
+        _ => panic!("scheduling vector: the 400 is neither a threshold rule nor the URL rule"),
+    }
+}
+/// The same rules run directly with the metrics URL APPROVED (as the real setup flow has
+/// it), so only the thresholds remain: `None` when the body is not a settings document.
+fn thresholds_with_approved_url(body: &Value) -> Option<bool> {
+    let approvals =
+        crate::providers::local::endpoints::ApprovedEndpoints::for_test("http://127.0.0.1:8000/v1");
+    let mut body = body.clone();
+    let url = json!("http://127.0.0.1:8000/metrics");
+    match body.get_mut("metrics") {
+        Some(Value::Object(gate)) => {
+            gate.insert("url".into(), url);
+        }
+        Some(Value::Array(gate)) if !gate.is_empty() => gate[0] = url,
+        _ => return None,
+    }
+    let settings: crate::jobs::schedule::RouteSettings = serde_json::from_value(body).ok()?;
+    match settings.validate("vllm", &approvals) {
+        Ok(()) => Some(true),
+        Err(THRESHOLD_MISSING | THRESHOLD_RANGE) => Some(false),
+        Err(_) => panic!("scheduling vector: a rule other than the thresholds refused the body"),
+    }
+}
+/// A scheduling body vector pinned as `(schema accepts, thresholds accepted)`: the wire
+/// verdict is read from the handler's message (see [`thresholds_accepted`]) and, where the
+/// body is a settings document, cross-checked against the rules run with the URL approved.
+#[allow(clippy::too_many_arguments)]
+async fn extra_schedule(
+    j: &Journey<'_>,
+    who: &Browser,
+    template: &str,
+    path: &str,
+    label: &str,
+    body: Value,
+    expected: Expected,
+) {
+    let schema = schema_accepts("PUT", template, &body);
+    let direct = thresholds_with_approved_url(&body);
+    let captured = send(&j.client, &j.base, Some(who), "PUT", path, Some(body)).await;
+    let handler = thresholds_accepted(&captured);
+    assert_eq!(
+        (schema, handler),
+        expected,
+        "PUT {template}: {label}: schema accepts {schema}, thresholds accepted {handler}"
+    );
+    if let Some(direct) = direct {
+        assert_eq!(
+            direct, handler,
+            "PUT {template}: {label}: the approved-URL rules say {direct}, the wire says {handler}"
+        );
+    }
 }
 /// Query boundary vectors for one operation: every documented parameter in the base.
 async fn query_set(
@@ -1803,55 +1888,71 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     )
     .await;
     let providers = "/api/v1/platform/providers";
-    for (label, patch) in [
-        ("bedrock without a region", json!({"region":null})),
+    for (label, patch, expected) in [
+        (
+            "bedrock without a region",
+            json!({"region":null}),
+            BOTH_REFUSE,
+        ),
         (
             "bedrock with a malformed region",
             json!({"region":"us-east-1x"}),
+            BOTH_REFUSE,
         ),
         (
             "bedrock with an uppercase region",
             json!({"region":"US-EAST-1"}),
+            BOTH_REFUSE,
         ),
         (
             "role options on the default identity",
             json!({"credential_ref":"aws:default"}),
+            BOTH_REFUSE,
         ),
         (
             "session name on the default identity",
             json!({"credential_ref":"aws:default","aws_external_id":null}),
+            BOTH_REFUSE,
         ),
         (
             "a ';' option in the reference",
             json!({"credential_ref":"aws:role:arn:aws:iam::123456789012:role/r;external_id=abcd","aws_external_id":null,"aws_session_name":null}),
+            BOTH_REFUSE,
         ),
         (
             "a one character external id",
             json!({"aws_external_id":"x"}),
+            BOTH_REFUSE,
         ),
         (
             "an external id with a space",
             json!({"aws_external_id":"ab cd"}),
+            BOTH_REFUSE,
         ),
         (
             "an external id of 1224 characters",
             json!({"aws_external_id":"e".repeat(1224)}),
+            BOTH_ACCEPT,
         ),
         (
             "an external id of 1225 characters",
             json!({"aws_external_id":"e".repeat(1225)}),
+            BOTH_REFUSE,
         ),
         (
             "a session name of 64 characters",
             json!({"aws_session_name":"s".repeat(64)}),
+            BOTH_ACCEPT,
         ),
         (
             "a session name of 65 characters",
             json!({"aws_session_name":"s".repeat(65)}),
+            BOTH_REFUSE,
         ),
         (
             "a role without an account",
             json!({"credential_ref":"aws:role:arn:aws:iam:::role/r","aws_external_id":null,"aws_session_name":null}),
+            BOTH_REFUSE,
         ),
     ] {
         let mut body = bedrock_body.clone();
@@ -1867,7 +1968,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             providers,
             label,
             body,
-            None,
+            expected,
         )
         .await;
     }
@@ -1876,6 +1977,11 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     let patch_template = "/api/v1/platform/providers/{id}";
     let patch_bed = format!("/api/v1/platform/providers/{vbed}");
     let patch_or = format!("/api/v1/platform/providers/{vprov}");
+    // update_provider refuses AWS options unless the restated reference is an aws:role:
+    // reference, for every stored kind (stored_reference), and the schema says so: each
+    // refusal below is pinned on both targets. The controls without options are accepted,
+    // so the refusals are the options', not the reference's.
+    let role = "aws:role:arn:aws:iam::123456789012:role/gateway/vector";
     for (label, body) in [
         (
             "an external id without a reference",
@@ -1889,6 +1995,22 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             "options with a null reference",
             json!({"enabled":true,"credential_ref":null,"aws_external_id":"tenant-ext-42"}),
         ),
+        (
+            "an external id beside the default identity",
+            json!({"enabled":true,"credential_ref":"aws:default","aws_external_id":"ab"}),
+        ),
+        (
+            "a session name beside the default identity",
+            json!({"enabled":true,"credential_ref":"aws:default","aws_session_name":"ab"}),
+        ),
+        (
+            "an external id beside an env reference",
+            json!({"enabled":true,"credential_ref":"env:CONTRACT_REFERENCE","aws_external_id":"ab"}),
+        ),
+        (
+            "an external id beside none",
+            json!({"enabled":true,"credential_ref":"none","aws_external_id":"ab"}),
+        ),
     ] {
         for path in [&patch_bed, &patch_or] {
             extra_body(
@@ -1899,33 +2021,175 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
                 path,
                 label,
                 body.clone(),
-                None,
+                BOTH_REFUSE,
             )
             .await;
         }
     }
-    // The stored kind (a connection that takes no AWS options, no endpoint and only
-    // the allowlisted env reference) decides what the schema cannot see.
-    body_set_when(&mut j, a, "PATCH", patch_template, &patch_or, json!({"enabled":true,"credential_ref":"env:CONTRACT_REFERENCE","aws_external_id":null,"aws_session_name":null}), (
-            &|b| {
-                b.get("endpoint").is_some()
-                    || b["aws_external_id"].is_string()
-                    || b["aws_session_name"].is_string()
-                    || b["credential_ref"].as_str().is_some_and(|c| c != "env:CONTRACT_REFERENCE")
-            },
-            &[],
-        )).await;
-    // A Bedrock connection with no allowlisted profile or endpoint: options only with a role
-    // reference, never a profile, never an endpoint.
-    body_set_when(&mut j, a, "PATCH", patch_template, &patch_bed, json!({"enabled":true,"credential_ref":"aws:role:arn:aws:iam::123456789012:role/gateway/vector","aws_external_id":"tenant-ext-42","aws_session_name":"gateway.vector","endpoint":null}), (
-            &|b| {
-                b["endpoint"].is_string()
-                    || b["credential_ref"].as_str().is_some_and(|c| !(c == "aws:default" || c.starts_with("aws:role:")))
-                    || ((b["aws_external_id"].is_string() || b["aws_session_name"].is_string())
-                        && !b["credential_ref"].as_str().is_some_and(|c| c.starts_with("aws:role:")))
-            },
-            &[],
-        )).await;
+    for (path, label, reference) in [
+        (&patch_bed, "the default identity restated", "aws:default"),
+        (
+            &patch_or,
+            "the env reference restated",
+            "env:CONTRACT_REFERENCE",
+        ),
+    ] {
+        extra_body(
+            &j,
+            a,
+            "PATCH",
+            patch_template,
+            path,
+            label,
+            json!({"enabled":true,"credential_ref":reference}),
+            BOTH_ACCEPT,
+        )
+        .await;
+    }
+    // A role reference with options is the schema's way in; a connection that is not
+    // Bedrock still refuses it (the stored kind is not in the body).
+    extra_body(
+        &j,
+        a,
+        "PATCH",
+        patch_template,
+        &patch_or,
+        "role options on a non-Bedrock connection",
+        json!({"enabled":true,"credential_ref":role,"aws_external_id":"ab"}),
+        SCHEMA_ONLY,
+    )
+    .await;
+    // The positional form has none of those couplings (documented divergence).
+    for path in [&patch_bed, &patch_or] {
+        extra_body(
+            &j,
+            a,
+            "PATCH",
+            patch_template,
+            path,
+            "a positional update with options beside the default identity",
+            json!([true, "aws:default", "ab", null]),
+            SCHEMA_ONLY,
+        )
+        .await;
+    }
+    // A Bedrock positional array has no region requirement either (documented divergence).
+    extra_body(
+        &j,
+        a,
+        "POST",
+        "/api/v1/platform/providers",
+        providers,
+        "a positional Bedrock connection without a region",
+        json!([
+            "Vector positional",
+            "bedrock",
+            "aws:default",
+            null,
+            null,
+            false,
+            null,
+            null
+        ]),
+        SCHEMA_ONLY,
+    )
+    .await;
+    // Local kinds take no region (validate_connection): checked on the wire, where a
+    // refusal could also be the server's missing approval, and against the very function
+    // with the endpoint approved, where it cannot.
+    let local_body = |region: Value| json!({"name":"Vector local","provider":"ollama","credential_ref":"none","endpoint":"http://127.0.0.1:11434/v1","region":region,"enabled":false});
+    let local_approvals = crate::providers::local::endpoints::ApprovedEndpoints::for_test(
+        "http://127.0.0.1:11434/v1",
+    );
+    for (label, region, expected) in [
+        (
+            "a local connection without a region",
+            json!(null),
+            BOTH_ACCEPT,
+        ),
+        (
+            "a local connection with an empty region",
+            json!(""),
+            BOTH_ACCEPT,
+        ),
+        (
+            "a local connection with a region",
+            json!("us-east-1"),
+            BOTH_REFUSE,
+        ),
+        (
+            "a local connection with a blank region",
+            json!(" "),
+            BOTH_REFUSE,
+        ),
+    ] {
+        let body = local_body(region.clone());
+        let schema = schema_accepts("POST", "/api/v1/platform/providers", &body);
+        let handler = local_approvals
+            .validate_connection("http://127.0.0.1:11434/v1", "none", region.as_str())
+            .is_ok();
+        assert_eq!(
+            (schema, handler),
+            expected,
+            "POST /api/v1/platform/providers: {label}: schema accepts {schema}, validate_connection accepts {handler}"
+        );
+    }
+    for (label, region, expected) in [
+        (
+            "a local connection without a region (contract: approval is server state)",
+            json!(null),
+            SCHEMA_ONLY,
+        ),
+        (
+            "a local connection with a region",
+            json!("us-east-1"),
+            BOTH_REFUSE,
+        ),
+    ] {
+        let mut body = local_body(region);
+        body["endpoint"] = json!("http://10.0.0.5:11434/v1");
+        extra_body(
+            &j,
+            a,
+            "POST",
+            "/api/v1/platform/providers",
+            providers,
+            label,
+            body,
+            expected,
+        )
+        .await;
+    }
+    // What the schema cannot see is decided by the STORED kind, read from the connection
+    // row rather than assumed per call: an OpenRouter connection takes no AWS options, no
+    // endpoint and only the allowlisted env reference; a Bedrock connection with no
+    // allowlisted profile or endpoint takes the default or a role reference and no endpoint
+    // (options beside a non-role reference are the schema's own rule, so not trusted here).
+    let refused_by_state = |kind: &str, b: &Value| {
+        let reference = b["credential_ref"].as_str();
+        if kind == "bedrock" {
+            b["endpoint"].is_string()
+                || reference.is_some_and(|c| !(c == "aws:default" || c.starts_with("aws:role:")))
+        } else {
+            b.get("endpoint").is_some()
+                || b["aws_external_id"].is_string()
+                || b["aws_session_name"].is_string()
+                || reference.is_some_and(|c| c != "env:CONTRACT_REFERENCE")
+        }
+    };
+    let stored_kind = |connection: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>("SELECT provider FROM provider_connections WHERE id=$1")
+                .bind(connection)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    let (kind_or, kind_bed) = (stored_kind(vprov).await, stored_kind(vbed).await);
+    body_set_when(&mut j, a, "PATCH", patch_template, &patch_or, json!({"enabled":true,"credential_ref":"env:CONTRACT_REFERENCE","aws_external_id":null,"aws_session_name":null}), (&|b| refused_by_state(&kind_or, b), &[])).await;
+    body_set_when(&mut j, a, "PATCH", patch_template, &patch_bed, json!({"enabled":true,"credential_ref":"aws:role:arn:aws:iam::123456789012:role/gateway/vector","aws_external_id":"tenant-ext-42","aws_session_name":"gateway.vector","endpoint":null}), (&|b| refused_by_state(&kind_bed, b), &[])).await;
     body_set(&mut j, a, "POST", "/api/v1/platform/deployments", "/api/v1/platform/deployments", json!({"model_id":vmodel,"provider_connection_id":vprov,"upstream_model":"vector/upstream","enabled":false}), &["route_unsupported_capability"]).await;
     body_set(
         &mut j,
@@ -2038,7 +2302,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     // Each compares the SCHEMA's verdict with the real handler's. `Some((schema,
     // handler))` states a divergence the contract documents instead of expressing.
     let policy_template = "/api/v1/workspaces/{ws}/policy";
-    let mut policy_vectors: Vec<(&str, Value, Documented)> = Vec::new();
+    let mut policy_vectors: Vec<(&str, Value, Expected)> = Vec::new();
     let budget = |period: &str, amount: &str| {
         let mut body = policy.clone();
         body["budgets"] = json!([{"period":period,"amount_microusd":amount}]);
@@ -2046,23 +2310,23 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     };
     let legacy_budget = |amount: &str| json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"monthly_budget_microusd":amount,"budget_period":"month"});
     policy_vectors.extend([
-        ("a budget above the signed 64-bit maximum", budget("month", "9223372036854775808"), None),
-        ("a zero budget", budget("month", "0"), None),
-        ("a budget with a leading zero (contract: canonical only)", budget("month", "0100"), Some((false, true))),
-        ("a monthly budget above the signed 64-bit maximum", legacy_budget("9223372036854775808"), None),
-        ("a zero monthly budget", legacy_budget("0"), None),
-        ("a monthly budget with a leading zero (contract: canonical only)", legacy_budget("0100"), Some((false, true))),
-        ("the largest budget of a period without a parent", budget("day", "9223372036854775807"), None),
+        ("a budget above the signed 64-bit maximum", budget("month", "9223372036854775808"), BOTH_REFUSE),
+        ("a zero budget", budget("month", "0"), BOTH_REFUSE),
+        ("a budget with a leading zero (contract: canonical only)", budget("month", "0100"), HANDLER_ONLY),
+        ("a monthly budget above the signed 64-bit maximum", legacy_budget("9223372036854775808"), BOTH_REFUSE),
+        ("a zero monthly budget", legacy_budget("0"), BOTH_REFUSE),
+        ("a monthly budget with a leading zero (contract: canonical only)", legacy_budget("0100"), HANDLER_ONLY),
+        ("the largest budget of a period without a parent", budget("day", "9223372036854775807"), BOTH_ACCEPT),
         ("two budgets for one period", {
             let mut body = policy.clone();
             body["budgets"] = json!([{"period":"month","amount_microusd":"100"},{"period":"month","amount_microusd":"200"}]);
             body
-        }, Some((true, false))),
-        ("a positional policy with a monthly budget", json!([10, 1000, 2, 1, 10_000, 5, 50, "100", "month"]), None),
-        ("a positional policy without a budget form", json!([10, 1000, 2, 1]), Some((true, false))),
-        ("a positional policy with both budget forms", json!([10, 1000, 2, 1, 10_000, 5, 50, "100", "month", [{"period":"day","amount_microusd":"5"}]]), Some((true, false))),
+        }, SCHEMA_ONLY),
+        ("a positional policy with a monthly budget", json!([10, 1000, 2, 1, 10_000, 5, 50, "100", "month"]), BOTH_ACCEPT),
+        ("a positional policy without a budget form", json!([10, 1000, 2, 1]), SCHEMA_ONLY),
+        ("a positional policy with both budget forms", json!([10, 1000, 2, 1, 10_000, 5, 50, "100", "month", [{"period":"day","amount_microusd":"5"}]]), SCHEMA_ONLY),
     ]);
-    for (label, body, documented) in policy_vectors {
+    for (label, body, expected) in policy_vectors {
         // A fresh team per request: the policy PUT is tighten-only against stored values.
         let ws = workspace(&pool, "Vector workspace", "team", f.owner.user_id).await;
         extra_body(
@@ -2073,7 +2337,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             &format!("/api/v1/workspaces/{ws}/policy"),
             label,
             body,
-            documented,
+            expected,
         )
         .await;
     }
@@ -2108,37 +2372,194 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         .as_array_mut()
         .unwrap()
         .push(json!({"meter":"input_audio_tokens","unknown":true}));
-    for (label, body, documented) in [
+    let cache_v2 = |input: &str, read: &str, limit: u64| json!({"pricing_version":2,"input_microusd_per_million":input,"output_microusd_per_million":"2","input_token_limit":limit,"output_token_limit":10,"cache_pricing":{"read":{"status":"priced","microusd_per_million":read},"write":{"status":"unknown"},"write_5m":{"status":"unknown"},"write_1h":{"status":"unknown"}}});
+    // Version 3: the stated lines replace the same meters of the baseline, with the given
+    // ceilings. Two rates of 2.3e15 per million tokens at the largest ceiling each charge
+    // about 4.9e18 (fits a signed 64-bit integer); together they do not.
+    let v3_set = |set: Vec<Value>, limits: (u64, u64), max_units: Value| {
+        let mut body = v3_price();
+        let mut lines: Vec<Value> = body["price_lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|l| !set.iter().any(|s| s["meter"] == l["meter"]))
+            .cloned()
+            .collect();
+        lines.extend(set);
+        body["price_lines"] = json!(lines);
+        body["input_token_limit"] = json!(limits.0);
+        body["output_token_limit"] = json!(limits.1);
+        body["max_units"] = max_units;
+        body
+    };
+    let (huge, large, ceiling) = (
+        9_223_372_036_854_775_807_u64,
+        2_300_000_000_000_000_u64,
+        2_147_483_647_u64,
+    );
+    // A version 3 price whose batch list mirrors the meters of the standard list.
+    let mirrored = || {
+        v3_with(
+            &[
+                line("input_tokens", 1_000_000, 5),
+                line("output_tokens", 1_000_000, 6),
+            ],
+            &[],
+            json!({}),
+        )
+    };
+    let batch_edit = |edit: &dyn Fn(&mut Vec<Value>)| {
+        let mut body = mirrored();
+        let mut lines = body["batch_price_lines"].as_array().unwrap().clone();
+        edit(&mut lines);
+        body["batch_price_lines"] = json!(lines);
+        body
+    };
+    let mut batch_overflow = mirrored();
+    batch_overflow["input_token_limit"] = json!(ceiling);
+    for l in batch_overflow["batch_price_lines"].as_array_mut().unwrap() {
+        if l["meter"] == "input_tokens" {
+            l["microusd_per_batch"] = json!(huge.to_string());
+        }
+    }
+    let mut unknown_only_standard = mirrored();
+    unknown_only_standard["price_lines"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"meter":"input_audio_tokens","unknown":true}));
+    for (label, body, expected) in [
         (
             "an input rate above the signed 64-bit maximum",
             rates("9223372036854775808", "1", 1, 1),
-            None,
+            BOTH_REFUSE,
         ),
         (
             "an input rate with leading zeros",
             rates("0000000000000000100", "1", 1, 1),
-            None,
+            BOTH_ACCEPT,
         ),
         (
             "a zero input ceiling on a version 1 price",
             rates("1", "1", 0, 1),
-            None,
+            BOTH_REFUSE,
         ),
         (
-            "rates whose charge overflows (contract: the pair limit is arithmetic)",
+            "a version 1 input charge that overflows alone (contract: the charge is arithmetic)",
             rates("9223372036854775807", "1", 2_147_483_647, 1),
-            Some((true, false)),
+            SCHEMA_ONLY,
+        ),
+        (
+            "a version 1 input charge and output charge that each fit and overflow together (contract: the sum is arithmetic)",
+            rates(
+                "2300000000000000",
+                "2300000000000000",
+                2_147_483_647,
+                2_147_483_647,
+            ),
+            SCHEMA_ONLY,
+        ),
+        (
+            "a version 1 charge that fits",
+            rates("2300000000000000", "1", 2_147_483_647, 1),
+            BOTH_ACCEPT,
         ),
         (
             "a cache rate above the signed 64-bit maximum",
             cache("9223372036854775808"),
-            None,
+            BOTH_REFUSE,
         ),
-        ("a sku label with a C1 control character", sku, None),
+        (
+            "a version 2 cache charge (cache rate x input ceiling) that overflows alone",
+            cache_v2("1", "9223372036854775807", 2_147_483_647),
+            SCHEMA_ONLY,
+        ),
+        (
+            "a version 2 input charge and cache charge that each fit and overflow together",
+            cache_v2("2300000000000000", "2300000000000000", 2_147_483_647),
+            SCHEMA_ONLY,
+        ),
+        (
+            "a version 2 cache charge that fits",
+            cache_v2("1", "2300000000000000", 2_147_483_647),
+            BOTH_ACCEPT,
+        ),
+        (
+            "a version 3 input charge (units x rate) that overflows alone",
+            v3_set(
+                vec![line("input_tokens", 1_000_000, huge)],
+                (ceiling, 10),
+                json!({"requests":"1"}),
+            ),
+            SCHEMA_ONLY,
+        ),
+        (
+            "a version 3 non-token charge (max_units x rate) that overflows alone",
+            v3_set(
+                vec![line("requests", 1, huge)],
+                (100, 10),
+                json!({"requests":"2"}),
+            ),
+            SCHEMA_ONLY,
+        ),
+        (
+            "a version 3 input charge and output charge that each fit and overflow together",
+            v3_set(
+                vec![
+                    line("input_tokens", 1_000_000, large),
+                    line("output_tokens", 1_000_000, large),
+                ],
+                (ceiling, ceiling),
+                json!({"requests":"1"}),
+            ),
+            SCHEMA_ONLY,
+        ),
+        (
+            "a version 3 input charge that fits",
+            v3_set(
+                vec![line("input_tokens", 1_000_000, large)],
+                (ceiling, 10),
+                json!({"requests":"1"}),
+            ),
+            BOTH_ACCEPT,
+        ),
+        (
+            "a batch list that overflows while the standard list does not",
+            batch_overflow,
+            SCHEMA_ONLY,
+        ),
+        (
+            "a batch list of the same meters at other rates",
+            mirrored(),
+            BOTH_ACCEPT,
+        ),
+        (
+            "a batch list with a tier the standard list lacks (contract: same_meters compares two properties)",
+            batch_edit(&|lines| lines.push(tiered(line("input_tokens", 1_000_000, 7), 3))),
+            SCHEMA_ONLY,
+        ),
+        (
+            "a batch list without a meter the standard list prices",
+            batch_edit(&|lines| lines.retain(|l| l["meter"] != "output_tokens")),
+            SCHEMA_ONLY,
+        ),
+        (
+            "a batch list that states a priced meter not_applicable",
+            batch_edit(&|lines| {
+                lines.retain(|l| l["meter"] != "output_tokens");
+                lines.push(json!({"meter":"output_tokens","not_applicable":true}));
+            }),
+            SCHEMA_ONLY,
+        ),
+        (
+            "an explicit unknown in the standard list only",
+            unknown_only_standard,
+            SCHEMA_ONLY,
+        ),
+        ("a sku label with a C1 control character", sku, BOTH_REFUSE),
         (
             "two lines for one meter and tier (contract: only whole-line duplicates)",
             with_lines(vec![line_of("input_tokens", "999")], false),
-            Some((true, false)),
+            SCHEMA_ONLY,
         ),
         (
             "a not_applicable line next to a priced tier of one meter",
@@ -2149,14 +2570,14 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
                 ],
                 true,
             ),
-            Some((true, false)),
+            SCHEMA_ONLY,
         ),
         (
             "64 valued lines and an explicit unknown",
             unknown_line,
-            None,
+            BOTH_ACCEPT,
         ),
-        ("65 valued lines", with_lines(tiers(53), false), None),
+        ("65 valued lines", with_lines(tiers(53), false), BOTH_REFUSE),
     ] {
         extra_body(
             &j,
@@ -2166,11 +2587,13 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             &prices,
             label,
             body,
-            documented,
+            expected,
         )
         .await;
     }
-    // Routing: the reserved residency is refused by both routing handlers.
+    // Routing: the reserved residency is refused by both routing handlers (residency_valid
+    // takes lowercase words, so the capitalised spelling is invalid and a look-alike is not
+    // the reserved name).
     for (template, path, mut body, field) in [
         (
             "/api/v1/platform/deployments/{deployment}/routing",
@@ -2185,22 +2608,27 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             "required_residency",
         ),
     ] {
-        for value in ["unspecified", "Unspecified", "unspecified2"] {
+        for (label, value, expected) in [
+            ("the reserved residency", "unspecified", BOTH_REFUSE),
+            (
+                "the reserved residency capitalised",
+                "Unspecified",
+                BOTH_REFUSE,
+            ),
+            (
+                "a look-alike of the reserved residency",
+                "unspecified2",
+                BOTH_ACCEPT,
+            ),
+        ] {
             body[field] = json!(value);
-            extra_body(
-                &j,
-                a,
-                "PUT",
-                template,
-                &path,
-                "a reserved or look-alike residency",
-                body.clone(),
-                None,
-            )
-            .await;
+            extra_body(&j, a, "PUT", template, &path, label, body.clone(), expected).await;
         }
     }
-    // Scheduling: a metrics gate needs a threshold; approvals are server state.
+    // Scheduling: thresholds are checked before the URL and the fixture server approves no
+    // local endpoint, so each vector below is pinned as (schema accepts, THRESHOLDS
+    // accepted): the handler's own message says which rule refused (see
+    // `thresholds_accepted`), and the rules are run again with the URL approved.
     let schedule_template = "/api/v1/platform/deployments/{deployment}/batch-scheduling";
     let schedule_vdep = format!("/api/v1/platform/deployments/{vdep}/batch-scheduling");
     let gate = |thresholds: Value| {
@@ -2210,30 +2638,85 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         }
         json!({"max_concurrency":3,"metrics":metrics})
     };
+    let gates: Vec<(String, Value, Expected)> = [
+        ("without a threshold".to_owned(), gate(json!({})), BOTH_REFUSE),
+        (
+            "with every threshold in range".to_owned(),
+            gate(json!({"max_waiting":5,"max_running":6,"max_kv_cache_percent":50})),
+            BOTH_ACCEPT,
+        ),
+        (
+            "with one valid threshold and one out of range".to_owned(),
+            gate(json!({"max_waiting":5,"max_kv_cache_percent":101})),
+            BOTH_REFUSE,
+        ),
+        (
+            "as a positional gate without a threshold (contract: the positional form has no coupling)"
+                .to_owned(),
+            json!({"max_concurrency":3,"metrics":["http://10.0.0.5:8000/metrics"]}),
+            SCHEMA_ONLY,
+        ),
+        (
+            "as a positional gate with a threshold".to_owned(),
+            json!({"max_concurrency":3,"metrics":["http://10.0.0.5:8000/metrics", 5]}),
+            BOTH_ACCEPT,
+        ),
+    ]
+    .into_iter()
+    .chain(
+        [
+            ("max_waiting", 0, true),
+            ("max_waiting", 100_000, true),
+            ("max_waiting", 100_001, false),
+            ("max_waiting", -1, false),
+            ("max_running", 0, true),
+            ("max_running", 100_000, true),
+            ("max_running", 100_001, false),
+            ("max_running", -1, false),
+            ("max_kv_cache_percent", 0, false),
+            ("max_kv_cache_percent", 1, true),
+            ("max_kv_cache_percent", 100, true),
+            ("max_kv_cache_percent", 101, false),
+            ("max_kv_cache_percent", -1, false),
+        ]
+        .map(|(field, value, accepted)| {
+            let mut threshold = serde_json::Map::new();
+            threshold.insert(field.to_owned(), json!(value));
+            (
+                format!("with {field} {value}"),
+                gate(Value::Object(threshold)),
+                (accepted, accepted),
+            )
+        }),
+    )
+    .collect();
+    for (label, body, expected) in gates {
+        extra_schedule(
+            &j,
+            a,
+            schedule_template,
+            &schedule_vdep,
+            &format!("a metrics gate {label}"),
+            body,
+            expected,
+        )
+        .await;
+    }
+    // JSON 3.0 is an integer to JSON Schema but a float to serde.
     extra_body(
         &j,
         a,
         "PUT",
         schedule_template,
         &schedule_vdep,
-        "a metrics gate without a threshold",
-        gate(json!({})),
-        None,
+        "an integer written as 3.0",
+        json!({"max_concurrency":3.0}),
+        SCHEMA_ONLY,
     )
     .await;
-    extra_body(
-        &j,
-        a,
-        "PUT",
-        schedule_template,
-        &schedule_vdep,
-        "a metrics gate with a threshold (contract: endpoint approval is server state)",
-        gate(json!({"max_waiting":5})),
-        Some((true, false)),
-    )
-    .await;
-    // Id lists: 200 distinct existing ids are accepted, 201 distinct ones refused for the
-    // bound itself (not for repeating an id).
+    // Id lists: 200 distinct existing ids are accepted; one more EXISTING id is refused for
+    // the bound itself (a nonexistent id would also be refused by the existence check, so
+    // it could not show that the cap is what answers).
     let mut bulk_models = vec![];
     let mut bulk_catalogs = vec![];
     for n in 0..200 {
@@ -2246,10 +2729,18 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             )
             .await));
     }
-    let fresh = |count: usize| (0..count).map(|_| Uuid::new_v4()).collect::<Vec<_>>();
-    for (label, ids, documented) in [
-        ("200 distinct ids", bulk_models.clone(), None),
-        ("201 distinct ids", fresh(201), None),
+    let one_more = |ids: &[Uuid], existing: Uuid| {
+        let mut ids = ids.to_vec();
+        ids.push(existing);
+        ids
+    };
+    for (label, ids, expected) in [
+        ("200 distinct ids", bulk_models.clone(), BOTH_ACCEPT),
+        (
+            "201 distinct existing ids",
+            one_more(&bulk_models, second),
+            BOTH_REFUSE,
+        ),
     ] {
         extra_body(
             &j,
@@ -2259,13 +2750,17 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             &format!("/api/v1/platform/catalogs/{vcat}/models"),
             label,
             json!({"model_ids":ids}),
-            documented,
+            expected,
         )
         .await;
     }
-    for (label, ids) in [
-        ("200 distinct catalogs", bulk_catalogs.clone()),
-        ("201 distinct catalogs", fresh(201)),
+    for (label, ids, expected) in [
+        ("200 distinct catalogs", bulk_catalogs.clone(), BOTH_ACCEPT),
+        (
+            "201 distinct existing catalogs",
+            one_more(&bulk_catalogs, cat),
+            BOTH_REFUSE,
+        ),
     ] {
         extra_body(
             &j,
@@ -2275,7 +2770,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             &format!("/api/v1/platform/models/{vmodel}/catalogs"),
             label,
             json!({"catalog_ids":ids}),
-            None,
+            expected,
         )
         .await;
         extra_body(
@@ -2286,7 +2781,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             "/api/v1/platform/catalog-defaults",
             label,
             json!({"personal":ids.clone(),"team":[],"project":[]}),
-            None,
+            expected,
         )
         .await;
         let setup = json!({"model":{"public_name":format!("vector/bulk-{}", Uuid::new_v4()),"display_name":"Bulk setup","enabled":true},"route":{"provider_connection_id":vprov,"upstream_model":"vector/bulk","enabled":false},"catalog_ids":ids});
@@ -2298,34 +2793,33 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             "/api/v1/platform/model-setup",
             label,
             setup,
-            None,
+            expected,
         )
         .await;
     }
     // Names are counted in bytes by the handler and in characters by the schema.
-    for (label, body) in [
+    for (label, body, expected) in [
         (
             "a name of 61 two-byte characters",
             json!({"name":"\u{e9}".repeat(61)}),
+            SCHEMA_ONLY,
         ),
         (
             "a name of 60 two-byte characters",
             json!({"name":"\u{e9}".repeat(60)}),
+            BOTH_ACCEPT,
         ),
         (
             "a description of 1001 two-byte characters",
             json!({"name":"Bytes","description":"\u{e9}".repeat(1001)}),
+            SCHEMA_ONLY,
         ),
         (
             "a description of 1000 two-byte characters",
             json!({"name":"Bytes","description":"\u{e9}".repeat(1000)}),
+            BOTH_ACCEPT,
         ),
     ] {
-        let documented = if label.contains("61") || label.contains("1001") {
-            Some((true, false))
-        } else {
-            None
-        };
         extra_body(
             &j,
             a,
@@ -2334,7 +2828,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             "/api/v1/platform/catalogs",
             label,
             body,
-            documented,
+            expected,
         )
         .await;
     }
@@ -2351,9 +2845,9 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             o,
         ),
     ] {
-        for (label, count) in [
-            ("200 two-byte characters", 200),
-            ("201 two-byte characters", 201),
+        for (label, count, expected) in [
+            ("200 two-byte characters", 200, BOTH_ACCEPT),
+            ("201 two-byte characters", 201, BOTH_REFUSE),
         ] {
             extra_query(
                 &j,
@@ -2364,15 +2858,73 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
                 "q",
                 &"\u{e9}".repeat(count),
                 label,
-                None,
+                expected,
             )
             .await;
         }
     }
-    for (label, value) in [
-        ("the signed 64-bit maximum", "9223372036854775807"),
-        ("one above it", "9223372036854775808"),
-        ("with leading zeros", "000000000000000000000000100"),
+    // Three list searches (catalogs, a workspace's models and its available models) neither
+    // trim `q` nor treat a blank one as no filter, unlike the `search()` lists: an empty
+    // value lists everything, whitespace lists only names containing it. The contrast is the
+    // providers list, which trims.
+    let listed = async |j: &Journey<'_>, who: &Browser, template: &str, path: String| {
+        let r = send(&j.client, &j.base, Some(who), "GET", &path, None).await;
+        assert_eq!(r.status, StatusCode::OK, "GET {template}: list");
+        let list: Value = serde_json::from_slice(&r.bytes).unwrap();
+        list["data"].as_array().unwrap().len()
+    };
+    for (template, path, who, trims) in [
+        (
+            "/api/v1/platform/catalogs",
+            "/api/v1/platform/catalogs".to_owned(),
+            a,
+            false,
+        ),
+        (
+            "/api/v1/workspaces/{ws}/models",
+            format!("/api/v1/workspaces/{team}/models"),
+            o,
+            false,
+        ),
+        (
+            "/api/v1/workspaces/{ws}/available-models",
+            format!("/api/v1/workspaces/{team}/available-models"),
+            o,
+            false,
+        ),
+        (
+            "/api/v1/platform/providers",
+            "/api/v1/platform/providers".to_owned(),
+            a,
+            true,
+        ),
+    ] {
+        let all = listed(&j, who, template, path.clone()).await;
+        assert!(all > 0, "GET {template}: nothing to filter");
+        assert_eq!(
+            listed(&j, who, template, format!("{path}?q=")).await,
+            all,
+            "GET {template}: an empty q"
+        );
+        let blank = listed(&j, who, template, format!("{path}?q=%20%20")).await;
+        assert_eq!(
+            blank,
+            if trims { all } else { 0 },
+            "GET {template}: a whitespace-only q (trimmed: {trims})"
+        );
+    }
+    for (label, value, expected) in [
+        (
+            "the signed 64-bit maximum",
+            "9223372036854775807",
+            BOTH_ACCEPT,
+        ),
+        ("one above it", "9223372036854775808", BOTH_REFUSE),
+        (
+            "with leading zeros",
+            "000000000000000000000000100",
+            BOTH_ACCEPT,
+        ),
     ] {
         extra_query(
             &j,
@@ -2383,37 +2935,46 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             "max_input_price",
             value,
             label,
-            None,
+            expected,
         )
         .await;
     }
     let history_template = "/api/v1/platform/deployments/{id}/configuration/history";
     let row = "00000000-0000-0000-0000-000000000001";
-    for (label, value) in [
+    for (label, value, expected) in [
         (
             "the latest representable instant",
             format!("8210266876799999999_{row}"),
+            BOTH_ACCEPT,
         ),
         (
             "one past it",
             format!("8210266876799999999_{row}")
                 .replace("8210266876799999999", "8210266876800000000"),
+            BOTH_REFUSE,
         ),
         (
             "the earliest representable instant",
             format!("-210866803200000000_{row}"),
+            BOTH_ACCEPT,
         ),
         (
             "a signed zero-padded value",
             format!("+0000000000000000000012345_{row}"),
+            BOTH_ACCEPT,
         ),
         (
             "a simple uuid",
             "1_00000000000000000000000000000001".to_owned(),
+            BOTH_ACCEPT,
         ),
-        ("a braced uuid", format!("1_{{{row}}}")),
-        ("a urn uuid", format!("1_urn:uuid:{row}")),
-        ("the i64 maximum", format!("9223372036854775807_{row}")),
+        ("a braced uuid", format!("1_{{{row}}}"), BOTH_ACCEPT),
+        ("a urn uuid", format!("1_urn:uuid:{row}"), BOTH_ACCEPT),
+        (
+            "the i64 maximum",
+            format!("9223372036854775807_{row}"),
+            BOTH_REFUSE,
+        ),
     ] {
         extra_query(
             &j,
@@ -2424,13 +2985,13 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             "cursor",
             &value,
             label,
-            None,
+            expected,
         )
         .await;
     }
     // Before the PostgreSQL minimum the cursor still parses (cursor_parts only asks chrono),
     // so the query fails in the database and the route answers 503 rather than 400. That
-    // is a suspected product bug (logs.rs cursor_parts); the contract documents the working
+    // is a suspected product bug (logs.rs cursor_parts, tracked in #409); the contract documents the working
     // range only, and this pins the current behaviour so a fix is noticed.
     let early = format!("-210866803200000001_{row}");
     assert!(!param_accepts(history_template, "cursor", &early));
@@ -2447,28 +3008,28 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     // Compare ids: every uuid spelling and Unicode padding the handler parses.
     let compare_template = "/api/v1/platform/models/compare";
     let (m1, m2) = (model.to_string(), second.to_string());
-    for (label, value, documented) in [
+    for (label, value, expected) in [
         (
             "simple spellings",
             format!("{},{}", m1.replace('-', ""), m2.replace('-', "")),
-            None,
+            BOTH_ACCEPT,
         ),
         (
             "braced and urn spellings",
             format!("{{{m1}}},urn:uuid:{m2}"),
-            None,
+            BOTH_ACCEPT,
         ),
         (
             "ideographic space padding",
             format!("\u{3000}{m1}\u{3000},\u{3000}{m2}\u{3000}"),
-            None,
+            BOTH_ACCEPT,
         ),
         (
             "the same id in two spellings (contract: distinctness is not expressible)",
             format!("{m1},{}", m1.replace('-', "")),
-            Some((true, false)),
+            SCHEMA_ONLY,
         ),
-        ("one id", m1.clone(), None),
+        ("one id", m1.clone(), BOTH_REFUSE),
         (
             "five ids",
             format!(
@@ -2477,7 +3038,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
                 Uuid::new_v4(),
                 Uuid::new_v4()
             ),
-            None,
+            BOTH_REFUSE,
         ),
     ] {
         extra_query(
@@ -2489,7 +3050,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             "ids",
             &value,
             label,
-            documented,
+            expected,
         )
         .await;
     }
