@@ -1350,7 +1350,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MoneyReportRun"
+                  "$ref": "#/components/schemas/MoneyPlatformReportRun"
                 }
               }
             },
@@ -4069,7 +4069,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MoneyReportRun"
+                  "$ref": "#/components/schemas/MoneyWorkspaceReportRun"
                 }
               }
             },
