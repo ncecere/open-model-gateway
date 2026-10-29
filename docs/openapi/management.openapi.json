@@ -1354,9 +1354,35 @@
           },
           "details": {
             "$comment": "Stored alert_events.details is an arbitrary producer-specific JSON object; monetary and identity refinements remain enforced.",
-            "description": "Stored JSON incident payload, not a serde DTO. Fields vary by producer/kind; readers do not deserialize or close this map. Every *_microusd value is a non-null integer micro-USD string: each alerts.rs producer (budget_condition, spend threshold, spend spike) writes `x.to_string()` and never null (unknown cost is reported in unknown_cost_requests), and an incident is only created when used exceeds a positive threshold. Admission-ceiling identity redaction is constrained by the separate variants below.",
+            "description": "Stored JSON incident payload, not a serde DTO. Fields vary by producer/kind; readers do not deserialize or close this map. Every *_microusd value is a non-null integer micro-USD string (unknown cost is reported in unknown_cost_requests, never as null). Each alerts.rs producer field is typed individually: pending_microusd is sum(held - held_unknown) read from budget_totals with no sign guard (migration 0015 has no >= 0 check), so drifted accounting can make it negative and it is signed; used_microusd (an incident needs used to reach a positive threshold of a positive reference), budget_microusd, spend_amount_microusd and min_spend_microusd (validated positive amounts), and current_microusd, baseline_total_microusd and baseline_hourly_microusd (settled ledger sums, CHECK(actual_microusd >= 0)) are unsigned. Any other *_microusd value from a producer not listed must still be an integer string (signed form). Admission-ceiling identity redaction is constrained by the separate variants below.",
             "patternProperties": {
               "(^|_)microusd$": {
+                "$ref": "#/components/schemas/IdentitySignedDecimal"
+              }
+            },
+            "properties": {
+              "baseline_hourly_microusd": {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              "baseline_total_microusd": {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              "budget_microusd": {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              "current_microusd": {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              "min_spend_microusd": {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              "pending_microusd": {
+                "$ref": "#/components/schemas/IdentitySignedDecimal"
+              },
+              "spend_amount_microusd": {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              "used_microusd": {
                 "$ref": "#/components/schemas/IdentityUnsignedDecimal"
               }
             },
