@@ -91,3 +91,56 @@ fn management_openapi_money_signed_credits_and_nested_billing_boundaries() {
         .remove("cache_read_input_tokens");
     assert!(!check("MoneyBillingUsageInput", &omitted));
 }
+#[test]
+fn management_openapi_money_explore_identity_keeps_personal_keys_redacted() {
+    let label = "Personal workspace keys";
+    // The redacted row is its own branch and is not an identified row.
+    let redacted = json!({"id":null,"name":label});
+    assert!(check("MoneyPlatformExploreRedactedKey", &redacted));
+    assert!(check("MoneyPlatformExploreIdentity", &redacted));
+    assert!(!check("MoneyPlatformExploreIdentified", &redacted));
+    assert!(!check("MoneyPlatformExploreUnidentified", &redacted));
+    for extra in ["key_id", "workspace_id", "owner_user_id", "api_key_id"] {
+        let mut v = redacted.clone();
+        v[extra] = json!(uuid::Uuid::nil());
+        assert!(!check("MoneyPlatformExploreRedactedKey", &v), "{extra}");
+        assert!(!check("MoneyPlatformExploreIdentity", &v), "{extra}");
+    }
+    // A redacted row never carries an id.
+    let with_id = json!({"id":uuid::Uuid::nil(),"name":label});
+    assert!(!check("MoneyPlatformExploreRedactedKey", &with_id));
+    // Pinned, deliberately: key names are free text (valid_name accepts any
+    // non-blank text of at most 120 bytes) and the platform key dimension only
+    // redacts personal-workspace keys, so a shared workspace's key may carry
+    // the redacted label with its own id. Excluding the label from the
+    // identified branch would make the schema refuse that real response; key
+    // privacy of personal rows is enforced by the handler and asserted by the
+    // fixture (id and name, both platform actors).
+    assert!(check("MoneyPlatformExploreIdentified", &with_id));
+}
+#[test]
+fn management_openapi_money_cost_row_provider_cost_is_a_canonical_i64() {
+    let schema = &artifact()["components"]["schemas"]["MoneyCostRow"]["properties"]["provider_cost_microusd"];
+    let accepts = |value: Value| validate_value(artifact(), schema, &value).is_ok();
+    // The producer is a bigint column (CHECK >= 0) cast to text.
+    for good in [
+        json!(null),
+        json!("0"),
+        json!("5"),
+        json!("9223372036854775807"),
+    ] {
+        assert!(accepts(good.clone()), "{good}");
+    }
+    for bad in [
+        json!("9223372036854775808"),
+        json!("9999999999999999999"),
+        json!("10000000000000000000"),
+        json!("007"),
+        json!("-1"),
+        json!("1.0"),
+        json!(5),
+        json!(""),
+    ] {
+        assert!(!accepts(bad.clone()), "{bad}");
+    }
+}

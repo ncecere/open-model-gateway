@@ -187,6 +187,9 @@ fn bounded_page(raw: &str) -> Result<(), ApiError> {
 }
 
 #[cfg(test)]
+#[path = "parser_magnitude_tests.rs"]
+mod magnitude_tests;
+#[cfg(test)]
 #[test]
 fn management_openapi_money_raw_upload_request_vectors() {
     // The real ingestion decoder is two-stage: Upload preserves RawValue,

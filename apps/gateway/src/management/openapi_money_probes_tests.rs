@@ -9,6 +9,8 @@ use super::*;
 /// How the handler is expected to answer (by status class), pinned per probe.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Handler {
+    /// Any non-refusal (2xx, 3xx, 404, 409): only `Want::Agree` uses it. Pinned
+    /// accept probes state `Status(200)` instead.
     Accept,
     Refuse,
     Status(u16),
@@ -112,6 +114,8 @@ impl Vx<'_> {
         self.guard("mapping rules", self.mapping_rules()).await;
         self.guard("mapping caps", self.mapping_caps()).await;
         self.guard("import caps", self.import_caps()).await;
+        self.guard("import magnitudes", self.import_magnitudes())
+            .await;
         self.guard("reconcile", self.reconcile_probes()).await;
         self.guard("holds cursor", self.cursor_probes()).await;
         self.guard("positional forms", self.positional_probes())
@@ -166,7 +170,7 @@ impl Vx<'_> {
             let want = if over {
                 Want::Pinned(Handler::Refuse, true)
             } else {
-                Want::Pinned(Handler::Accept, true)
+                Want::Pinned(Handler::Status(200), true)
             };
             self.probe(
                 label,
@@ -200,7 +204,7 @@ impl Vx<'_> {
         ];
         for (label, limit, set) in fields {
             for (extra, want) in [
-                (0, Want::Pinned(Handler::Accept, true)),
+                (0, Want::Pinned(Handler::Status(200), true)),
                 (2, Want::Pinned(Handler::Refuse, true)),
             ] {
                 let mut body = self.base_mapping(&format!("mb-{}", unique()));
@@ -219,7 +223,7 @@ impl Vx<'_> {
         }
         // The upstream model counts bytes as well.
         for (extra, want) in [
-            (0, Want::Pinned(Handler::Accept, true)),
+            (0, Want::Pinned(Handler::Status(200), true)),
             (2, Want::Pinned(Handler::Refuse, true)),
         ] {
             let mut body = self.base_mapping(&format!("mb-{}", unique()));
@@ -240,7 +244,7 @@ impl Vx<'_> {
         let template = "/api/v1/platform/cost-report";
         for name in ["model", "provider"] {
             for (characters, want) in [
-                (100, Want::Pinned(Handler::Accept, true)),
+                (100, Want::Pinned(Handler::Status(200), true)),
                 (101, Want::Pinned(Handler::Refuse, true)),
             ] {
                 self.probe_query(
@@ -301,7 +305,7 @@ impl Vx<'_> {
                 (
                     "50 distinct eligible recipients",
                     json!(ids[..50]),
-                    Want::Pinned(Handler::Accept, true),
+                    Want::Pinned(Handler::Status(200), true),
                 ),
                 (
                     "51 distinct eligible recipients",
@@ -316,7 +320,7 @@ impl Vx<'_> {
                 (
                     "two distinct recipients",
                     json!([ids[0], ids[1]]),
-                    Want::Pinned(Handler::Accept, true),
+                    Want::Pinned(Handler::Status(200), true),
                 ),
             ] {
                 self.probe(
@@ -377,7 +381,7 @@ impl Vx<'_> {
                     m["bindings"][0]["non_omg_traffic"] = json!(true);
                     m["bindings"][0]["workspace_id"] = Value::Null;
                 },
-                Want::Pinned(Handler::Accept, true),
+                Want::Pinned(Handler::Status(200), true),
             ),
             (
                 "duplicate provider_model",
@@ -397,7 +401,7 @@ impl Vx<'_> {
                         {"provider_model":"alias-b","upstream_model":"one"}
                     ]);
                 },
-                Want::Pinned(Handler::Accept, true),
+                Want::Pinned(Handler::Status(200), true),
             ),
         ];
         for (label, edit, want) in single {
@@ -455,7 +459,7 @@ impl Vx<'_> {
                     b["effective_start"] = json!(at(1));
                     b["effective_end"] = json!(at(2));
                 }),
-                Want::Pinned(Handler::Accept, true),
+                Want::Pinned(Handler::Status(200), true),
             ),
         ] {
             self.probe(label, self.admin, "POST", mappings, mappings, body, want)
@@ -475,7 +479,7 @@ impl Vx<'_> {
                 "non_omg_traffic":true,"attested":true,"evidence_reference":"cap:binding","model_mappings":[]})
         };
         for (count, want) in [
-            (1000_i64, Want::Pinned(Handler::Accept, true)),
+            (1000_i64, Want::Pinned(Handler::Status(200), true)),
             (1001, Want::Pinned(Handler::Refuse, false)),
         ] {
             let mut body = self.base_mapping(&format!("cap-{}", unique()));
@@ -492,7 +496,7 @@ impl Vx<'_> {
             .await;
         }
         for (count, want) in [
-            (100, Want::Pinned(Handler::Accept, true)),
+            (100, Want::Pinned(Handler::Status(200), true)),
             (101, Want::Pinned(Handler::Refuse, false)),
         ] {
             let mut body = self.base_mapping(&format!("cap-{}", unique()));
@@ -518,38 +522,41 @@ impl Vx<'_> {
     /// one past it. (A 32-bucket chain also spans more than 31 days, so the
     /// refusal past the cap cannot be isolated from the span rule here; the
     /// cap itself is the schema's maxItems.)
-    async fn import_caps(&self) {
-        let imports = "/api/v1/platform/provider-cost-imports";
+    /// A chain of `days` one-day buckets (the first holds one item with the
+    /// given amount), `per_page` buckets to a page, from a fresh account.
+    fn import_chain(&self, days: usize, per_page: usize, amount: &str) -> Value {
         let start = chrono::Utc::now().date_naive() - chrono::TimeDelta::days(45);
         let origin = start.and_hms_opt(0, 0, 0).unwrap();
-        let item = json!({"amount":"1","currency":"USD","workspace_id":null,"description":null,"model":null,"service_tier":null,"context_window":null,"cost_type":null,"token_type":null,"inference_geo":null,"speed":null});
-        let chain = |days: usize, per_page: usize| {
-            let buckets: Vec<Value> = (0..days as i64)
-                .map(|d| {
-                    json!({"starting_at":stamp(origin, d * 24),"ending_at":stamp(origin, d * 24 + 24),
-                        "results": if d == 0 { vec![item.clone()] } else { vec![] }})
-                })
-                .collect();
-            let chunks: Vec<&[Value]> = buckets.chunks(per_page).collect();
-            let pages: Vec<Value> = chunks
-                .iter()
-                .enumerate()
-                .map(|(i, data)| {
-                    let more = i + 1 < chunks.len();
-                    json!({"data":data,"has_more":more,"next_page":more.then(|| format!("cursor-{i}"))})
-                })
-                .collect();
-            let end = stamp(origin, days as i64 * 24);
-            json!({"account_id":format!("cap-{}", unique()),"evidence_reference":"cap:export","exported_at":end,"supersedes":null,
-                "request":{"starting_at":stamp(origin, 0),"ending_at":end,"bucket_width":"1d","group_by":["workspace_id","description"],"limit":per_page.min(31)},
-                "pages":pages})
-        };
+        let item = json!({"amount":amount,"currency":"USD","workspace_id":null,"description":null,"model":null,"service_tier":null,"context_window":null,"cost_type":null,"token_type":null,"inference_geo":null,"speed":null});
+        let buckets: Vec<Value> = (0..days as i64)
+            .map(|d| {
+                json!({"starting_at":stamp(origin, d * 24),"ending_at":stamp(origin, d * 24 + 24),
+                    "results": if d == 0 { vec![item.clone()] } else { vec![] }})
+            })
+            .collect();
+        let chunks: Vec<&[Value]> = buckets.chunks(per_page).collect();
+        let pages: Vec<Value> = chunks
+            .iter()
+            .enumerate()
+            .map(|(i, data)| {
+                let more = i + 1 < chunks.len();
+                json!({"data":data,"has_more":more,"next_page":more.then(|| format!("cursor-{i}"))})
+            })
+            .collect();
+        let end = stamp(origin, days as i64 * 24);
+        json!({"account_id":format!("cap-{}", unique()),"evidence_reference":"cap:export","exported_at":end,"supersedes":null,
+            "request":{"starting_at":stamp(origin, 0),"ending_at":end,"bucket_width":"1d","group_by":["workspace_id","description"],"limit":per_page.min(31)},
+            "pages":pages})
+    }
+    async fn import_caps(&self) {
+        let imports = "/api/v1/platform/provider-cost-imports";
+        let chain = |days: usize, per_page: usize| self.import_chain(days, per_page, "1");
         for (label, days, per_page, want) in [
             (
                 "31 pages of one bucket",
                 31,
                 1,
-                Want::Pinned(Handler::Accept, true),
+                Want::Pinned(Handler::Status(200), true),
             ),
             (
                 "32 pages of one bucket",
@@ -561,7 +568,7 @@ impl Vx<'_> {
                 "31 buckets in one page",
                 31,
                 31,
-                Want::Pinned(Handler::Accept, true),
+                Want::Pinned(Handler::Status(200), true),
             ),
             (
                 "32 buckets in one page",
@@ -577,6 +584,38 @@ impl Vx<'_> {
                 imports,
                 imports,
                 chain(days, per_page),
+                want,
+            )
+            .await;
+        }
+    }
+
+    /// Amount magnitude over HTTP (the DB-free unit test
+    /// `management_openapi_money_amount_magnitude_matches_cents` covers the
+    /// exact boundary): 34 whole
+    /// digits convert to micro-USD within i128 and fit numeric(39,0); 35 nines
+    /// exceed the limit and are refused.
+    async fn import_magnitudes(&self) {
+        let imports = "/api/v1/platform/provider-cost-imports";
+        for (label, amount, want) in [
+            (
+                "amount of 34 whole digits",
+                "9".repeat(34),
+                Want::Pinned(Handler::Status(200), true),
+            ),
+            (
+                "amount of 35 whole digits above the limit",
+                "9".repeat(35),
+                Want::Pinned(Handler::Refuse, false),
+            ),
+        ] {
+            self.probe(
+                label,
+                self.admin,
+                "POST",
+                imports,
+                imports,
+                self.import_chain(1, 1, &amount),
                 want,
             )
             .await;
@@ -624,8 +663,11 @@ impl Vx<'_> {
         };
         const MAX: &str = "9223372036854775807";
         const OVER: &str = "9223372036854775808";
-        let accept = Want::Pinned(Handler::Accept, true);
+        // The accept side is strict: exactly 200 (Handler::Accept would also
+        // pass a 404 or a 409).
+        let accept = Want::Pinned(Handler::Status(200), true);
         let refuse = Want::Pinned(Handler::Refuse, false);
+        // Current behaviour; see #408 (a Storage error maps to 503).
         let incoherent = Want::Pinned(Handler::Status(503), true);
         self.reconcile_probe("every optional sibling", full(), accept)
             .await;
@@ -645,7 +687,7 @@ impl Vx<'_> {
             (
                 "zero-padded provider_cost_microusd",
                 "007",
-                Want::Pinned(Handler::Accept, false),
+                Want::Pinned(Handler::Status(200), false),
             ),
         ] {
             let mut body = full();
@@ -655,7 +697,7 @@ impl Vx<'_> {
         self.reconcile_probe(
             "zero-padded input_tokens",
             bare("007", "2"),
-            Want::Pinned(Handler::Accept, false),
+            Want::Pinned(Handler::Status(200), false),
         )
         .await;
         // Coherent usage is accepted.
@@ -681,9 +723,17 @@ impl Vx<'_> {
             self.reconcile_probe(label, billing(&set), accept).await;
         }
         // BillingUsage::validate refuses these, but the refusal surfaces as a
-        // Storage error: 503 "Reconciliation unavailable" (governance.rs
-        // usage_values -> governance/reports.rs error mapping), not 400. The
-        // schema cannot state the cross-field rules, so it accepts them.
+        // Storage error: 503 "Reconciliation unavailable" (usage_values in
+        // src/governance.rs -> the error mapping of reconcile in
+        // src/management/governance/reports.rs), not 400. The schema cannot
+        // state the cross-field rules, so it accepts them. Current behaviour;
+        // see #408.
+        self.reconcile_probe(
+            "input_tokens + output_tokens past i64",
+            bare(MAX, "1"),
+            incoherent,
+        )
+        .await;
         for (label, set) in [
             (
                 "uncached above total",
@@ -754,8 +804,11 @@ impl Vx<'_> {
 
     // -----------------------------------------------------------------
     // Holds cursor: the emitted spelling is the only accepted one, and a
-    // timestamp before PostgreSQL's timestamptz range is refused (holds.rs:
-    // 36-47), which the cursor pattern cannot express.
+    // timestamp before PostgreSQL's timestamptz range is refused
+    // (pg_timestamptz_representable in src/management/governance/holds.rs), as
+    // is a 19-digit value outside the representable range (cursor_parts in
+    // src/management/logs.rs: i64 parse, then from_timestamp_micros); the
+    // cursor pattern expresses neither.
     // -----------------------------------------------------------------
     async fn cursor_probes(&self) {
         let nil = Uuid::nil();
@@ -776,11 +829,23 @@ impl Vx<'_> {
                 (
                     "cursor at the earliest timestamptz",
                     "-210866803200000000",
-                    Want::Pinned(Handler::Accept, true),
+                    Want::Pinned(Handler::Status(200), true),
                 ),
                 (
                     "cursor before the earliest timestamptz",
                     "-210866803200000001",
+                    Want::Pinned(Handler::Refuse, true),
+                ),
+                // 19 digits that do not parse as an i64 (cursor_parts).
+                (
+                    "cursor of 19 digits past i64",
+                    "9999999999999999999",
+                    Want::Pinned(Handler::Refuse, true),
+                ),
+                // An i64 that from_timestamp_micros cannot represent.
+                (
+                    "cursor of i64::MAX microseconds",
+                    "9223372036854775807",
                     Want::Pinned(Handler::Refuse, true),
                 ),
             ] {

@@ -53,6 +53,23 @@ fn body(r: &Captured) -> Value {
     serde_json::from_slice(&r.bytes).unwrap()
 }
 
+/// The personal workspace's key, named so that a leak of the NAME is detectable.
+const PRIVATE_KEY_NAME: &str = "Private personal workspace credential";
+/// Key privacy on personal rows (#400 Option A) is enforced by the handlers
+/// (the platform `key` dimension collapses personal keys to one redacted row)
+/// and asserted here: neither the key's id nor its name may appear.
+fn assert_no_personal_key(v: &Value, key: &Value) {
+    let text = v.to_string();
+    assert!(
+        !text.contains(key["id"].as_str().unwrap()),
+        "a personal key id is exposed"
+    );
+    assert!(
+        !text.contains(PRIVATE_KEY_NAME),
+        "a personal key name is exposed"
+    );
+}
+
 async fn observe(
     seen: &mut PositiveFixtures,
     client: &reqwest::Client,
@@ -425,7 +442,15 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
     let price3 = price_v3(&pool, deployment, false).await;
     let price_audio = price_v3(&pool, deployment, true).await;
     let (_, team_key) = key(&f, &f.owner, f.team, Value::Null).await;
-    let (_, private_key) = key(&f, &f.owner, f.personal, Value::Null).await;
+    // A distinctive name, so a leak of the key NAME (not only its id) is detectable.
+    let (_, private_key) = call(
+        &f.s,
+        &f.owner,
+        "POST",
+        &format!("/api/v1/workspaces/{}/keys", f.personal),
+        json!({"name":PRIVATE_KEY_NAME,"expires_in_days":1,"model_ids":Value::Null}),
+    )
+    .await;
     let (_, member_key) = key(&f, &f.member, f.team, Value::Null).await;
     let (_, project_key_a) = key(&f, &f.owner, f.project, Value::Null).await;
     let (_, project_key_b) = key(&f, &f.owner, f.project, Value::Null).await;
@@ -902,11 +927,7 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
                         .iter()
                         .any(|r| r["id"].is_null() && r["name"] == "Personal workspace keys")
                 );
-                assert!(
-                    !v["top"]["keys"]
-                        .to_string()
-                        .contains(private_key["id"].as_str().unwrap())
-                );
+                assert_no_personal_key(&v["top"]["keys"], &private_key);
             }
             if suffix == "usage/storage" {
                 assert_ne!(v["total"]["byte_seconds"], "0");
@@ -1009,7 +1030,7 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
     )
     .await;
     assert!(v["top"]["keys"][0]["share"].is_null());
-    assert!(!v.to_string().contains(private_key["id"].as_str().unwrap()));
+    assert_no_personal_key(&v, &private_key);
     // Usage overview: busy scope, a scope with only in-flight attempts, the
     // unallocated bucket, and a member (own activity only: no member list).
     for (actor, scope, filter) in [
@@ -1045,7 +1066,7 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
             assert!(v["top"]["members"].is_null());
         }
         if scope.contains("/platform") {
-            assert!(!v.to_string().contains(private_key["id"].as_str().unwrap()));
+            assert_no_personal_key(&v, &private_key);
         }
     }
     // Usage explore: every metric, grouping and then-grouping, including the
@@ -1093,7 +1114,7 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
             None,
         )
         .await;
-        assert!(!v.to_string().contains(private_key["id"].as_str().unwrap()));
+        assert_no_personal_key(&v, &private_key);
         if query.starts_with("metric=requests&group_by=workspace") {
             assert!(v["rows"].as_array().unwrap().iter().any(|r| {
                 r["group"]["name"]
@@ -1120,6 +1141,27 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
         }
         if query == "metric=spend&group_by=key&top=1" {
             assert!(!v["other"].is_null());
+        }
+    }
+    // Key privacy for BOTH platform actors (the Auditor loops above and the
+    // Admin here): every platform view that groups or lists keys exposes
+    // neither the personal workspace's key id nor its name.
+    for actor in [&auditor, &admin] {
+        for path in [
+            format!("/api/v1/platform/cost-report?{range}"),
+            format!("/api/v1/platform/usage/overview?{range}"),
+            format!("/api/v1/platform/usage/explore?{range}&metric=spend&group_by=key"),
+            format!(
+                "/api/v1/platform/usage/explore?{range}&metric=spend&group_by=key&then_by=cost_center"
+            ),
+            format!(
+                "/api/v1/platform/usage/explore?{range}&metric=spend&group_by=cost_center&then_by=key"
+            ),
+            format!("/api/v1/platform/usage/explore?{range}&metric=requests&group_by=workspace"),
+            "/api/v1/platform/holds".to_owned(),
+        ] {
+            let v = observe(&mut seen, &client, &base, actor, "GET", &path, None).await;
+            assert_no_personal_key(&v, &private_key);
         }
     }
     let member_key_id = id(&member_key).to_string();
@@ -1254,9 +1296,10 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
         assert_eq!(v["personal"]["count"], "2");
         assert_eq!(v["personal"]["known_floor_microusd"], "10");
         assert_eq!(v["personal"]["unbounded_count"], "1");
-        for secret in [private, f.personal, id(&private_key)] {
+        for secret in [private, f.personal] {
             assert!(!v.to_string().contains(&secret.to_string()));
         }
+        assert_no_personal_key(&v, &private_key);
         assert_eq!(v["data"][0]["can_reconcile"], actor.token == admin.token);
         assert!(
             v["data"]
@@ -1825,9 +1868,10 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
                 v["snapshot"]["personal_activity"]["estimates"]["attempts"],
                 "1"
             );
-            for secret in [f.personal, id(&private_key), private] {
+            for secret in [f.personal, private] {
                 assert!(!v["snapshot"].to_string().contains(&secret.to_string()));
             }
+            assert_no_personal_key(&v["snapshot"], &private_key);
         }
         if path.ends_with(&recon_revised.to_string()) {
             let categories =
@@ -1838,18 +1882,18 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
                     .is_some_and(|s| s.starts_with('-'))
             );
             assert!(categories["tokens"].is_string());
-            for secret in [f.personal, id(&private_key)] {
-                assert!(
-                    !v["snapshot"]["rows"]
-                        .to_string()
-                        .contains(&secret.to_string())
-                );
-                assert!(
-                    !v["snapshot"]["mapping_provenance"]
-                        .to_string()
-                        .contains(&secret.to_string())
-                );
-            }
+            assert!(
+                !v["snapshot"]["rows"]
+                    .to_string()
+                    .contains(&f.personal.to_string())
+            );
+            assert!(
+                !v["snapshot"]["mapping_provenance"]
+                    .to_string()
+                    .contains(&f.personal.to_string())
+            );
+            assert_no_personal_key(&v["snapshot"]["rows"], &private_key);
+            assert_no_personal_key(&v["snapshot"]["mapping_provenance"], &private_key);
         }
     }
     let duplicate = serde_json::to_string(&upload).unwrap().replace(
