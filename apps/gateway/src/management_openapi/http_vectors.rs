@@ -41,21 +41,23 @@ impl From<Captured> for Probe {
 impl Probe {
     /// An explicit verdict for handlers whose status is ambiguous (for example a
     /// callback that answers 400 both for malformed input and for a refused login).
+    /// It replaces only the accept/refuse reading of a status in the expected set
+    /// (2xx, 3xx, 400, 404, 409, 422); any other status still fails the run.
     pub(crate) fn decided(captured: Captured, accepted: bool) -> Self {
         Self {
             captured,
             accepted: Some(accepted),
         }
     }
+    /// The status must always be one an input verdict can rest on, even when the
+    /// fixture decides: 401/403/413/415/429/5xx are never "refused input".
     fn verdict(&self) -> Result<bool> {
-        if let Some(accepted) = self.accepted {
-            return Ok(accepted);
-        }
-        match self.captured.status.as_u16() {
-            400 | 422 => Ok(false),
-            200..=399 | 404 | 409 => Ok(true),
+        let by_status = match self.captured.status.as_u16() {
+            400 | 422 => false,
+            200..=399 | 404 | 409 => true,
             other => bail!("unexpected status {other}: not an input verdict"),
-        }
+        };
+        Ok(self.accepted.unwrap_or(by_status))
     }
 }
 
@@ -137,6 +139,138 @@ fn repeat_to(seed: &str, length: usize) -> String {
 /// Longest string vector (bytes of characters) the harness will send.
 const LONGEST: u64 = 100_000;
 
+/// Reviewed extension on a string schema: the handler limits the UTF-8 BYTES of
+/// the value (JSON Schema `maxLength` counts characters, so it can only state a
+/// necessary bound). The vector oracle refuses a value over the byte limit and
+/// sends multibyte values around it, so a handler that counts characters (or a
+/// schema that claims characters for a byte limit) cannot silently pass.
+pub(super) const MAX_BYTES: &str = "x-omg-max-bytes";
+
+/// A reviewed byte limit that applies to `instance`, or one of its nested values?
+fn bytes_ok(document: &Value, schema: &Value, instance: &Value, depth: usize) -> Result<bool> {
+    ensure!(depth < 16, "schema nesting too deep");
+    let mut nodes = Vec::new();
+    applicable(document, schema, instance, &mut nodes, 0)?;
+    match instance {
+        Value::String(text) => {
+            let over = nodes
+                .iter()
+                .filter_map(|node| node.get(MAX_BYTES).and_then(Value::as_u64))
+                .any(|limit| text.len() as u64 > limit);
+            Ok(!over)
+        }
+        Value::Object(map) => {
+            for (name, child) in map {
+                if let Some(child_schema) = child_schema(&nodes, name)
+                    && !bytes_ok(document, &child_schema, child, depth + 1)?
+                {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        Value::Array(items) => {
+            for (i, child) in items.iter().enumerate() {
+                if let Some(item_schema) = index_schema(&nodes, i)
+                    && !bytes_ok(document, &item_schema, child, depth + 1)?
+                {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        _ => Ok(true),
+    }
+}
+
+/// The schema's verdict: JSON Schema validity plus the reviewed byte limits.
+fn accepts(document: &Value, schema: &Value, instance: &Value) -> Result<bool> {
+    Ok(valid(document, schema, instance)? && bytes_ok(document, schema, instance, 0)?)
+}
+
+/// `(min, max)` repetitions of a SIMPLE anchored pattern: one character class,
+/// escape or literal under `{n}`, `{m,n}`, `{m,}`, `+`, `*` or `?`. Anything
+/// else (groups, alternation, sequences) yields `None`.
+fn simple_bounds(pattern: &str) -> Option<(usize, Option<usize>)> {
+    let body = pattern.strip_prefix('^')?.strip_suffix('$')?;
+    let rest = if body.starts_with('[') {
+        let mut escaped = false;
+        let mut end = None;
+        for (i, c) in body.char_indices().skip(1) {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == ']' && i > 1 {
+                end = Some(i);
+                break;
+            }
+        }
+        &body[end? + 1..]
+    } else if body.starts_with('\\') {
+        body.get(2..)?
+    } else {
+        let first = body.chars().next()?;
+        if "()|.^$*+?{}[]".contains(first) {
+            return None;
+        }
+        &body[first.len_utf8()..]
+    };
+    match rest {
+        "+" => Some((1, None)),
+        "*" => Some((0, None)),
+        "?" => Some((0, Some(1))),
+        quantifier => {
+            let inner = quantifier.strip_prefix('{')?.strip_suffix('}')?;
+            match inner.split_once(',') {
+                None => {
+                    let n = inner.parse().ok()?;
+                    Some((n, Some(n)))
+                }
+                Some((low, "")) => Some((low.parse().ok()?, None)),
+                Some((low, high)) => Some((low.parse().ok()?, Some(high.parse().ok()?))),
+            }
+        }
+    }
+}
+
+/// Candidates around a pattern: shape violations, control characters,
+/// multibyte values and, for simple repetition patterns, the length boundaries
+/// m-1, m, n and n+1 built from the characters of the valid seed.
+fn pattern_candidates(pattern: &str, seed: &str) -> Vec<String> {
+    let mut replaced = seed.chars();
+    replaced.next();
+    let mut out = vec![
+        format!("{seed}!"),
+        format!("!{seed}"),
+        format!("!{}", replaced.as_str()),
+        seed.to_uppercase(),
+        seed.to_lowercase(),
+        " ".to_owned(),
+        "~".to_owned(),
+        "\u{e9}".to_owned(),
+    ];
+    for control in ['\n', '\0', '\u{7f}', '\u{85}'] {
+        out.push(control.to_string());
+        out.push(format!("{seed}{control}"));
+        out.push(format!("{control}{seed}"));
+        out.push(format!("a{control}b"));
+    }
+    for glyph in ["\u{e9}", "\u{2713}", "\u{1F600}"] {
+        out.push(glyph.to_owned());
+        out.push(format!("{seed}{glyph}"));
+    }
+    if let Some((min, max)) = simple_bounds(pattern) {
+        let lengths = [min.checked_sub(1), Some(min), max, max.map(|n| n + 1)];
+        for length in lengths.into_iter().flatten() {
+            if (length as u64) <= LONGEST {
+                out.push(repeat_to(seed, length));
+            }
+        }
+    }
+    out
+}
+
 /// Candidate replacement values for one location, by the constraints that apply.
 /// `query` candidates are rendered as strings; JSON wrong types do not exist there.
 fn scalar_mutations(
@@ -203,6 +337,24 @@ fn scalar_mutations(
             out.push(("enum member", member.clone()));
         }
     }
+    // Flip booleans and consts, so a value that is valid alone but not beside its
+    // siblings (`ids` together with `all: true`) reaches the handler.
+    if let Value::Bool(flag) = value {
+        out.push(("boolean flip", json!(!flag)));
+    }
+    for node in nodes {
+        if let Some(constant) = node.get("const") {
+            let other = match constant {
+                Value::String(text) => json!(format!("{text}~")),
+                Value::Number(n) => json!(n.as_i64().map_or(0, |n| n.saturating_add(1))),
+                Value::Bool(flag) => json!(!flag),
+                _ => json!("~not-the-constant~"),
+            };
+            if other != *value {
+                out.push(("const flip", other));
+            }
+        }
+    }
     // Numeric bounds, each side and its neighbour.
     let number = |key: &str| first(nodes, key).and_then(Value::as_i64);
     if kinds.contains("integer") || kinds.contains("number") {
@@ -243,26 +395,41 @@ fn scalar_mutations(
         {
             out.push(("maxLength", json!(repeat_to(seed, max as usize))));
             out.push(("maxLength+1", json!(repeat_to(seed, max as usize + 1))));
-        }
-        if first(nodes, "pattern").is_some() {
-            let upper = seed.to_uppercase();
-            let lower = seed.to_lowercase();
-            let mut replaced = seed.chars();
-            replaced.next();
-            for candidate in [
-                format!("{seed}!"),
-                format!("!{seed}"),
-                format!("!{}", replaced.as_str()),
-                upper,
-                lower,
-                " ".to_owned(),
-                "~".to_owned(),
-                "\u{e9}".to_owned(),
-            ] {
-                // Keep only genuine violations: this is the pattern-violation vector.
-                if !valid(document, schema, &json!(candidate))? {
-                    out.push(("pattern violation", json!(candidate)));
+            // Characters, not bytes: a value of `max` multibyte characters is
+            // within maxLength however many bytes it takes.
+            if max <= 20_000 {
+                for glyph in ["\u{e9}", "\u{1F600}"] {
+                    out.push(("multibyte maxLength", json!(glyph.repeat(max as usize))));
+                    out.push((
+                        "multibyte maxLength+1",
+                        json!(glyph.repeat(max as usize + 1)),
+                    ));
                 }
+            }
+        }
+        // A reviewed byte limit: multibyte values at and just over it.
+        if let Some(limit) = nodes
+            .iter()
+            .filter_map(|node| node.get(MAX_BYTES).and_then(Value::as_u64))
+            .min()
+            && limit < LONGEST
+        {
+            for glyph in ["\u{e9}", "\u{2713}", "\u{1F600}"] {
+                let fit = limit as usize / glyph.len();
+                out.push(("multibyte maxBytes", json!(glyph.repeat(fit))));
+                out.push(("multibyte maxBytes+1", json!(glyph.repeat(fit + 1))));
+            }
+        }
+        if let Some(pattern) = first(nodes, "pattern").and_then(Value::as_str) {
+            for candidate in pattern_candidates(pattern, seed) {
+                // Genuine violations are the pattern-violation vectors; the rest
+                // (multibyte text, say) must be accepted by both sides.
+                let kind = if accepts(document, schema, &json!(candidate))? {
+                    "pattern candidate"
+                } else {
+                    "pattern violation"
+                };
+                out.push((kind, json!(candidate)));
             }
         }
         if let Some(format) = first(nodes, "format").and_then(Value::as_str) {
@@ -409,7 +576,7 @@ pub(super) fn query_cases(
         {
             let raw = render(&value);
             if seen.insert(raw.clone()) {
-                let accept = valid(document, schema, &coerce(&kinds, &raw))?;
+                let accept = accepts(document, schema, &coerce(&kinds, &raw))?;
                 out.push(QueryCase {
                     param: name.clone(),
                     kind,
@@ -621,7 +788,14 @@ fn set(root: &Value, path: &[Step], new: Option<Value>) -> Value {
             }
         }
         (Step::Index(i), Some(v)) => {
-            at[*i] = v;
+            // One past the end appends (a seeded trailing positional item).
+            if let Some(items) = at.as_array_mut()
+                && *i == items.len()
+            {
+                items.push(v);
+            } else {
+                at[*i] = v;
+            }
         }
         (Step::Index(i), None) => {
             if let Some(items) = at.as_array_mut()
@@ -648,17 +822,27 @@ fn pointer(path: &[Step]) -> String {
 struct Walk<'a> {
     document: &'a Value,
     root_schema: &'a Value,
-    valid_body: &'a Value,
+    /// The valid body the current mutations are derived from (a seeded walk
+    /// derives from the body with its seed added).
+    valid_body: Value,
+    /// The caller's valid body: never sent again as a vector.
+    original: &'a Value,
+    /// Caller-supplied valid values for declared optional locations, by pointer.
+    seeds: std::collections::BTreeMap<String, Value>,
+    used: BTreeSet<String>,
     seen: BTreeSet<String>,
     out: Vec<BodyCase>,
 }
 impl Walk<'_> {
     fn push(&mut self, path: &[Step], kind: &'static str, new: Option<Value>) -> Result<()> {
-        let body = set(self.valid_body, path, new);
-        if body == *self.valid_body || !self.seen.insert(serde_json::to_string(&body)?) {
+        let body = set(&self.valid_body, path, new);
+        if body == self.valid_body
+            || body == *self.original
+            || !self.seen.insert(serde_json::to_string(&body)?)
+        {
             return Ok(());
         }
-        let accept = valid(self.document, self.root_schema, &body)?;
+        let accept = accepts(self.document, self.root_schema, &body)?;
         self.out.push(BodyCase {
             pointer: pointer(path),
             kind,
@@ -666,6 +850,21 @@ impl Walk<'_> {
             accept,
         });
         Ok(())
+    }
+    /// The caller's seed for an absent declared location: send it ADDED to the
+    /// valid body, then walk the seeded value like any other.
+    fn seeded(&mut self, child: &Value, path: &mut Vec<Step>) -> Result<()> {
+        let at = pointer(path);
+        let Some(seed) = self.seeds.get(&at).cloned() else {
+            return Ok(());
+        };
+        self.used.insert(at);
+        self.push(path, "optional added", Some(seed.clone()))?;
+        let base = set(&self.valid_body, path, Some(seed.clone()));
+        let saved = std::mem::replace(&mut self.valid_body, base);
+        let walked = self.walk(child, &seed, path);
+        self.valid_body = saved;
+        walked
     }
     fn walk(&mut self, schema: &Value, value: &Value, path: &mut Vec<Step>) -> Result<()> {
         ensure!(path.len() < 12, "request body nesting too deep");
@@ -684,9 +883,24 @@ impl Walk<'_> {
                 self.push(path, "unknown field", Some(Value::Object(unknown)))?;
                 for (name, child) in map {
                     // Only schema-declared names are walked (and reported).
-                    if let Some(child_schema) = first_property(&nodes, name) {
+                    if let Some(child_schema) = child_schema(&nodes, name) {
                         path.push(Step::Key(name.clone()));
-                        self.walk(child_schema, child, path)?;
+                        self.walk(&child_schema, child, path)?;
+                        path.pop();
+                    }
+                }
+                // Declared optional properties the valid body omits: only the
+                // caller's seeds make them reachable.
+                let absent: BTreeSet<&String> = nodes
+                    .iter()
+                    .filter_map(|node| node["properties"].as_object())
+                    .flat_map(|properties| properties.keys())
+                    .filter(|name| !map.contains_key(*name))
+                    .collect();
+                for name in absent {
+                    if let Some(child_schema) = child_schema(&nodes, name) {
+                        path.push(Step::Key(name.clone()));
+                        self.seeded(&child_schema, path)?;
                         path.pop();
                     }
                 }
@@ -709,10 +923,22 @@ impl Walk<'_> {
                     }
                 }
                 self.push(path, "empty array", Some(json!([])))?;
-                if let (Some(first), Some(item_schema)) = (items.first(), item_schema(&nodes, 0)) {
-                    path.push(Step::Index(0));
-                    self.walk(item_schema, first, path)?;
-                    path.pop();
+                // Every positional index (a homogeneous `items` schema: the first).
+                for (i, item) in items.iter().enumerate() {
+                    if let Some(item_schema) = index_schema(&nodes, i) {
+                        path.push(Step::Index(i));
+                        self.walk(&item_schema, item, path)?;
+                        path.pop();
+                    }
+                }
+                // The next positional item, when the caller seeded it.
+                let next = items.len();
+                if positional(&nodes, next) {
+                    if let Some(item_schema) = index_schema(&nodes, next) {
+                        path.push(Step::Index(next));
+                        self.seeded(&item_schema, path)?;
+                        path.pop();
+                    }
                 }
             }
             _ => {}
@@ -723,15 +949,48 @@ impl Walk<'_> {
 fn first_u64(nodes: &[&Value], key: &str) -> Option<u64> {
     first(nodes, key).and_then(Value::as_u64)
 }
-fn first_property<'a>(nodes: &[&'a Value], name: &str) -> Option<&'a Value> {
-    nodes.iter().find_map(|node| node["properties"].get(name))
+/// All schemas a property or item must satisfy, as one `allOf` when several
+/// (the base object and the matching union/conditional arms each constrain it).
+fn combine(mut parts: Vec<Value>) -> Option<Value> {
+    match parts.len() {
+        0 => None,
+        1 => parts.pop(),
+        _ => Some(json!({"allOf": parts})),
+    }
 }
-fn item_schema<'a>(nodes: &[&'a Value], index: usize) -> Option<&'a Value> {
-    nodes.iter().find_map(|node| {
-        node["prefixItems"]
-            .get(index)
-            .or_else(|| node.get("items").filter(|v| v.is_object()))
-    })
+fn child_schema(nodes: &[&Value], name: &str) -> Option<Value> {
+    combine(
+        nodes
+            .iter()
+            .filter_map(|node| node["properties"].get(name))
+            .cloned()
+            .collect(),
+    )
+}
+/// Does any applicable node declare a positional (`prefixItems`) schema at `index`?
+fn positional(nodes: &[&Value], index: usize) -> bool {
+    nodes
+        .iter()
+        .any(|node| node["prefixItems"].get(index).is_some())
+}
+fn index_schema(nodes: &[&Value], index: usize) -> Option<Value> {
+    if positional(nodes, index) {
+        return combine(
+            nodes
+                .iter()
+                .filter_map(|node| node["prefixItems"].get(index))
+                .cloned()
+                .collect(),
+        );
+    }
+    // A homogeneous `items` schema is walked at its first element only.
+    if index == 0 {
+        return nodes
+            .iter()
+            .find_map(|node| node.get("items").filter(|v| v.is_object()))
+            .cloned();
+    }
+    None
 }
 
 fn body_schema(operation: &Value) -> Result<&Value> {
@@ -745,20 +1004,30 @@ pub(super) fn body_cases(
     document: &Value,
     operation: &Value,
     valid_body: &Value,
+    seeds: &[(String, Value)],
 ) -> Result<Vec<BodyCase>> {
     let schema = body_schema(operation)?;
     ensure!(
-        valid(document, schema, valid_body)?,
+        accepts(document, schema, valid_body)?,
         "the valid request body must satisfy its schema"
     );
     let mut walk = Walk {
         document,
         root_schema: schema,
-        valid_body,
+        valid_body: valid_body.clone(),
+        original: valid_body,
+        seeds: seeds.iter().cloned().collect(),
+        used: BTreeSet::new(),
         seen: BTreeSet::new(),
         out: Vec::new(),
     };
     walk.walk(schema, valid_body, &mut Vec::new())?;
+    for (at, _) in seeds {
+        ensure!(
+            walk.used.contains(at),
+            "seed at {at} names no declared optional location that the valid body omits"
+        );
+    }
     Ok(walk.out)
 }
 
@@ -767,10 +1036,11 @@ pub(super) async fn run_body(
     method: &str,
     template: &str,
     valid_body: Value,
+    seeds: &[(String, Value)],
     send: &impl AsyncFn(Value) -> Probe,
 ) -> Result<Vec<Captured>> {
     let operation = responses::operation(document, method, template)?;
-    let cases = body_cases(document, operation, &valid_body)?;
+    let cases = body_cases(document, operation, &valid_body, seeds)?;
     let mut plan = vec![("valid", "(root)".to_owned(), valid_body.clone(), true)];
     plan.extend(
         cases
@@ -799,8 +1069,10 @@ pub(super) async fn run_body(
 
 /// Body boundary vectors for one operation over real HTTP: top-level and nested
 /// wrong types, null where not nullable, enum members and non-members, bounds,
-/// omissions and unknown fields. `valid` must satisfy the schema; supply optional
-/// nested fields in it to have them walked too.
+/// flipped booleans and consts, pattern and length boundaries, every positional
+/// index, omissions and unknown fields. `valid` must satisfy the schema; supply
+/// optional nested fields in it to have them walked too, or use
+/// [`body_vectors_seeded`] for optional siblings that cross-field rules relate.
 pub(crate) async fn body_vectors_http(
     fixtures: &mut PositiveFixtures,
     method: &str,
@@ -808,9 +1080,36 @@ pub(crate) async fn body_vectors_http(
     valid: Value,
     send: impl AsyncFn(Value) -> Probe,
 ) {
-    let exchanges = run_body(responses::artifact(), method, template, valid, &send)
-        .await
-        .unwrap_or_else(|e| responses::refuse(e));
+    body_vectors_seeded(fixtures, method, template, valid, &[], send).await;
+}
+
+/// [`body_vectors_http`] with caller-supplied `seeds`: `(JSON pointer, valid
+/// value)` for declared optional properties (or the next positional item) that
+/// `valid` omits. Each seed is sent ADDED to `valid` (so `{"ids":[x]}` plus
+/// `/all: true` reaches the handler) and its value is walked like any other.
+/// A seed that names nothing the body omits fails the run.
+pub(crate) async fn body_vectors_seeded(
+    fixtures: &mut PositiveFixtures,
+    method: &str,
+    template: &str,
+    valid: Value,
+    seeds: &[(&str, Value)],
+    send: impl AsyncFn(Value) -> Probe,
+) {
+    let seeds: Vec<(String, Value)> = seeds
+        .iter()
+        .map(|(pointer, value)| ((*pointer).to_owned(), value.clone()))
+        .collect();
+    let exchanges = run_body(
+        responses::artifact(),
+        method,
+        template,
+        valid,
+        &seeds,
+        &send,
+    )
+    .await
+    .unwrap_or_else(|e| responses::refuse(e));
     for exchange in &exchanges {
         fixtures.observe(exchange);
     }

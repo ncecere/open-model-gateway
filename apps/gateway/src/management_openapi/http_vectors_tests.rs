@@ -314,6 +314,7 @@ async fn run_bodies(app: &Router, document: &Value) -> anyhow::Result<Vec<Captur
         "POST",
         TEMPLATE,
         valid_body(),
+        &[],
         &async |body: Value| {
             let request = Request::builder()
                 .method("POST")
@@ -331,7 +332,7 @@ async fn run_bodies(app: &Router, document: &Value) -> anyhow::Result<Vec<Captur
 fn management_openapi_http_vectors_body_cases_reach_nested_fields() {
     let document = body_document();
     let operation = &document["paths"][TEMPLATE]["post"];
-    let cases = body_cases(&document, operation, &valid_body()).unwrap();
+    let cases = body_cases(&document, operation, &valid_body(), &[]).unwrap();
     let has = |pointer: &str, kind: &str, accept: bool| {
         cases
             .iter()
@@ -372,7 +373,7 @@ fn management_openapi_http_vectors_body_cases_reach_nested_fields() {
             .any(|c| c.pointer == "/tags" && c.body["tags"] == json!([]) && c.accept)
     );
     // A body that does not satisfy its own schema is not a baseline.
-    assert!(body_cases(&document, operation, &json!({"token":"x"})).is_err());
+    assert!(body_cases(&document, operation, &json!({"token":"x"}), &[]).is_err());
 }
 
 #[tokio::test]
@@ -421,4 +422,462 @@ fn management_openapi_http_vectors_seeds_cover_parameters_absent_from_the_base()
             .iter()
             .any(|c| c.param == "state" && c.kind == "omitted" && !c.accept)
     );
+}
+
+// ----- engine v2: flips, seeds, pattern boundaries, positional indices, bytes ----
+
+fn body_only(schema: Value) -> Value {
+    json!({"openapi":"3.1.0","paths":{TEMPLATE:{"post":{
+        "requestBody":{"required":true,"content":{"application/json":{"schema":schema}}},
+        "responses":{"200":{"description":"ok"}}}}},"components":{"schemas":{}}})
+}
+fn cases_of(
+    document: &Value,
+    valid: &Value,
+    seeds: &[(&str, Value)],
+) -> anyhow::Result<Vec<super::http_vectors::BodyCase>> {
+    let seeds: Vec<(String, Value)> = seeds
+        .iter()
+        .map(|(p, v)| ((*p).to_owned(), v.clone()))
+        .collect();
+    body_cases(
+        document,
+        &document["paths"][TEMPLATE]["post"],
+        valid,
+        &seeds,
+    )
+}
+/// A handler that deserializes strictly into `T` (a refusal is 4xx) and then
+/// applies its own value rules.
+fn judge<T: serde::de::DeserializeOwned + Send + 'static>(check: fn(&T) -> bool) -> Router {
+    Router::new().route(
+        TEMPLATE,
+        post(move |Json(v): Json<T>| async move {
+            if check(&v) {
+                StatusCode::OK
+            } else {
+                StatusCode::BAD_REQUEST
+            }
+        }),
+    )
+}
+async fn run_judged(
+    app: &Router,
+    document: &Value,
+    valid: Value,
+    seeds: &[(String, Value)],
+) -> anyhow::Result<Vec<Captured>> {
+    run_body(
+        document,
+        "POST",
+        TEMPLATE,
+        valid,
+        seeds,
+        &async |body: Value| {
+            let request = Request::builder()
+                .method("POST")
+                .uri(TEMPLATE)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap();
+            Probe::from(exchange(app, "POST", request).await)
+        },
+    )
+    .await
+}
+fn has(
+    cases: &[super::http_vectors::BodyCase],
+    pointer: &str,
+    kind: &str,
+    accept: bool,
+    test: impl Fn(&Value) -> bool,
+) -> bool {
+    cases
+        .iter()
+        .any(|c| c.pointer == pointer && c.kind == kind && c.accept == accept && test(&c.body))
+}
+
+/// The notification-read shape: a cross-field rule between two siblings.
+fn cross_field() -> Value {
+    body_only(
+        json!({"type":"object","required":[],"additionalProperties":false,"properties":{
+        "ids":{"type":["array","null"],"minItems":1,"maxItems":3,"items":{"type":"string","pattern":"^[0-9a-f]{4}$"}},
+        "all":{"type":"boolean","default":false}},
+        "oneOf":[
+            {"required":["all"],"properties":{"all":{"const":true},"ids":{"type":"null"}}},
+            {"required":["ids"],"properties":{"all":{"const":false},"ids":{"type":"array"}}}]}),
+    )
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Read {
+    ids: Option<Vec<String>>,
+    #[serde(default)]
+    all: bool,
+}
+fn read_shape_ok(b: &Read) -> bool {
+    b.ids.as_ref().is_none_or(|ids| {
+        (1..=3).contains(&ids.len())
+            && ids.iter().all(|id| {
+                id.len() == 4 && id.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
+            })
+    })
+}
+/// Exactly one of `all=true` or `ids`.
+fn read_exact(b: &Read) -> bool {
+    read_shape_ok(b) && b.all != b.ids.is_some()
+}
+/// Forgets that both together are refused.
+fn read_loose(b: &Read) -> bool {
+    read_shape_ok(b) && (b.all || b.ids.is_some())
+}
+
+#[test]
+fn management_openapi_http_vectors_flip_booleans_and_consts() {
+    let document = cross_field();
+    let cases = cases_of(&document, &json!({"ids":["abcd"],"all":false}), &[]).unwrap();
+    // `{"ids":[x],"all":true}` reaches the handler, and the schema refuses it.
+    assert!(has(&cases, "/all", "boolean flip", false, |b| {
+        b["all"] == json!(true) && b["ids"] == json!(["abcd"])
+    }));
+    let cases = cases_of(&document, &json!({"all":true}), &[]).unwrap();
+    assert!(has(&cases, "/all", "boolean flip", false, |b| {
+        b["all"] == json!(false) && b.get("ids").is_none()
+    }));
+    // A const is flipped to a different value of its type.
+    let document = body_only(json!({"type":"object","required":["kind","n"],
+        "additionalProperties":false,"properties":{"kind":{"const":"fixed"},"n":{"const":7}}}));
+    let cases = cases_of(&document, &json!({"kind":"fixed","n":7}), &[]).unwrap();
+    assert!(has(&cases, "/kind", "const flip", false, |b| b["kind"]
+        != json!("fixed")));
+    assert!(has(&cases, "/n", "const flip", false, |b| b["n"] != json!(7)));
+}
+
+#[tokio::test]
+async fn management_openapi_http_vectors_a_handler_missing_a_cross_field_rule_fails() {
+    let document = cross_field();
+    let valid = json!({"ids":["abcd"],"all":false});
+    run_judged(&judge(read_exact), &document, valid.clone(), &[])
+        .await
+        .unwrap();
+    let text = message(run_judged(&judge(read_loose), &document, valid, &[]).await);
+    assert!(
+        text.contains("boolean flip")
+            && text.contains("/all")
+            && text.contains("schema refuses but handler accepts"),
+        "{text}"
+    );
+    assert!(!text.contains("abcd"), "{text}");
+}
+
+#[test]
+fn management_openapi_http_vectors_seeds_add_declared_absent_optionals() {
+    let document = cross_field();
+    let valid = json!({"ids":["abcd"]});
+    // Without a seed the absent optional is never sent.
+    let cases = cases_of(&document, &valid, &[]).unwrap();
+    assert!(
+        cases
+            .iter()
+            .all(|c| c.pointer != "/all" || c.kind == "omitted")
+    );
+    let cases = cases_of(&document, &valid, &[("/all", json!(true))]).unwrap();
+    assert!(has(&cases, "/all", "optional added", false, |b| {
+        b["all"] == json!(true) && b["ids"] == json!(["abcd"])
+    }));
+    // The seeded value is walked too: its own flip is a vector.
+    assert!(has(&cases, "/all", "boolean flip", true, |b| b["all"]
+        == json!(false)));
+    // A seed for an undeclared or already present location is a harness error
+    // that names the pointer.
+    for bad in ["/typo", "/ids"] {
+        let error = cases_of(&document, &valid, &[(bad, json!(true))])
+            .err()
+            .unwrap();
+        assert!(format!("{error:#}").contains(bad), "{error:#}");
+    }
+    // Trailing optional positional items are seeded the same way.
+    let tuple = body_only(json!({"type":"array","prefixItems":[
+        {"type":"string","pattern":"^[0-9a-f]{4}$"},{"type":"boolean"}],
+        "minItems":1,"maxItems":2,"items":false}));
+    let cases = cases_of(&tuple, &json!(["abcd"]), &[("/1", json!(true))]).unwrap();
+    assert!(has(&cases, "/1", "optional added", true, |b| *b
+        == json!(["abcd", true])));
+}
+
+#[tokio::test]
+async fn management_openapi_http_vectors_seeded_run_sends_the_added_optional() {
+    let document = cross_field();
+    let seeds = vec![("/all".to_owned(), json!(true))];
+    let valid = json!({"ids":["abcd"]});
+    let app = judge(read_exact);
+    let exchanges = run_judged(&app, &document, valid.clone(), &seeds)
+        .await
+        .unwrap();
+    assert!(exchanges.len() > 10, "{}", exchanges.len());
+    let text = message(run_judged(&judge(read_loose), &document, valid, &seeds).await);
+    assert!(
+        text.contains("optional added") && text.contains("/all"),
+        "{text}"
+    );
+}
+
+#[test]
+fn management_openapi_http_vectors_walk_every_positional_index() {
+    let tuple = body_only(json!({"type":"array","prefixItems":[
+        {"type":"string","pattern":"^[0-9a-f]{4}$"},
+        {"type":["array","null"],"items":{"type":"string","maxLength":3}},
+        {"type":"boolean"}],"minItems":3,"maxItems":3,"items":false}));
+    let valid = json!(["abcd", ["x"], false]);
+    let cases = cases_of(&tuple, &valid, &[]).unwrap();
+    for (pointer, kind, accept) in [
+        ("/0", "pattern violation", false),
+        ("/1", "null", true),
+        ("/1", "wrong type", false),
+        ("/1/0", "maxLength+1", false),
+        ("/2", "wrong type", false),
+        ("/2", "boolean flip", true),
+        ("/2", "null", false),
+    ] {
+        assert!(
+            has(&cases, pointer, kind, accept, |_| true),
+            "missing {kind} at {pointer}"
+        );
+    }
+}
+
+fn pattern_document() -> Value {
+    body_only(
+        json!({"type":"object","required":["key","token"],"additionalProperties":false,"properties":{
+        "reason":{"type":["string","null"],"maxLength":10,"pattern":"^[^\\u0000-\\u001f\\u007f-\\u009f]*$"},
+        "key":{"type":"string","pattern":"^[!-~]{1,8}$"},
+        "token":{"type":"string","pattern":"^[0-9a-fA-F]{4}$"}}}),
+    )
+}
+fn pattern_valid() -> Value {
+    json!({"reason":"ok","key":"abc","token":"abcd"})
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Fields {
+    reason: Option<String>,
+    key: String,
+    token: String,
+}
+fn fields_ok(b: &Fields, controls: bool, key_limit: usize) -> bool {
+    b.reason
+        .as_ref()
+        .is_none_or(|r| r.chars().count() <= 10 && (!controls || !r.chars().any(char::is_control)))
+        && (1..=key_limit).contains(&b.key.len())
+        && b.key.bytes().all(|c| c.is_ascii_graphic())
+        && b.token.len() == 4
+        && b.token.bytes().all(|c| c.is_ascii_hexdigit())
+}
+fn fields_exact(b: &Fields) -> bool {
+    fields_ok(b, true, 8)
+}
+fn fields_without_control_check(b: &Fields) -> bool {
+    fields_ok(b, false, 8)
+}
+fn fields_wide_key(b: &Fields) -> bool {
+    fields_ok(b, true, 1024)
+}
+
+#[test]
+fn management_openapi_http_vectors_pattern_boundaries_cover_controls_multibyte_and_lengths() {
+    let cases = cases_of(&pattern_document(), &pattern_valid(), &[]).unwrap();
+    for c in ['\n', '\0', '\u{7f}', '\u{85}'] {
+        assert!(
+            has(&cases, "/reason", "pattern violation", false, |b| {
+                b["reason"].as_str().is_some_and(|r| r.contains(c))
+            }),
+            "no control character candidate"
+        );
+    }
+    // Multibyte values the pattern allows are sent, and accepted by the schema.
+    assert!(has(&cases, "/reason", "pattern candidate", true, |b| {
+        b["reason"]
+            .as_str()
+            .is_some_and(|r| r.chars().any(|c| c.len_utf8() > 1))
+    }));
+    // Length boundaries of `^X{m,n}$`: m-1, m, n, n+1, from the valid seed's characters.
+    let key_lengths = |accept: bool| -> Vec<usize> {
+        cases
+            .iter()
+            .filter(|c| c.pointer == "/key" && c.accept == accept)
+            .filter_map(|c| c.body["key"].as_str().map(str::len))
+            .collect()
+    };
+    assert!(key_lengths(false).contains(&9), "n+1 is a vector");
+    assert!(key_lengths(true).contains(&8), "n is a vector");
+    let token_lengths: Vec<usize> = cases
+        .iter()
+        .filter(|c| c.pointer == "/token" && !c.accept)
+        .filter_map(|c| c.body["token"].as_str().map(str::len))
+        .collect();
+    assert!(token_lengths.contains(&3) && token_lengths.contains(&5));
+    // `^X+$`: the empty string is the m-1 vector.
+    let plus = body_only(
+        json!({"type":"object","required":["a"],"additionalProperties":false,
+        "properties":{"a":{"type":"string","pattern":"^[a-z]+$"}}}),
+    );
+    let cases = cases_of(&plus, &json!({"a":"abc"}), &[]).unwrap();
+    assert!(
+        cases
+            .iter()
+            .any(|c| c.pointer == "/a" && !c.accept && c.body["a"] == json!(""))
+    );
+}
+
+#[tokio::test]
+async fn management_openapi_http_vectors_pattern_boundaries_catch_loose_handlers() {
+    let run = |app: Router| async move {
+        run_judged(&app, &pattern_document(), pattern_valid(), &[]).await
+    };
+    run(judge(fields_exact)).await.unwrap();
+    let text = message(run(judge(fields_without_control_check)).await);
+    assert!(
+        text.contains("/reason")
+            && text.contains("pattern violation")
+            && text.contains("schema refuses but handler accepts"),
+        "{text}"
+    );
+    let text = message(run(judge(fields_wide_key)).await);
+    assert!(
+        text.contains("/key") && text.contains("pattern violation"),
+        "{text}"
+    );
+}
+
+fn byte_limited(extension: bool) -> Value {
+    let mut code = json!({"type":"string","minLength":1,"maxLength":8});
+    if extension {
+        code["x-omg-max-bytes"] = json!(8);
+    }
+    body_only(
+        json!({"type":"object","required":["code"],"additionalProperties":false,
+        "properties":{"code":code}}),
+    )
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Code {
+    code: String,
+}
+fn by_bytes(b: &Code) -> bool {
+    !b.code.is_empty() && b.code.len() <= 8
+}
+fn by_chars(b: &Code) -> bool {
+    !b.code.is_empty() && b.code.chars().count() <= 8
+}
+
+#[test]
+fn management_openapi_http_vectors_byte_limits_are_honoured_by_the_oracle() {
+    let valid = json!({"code":"abc"});
+    let multibyte = |b: &Value, n: usize| {
+        b["code"]
+            .as_str()
+            .is_some_and(|c| c.chars().count() == n && c.len() > c.chars().count())
+    };
+    // 8 two-byte characters satisfy maxLength (characters) but not 8 BYTES.
+    let cases = cases_of(&byte_limited(true), &valid, &[]).unwrap();
+    assert!(has(&cases, "/code", "multibyte maxLength", false, |b| {
+        multibyte(b, 8)
+    }));
+    // 4 two-byte characters are exactly 8 bytes: accepted.
+    assert!(has(&cases, "/code", "multibyte maxBytes", true, |b| {
+        multibyte(b, 4)
+    }));
+    assert!(has(&cases, "/code", "multibyte maxBytes+1", false, |b| {
+        multibyte(b, 5)
+    }));
+    // Without the byte annotation, characters are what the schema counts.
+    let cases = cases_of(&byte_limited(false), &valid, &[]).unwrap();
+    assert!(has(&cases, "/code", "multibyte maxLength", true, |b| {
+        multibyte(b, 8)
+    }));
+    assert!(has(&cases, "/code", "multibyte maxLength+1", false, |b| {
+        multibyte(b, 9)
+    }));
+}
+
+#[tokio::test]
+async fn management_openapi_http_vectors_a_char_byte_mismatch_fails() {
+    let valid = json!({"code":"abc"});
+    let run = |document: Value, check: fn(&Code) -> bool| {
+        let valid = valid.clone();
+        async move { run_judged(&judge(check), &document, valid, &[]).await }
+    };
+    // The honest pairings agree.
+    run(byte_limited(true), by_bytes).await.unwrap();
+    run(byte_limited(false), by_chars).await.unwrap();
+    // A byte-limited handler documented only in characters is stricter.
+    let text = message(run(byte_limited(false), by_bytes).await);
+    assert!(
+        text.contains("multibyte maxLength") && text.contains("schema accepts but handler refuses"),
+        "{text}"
+    );
+    // A character-counting handler documented as a byte limit is looser.
+    let text = message(run(byte_limited(true), by_chars).await);
+    assert!(
+        text.contains("multibyte maxLength") && text.contains("schema refuses but handler accepts"),
+        "{text}"
+    );
+    assert!(!text.contains('\u{e9}'), "{text}");
+}
+
+#[tokio::test]
+async fn management_openapi_http_vectors_decided_probes_still_fail_on_unexpected_statuses() {
+    let document = query_document();
+    for status in [
+        StatusCode::UNAUTHORIZED,
+        StatusCode::FORBIDDEN,
+        StatusCode::TOO_MANY_REQUESTS,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        StatusCode::SERVICE_UNAVAILABLE,
+    ] {
+        let app = Router::new().route(TEMPLATE, get(move || async move { status }));
+        for accepted in [true, false] {
+            let result = run_query(
+                &document,
+                "GET",
+                TEMPLATE,
+                &[],
+                &async || ((), base()),
+                &async |_: &(), query: String| {
+                    let request = Request::builder()
+                        .uri(format!("{TEMPLATE}?{query}"))
+                        .body(Body::empty())
+                        .unwrap();
+                    Probe::decided(exchange(&app, "GET", request).await, accepted)
+                },
+            )
+            .await;
+            let text = message(result);
+            assert!(
+                text.contains(&format!("unexpected status {}", status.as_u16())),
+                "{text}"
+            );
+        }
+    }
+    // Within the expected set an explicit verdict may override the status.
+    let app = Router::new().route(TEMPLATE, get(|| async { StatusCode::BAD_REQUEST }));
+    let result = run_query(
+        &document,
+        "GET",
+        TEMPLATE,
+        &[],
+        &async || ((), base()),
+        &async |_: &(), query: String| {
+            let request = Request::builder()
+                .uri(format!("{TEMPLATE}?{query}"))
+                .body(Body::empty())
+                .unwrap();
+            Probe::decided(exchange(&app, "GET", request).await, true)
+        },
+    )
+    .await;
+    // Every request is "accepted" by decision, so the schema-refused vectors mismatch,
+    // proving the decision (not the 400) was used.
+    assert!(message(result).contains("schema refuses but handler accepts"));
 }
