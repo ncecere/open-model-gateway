@@ -64,7 +64,7 @@ pub(crate) const SEMANTIC_REFINEMENTS: &[(&str, &str, &str)] = &[
     (
         "PATCH",
         "/api/v1/platform/providers/{id}",
-        "a restated credential reference is a non-empty reference",
+        "a restated credential reference, AWS options and a Bedrock endpoint carry their shapes, and AWS options need a restated reference",
     ),
     (
         "POST",

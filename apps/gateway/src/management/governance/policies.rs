@@ -2,10 +2,17 @@ use super::*;
 
 #[test]
 fn management_openapi_slice3_policy_request_vectors() {
+    // Exactly one budget form: the stacked set ...
     openapi::requests::vectors::<Policy>(
         "PUT",
         "/api/v1/workspaces/{ws}/policy",
-        json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"concurrent_jobs":null,"storage_bytes":null,"key_issuances_per_holder":null,"key_issuances_per_workspace":null,"monthly_budget_microusd":null,"budget_period":"month","budgets":[{"period":"month","amount_microusd":"9007199254740993"}]}),
+        json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"concurrent_jobs":null,"storage_bytes":null,"key_issuances_per_holder":null,"key_issuances_per_workspace":null,"budgets":[{"period":"month","amount_microusd":"9007199254740993"}]}),
+    );
+    // ... or the deprecated single monthly budget with its period.
+    openapi::requests::vectors::<Policy>(
+        "PUT",
+        "/api/v1/workspaces/{ws}/policy",
+        json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"monthly_budget_microusd":"9007199254740993","budget_period":"month"}),
     );
     // Omission retains supplied fields; explicit null clears them.
     let base = json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"budgets":[]});
