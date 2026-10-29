@@ -10421,8 +10421,8 @@
         "scope_kind": {
           "type": "string",
           "enum": [
-            "installation",
-            "cost_center"
+            "cost_center",
+            "installation"
           ]
         },
         "workspace_id": {
@@ -10563,8 +10563,8 @@
         "scope_kind": {
           "type": "string",
           "enum": [
-            "installation",
-            "cost_center"
+            "cost_center",
+            "installation"
           ]
         },
         "workspace_id": {
@@ -10692,8 +10692,8 @@
         "scope_kind": {
           "type": "string",
           "enum": [
-            "installation",
-            "cost_center"
+            "cost_center",
+            "installation"
           ]
         },
         "workspace_id": {

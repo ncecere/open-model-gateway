@@ -3,6 +3,9 @@ use super::*;
 use openapi::responses::{Captured, PositiveFixtures, capture_http};
 use sha2::{Digest, Sha256};
 
+#[path = "openapi_money_vectors_tests.rs"]
+mod vectors;
+
 struct Server(tokio::task::JoinHandle<()>);
 impl Drop for Server {
     fn drop(&mut self) {
@@ -662,6 +665,24 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
         },
     )
     .await;
+    let (v3b, v3b_total) = components([1, 0, 0, 0, 0, 1], Some([1, 0, 0, 1, 0, 0]), None);
+    seed(
+        &pool,
+        &Seed {
+            at: ago(3),
+            price: Some(price3),
+            workload: "images",
+            res: Some(Res::Settled {
+                actual: v3b_total,
+                held: Some(10),
+            }),
+            tokens: Some((5, 5)),
+            meter: Some(json!({"output_images":"1","input_characters":null,"input_audio_seconds_ms":null,"output_audio_seconds_ms":"700","search_units":null,"requests":null,"output_video_seconds_ms":null})),
+            components: Some(v3b),
+            ..Seed::new(f.team, id(&team_key), deployment, price)
+        },
+    )
+    .await;
     // An unbounded hold (no known floor), an attempt with no reservation row
     // at all (details redacted), and a robot (service account) settlement.
     seed(
@@ -954,6 +975,48 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
         )
         .await;
     }
+    // Scopes whose attempts carry no billing detail yet.
+    observe(
+        &mut seen,
+        &client,
+        &base,
+        &owner,
+        "GET",
+        &format!("{projbase}/cost-report?{range}"),
+        None,
+    )
+    .await;
+    observe(
+        &mut seen,
+        &client,
+        &base,
+        &auditor,
+        "GET",
+        &format!(
+            "/api/v1/platform/cost-report?{range}&workspace_id={}",
+            f.project
+        ),
+        None,
+    )
+    .await;
+    // A window holding only the personal workspace's unsettled attempts: its
+    // collapsed key row has no spend share and no blended rate.
+    let recent = (now - chrono::TimeDelta::days(5)).to_string();
+    let v = observe(
+        &mut seen,
+        &client,
+        &base,
+        &auditor,
+        "GET",
+        &format!(
+            "/api/v1/platform/usage/overview?start_date={recent}&end_date={end}&workspace_id={}",
+            f.personal
+        ),
+        None,
+    )
+    .await;
+    assert!(v["top"]["keys"][0]["share"].is_null());
+    assert!(!v.to_string().contains(private_key["id"].as_str().unwrap()));
     // Usage overview: busy scope, a scope with only in-flight attempts, the
     // unallocated bucket, and a member (own activity only: no member list).
     for (actor, scope, filter) in [
@@ -1390,6 +1453,56 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
             )
             .await;
             assert_eq!(v["expired"], false);
+            assert!(!v["delivery"].is_null());
+            // An occurrence generated before delivery envelopes existed (an
+            // upgraded installation) has none. History is append-only, so the
+            // test lifts the guards, as for expiry below, and restores them.
+            let mut tx = pool.begin().await.unwrap();
+            for statement in [
+                "ALTER TABLE alert_recipient_outbox DISABLE TRIGGER alert_recipient_outbox_no_delete",
+                "ALTER TABLE alert_deliveries DISABLE TRIGGER alert_deliveries_no_delete",
+            ] {
+                sqlx::query(statement).execute(&mut *tx).await.unwrap();
+            }
+            sqlx::query("DELETE FROM alert_recipient_outbox WHERE delivery_id IN (SELECT id FROM alert_deliveries WHERE report_run_id=$1)")
+                .bind(run2)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            sqlx::query("DELETE FROM alert_deliveries WHERE report_run_id=$1")
+                .bind(run2)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            for statement in [
+                "ALTER TABLE alert_recipient_outbox ENABLE TRIGGER alert_recipient_outbox_no_delete",
+                "ALTER TABLE alert_deliveries ENABLE TRIGGER alert_deliveries_no_delete",
+            ] {
+                sqlx::query(statement).execute(&mut *tx).await.unwrap();
+            }
+            tx.commit().await.unwrap();
+            let v = observe(
+                &mut seen,
+                &client,
+                &base,
+                actor,
+                "GET",
+                &format!("{schedules}/{s2}/runs/{run2}"),
+                None,
+            )
+            .await;
+            assert!(v["delivery"].is_null());
+            let v = observe(
+                &mut seen,
+                &client,
+                &base,
+                actor,
+                "GET",
+                &format!("{schedules}/{s2}/runs"),
+                None,
+            )
+            .await;
+            assert!(v["data"][0]["delivery"].is_null());
         }
         // Pause again (an active schedule needs the operator public URL).
         observe(
@@ -1429,15 +1542,7 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
             )
             .await;
         }
-        // Occurrences generated before delivery envelopes existed have none;
-        // a creator whose authority lapsed leaves an outcome without a period.
-        soft.note(
-            "legacy run",
-            sqlx::query("WITH r AS (INSERT INTO report_runs(schedule_id,period_start,period_end,configuration_revision,configuration,claim_token,lease_holder,lease_epoch,skipped_intervals,observed_at,expires_at) SELECT schedule_id,period_start-interval '7 days',period_end-interval '7 days',configuration_revision,configuration,gen_random_uuid(),lease_holder,lease_epoch,skipped_intervals,observed_at,expires_at FROM report_runs WHERE id=$1 RETURNING id) INSERT INTO report_snapshots(run_id,body) SELECT r.id,p.body FROM r,report_snapshots p WHERE p.run_id=$1")
-                .bind(run)
-                .execute(&pool)
-                .await,
-        );
+        // A creator whose authority lapsed leaves an outcome without a period.
         soft.note(
             "authority outcome",
             sqlx::query("INSERT INTO report_generation_outcomes(schedule_id,run_id,configuration_revision,claim_token,period_start,period_end,category) SELECT id,NULL,configuration_revision,NULL,NULL,NULL,'authority_lost' FROM report_schedules WHERE id=$1")
@@ -1457,26 +1562,6 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
         .await;
         assert!(!v["data"].as_array().unwrap().is_empty());
         assert!(!v["outcomes"].as_array().unwrap().is_empty());
-        let legacy_run: Option<Uuid> =
-            sqlx::query_scalar("SELECT id FROM report_runs WHERE schedule_id=$1 AND id<>$2")
-                .bind(schedule)
-                .bind(run)
-                .fetch_optional(&pool)
-                .await
-                .unwrap();
-        if let Some(legacy_run) = legacy_run {
-            let v = observe(
-                &mut seen,
-                &client,
-                &base,
-                actor,
-                "GET",
-                &format!("{path}/runs/{legacy_run}"),
-                None,
-            )
-            .await;
-            assert!(v["delivery"].is_null());
-        }
         let runpath = format!("{path}/runs/{run}");
         let v = observe(&mut seen, &client, &base, actor, "GET", &runpath, None).await;
         assert_eq!(v["expired"], false);
@@ -1772,6 +1857,36 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
         None,
     )
     .await;
+    // HTTP boundary vectors: every query parameter and request body, compared
+    // with the real handler over HTTP. Refusals are collected, not fatal.
+    let vx = vectors::Vx {
+        client: &client,
+        base: &base,
+        pool: &pool,
+        f: &f,
+        admin: &admin,
+        auditor: &auditor,
+        owner: &owner,
+        start: start.clone(),
+        end: end.clone(),
+        team: f.team,
+        clean,
+        cc,
+        key: id(&team_key),
+        account,
+        model_id,
+        deployment,
+        price,
+        connection,
+        import: import_first,
+        mapping: mapping_revised,
+        failures: Default::default(),
+    };
+    vx.queries(&mut seen).await;
+    vx.bodies(&mut seen).await;
+    for line in vx.failures.borrow().iter() {
+        eprintln!("slice4 vector failure: {line}");
+    }
     // Real refusals: unauthenticated, inference credential, foreign personal and Auditor writes.
     assert_eq!(
         send(&client, &base, None, "GET", centers, None)
@@ -1880,4 +1995,5 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
     }
     seen.finish(openapi::responses::SLICE4_AREAS);
     assert!(soft.0.is_empty(), "{:?}", soft.0);
+    assert!(vx.failures.borrow().is_empty());
 }
