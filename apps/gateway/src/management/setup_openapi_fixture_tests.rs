@@ -173,6 +173,45 @@ fn judged(captured: openapi::responses::Captured, domain: &[&str]) -> Probe {
         Probe::from(captured)
     }
 }
+/// [`judged`] for requests whose 400 is ambiguous by BODY: when `rules.0` holds
+/// for the sent body, a 400 is a domain refusal of schema-valid input (the rule
+/// depends on state the body does not carry: the stored provider kind, or the
+/// price's own cross-field rule for a zero input ceiling); otherwise the
+/// machine reasons in `rules.1` are domain refusals.
+fn judged_when(
+    captured: openapi::responses::Captured,
+    body: &Value,
+    rules: (fn(&Value) -> bool, &[&str]),
+) -> Probe {
+    if captured.status == StatusCode::BAD_REQUEST && rules.0(body) {
+        Probe::decided(captured, true)
+    } else {
+        judged(captured, rules.1)
+    }
+}
+/// Body boundary vectors with a body-dependent domain refusal (see [`judged_when`]).
+async fn body_set_when(
+    j: &mut Journey<'_>,
+    who: &Browser,
+    method: &str,
+    template: &str,
+    path: &str,
+    valid: Value,
+    rules: (fn(&Value) -> bool, &[&str]),
+) {
+    let (client, root) = (j.client.clone(), j.base.clone());
+    http_vectors::body_vectors_http(
+        &mut j.observed,
+        method,
+        template,
+        valid,
+        async |body: Value| {
+            let captured = send(&client, &root, Some(who), method, path, Some(body.clone())).await;
+            judged_when(captured, &body, rules)
+        },
+    )
+    .await;
+}
 /// Query boundary vectors for one operation: every documented parameter in the base.
 async fn query_set(
     j: &mut Journey<'_>,
