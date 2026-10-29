@@ -23744,7 +23744,41 @@
         }
       },
       "additionalProperties": false,
-      "description": "A visible window whose accounting was read: every consumption fact is a value. remaining_microusd is null exactly when unknown_cost_requests is positive (budget_windows: remaining() needs zero unknown-cost requests)."
+      "description": "A visible window whose accounting was read: every consumption fact is a value. remaining_microusd is null exactly when unknown_cost_requests is positive (budget_windows: remaining() needs zero unknown-cost requests). The facts are coupled (budget_windows): while unknown_cost_requests is 0 the headroom is known and remaining_microusd is a value; otherwise the headroom is unknown and remaining_microusd is null.",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "unknown_cost_requests": {
+                "const": "0"
+              }
+            },
+            "required": [
+              "unknown_cost_requests"
+            ]
+          },
+          "then": {
+            "properties": {
+              "headroom_status": {
+                "const": "known"
+              },
+              "remaining_microusd": {
+                "type": "string"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "headroom_status": {
+                "const": "unknown"
+              },
+              "remaining_microusd": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
     },
     "SetupRestrictedBudgetWindow": {
       "type": "object",
@@ -24706,8 +24740,7 @@
               }
             },
             {
-              "type": "null",
-              "x-omg-unobserved-branch": "Null only when the draft's own lines fail PriceLines validation (suggestion.rs map: parsed is None). The mapper builds unique, in-range lines, so no catalog input known to the fixture reaches this defensive guard; it is not producible with a valid catalog fixture."
+              "type": "null"
             }
           ]
         },
@@ -25727,7 +25760,7 @@
         }
       },
       "additionalProperties": false,
-      "description": "A visible window whose budget_totals accounting is invalid or unrepresentable (negative or overflowing counters): read_budget_report answers None and every consumption fact is null with headroom unknown (policies.rs budget_windows)."
+      "description": "A visible window whose budget_totals accounting is invalid or unrepresentable (negative or overflowing counters): read_budget_report answers None and every consumption fact is null with headroom unknown (policies.rs budget_windows). Every consumption fact is null together, in this branch only."
     },
     "SetupVisibleBudgetWindows": {
       "oneOf": [
@@ -25735,8 +25768,7 @@
           "$ref": "#/components/schemas/SetupVisibleBudgetWindow"
         },
         {
-          "$ref": "#/components/schemas/SetupInvalidAccountingBudgetWindow",
-          "x-omg-unobserved-branch": "Produced only when budget_totals holds invalid accounting (negative or overflowing counters), which the maintaining trigger (migrations 0015/0025) never writes; the invalid-accounting path is exercised by management/governance/tests.rs budget_headroom_invalid_window_preserves_neighbors_and_sql_errors_remain_503 with deliberately corrupted rows, not by producer-shaped data."
+          "$ref": "#/components/schemas/SetupInvalidAccountingBudgetWindow"
         }
       ]
     }

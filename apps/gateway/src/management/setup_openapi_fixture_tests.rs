@@ -265,6 +265,32 @@ async fn body_set(
     )
     .await;
 }
+/// A model and an enabled route created through the API exactly as an operator
+/// would (the connection profile serves the protocols: `route_unsupported_capability`
+/// otherwise). The actor must be the platform admin.
+async fn api_route(
+    j: &mut Journey<'_>,
+    provider: Uuid,
+    public_name: &str,
+    protocols: &[&str],
+    upstream: &str,
+) -> (Uuid, Uuid) {
+    let model = id(&j
+        .request(
+            "POST",
+            "/api/v1/platform/models",
+            Some(json!({"public_name":public_name,"display_name":public_name,"enabled":true,"supported_protocols":protocols})),
+        )
+        .await);
+    let deployment = id(&j
+        .request(
+            "POST",
+            "/api/v1/platform/deployments",
+            Some(json!({"model_id":model,"provider_connection_id":provider,"upstream_model":upstream,"enabled":true})),
+        )
+        .await);
+    (model, deployment)
+}
 /// A telemetry attempt exactly as the engine records it: the execution row with
 /// its timings and the governance reservation (settled with an actual cost, or
 /// unknown with only a retained hold). The maintaining triggers fill the totals.
@@ -278,12 +304,16 @@ async fn seed_attempt(
     state: &str,
     actual: Option<i64>,
     held: Option<i64>,
-) {
+    reported: Option<(i64, i64, i64)>,
+) -> Uuid {
     let id = Uuid::new_v4();
-    let tokens = actual.map(|_| (10_i64, 5_i64));
-    sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,started_at,completed_at,elapsed_ms,root_request_id,attempt_number,input_tokens,output_tokens,finish_reason,time_to_first_token_ms,generation_ms) VALUES($1,$2,$3,$4,$5,'openrouter',true,$6,now()-interval '1 second',now()-interval '1 second'+interval '600 milliseconds',600,$1,1,$7,$8,'stop',100,600)")
+    // Provider-reported usage and cost (OpenRouter's usage accounting) when given.
+    let tokens = reported
+        .map(|r| (r.0, r.1))
+        .or(actual.map(|_| (10_i64, 5_i64)));
+    sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,started_at,completed_at,elapsed_ms,root_request_id,attempt_number,input_tokens,output_tokens,finish_reason,time_to_first_token_ms,generation_ms,provider_cost_microusd) VALUES($1,$2,$3,$4,$5,'openrouter',true,$6,now()-interval '1 second',now()-interval '1 second'+interval '600 milliseconds',600,$1,1,$7,$8,'stop',100,600,$9)")
         .bind(id).bind(ws).bind(key).bind(deployment).bind(model).bind(state)
-        .bind(tokens.map(|t| t.0)).bind(tokens.map(|t| t.1))
+        .bind(tokens.map(|t| t.0)).bind(tokens.map(|t| t.1)).bind(reported.map(|r| r.2))
         .execute(pool).await.unwrap();
     let reservation = if actual.is_some() {
         "settled"
@@ -295,9 +325,11 @@ async fn seed_attempt(
         .bind(actual.is_none() && held.is_none())
         .bind(tokens.map(|t| t.0)).bind(tokens.map(|t| t.1))
         .execute(pool).await.unwrap();
+    id
 }
-/// A legacy local or non-chat route: model and route inserted as an earlier
-/// release accepted them (route validation did not exist or had other rules).
+/// A route inserted as an earlier release accepted it (route validation did not
+/// exist): used only for the `videos` route, which no connection profile serves
+/// any more, so the API refuses to create it.
 async fn legacy_route(
     pool: &PgPool,
     provider: Uuid,
@@ -372,6 +404,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         {"id":"contract/bare","pricing":{}},
         {"id":"contract/embed","context_length":8192,"pricing":{"prompt":"0.00000002"}},
         {"id":"contract/image","pricing":{}},
+        {"id":"contract/image-many","pricing":{}},
         {"id":"contract/stt-minute","pricing":{"prompt":"0.0001","completion":"0.00001"}},
         {"id":"contract/stt-hour","pricing":{"prompt":"0.0000000025"}},
         {"id":"contract/tts-minute","pricing":{"prompt":"0.000015","completion":"0.0001"}},
@@ -379,6 +412,10 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     ]});
     let model_endpoints = json!({"data":{"id":"contract/model","endpoints":[{"provider_name":"Contract Cheap","status":0,"pricing":{"prompt":"0.000000123","completion":"0.000000456"}},{"provider_name":"Contract Dear","status":0,"pricing":{"prompt":"0.000000246","completion":"0.000000912"}}]}});
     let image_endpoints = json!({"data":{"endpoints":[{"pricing":[{"billable":"output_image","unit":"image","cost_usd":0.041,"variant":"768"},{"billable":"output_image","unit":"image","cost_usd":0.06,"variant":"1024"}]}]}});
+    // An image model priced per size with more sizes than a price may carry (64
+    // valued lines): the draft's own lines fail PriceLines validation, so the
+    // suggestion has no display lines and needs review.
+    let many_images = json!({"data":{"endpoints":[{"pricing":(0..70).map(|n| json!({"billable":"output_image","unit":"image","cost_usd":0.04,"variant":format!("size-{n}")})).collect::<Vec<_>>()}]}});
     let catalog_app = axum::Router::new()
         .route(
             "/models",
@@ -391,6 +428,13 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             "/models/contract/model/endpoints",
             axum::routing::get(move || {
                 let body = model_endpoints.clone();
+                async move { Json(body) }
+            }),
+        )
+        .route(
+            "/images/models/contract/image-many/endpoints",
+            axum::routing::get(move || {
+                let body = many_images.clone();
                 async move { Json(body) }
             }),
         )
@@ -506,10 +550,11 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     // A setup without a price publishes none (price_id null).
     let unpriced_setup = j.request("POST", "/api/v1/platform/model-setup", Some(json!({"model":{"public_name":"contract/third","display_name":"Third model","enabled":true},"route":{"provider_connection_id":provider,"upstream_model":"contract/third","enabled":true}}))).await;
     assert!(unpriced_setup["price_id"].is_null());
-    // Legacy routes (accepted before route validation): chat without any catalog
-    // data, and one non-serving video route that also anchors the telemetry.
-    let (_, bare) = legacy_route(
-        &pool,
+    // Chat without any catalog data, created through the API; and one legacy
+    // video route (no profile serves videos any more, so it can only be seeded)
+    // that also anchors the telemetry.
+    let (_, bare) = api_route(
+        &mut j,
         provider,
         "contract/bare-model",
         &["chat_completions"],
@@ -525,8 +570,8 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     )
     .await;
     // A route on a regional (Bedrock) connection: the deployment shows its region.
-    let (_, bedrock_route) = legacy_route(
-        &pool,
+    let (_, bedrock_route) = api_route(
+        &mut j,
         bedrock_default,
         "contract/bedrock-model",
         &["chat_completions"],
@@ -548,6 +593,11 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         ),
         ("contract/image-model", &["images"][..], "contract/image"),
         (
+            "contract/image-many-model",
+            &["images"][..],
+            "contract/image-many",
+        ),
+        (
             "contract/stt-minute-model",
             &["audio_transcriptions"][..],
             "contract/stt-minute",
@@ -568,11 +618,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             "contract/tts-hour",
         ),
     ] {
-        drafted.push(
-            legacy_route(&pool, provider, name, protocols, upstream)
-                .await
-                .1,
-        );
+        drafted.push(api_route(&mut j, provider, name, protocols, upstream).await.1);
     }
     j.request(
         "PATCH",
@@ -803,8 +849,8 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     // A vLLM-compatible route: defaults, then a priority and window, then
     // server-load gates (written by the production writer: the metrics URL needs
     // a process-level endpoint approval) and the route's batch signals.
-    let (_, vllm) = legacy_route(
-        &pool,
+    let (_, vllm) = api_route(
+        &mut j,
         vllm_provider,
         "contract/vllm-model",
         &["chat_completions"],
@@ -940,6 +986,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         "succeeded",
         Some(50),
         None,
+        None,
     )
     .await;
     for path in [
@@ -976,7 +1023,10 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             None,
         )
         .await;
-    assert!(detail["readiness"]["unsupported_profiles"].is_array());
+    assert_eq!(
+        detail["readiness"]["unsupported_profiles"],
+        json!(["openrouter"])
+    );
     // Optional-parameter coverage: every documented query parameter in a positive request.
     // The OpenRouter route's data policy is the configured one; the two picker
     // exclusions name workspaces/catalogs the model is not yet part of.
@@ -1032,6 +1082,31 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         )
         .await;
     assert_eq!(from_endpoint["endpoint"]["selection"], "cheapest");
+    // A succeeded attempt whose provider-reported cost is the dearer endpoint's list
+    // price for its usage (1000 in + 1000 out: 246 + 912 micro-USD) identifies the
+    // endpoint that served the route: the draft follows the evidence.
+    let (_, evidence_key) = key(&f, &f.owner, f.team, Value::Null).await;
+    seed_attempt(
+        &pool,
+        f.team,
+        id(&evidence_key),
+        deployment,
+        "contract/model",
+        "succeeded",
+        Some(1),
+        None,
+        Some((1000, 1000, 1158)),
+    )
+    .await;
+    let from_evidence = j
+        .request(
+            "GET",
+            &format!("/api/v1/platform/deployments/{deployment}/price-suggestion"),
+            None,
+        )
+        .await;
+    assert_eq!(from_evidence["endpoint"]["selection"], "evidence");
+    assert_eq!(from_evidence["endpoint"]["matched_attempts"], 1);
     for route in &drafted {
         j.request(
             "GET",
@@ -1071,14 +1146,20 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     // Configuration history: paged (cursor), every kind of entry in detail.
     let history = format!("/api/v1/platform/deployments/{deployment}/configuration/history");
     let first = j.request("GET", &format!("{history}?limit=2"), None).await;
-    if let Some(cursor) = first["next_cursor"].as_str() {
-        j.request("GET", &format!("{history}?limit=2&cursor={cursor}"), None)
-            .await;
-    }
+    let cursor = first["next_cursor"].as_str().unwrap().to_owned();
+    j.request("GET", &format!("{history}?limit=2&cursor={cursor}"), None)
+        .await;
     let all = j
         .request("GET", &format!("{history}?limit=100"), None)
         .await;
     let entries = all["data"].as_array().unwrap();
+    assert!(
+        entries
+            .iter()
+            .any(|e| e["actor"]["admin_token_id"].is_string())
+    );
+    assert!(entries.iter().any(|e| e["actor"]["id"].is_null()));
+    assert!(entries.iter().any(|e| e["values_available"] == false));
     for entry in entries {
         j.request("GET", &format!("{history}/{}", id(entry)), None)
             .await;
@@ -1121,6 +1202,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         "failed",
         None,
         Some(7),
+        None,
     )
     .await;
     for who in [&owner, &member] {
@@ -1179,6 +1261,62 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         None,
     )
     .await;
+    // Invalid accounting: a throwaway team whose day window totals are corrupted
+    // exactly as governance/tests.rs does (the maintaining trigger never writes
+    // such rows). The owner sees that window with every consumption fact unknown
+    // (the neighbouring month stays known); a member sees both restricted.
+    let broken = workspace(&pool, "Contract invalid accounting", "team", f.owner.user_id).await;
+    super::member(&pool, broken, f.member.user_id, "member").await;
+    let broken_policy = format!("/api/v1/workspaces/{broken}/policy");
+    j.actor = &owner;
+    j.request(
+        "PUT",
+        &broken_policy,
+        Some(limits(
+            10,
+            1000,
+            2,
+            1,
+            10_000,
+            5,
+            50,
+            json!([{"period":"day","amount_microusd":"100"},{"period":"month","amount_microusd":"1000"}]),
+        )),
+    )
+    .await;
+    let (_, broken_key) = key(&f, &f.owner, broken, Value::Null).await;
+    seed_attempt(
+        &pool,
+        broken,
+        id(&broken_key),
+        anchor,
+        "contract/model",
+        "succeeded",
+        Some(70),
+        None,
+        None,
+    )
+    .await;
+    let corrupted = sqlx::query("UPDATE budget_totals SET settled_microusd=-1,held_microusd=0 WHERE scope_kind='workspace' AND scope_id=$1 AND period='day'")
+        .bind(broken)
+        .execute(&pool)
+        .await
+        .unwrap()
+        .rows_affected();
+    assert_eq!(corrupted, 1);
+    for (who, day, month) in [(&owner, "unknown", "known"), (&member, "restricted", "restricted")] {
+        j.actor = who;
+        let v = j.request("GET", &broken_policy, None).await;
+        assert_eq!(v["budgets"][0]["period"], "day");
+        assert_eq!(v["budgets"][0]["headroom_status"], day);
+        assert_eq!(v["budgets"][1]["headroom_status"], month);
+        if day == "unknown" {
+            // Every consumption fact travels together: all null, none fabricated.
+            for field in ["used_microusd","settled_microusd","pending_held_microusd","unknown_held_microusd","unknown_cost_requests","remaining_microusd","exhausted","unresolved_usage"] {
+                assert!(v["budgets"][0][field].is_null());
+            }
+        }
+    }
     j.actor = &owner;
     j.request(
         "DELETE",
