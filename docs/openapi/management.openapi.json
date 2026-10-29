@@ -1611,7 +1611,7 @@
           "issuer": {
             "description": "An https URL without credentials, query or fragment (directory.rs mapping_valid), at most 2048 bytes. A development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host.",
             "maxLength": 2048,
-            "pattern": "^https://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{0,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+            "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{0,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
             "type": "string"
           },
           "platform_role": {
@@ -2064,7 +2064,7 @@
               "issuer": {
                 "description": "An https URL without credentials, query or fragment (directory.rs mapping_valid), at most 2048 bytes. A development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host.",
                 "maxLength": 2048,
-                "pattern": "^https://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{0,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+                "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{0,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
                 "type": "string"
               },
               "platform_role": {
@@ -2105,7 +2105,7 @@
               "issuer": {
                 "description": "An https URL without credentials, query or fragment (directory.rs mapping_valid), at most 2048 bytes. A development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host.",
                 "maxLength": 2048,
-                "pattern": "^https://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{0,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+                "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{0,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
                 "type": "string"
               },
               "platform_role": {
@@ -2142,7 +2142,7 @@
               {
                 "description": "An https URL without credentials, query or fragment (directory.rs mapping_valid), at most 2048 bytes. A development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host.",
                 "maxLength": 2048,
-                "pattern": "^https://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{0,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+                "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{0,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
                 "type": "string"
               },
               {
@@ -2209,7 +2209,7 @@
           "issuer": {
             "description": "An https URL without credentials, query or fragment (directory.rs mapping_valid), at most 2048 bytes. A development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host.",
             "maxLength": 2048,
-            "pattern": "^https://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{0,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+            "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{0,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
             "type": "string"
           },
           "platform_role": {
