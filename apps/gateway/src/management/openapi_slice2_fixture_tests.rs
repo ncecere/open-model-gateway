@@ -140,6 +140,15 @@ impl Client {
         );
         self.send(who, method, path, Some(body), status).await;
     }
+    /// A fixture expectation that is reported with the rest instead of
+    /// stopping the run.
+    fn expect(&self, holds: bool, what: &str) {
+        if !holds {
+            self.failures
+                .borrow_mut()
+                .push(format!("expectation: {what}"));
+        }
+    }
     /// Run one boundary-vector set, recording (never printing) a failure so a
     /// single run reports every disagreeing operation.
     async fn guarded(&self, label: &str, work: impl std::future::Future<Output = ()>) {
@@ -246,6 +255,18 @@ async fn attempt(
             .execute(pool).await.unwrap();
     }
     execution
+}
+
+/// A failed attempt whose cost is unknown (the engine's `unknown` reservation
+/// with an unbounded cost): its budget windows can no longer state a remainder.
+async fn unknown_cost_attempt(pool: &PgPool, ws: Uuid, key: Uuid, deployment: Uuid) {
+    let execution = Uuid::new_v4();
+    sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,error_code,root_request_id,completed_at,elapsed_ms) VALUES($1,$2,$3,$4,'contract-access-model','openai',false,'failed','upstream_unavailable',$1,clock_timestamp(),250)")
+        .bind(execution).bind(ws).bind(key).bind(deployment)
+        .execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,unbounded_cost) SELECT $1,$2,$3,$4,e.started_at,date_trunc('minute',e.started_at,'UTC'),date_trunc('month',e.started_at,'UTC'),e.started_at,'unknown',true FROM inference_executions e WHERE e.id=$1")
+        .bind(execution).bind(ws).bind(key).bind(deployment)
+        .execute(pool).await.unwrap();
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
@@ -729,7 +750,14 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
     }
     // Suspended for entitlement loss (`disable_for_entitlement_loss`), still holding
     // a workspace group grant from a sign-in that matched only the workspace mapping.
-    let d = plain_user(&pool, "group-d").await;
+    // The first user id of the roster: test builds cap a group roster at 3
+    // members (group_mapping_preview.rs ROSTER_LIMIT) in user-id order.
+    let d = Uuid::from_u128(1);
+    sqlx::query("INSERT INTO users(id,email) VALUES($1,'group-d@example.test')")
+        .bind(d)
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::query("UPDATE users SET disabled_at=now(),cleanup_due_at=now()+interval '30 days',disable_reason='entitlement_loss' WHERE id=$1").bind(d).execute(&pool).await.unwrap();
     group_member(&pool, d, ws2, "member", m_wsp).await;
     let a2 = user(&pool, "group-a2", "user").await;
@@ -767,17 +795,19 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
     let new_preview = "/api/v1/platform/oidc/group-mappings/preview";
     let preview = c.ok(&admin, "POST", new_preview, Some(json!({"issuer":ISSUER,"group_value":"pl-group","target_kind":"platform","platform_role":"admin","workspace_id":null,"workspace_role":null,"enabled":true}))).await;
     assert!(preview["digest"].is_null());
-    assert!(
+    c.expect(
         !preview["diff"]["platform_role_gained"]
             .as_array()
             .unwrap()
-            .is_empty()
+            .is_empty(),
+        "new platform preview gains a platform role",
     );
-    assert!(
+    c.expect(
         !preview["diff"]["workspace_membership_gained"]
             .as_array()
             .unwrap()
-            .is_empty()
+            .is_empty(),
+        "new platform preview reactivates a workspace membership",
     );
     let preview = c.ok(&admin, "POST", new_preview, Some(json!({"issuer":ISSUER,"group_value":"ws-group","target_kind":"workspace","platform_role":null,"workspace_id":ws2,"workspace_role":"admin","enabled":true}))).await;
     assert!(
@@ -1051,7 +1081,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
                 }
             );
             assert!(value.get("requester_email").is_none());
-            requesters.push((requester.user_id, request));
+            requesters.push((requester.clone(), request));
             if i == 3 && named {
                 c.ok(
                     &admin,
@@ -1077,22 +1107,23 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             }
         }
     }
-    // Two requests left pending, one with a reason and one without.
-    let mut pending = Vec::new();
-    for (n, reason) in [("pending-a", Some("Waiting")), ("pending-b", None)] {
-        let requester = user(&pool, n, "user").await;
-        let request_browser = browser(&pool, &requester).await;
-        c.ok(
-            &request_browser,
-            "POST",
-            "/api/v1/me/access-requests",
-            Some(
-                json!({"workspace_id":ws,"reason":reason,"idempotency_key":format!("slice2-{n}")}),
-            ),
-        )
-        .await;
-        pending.push(requester.user_id);
-    }
+    // One person with a decided request (with a reason) and a pending one (without).
+    c.ok(
+        &admin,
+        "PUT",
+        &format!("/api/v1/platform/workspaces/{ws2}/discoverable"),
+        Some(json!({"discoverable":true})),
+    )
+    .await;
+    let decided_requester = requesters[0].0.clone();
+    let decided_browser = browser(&pool, &decided_requester).await;
+    c.ok(
+        &decided_browser,
+        "POST",
+        "/api/v1/me/access-requests",
+        Some(json!({"workspace_id":ws2,"idempotency_key":"slice2-pending"})),
+    )
+    .await;
 
     // Catalog and policy layers: populated replacement/default lists, never a union.
     let catalog = Uuid::new_v4();
@@ -1103,22 +1134,46 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         .unwrap();
     let m = model(&pool, "contract-access-model").await;
     let access = format!("{own}/access");
-    // Every layer empty first: the whole access view is unset.
+    // A route, and a key in the workspace, for the attempts seeded below.
+    let connection = Uuid::new_v4();
+    let deployment = Uuid::new_v4();
+    sqlx::query("INSERT INTO provider_connections(id,name,provider,credential_ref) VALUES($1,'Contract mock','openai','env:UNUSED')").bind(connection).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model) VALUES($1,$2,$3,'mock')").bind(deployment).bind(m).bind(connection).execute(&pool).await.unwrap();
+    let (status, ws_key) = key(&f, &f.owner, ws, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    // Every layer unset first: the project type default carries no limit, no
+    // override exists and the workspace has no local policy.
+    let nulls = json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"concurrent_jobs":null,"storage_bytes":null,"key_issuances_per_holder":null,"key_issuances_per_workspace":null,"budgets":[]});
+    c.ok(
+        &admin,
+        "PUT",
+        "/api/v1/platform/workspace-types/project/policy",
+        Some(nulls),
+    )
+    .await;
     c.ok(&owner, "GET", &access, None).await;
     assert!(
         c.ok(
             &auditor,
             "GET",
-            "/api/v1/platform/workspace-types/team/policy",
+            "/api/v1/platform/workspace-types/project/policy",
             None
         )
-        .await["policy"]["requests_per_minute"]
+        .await["policy"]["storage_bytes"]
             .is_null()
     );
+    c.ok(
+        &auditor,
+        "GET",
+        "/api/v1/platform/workspace-types/team/policy",
+        None,
+    )
+    .await;
     let bare = c
         .ok(&auditor, "GET", &format!("{platform}/policy"), None)
         .await;
     assert!(bare["effective"]["requests_per_minute"].is_null());
+    assert!(bare["storage"]["quota_bytes"].is_null());
     c.ok(
         &admin,
         "PUT",
@@ -1138,6 +1193,15 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             .unwrap()
             .is_empty()
     );
+    // A workspace override that sets nothing: present, with every limit empty.
+    c.ok(
+        &admin,
+        "PUT",
+        &format!("{platform}/policy"),
+        Some(json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"concurrent_jobs":null,"storage_bytes":null,"key_issuances_per_holder":null,"key_issuances_per_workspace":null,"monthly_budget_microusd":null})),
+    )
+    .await;
+    c.ok(&owner, "GET", &access, None).await;
     let limits = json!({"requests_per_minute":100,"tokens_per_minute":1000,"concurrent_requests":4,"concurrent_jobs":2,"storage_bytes":4096,"key_issuances_per_holder":10,"key_issuances_per_workspace":100,"budgets":[{"period":"month","amount_microusd":"9007199254740993"}]});
     c.ok(
         &admin,
@@ -1206,6 +1270,12 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             .unwrap()
             .is_empty()
     );
+    // An attempt of unknown cost: no window can state its remainder any more.
+    unknown_cost_attempt(&pool, ws, id(&ws_key), deployment).await;
+    let unknown_windows = c
+        .ok(&auditor, "GET", &format!("{platform}/policy"), None)
+        .await;
+    assert!(unknown_windows["budgets"][0]["remaining_microusd"].is_null());
     c.ok(
         &admin,
         "POST",
@@ -1231,10 +1301,6 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
 
     // Nonempty inference session reads: unknown usage and settled usage,
     // including own-vs-wide refusal.
-    let connection = Uuid::new_v4();
-    let deployment = Uuid::new_v4();
-    sqlx::query("INSERT INTO provider_connections(id,name,provider,credential_ref) VALUES($1,'Contract mock','openai','env:UNUSED')").bind(connection).execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model) VALUES($1,$2,$3,'mock')").bind(deployment).bind(m).bind(connection).execute(&pool).await.unwrap();
     let (status, key_value) = key(&f, &f.owner, f.team, Value::Null).await;
     assert_eq!(status, StatusCode::OK);
     let key_id = id(&key_value);
@@ -1380,18 +1446,16 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
     assert!(!export.to_string().contains(&f.personal.to_string()));
     // A cleaned-up person (cleaned, null address, system audit), an Admin whose
     // audit rows have no resource, a group-role holder with a name and sign-ins,
-    // a decided request and two pending ones (with and without a reason).
-    for who in [
-        new_user,
-        f.admin.user_id,
-        b,
-        requesters[0].0,
-        requesters[1].0,
-        pending[0],
-        pending[1],
+    // and a person with a decided request and a pending one. Exports are limited
+    // to three per hour and actor, so they are split across both platform readers.
+    for (reader, who) in [
+        (&auditor, new_user),
+        (&auditor, b),
+        (&admin, f.admin.user_id),
+        (&admin, decided_requester.user_id),
     ] {
         c.ok(
-            &auditor,
+            reader,
             "GET",
             &format!("/api/v1/platform/users/{who}/export"),
             None,

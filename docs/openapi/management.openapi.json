@@ -1611,7 +1611,7 @@
           "issuer": {
             "description": "An https URL without credentials, query or fragment (directory.rs mapping_valid), at most 2048 bytes. A development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host.",
             "maxLength": 2048,
-            "pattern": "^https://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{1,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+            "pattern": "^https://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{0,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
             "type": "string"
           },
           "platform_role": {
@@ -2064,7 +2064,7 @@
               "issuer": {
                 "description": "An https URL without credentials, query or fragment (directory.rs mapping_valid), at most 2048 bytes. A development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host.",
                 "maxLength": 2048,
-                "pattern": "^https://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{1,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+                "pattern": "^https://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{0,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
                 "type": "string"
               },
               "platform_role": {
@@ -2105,7 +2105,7 @@
               "issuer": {
                 "description": "An https URL without credentials, query or fragment (directory.rs mapping_valid), at most 2048 bytes. A development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host.",
                 "maxLength": 2048,
-                "pattern": "^https://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{1,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+                "pattern": "^https://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{0,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
                 "type": "string"
               },
               "platform_role": {
@@ -2142,7 +2142,7 @@
               {
                 "description": "An https URL without credentials, query or fragment (directory.rs mapping_valid), at most 2048 bytes. A development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host.",
                 "maxLength": 2048,
-                "pattern": "^https://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{1,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+                "pattern": "^https://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{0,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
                 "type": "string"
               },
               {
@@ -2209,7 +2209,7 @@
           "issuer": {
             "description": "An https URL without credentials, query or fragment (directory.rs mapping_valid), at most 2048 bytes. A development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host.",
             "maxLength": 2048,
-            "pattern": "^https://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{1,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+            "pattern": "^https://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{0,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
             "type": "string"
           },
           "platform_role": {
@@ -3172,7 +3172,7 @@
         "type": "object"
       },
       "AccessPolicyInput": {
-        "description": "Rates are required-nullable (null clears) for requests_per_minute, tokens_per_minute and concurrent_requests and optional-nullable for the other four; every number is positive within the stated bound. EXACTLY ONE of budgets (the stacked form) or monthly_budget_microusd with an optional budget_period (the deprecated single-budget form) must be present: both, or neither, or budget_period with budgets, are refused. Money is a canonical positive integer micro-USD string. The positional array form does not repeat the exclusivity rule.",
+        "description": "Rates are required-nullable (null clears) for requests_per_minute, tokens_per_minute and concurrent_requests and optional-nullable for the other four; every number is positive within the stated bound. EXACTLY ONE of budgets (the stacked form) or monthly_budget_microusd with an optional budget_period (the deprecated single-budget form) must be present: both, or neither, or budget_period with budgets, are refused. Money is a canonical positive integer micro-USD string. The positional array form can only express the monthly form (the stacked budgets field would be the tenth element, which makes both present): 8 or 9 elements ending at monthly_budget_microusd or budget_period.",
         "oneOf": [
           {
             "additionalProperties": false,
@@ -3395,8 +3395,8 @@
           },
           {
             "items": false,
-            "maxItems": 10,
-            "minItems": 3,
+            "maxItems": 9,
+            "minItems": 8,
             "prefixItems": [
               {
                 "anyOf": [
@@ -3507,73 +3507,6 @@
               },
               {
                 "$ref": "#/components/schemas/IdentityPeriod"
-              },
-              {
-                "description": "Full replacement set of stacked budgets, at most one per period (day, week, month, lifetime); a repeated period is refused.",
-                "items": {
-                  "description": "Closed serde object or positional struct array in declared field order.",
-                  "oneOf": [
-                    {
-                      "additionalProperties": false,
-                      "properties": {
-                        "amount_microusd": {
-                          "allOf": [
-                            {
-                              "$ref": "#/components/schemas/IdentityUnsignedDecimal"
-                            },
-                            {
-                              "not": {
-                                "const": "0"
-                              }
-                            },
-                            {
-                              "maxLength": 19
-                            }
-                          ],
-                          "description": "Exact positive integer micro-USD amount, canonical (no leading zeros), at most 19 digits and at most 9223372036854775807 (governance.rs money(positive=true), which also tolerates leading zeros that the contract does not document)."
-                        },
-                        "period": {
-                          "$ref": "#/components/schemas/IdentityPeriod"
-                        }
-                      },
-                      "required": [
-                        "period",
-                        "amount_microusd"
-                      ],
-                      "type": "object"
-                    },
-                    {
-                      "items": false,
-                      "maxItems": 2,
-                      "minItems": 2,
-                      "prefixItems": [
-                        {
-                          "$ref": "#/components/schemas/IdentityPeriod"
-                        },
-                        {
-                          "allOf": [
-                            {
-                              "$ref": "#/components/schemas/IdentityUnsignedDecimal"
-                            },
-                            {
-                              "not": {
-                                "const": "0"
-                              }
-                            },
-                            {
-                              "maxLength": 19
-                            }
-                          ],
-                          "description": "Exact positive integer micro-USD amount, canonical (no leading zeros), at most 19 digits and at most 9223372036854775807 (governance.rs money(positive=true), which also tolerates leading zeros that the contract does not document)."
-                        }
-                      ],
-                      "type": "array"
-                    }
-                  ]
-                },
-                "maxItems": 4,
-                "type": "array",
-                "uniqueItems": true
               }
             ],
             "type": "array"
