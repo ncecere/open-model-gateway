@@ -913,6 +913,31 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
     .await;
     realtime_response(&pool, compacted, 1, "settled").await;
     realtime_response(&pool, compacted, 2, "settled_unreported").await;
+    // H2: a compacted gateway-run batch envelope. Only a native batch pins a
+    // price (`governance::batch`), so the envelope's reservation has none and
+    // `close_batch` settles it at a known zero with zero tokens.
+    exec(
+        &pool,
+        Ex {
+            workload: "batches",
+            streamed: false,
+            redacted: true,
+            tokens: Some((0, 0)),
+            reasoning: None,
+            ttft: None,
+            generation: None,
+            upstream: None,
+            reported: None,
+            billing: None,
+            meter: None,
+            res: Res::Settled {
+                actual: 0,
+                price: None,
+            },
+            ..Ex::rich(f.team, log_key, deployment, Uuid::new_v4(), 50)
+        },
+    )
+    .await;
     // K: one settled request of the key with a policy, in its own session.
     exec(
         &pool,
