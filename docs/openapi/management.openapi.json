@@ -13786,7 +13786,7 @@
             "name": "token",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           }
         ],
@@ -16950,7 +16950,7 @@
             "name": "hold",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           }
         ],
@@ -17682,7 +17682,7 @@
             "name": "root",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -18112,7 +18112,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -18120,6 +18120,8 @@
             "name": "session",
             "required": true,
             "schema": {
+              "maxLength": 128,
+              "minLength": 1,
               "type": "string"
             }
           },
@@ -23912,7 +23914,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -24077,7 +24079,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -24194,7 +24196,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -24202,6 +24204,7 @@
             "name": "id",
             "required": true,
             "schema": {
+              "pattern": "^batch_[0-9a-f]{32}$",
               "type": "string"
             }
           }
@@ -24282,7 +24285,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -24290,6 +24293,7 @@
             "name": "id",
             "required": true,
             "schema": {
+              "pattern": "^batch_[0-9a-f]{32}$",
               "type": "string"
             }
           }
@@ -24697,7 +24701,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -24801,7 +24805,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -24929,7 +24933,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           }
         ],
@@ -25021,7 +25025,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -25029,6 +25033,7 @@
             "name": "id",
             "required": true,
             "schema": {
+              "pattern": "^file-[0-9a-f]{32}$",
               "type": "string"
             }
           }
@@ -25121,7 +25126,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -25129,6 +25134,7 @@
             "name": "id",
             "required": true,
             "schema": {
+              "pattern": "^file-[0-9a-f]{32}$",
               "type": "string"
             }
           }
@@ -25237,7 +25243,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -25690,7 +25696,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           }
         ],
@@ -25770,7 +25776,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -25883,7 +25889,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -25995,7 +26001,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           }
         ],
@@ -26117,7 +26123,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -26125,7 +26131,7 @@
             "name": "key",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           }
         ],
@@ -26215,7 +26221,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -26223,7 +26229,7 @@
             "name": "key",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           }
         ],
@@ -26301,7 +26307,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -26309,7 +26315,7 @@
             "name": "key",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           }
         ],
@@ -26431,7 +26437,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -26439,7 +26445,7 @@
             "name": "key",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -26528,7 +26534,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -26536,7 +26542,7 @@
             "name": "key",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           }
         ],
@@ -26614,7 +26620,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -26622,7 +26628,7 @@
             "name": "key",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           }
         ],
@@ -26744,7 +26750,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -26752,7 +26758,7 @@
             "name": "key",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           }
         ],
@@ -26874,7 +26880,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -26882,7 +26888,7 @@
             "name": "key",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           }
         ],
@@ -26962,7 +26968,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -28280,7 +28286,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -28495,7 +28501,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -28503,7 +28509,7 @@
             "name": "root",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -28696,7 +28702,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -28798,7 +28804,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           }
         ],
@@ -28920,7 +28926,7 @@
             "name": "ws",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           },
           {
@@ -28928,7 +28934,7 @@
             "name": "id",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           }
         ],
