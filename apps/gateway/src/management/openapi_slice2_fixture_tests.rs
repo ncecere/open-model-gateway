@@ -78,6 +78,8 @@ struct Client {
     base: String,
     observed: tokio::sync::Mutex<PositiveFixtures>,
     failures: RefCell<Vec<String>>,
+    /// Handler-derived probes executed (a guard against a vacuous set).
+    pins: std::cell::Cell<usize>,
 }
 impl Client {
     /// One request, captured and schema-checked against its documented
@@ -192,6 +194,7 @@ impl Client {
         schema_accepts: bool,
         handler_accepts: bool,
     ) {
+        self.pins.set(self.pins.get() + 1);
         let schema = openapi::responses::check_request(method, path, &body).is_ok();
         let r = self.raw(who, method, path, Some(body), &[]).await;
         self.expect(
@@ -216,6 +219,7 @@ impl Client {
         schema_accepts: bool,
         handler_accepts: bool,
     ) {
+        self.pins.set(self.pins.get() + 1);
         let document = openapi::responses::artifact();
         let parameters = document["paths"][template]["get"]["parameters"]
             .as_array()
@@ -402,6 +406,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         base,
         observed: tokio::sync::Mutex::new(PositiveFixtures::default()),
         failures: RefCell::new(Vec::new()),
+        pins: std::cell::Cell::new(0),
     };
     let c = &c;
 
@@ -2709,6 +2714,10 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
     })
     .await;
 
+    c.expect(
+        c.pins.get() >= 130,
+        "the handler-derived probes did not all run",
+    );
     let mut failures = c.failures.borrow().clone();
     // The coverage gates last: they judge every positive and vector set above.
     let observed = c.observed.lock().await;
