@@ -2921,9 +2921,14 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         ),
         ("one above it", "9223372036854775808", BOTH_REFUSE),
         (
-            "with leading zeros",
-            "000000000000000000000000100",
+            "with leading zeros in 19 digits",
+            "0000000000000000100",
             BOTH_ACCEPT,
+        ),
+        (
+            "with leading zeros in 27 digits",
+            "000000000000000000000000100",
+            BOTH_REFUSE,
         ),
     ] {
         extra_query(
