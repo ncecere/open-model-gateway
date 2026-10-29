@@ -366,20 +366,69 @@ fn padded_png(total: usize) -> Vec<u8> {
 /// oracle runs, so a mistake shared by the inspector and the oracle cannot hide.
 fn logo_table() -> Vec<(&'static str, &'static str, Vec<u8>, bool)> {
     let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"></svg>"#.to_vec();
-    let mut text_chunk = branding::fixtures::png(64, 64);
-    let iend = text_chunk.len() - 12;
-    let payload = b"Comment\0<html><script>alert(1)</script>";
-    let mut chunk = u32::try_from(payload.len()).unwrap().to_be_bytes().to_vec();
-    chunk.extend_from_slice(b"tEXt");
-    chunk.extend_from_slice(payload);
-    chunk.extend_from_slice(&[0; 4]);
-    text_chunk.splice(iend..iend, chunk);
+    // A valid PNG with one `tEXt` chunk (payload as given) before IEND.
+    let with_text = |payload: &[u8]| {
+        let mut image = branding::fixtures::png(64, 64);
+        let iend = image.len() - 12;
+        let mut chunk = u32::try_from(payload.len()).unwrap().to_be_bytes().to_vec();
+        chunk.extend_from_slice(b"tEXt");
+        chunk.extend_from_slice(payload);
+        chunk.extend_from_slice(&[0; 4]);
+        image.splice(iend..iend, chunk);
+        image
+    };
+    let text_chunk = with_text(b"Comment\0<html><script>alert(1)</script>");
     let trailing = |mut image: Vec<u8>| {
         image.extend_from_slice(b"<script>alert(1)</script>");
         image
     };
     let jpeg = branding::fixtures::jpeg(64, 64);
+    // Each row's verdict is from `branding.rs`: `png_size` (IEND must end the file),
+    // `webp_size` (RIFF size + 8 must equal the length), `jpeg_size` (EOI must be the
+    // last two bytes) all answer `Invalid` (400) for trailing data; `inspect` refuses
+    // any MARKUP needle case-insensitively (`contains_ignore_case`) with `Invalid`
+    // (400); `SIDES` is 16..=4096 inclusive, so 4096 x 4096 passes.
+    let after = |mut image: Vec<u8>, tail: &[u8]| {
+        image.extend_from_slice(tail);
+        image
+    };
     let mut rows = vec![
+        (
+            "png with 4 zero bytes after IEND",
+            "image/png",
+            after(branding::fixtures::png(64, 64), &[0; 4]),
+            false,
+        ),
+        (
+            "webp with 2 bytes past the RIFF size",
+            "image/webp",
+            after(branding::fixtures::webp_lossless(64, 64), &[0; 2]),
+            false,
+        ),
+        (
+            "jpeg with a zero byte after EOI",
+            "image/jpeg",
+            after(jpeg.clone(), &[0]),
+            false,
+        ),
+        (
+            "png with an uppercase script tag in a chunk",
+            "image/png",
+            with_text(b"Comment\0<SCRIPT>"),
+            false,
+        ),
+        (
+            "png with a mixed-case iframe tag in a chunk",
+            "image/png",
+            with_text(b"Comment\0<IfRaMe src=x>"),
+            false,
+        ),
+        (
+            "png at 4096 by 4096",
+            "image/png",
+            branding::fixtures::png(4096, 4096),
+            true,
+        ),
         ("png", "image/png", branding::fixtures::png(64, 64), true),
         ("jpeg", "image/jpeg", jpeg.clone(), true),
         (
