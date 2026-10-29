@@ -9,6 +9,9 @@ pub(super) const BILLING_FULL: &str = r#"{"total_input_tokens":"10","uncached_in
 /// All seven keys present, every figure unknown (the provider reported none).
 pub(super) const BILLING_UNKNOWN: &str = r#"{"total_input_tokens":null,"uncached_input_tokens":null,"cache_read_input_tokens":null,"cache_write_input_tokens":null,"cache_write_default_input_tokens":null,"cache_write_5m_input_tokens":null,"cache_write_1h_input_tokens":null}"#;
 pub(super) const METER_FULL: &str = r#"{"output_images":"1","input_characters":"2","input_audio_seconds_ms":"3","output_audio_seconds_ms":"4","search_units":"5","requests":"6","output_video_seconds_ms":"7"}"#;
+/// What a realtime session close records (`governance::realtime`): zeros for
+/// the meters a session cannot produce and the response count.
+pub(super) const METER_REALTIME: &str = r#"{"output_images":"0","input_characters":"0","input_audio_seconds_ms":"0","output_audio_seconds_ms":"0","search_units":"0","requests":"2"}"#;
 pub(super) const METER_UNKNOWN: &str = r#"{"output_images":null,"input_characters":null,"input_audio_seconds_ms":null,"output_audio_seconds_ms":null,"search_units":null,"requests":null,"output_video_seconds_ms":null}"#;
 
 /// What the accounting side recorded for an attempt.
@@ -166,25 +169,48 @@ pub(super) async fn price(pool: &PgPool, deployment: Uuid) -> Uuid {
     id
 }
 
+/// A pricing v3 version that is explicitly free: zero rates on the token and
+/// request meters and every other meter not applicable, the shape a free
+/// pre-processing rejection settles against (`governance::free_rejection`).
+pub(super) async fn free_price(pool: &PgPool, deployment: Uuid) -> Uuid {
+    use crate::billing::v3::Meter;
+    let id = Uuid::new_v4();
+    let lines: Vec<Value> = Meter::ALL
+        .into_iter()
+        .map(|m| match m {
+            Meter::InputTokens | Meter::OutputTokens | Meter::Requests | Meter::SearchUnits => {
+                let batch = m.batches()[0];
+                json!({"meter":m.as_str(),"microusd_per_batch":"0","batch":batch,"unit_label":m.unit_label(batch).unwrap(),"sku_label":"Free"})
+            }
+            m => json!({"meter":m.as_str(),"not_applicable":true}),
+        })
+        .collect();
+    sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_token_limit,output_token_limit,pricing_version,price_lines,max_units) VALUES($1,$2,100,50,3,$3,'{}')")
+        .bind(id).bind(deployment).bind(json!(lines)).execute(pool).await.unwrap();
+    id
+}
+
 /// One response row of a realtime session, as `governance::realtime` writes it:
-/// `pending` while the response runs; `settled` with usage; `unknown` (and
-/// completed) when the session closed before the response did.
+/// `pending` while the response runs; `settled` with usage (and the status the
+/// provider reported, `settled_unreported` when it reported none); `unknown`
+/// (and completed) when the session closed before the response did.
 pub(super) async fn realtime_response(pool: &PgPool, execution: Uuid, sequence: i32, state: &str) {
     let sql = match state {
-        "settled" => {
-            "INSERT INTO realtime_responses(execution_id,sequence,state,status,window_hold_microusd,actual_microusd,unbounded_cost,input_text_tokens,cached_text_tokens,input_audio_tokens,cached_audio_tokens,output_text_tokens,output_audio_tokens,completed_at) VALUES($1,$2,'settled','completed',6,4,false,3,1,2,0,5,6,clock_timestamp()+interval '40 milliseconds')"
+        "settled" | "settled_unreported" => {
+            "INSERT INTO realtime_responses(execution_id,sequence,state,status,window_hold_microusd,actual_microusd,unbounded_cost,input_text_tokens,cached_text_tokens,input_audio_tokens,cached_audio_tokens,output_text_tokens,output_audio_tokens,completed_at) VALUES($1,$2,'settled',CASE WHEN $3 THEN 'completed' END,6,4,false,3,1,2,0,5,6,clock_timestamp()+interval '40 milliseconds')"
         }
         "unknown" => {
-            "INSERT INTO realtime_responses(execution_id,sequence,state,window_hold_microusd,unbounded_cost,completed_at) VALUES($1,$2,'unknown',6,true,clock_timestamp()+interval '40 milliseconds')"
+            "INSERT INTO realtime_responses(execution_id,sequence,state,window_hold_microusd,unbounded_cost,completed_at) VALUES($1,$2,'unknown',6,false,clock_timestamp()+interval '40 milliseconds')"
         }
         _ => {
             "INSERT INTO realtime_responses(execution_id,sequence,state,window_hold_microusd,unbounded_cost) VALUES($1,$2,'pending',6,false)"
         }
     };
-    sqlx::query(sql)
-        .bind(execution)
-        .bind(sequence)
-        .execute(pool)
-        .await
-        .unwrap();
+    let query = sqlx::query(sql).bind(execution).bind(sequence);
+    let query = if sql.contains("CASE WHEN $3") {
+        query.bind(state == "settled")
+    } else {
+        query
+    };
+    query.execute(pool).await.unwrap();
 }

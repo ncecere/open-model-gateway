@@ -273,6 +273,8 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
     let (router, router_deployment) = (Uuid::new_v4(), Uuid::new_v4());
     sqlx::query("INSERT INTO provider_connections(id,name,provider,credential_ref,enabled) VALUES($1,'Contract router','openrouter','env:UNUSED',true)").bind(router).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model,enabled) VALUES($1,$2,$3,'contract-router-upstream',true)").bind(router_deployment).bind(m).bind(router).execute(&pool).await.unwrap();
+    // A free price, older than the paid one (the latest version is the paid).
+    let free = free_price(&pool, deployment).await;
     let (p1, p2) = (
         price(&pool, deployment).await,
         price(&pool, router_deployment).await,
@@ -442,7 +444,8 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
 
     // Request logs: every attempt shape the engine, settlement, the realtime
     // close and retention compaction can leave behind.
-    let (a, b_root, c, d, e, rt_root, g, h, k) = (
+    let (a, b_root, c, d, e, rt_root, closed_root, g, h, k) = (
+        Uuid::new_v4(),
         Uuid::new_v4(),
         Uuid::new_v4(),
         Uuid::new_v4(),
@@ -601,17 +604,21 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
         },
     )
     .await;
-    // F: a live realtime session: one response settled, one running.
+    // F: a live realtime session: one response settled, one running. The
+    // execution is `started` until the session closes (`finish_once`).
     let realtime = exec(
         &pool,
         Ex {
             workload: "realtime",
             streamed: true,
+            state: "started",
+            completed: false,
             tokens: None,
             reasoning: None,
             finish: None,
             ttft: None,
             generation: None,
+            elapsed: None,
             session: None,
             app: None,
             cost_center: None,
@@ -627,29 +634,60 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
     .await;
     realtime_response(&pool, realtime, 1, "settled").await;
     realtime_response(&pool, realtime, 2, "pending").await;
-    // G: compacted: details cleared, every reservation settled.
+    // F2: a closed realtime session whose last response never finished: the
+    // reservation is unknown (the held figure is the retained window plus the
+    // settled response) and no token total is recorded.
+    let closed = exec(
+        &pool,
+        Ex {
+            workload: "realtime",
+            streamed: true,
+            tokens: None,
+            reasoning: None,
+            finish: None,
+            ttft: None,
+            generation: None,
+            session: None,
+            app: None,
+            cost_center: None,
+            billing: None,
+            meter: Some(METER_REALTIME),
+            res: Res::Unknown {
+                held: Some(10),
+                price: priced,
+                unbounded: false,
+            },
+            ..Ex::rich(f.team, log_key, deployment, closed_root, 11)
+        },
+    )
+    .await;
+    realtime_response(&pool, closed, 1, "settled").await;
+    realtime_response(&pool, closed, 2, "unknown").await;
+    // G: compacted: details cleared, every reservation settled. A failure
+    // settles only as a free price's pre-processing rejection (known zero,
+    // tokens 0, `governance::free_rejection`); a success settles on its usage.
     for (n, error, res, billing, meter, tokens) in [
         (
             1,
-            Some("upstream_unavailable"),
+            Some("upstream_rejected"),
             Res::Settled {
                 actual: 0,
-                price: priced,
+                price: Some(free),
             },
             None,
             None,
-            None,
+            Some((0, 0)),
         ),
         (
             2,
-            Some("upstream_timeout"),
+            Some("context_length_exceeded"),
             Res::Settled {
                 actual: 0,
-                price: unpriced,
+                price: Some(free),
             },
-            Some(BILLING_UNKNOWN),
-            Some(METER_UNKNOWN),
             None,
+            None,
+            Some((0, 0)),
         ),
         (
             3,
@@ -678,32 +716,33 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
                 billing,
                 meter,
                 tokens,
-                reasoning: tokens.map(|_| 2),
+                reasoning: error.map_or(Some(2), |_| None),
                 finish: error.map_or(Some("stop"), |_| None),
-                ttft: tokens.map(|_| 100),
-                generation: tokens.map(|_| 600),
-                reported: tokens.map(|_| "served-upstream-v2"),
+                ttft: error.map_or(Some(100), |_| None),
+                generation: error.map_or(Some(600), |_| None),
+                reported: error.map_or(Some("served-upstream-v2"), |_| None),
                 ..at(n, g, 60)
             },
         )
         .await;
     }
-    // H: a compacted realtime session whose last response never finished.
+    // H: a compacted realtime session (compaction needs a settled reservation,
+    // and a realtime reservation settles only when every response did).
     let compacted = exec(
         &pool,
         Ex {
             workload: "realtime",
             redacted: true,
             provider: "openrouter",
-            tokens: None,
+            tokens: Some((10, 22)),
             reasoning: None,
             finish: None,
             ttft: None,
             generation: None,
             billing: None,
-            meter: None,
+            meter: Some(METER_REALTIME),
             res: Res::Settled {
-                actual: 4,
+                actual: 8,
                 price: Some(p2),
             },
             ..Ex::rich(f.team, log_key, router_deployment, h, 55)
@@ -711,7 +750,7 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
     )
     .await;
     realtime_response(&pool, compacted, 1, "settled").await;
-    realtime_response(&pool, compacted, 2, "unknown").await;
+    realtime_response(&pool, compacted, 2, "settled_unreported").await;
     // K: one settled request of the key with a policy, in its own session.
     exec(
         &pool,
