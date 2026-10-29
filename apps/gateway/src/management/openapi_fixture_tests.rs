@@ -232,7 +232,10 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
     let (status, _) = call(&f.s, &f.admin, "PUT", "/api/v1/platform/workspace-types/project/policy", json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"budgets":[{"period":"month","amount_microusd":"5000000"}]})).await;
     assert!(status == StatusCode::OK, "unexpected value: status");
     // An administrator's workspace whose day accounting has drifted: the
-    // summary must report that window as unknown, never as zero.
+    // summary must report that window as unknown, never as zero. (Not a producer
+    // row: settled_microusd=-1 stands for corrupted/drifted budget_totals, the
+    // governance drift precedent that totals::read_budget_report's `valid` guard
+    // exists for.)
     let (status, lab_key) = key(&f, &f.admin, lab, Value::Null).await;
     assert!(status == StatusCode::OK, "unexpected value: status");
     sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,input_tokens,output_tokens) VALUES($1,$2,$3,$4,'contract-serving','openai',false,'succeeded',$1,1,1)").bind(Uuid::new_v4()).bind(lab).bind(id(&lab_key)).bind(deployment).execute(&pool).await.unwrap();
