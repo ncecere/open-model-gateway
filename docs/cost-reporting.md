@@ -24,7 +24,7 @@ Payloads expire after **90 elapsed UTC days**; an authorized page shows the expi
 
 Browser-session endpoints:
 
-- `/api/v1/platform/cost-report`: Platform Admin/Auditor totals across the installation, including personal financial totals. No foreign personal keys/request rows; platform service-account breakdown is empty.
+- `/api/v1/platform/cost-report`: Platform Admin/Auditor totals across the installation, including personal financial totals. A personal workspace's `workspaces` row carries its id and `Personal · <owner>` name; no foreign personal keys/request rows; platform service-account breakdown is empty.
 - `/api/v1/workspaces/{ws}/cost-report`: owner-private personal scope; shared administrators see whole workspace, ordinary members their own human-key activity.
 - `/api/v1/workspaces/{ws}/costs` and `/usage-export`: authorized workspace request details only, not a platform-wide detail/export API.
 
