@@ -7,9 +7,12 @@
 //! `500`, file store `unavailable`, CLI non-zero exit). It never panics and
 //! never falls back to another generator: `rand::rng()`/`ThreadRng` is also a
 //! CSPRNG but panics when the OS source fails, and seeded generators
-//! (`StdRng`) are deterministic. The production dependency does not enable
-//! rand's `thread_rng` feature; `StdRng` is used only by routing for its
-//! seeded, non-secret weighted choice.
+//! (`StdRng`) are deterministic. The gateway's own rand dependency does not
+//! enable `thread_rng`, but tungstenite 0.30 (upstream realtime transport)
+//! enables rand's default features, so `ThreadRng` is compiled in
+//! transitively and used by tungstenite only for WebSocket masking and
+//! handshake keys; no gateway secret is drawn from it. `StdRng` is used only
+//! by routing for its seeded, non-secret weighted choice.
 use std::fmt;
 
 use rand::{TryRng, rngs::SysRng};
