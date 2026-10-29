@@ -216,10 +216,10 @@ pub(crate) async fn management_openapi_auth_fixtures(
     .unwrap();
     let app = crate::http::router_with_identity(identity.store.clone(), None, engine, identity);
     let r = open_get(&app, "/api/v1/auth/config", &[]).await;
-    assert_eq!(r.status, StatusCode::OK);
-    assert_eq!(
-        serde_json::from_slice::<Value>(&r.bytes).unwrap()["enabled"],
-        true
+    assert!(r.status == StatusCode::OK, "unexpected value: r.status");
+    assert!(
+        serde_json::from_slice::<Value>(&r.bytes).unwrap()["enabled"] == true,
+        "unexpected value: serde_json::from_slice::<Value>(&r.bytes).unwrap()[\"enabled\"]"
     );
     observed.observe(&r);
     // The verified token carries a display name, which the callback stores.
@@ -228,7 +228,10 @@ pub(crate) async fn management_openapi_auth_fixtures(
     // attempt's nonce into its next token.
     let begin = async || {
         let r = open_get(&app, "/api/v1/auth/login", &[]).await;
-        assert_eq!(r.status, StatusCode::SEE_OTHER);
+        assert!(
+            r.status == StatusCode::SEE_OTHER,
+            "unexpected value: r.status"
+        );
         let url = Url::parse(r.headers[header::LOCATION].to_str().unwrap()).unwrap();
         let params: HashMap<_, _> = url
             .query_pairs()
@@ -253,8 +256,14 @@ pub(crate) async fn management_openapi_auth_fixtures(
         ],
     )
     .await;
-    assert_eq!(r.status, StatusCode::SEE_OTHER);
-    assert_eq!(r.headers[header::LOCATION], "/");
+    assert!(
+        r.status == StatusCode::SEE_OTHER,
+        "unexpected value: r.status"
+    );
+    assert!(
+        r.headers[header::LOCATION] == "/",
+        "unexpected value: r.headers[header::LOCATION]"
+    );
     let session = captured_cookie(&r.headers, SESSION);
     let csrf = captured_cookie(&r.headers, CSRF);
     assert!(is_token(&session));
@@ -262,22 +271,37 @@ pub(crate) async fn management_openapi_auth_fixtures(
     observed.observe(&r);
     // Real replay refusal; it cannot earn callback coverage.
     let r = open_get(&app, &path, &[("cookie", format!("{BROWSER}={browser}"))]).await;
-    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert!(
+        r.status == StatusCode::BAD_REQUEST,
+        "unexpected value: r.status"
+    );
     observed.observe(&r);
     // The new session is real: its identity, device label and own export come
     // from the verified token, the callback's own writes and the live handlers.
     let as_session = [("cookie", format!("{SESSION}={session}"))];
     let r = open_get(&app, "/api/v1/me", &as_session).await;
-    assert_eq!(r.status, StatusCode::OK);
+    assert!(r.status == StatusCode::OK, "unexpected value: r.status");
     let me: Value = serde_json::from_slice(&r.bytes).unwrap();
-    assert_eq!(me["user"]["display_name"], "Contract Person");
-    assert_eq!(me["user"]["email"], "newuser@example.test");
+    assert!(
+        me["user"]["display_name"] == "Contract Person",
+        "unexpected value: me[\"user\"][\"display_name\"]"
+    );
+    assert!(
+        me["user"]["email"] == "newuser@example.test",
+        "unexpected value: me[\"user\"][\"email\"]"
+    );
     observed.observe(&r);
     let r = open_get(&app, "/api/v1/me/sessions", &as_session).await;
-    assert_eq!(r.status, StatusCode::OK);
+    assert!(r.status == StatusCode::OK, "unexpected value: r.status");
     let sessions: Value = serde_json::from_slice(&r.bytes).unwrap();
-    assert_eq!(sessions["data"][0]["client"], "Firefox on Linux");
-    assert_eq!(sessions["data"][0]["current"], true);
+    assert!(
+        sessions["data"][0]["client"] == "Firefox on Linux",
+        "unexpected value: sessions[\"data\"][0][\"client\"]"
+    );
+    assert!(
+        sessions["data"][0]["current"] == true,
+        "unexpected value: sessions[\"data\"][0][\"current\"]"
+    );
     assert!(sessions["data"][0]["last_seen_at"].is_string());
     observed.observe(&r);
     let today = chrono::Utc::now().date_naive();
@@ -287,10 +311,16 @@ pub(crate) async fn management_openapi_auth_fixtures(
         &as_session,
     )
     .await;
-    assert_eq!(r.status, StatusCode::OK);
+    assert!(r.status == StatusCode::OK, "unexpected value: r.status");
     let exported: Value = serde_json::from_slice(&r.bytes).unwrap();
-    assert_eq!(exported["subject"]["display_name"], "Contract Person");
-    assert_eq!(exported["subject"]["platform_role"], "user");
+    assert!(
+        exported["subject"]["display_name"] == "Contract Person",
+        "unexpected value: exported[\"subject\"][\"display_name\"]"
+    );
+    assert!(
+        exported["subject"]["platform_role"] == "user",
+        "unexpected value: exported[\"subject\"][\"platform_role\"]"
+    );
     observed.observe(&r);
     let r = capture(
         "POST",
@@ -310,7 +340,10 @@ pub(crate) async fn management_openapi_auth_fixtures(
             .unwrap(),
     )
     .await;
-    assert_eq!(r.status, StatusCode::NO_CONTENT);
+    assert!(
+        r.status == StatusCode::NO_CONTENT,
+        "unexpected value: r.status"
+    );
     assert!(r.bytes.is_empty());
     observed.observe(&r);
 

@@ -117,10 +117,13 @@ fn management_openapi_wiring_gap_messages_name_pointers_never_values() {
         ),
     );
     let gap = message(gaps(&fixtures, &document));
-    assert!(!gap.contains(secret), "{gap}");
+    assert!(
+        !gap.contains(secret),
+        "a gap message leaked a captured value"
+    );
     assert!(
         gap.contains("limit") && gap.contains("/data/*/note"),
-        "{gap}"
+        "the gap message does not name the parameter and the array pointer"
     );
 }
 

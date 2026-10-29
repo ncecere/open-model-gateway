@@ -70,6 +70,20 @@ async fn send(
     }
     capture_http(method, path, request.send().await.unwrap()).await
 }
+/// A POSITIVE request body, which must satisfy its documented request schema
+/// before it is sent (this covers the object and the positional wire forms; the
+/// vectors check the schema against the handler for everything else).
+fn valid_body(template: &str, body: Value) -> Value {
+    let schema = &openapi::responses::artifact()["paths"][template]["post"]["requestBody"]["content"]
+        ["application/json"]["schema"];
+    assert!(
+        !schema.is_null()
+            && openapi::responses::validate_value(openapi::responses::artifact(), schema, &body)
+                .is_ok(),
+        "a positive request body does not satisfy its request schema ({template})"
+    );
+    body
+}
 /// A request target with a raw query string (empty: none).
 fn target(path: &str, query: &str) -> String {
     if query.is_empty() {
@@ -79,7 +93,10 @@ fn target(path: &str, query: &str) -> String {
     }
 }
 fn body(captured: &Captured) -> Value {
-    assert_eq!(captured.status, StatusCode::OK);
+    assert!(
+        captured.status == StatusCode::OK,
+        "unexpected value: captured.status"
+    );
     serde_json::from_slice(&captured.bytes).unwrap()
 }
 /// A Files API upload (multipart) with a key as the credential.
@@ -117,7 +134,10 @@ async fn upload(
         .send()
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        response.status() == StatusCode::OK,
+        "unexpected value: response.status()"
+    );
     response.json().await.unwrap()
 }
 /// One incident of a workspace rule, as the evaluator writes it, and its first
@@ -194,10 +214,10 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
     sqlx::query("INSERT INTO provider_connections(id,name,provider,credential_ref,enabled) VALUES($1,'Contract mock','openai','env:UNUSED',true)").bind(connection).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model,enabled) VALUES($1,$2,$3,'mock',true)").bind(deployment).bind(serving).bind(connection).execute(&pool).await.unwrap();
     let (status, key_value) = key(&f, &f.owner, f.team, Value::Null).await;
-    assert_eq!(status, StatusCode::OK);
+    assert!(status == StatusCode::OK, "unexpected value: status");
     let own_key = id(&key_value);
     let (status, foreign_key) = key(&f, &f.member, f.team, Value::Null).await;
-    assert_eq!(status, StatusCode::OK);
+    assert!(status == StatusCode::OK, "unexpected value: status");
     // Real persisted, nonempty request/export records: an execution whose cost
     // is unknown (no reservation), a settled one, and an upstream failure.
     let execution = Uuid::new_v4();
@@ -208,33 +228,33 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
     sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,error_code,root_request_id,completed_at) VALUES($1,$2,$3,$4,'contract-serving','openai',false,'failed','timeout_error',$1,now())").bind(Uuid::new_v4()).bind(f.team).bind(own_key).bind(deployment).execute(&pool).await.unwrap();
     // Stacked platform budgets for Team workspaces, one for Projects.
     let (status, _) = call(&f.s, &f.admin, "PUT", "/api/v1/platform/workspace-types/team/policy", json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"budgets":[{"period":"month","amount_microusd":"9007199254740993"},{"period":"day","amount_microusd":"1000000"},{"period":"lifetime","amount_microusd":"9007199254740993"}]})).await;
-    assert_eq!(status, StatusCode::OK);
+    assert!(status == StatusCode::OK, "unexpected value: status");
     let (status, _) = call(&f.s, &f.admin, "PUT", "/api/v1/platform/workspace-types/project/policy", json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"budgets":[{"period":"month","amount_microusd":"5000000"}]})).await;
-    assert_eq!(status, StatusCode::OK);
+    assert!(status == StatusCode::OK, "unexpected value: status");
     // An administrator's workspace whose day accounting has drifted: the
     // summary must report that window as unknown, never as zero.
     let (status, lab_key) = key(&f, &f.admin, lab, Value::Null).await;
-    assert_eq!(status, StatusCode::OK);
+    assert!(status == StatusCode::OK, "unexpected value: status");
     sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,input_tokens,output_tokens) VALUES($1,$2,$3,$4,'contract-serving','openai',false,'succeeded',$1,1,1)").bind(Uuid::new_v4()).bind(lab).bind(id(&lab_key)).bind(deployment).execute(&pool).await.unwrap();
     sqlx::query("UPDATE budget_totals SET settled_microusd=-1,held_microusd=0 WHERE scope_kind='workspace' AND scope_id=$1 AND period='day'")
         .bind(lab).execute(&pool).await.unwrap();
     // Alert rules: workspace budget (the owner's feed), provider failure, three
     // admission-ceiling shapes (rate and lock wait, rate only, lock wait only).
     let (status, workspace_rule) = call(&f.s, &f.owner, "POST", &format!("/api/v1/workspaces/{}/alerts/rules", f.team), json!({"name":"Generation","kind":"budget_threshold","budget_layers":["local"],"thresholds":[100],"notify_workspace_admins":true})).await;
-    assert_eq!(status, StatusCode::OK);
+    assert!(status == StatusCode::OK, "unexpected value: status");
     let (status, _) = call(&f.s, &f.admin, "POST", "/api/v1/platform/alerts/rules", json!({"name":"Provider failing","kind":"provider_failing","window_minutes":60,"consecutive_failures":1,"notify_platform_admins":true})).await;
-    assert_eq!(status, StatusCode::OK);
+    assert!(status == StatusCode::OK, "unexpected value: status");
     sqlx::query("UPDATE api_keys SET expires_at=now()+interval '3 days'")
         .execute(&pool)
         .await
         .unwrap();
     crate::alerts::evaluate_once(&f.s).await.unwrap().unwrap();
     let (status, ceiling) = call(&f.s, &f.admin, "POST", "/api/v1/platform/alerts/rules", json!({"name":"Contract ceiling","kind":"admission_ceiling","window_minutes":5,"ceiling_requests_per_second":200,"ceiling_lock_wait_ms":250,"notify_platform_admins":true})).await;
-    assert_eq!(status, StatusCode::OK);
+    assert!(status == StatusCode::OK, "unexpected value: status");
     let (status, rate_only) = call(&f.s, &f.admin, "POST", "/api/v1/platform/alerts/rules", json!({"name":"Ceiling by rate","kind":"admission_ceiling","window_minutes":5,"ceiling_requests_per_second":200,"notify_platform_admins":true})).await;
-    assert_eq!(status, StatusCode::OK);
+    assert!(status == StatusCode::OK, "unexpected value: status");
     let (status, wait_only) = call(&f.s, &f.admin, "POST", "/api/v1/platform/alerts/rules", json!({"name":"Ceiling by lock wait","kind":"admission_ceiling","window_minutes":5,"ceiling_lock_wait_ms":250,"notify_platform_admins":true})).await;
-    assert_eq!(status, StatusCode::OK);
+    assert!(status == StatusCode::OK, "unexpected value: status");
     let details = |rate: Option<u64>, p95: Option<u64>, wait: Option<u64>| json!({"scope":"workspace","personal":false,"workspace_name":"Team","workspace_kind":"team","window_minutes":5,"admissions":60000,"admissions_per_second":"200.0","by_rate":rate.is_some(),"by_lock_wait":p95.is_some(),"threshold_requests_per_second":rate,"lock_wait_p95_at_least_ms":p95,"threshold_lock_wait_ms":wait});
     ceiling_incident(
         &pool,
@@ -288,16 +308,19 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
     resolve(&pool, suppressed).await;
     let counts: (i64, i64) = sqlx::query_as("SELECT count(*) FILTER(WHERE status='suppressed' AND suppression_reason='workspace_generation_limit'),count(*) FILTER(WHERE quota_charged) FROM alert_deliveries WHERE bucket_id=$1")
         .bind(f.team).fetch_one(&pool).await.unwrap();
-    assert_eq!(counts, (2, 100));
+    assert!(counts == (2, 100), "unexpected value: counts");
     // The owner's keys: restricted to a model, with a lifetime budget, disabled,
     // revoked, and one with no expiry exactly as bootstrap writes it.
     let (status, restricted) = key(&f, &f.owner, f.team, json!([serving])).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(restricted["model_ids"], json!([serving]));
+    assert!(status == StatusCode::OK, "unexpected value: status");
+    assert!(
+        restricted["model_ids"] == json!([serving]),
+        "unexpected value: restricted[\"model_ids\"]"
+    );
     let (status, _) = call(&f.s, &f.owner, "POST", &format!("/api/v1/workspaces/{}/keys", f.team), json!({"name":"Budgeted","expires_in_days":1,"budgets":[{"period":"lifetime","amount_microusd":"5000000"}]})).await;
-    assert_eq!(status, StatusCode::OK);
+    assert!(status == StatusCode::OK, "unexpected value: status");
     let (status, to_disable) = key(&f, &f.owner, f.team, Value::Null).await;
-    assert_eq!(status, StatusCode::OK);
+    assert!(status == StatusCode::OK, "unexpected value: status");
     let (status, _) = call(
         &f.s,
         &f.owner,
@@ -306,9 +329,9 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         json!({"disabled":true}),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert!(status == StatusCode::OK, "unexpected value: status");
     let (status, to_revoke) = key(&f, &f.owner, f.team, Value::Null).await;
-    assert_eq!(status, StatusCode::OK);
+    assert!(status == StatusCode::OK, "unexpected value: status");
     let (status, _) = call(
         &f.s,
         &f.owner,
@@ -317,7 +340,7 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         Value::Null,
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert!(status == StatusCode::OK, "unexpected value: status");
     sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash) VALUES($1,$2,$3,'Local team key',decode(repeat('ab',32),'hex'))")
         .bind(Uuid::new_v4()).bind(f.team).bind(f.owner.user_id).execute(&pool).await.unwrap();
     // A role the owner held and lost keeps its row (revoked) in their export.
@@ -329,7 +352,7 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         json!({"role":"auditor"}),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert!(status == StatusCode::OK, "unexpected value: status");
     let (status, _) = call(
         &f.s,
         &f.admin,
@@ -338,7 +361,7 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         Value::Null,
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert!(status == StatusCode::OK, "unexpected value: status");
     let (status, invitation) = call(
         &f.s,
         &f.owner,
@@ -347,7 +370,7 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         json!({"email":f.outsider.email,"role":"member"}),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert!(status == StatusCode::OK, "unexpected value: status");
     let mock = crate::identity::tests::MockProvider::start(None).await;
     let identity = mock.state(pool.clone()).await;
     let engine = crate::inference::Engine::new(
@@ -390,7 +413,7 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
     assert!(body(&r)["installation"]["support_url"].is_null());
     observed.observe(&r);
     let (status, _) = call(&f.s, &f.admin, "PUT", "/api/v1/platform/settings/general", json!({"display_name":"Acme AI","support_url":"https://help.example.test/ai","logo_url":"https://cdn.example.test/logo.png","human_key_max_lifetime_days":90})).await;
-    assert_eq!(status, StatusCode::OK);
+    assert!(status == StatusCode::OK, "unexpected value: status");
     let r = send(
         &client,
         configured_base,
@@ -401,10 +424,13 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
     )
     .await;
     let configured_me = body(&r);
-    assert_eq!(configured_me["installation"]["name"], "Acme AI");
-    assert_eq!(
-        configured_me["installation"]["inference_base_url"],
-        "https://api.bitop.dev/v1"
+    assert!(
+        configured_me["installation"]["name"] == "Acme AI",
+        "unexpected value: configured_me[\"installation\"][\"name\"]"
+    );
+    assert!(
+        configured_me["installation"]["inference_base_url"] == "https://api.bitop.dev/v1",
+        "unexpected value: configured_me[\"installation\"][\"inference_base_url\"]"
     );
     assert!(configured_me["installation"]["logo"].is_null());
     observed.observe(&r);
@@ -433,7 +459,10 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
     )
     .await;
     let config = body(&r);
-    assert_eq!(config["installation_name"], "Acme AI");
+    assert!(
+        config["installation_name"] == "Acme AI",
+        "unexpected value: config[\"installation_name\"]"
+    );
     assert!(config["logo"]["url"].is_string());
     observed.observe(&r);
     // Files the owner uploaded through the real Files API.
@@ -478,7 +507,10 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         .send()
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        response.status() == StatusCode::OK,
+        "unexpected value: response.status()"
+    );
 
     let r = send(
         &client,
@@ -523,7 +555,7 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         Some(&requester),
         "POST",
         "/api/v1/me/access-requests",
-        Some(submission.clone()),
+        Some(valid_body("/api/v1/me/access-requests", submission.clone())),
     )
     .await;
     let request_id = id(&body(&r));
@@ -550,8 +582,14 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         None,
     )
     .await;
-    assert_eq!(body(&r)["status"], "withdrawn");
-    assert_eq!(body(&r)["decided_by"], json!(f.outsider.user_id));
+    assert!(
+        body(&r)["status"] == "withdrawn",
+        "unexpected value: body(&r)[\"status\"]"
+    );
+    assert!(
+        body(&r)["decided_by"] == json!(f.outsider.user_id),
+        "unexpected value: body(&r)[\"decided_by\"]"
+    );
     observed.observe(&r);
     let r = send(
         &client,
@@ -559,10 +597,16 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         Some(&requester),
         "POST",
         "/api/v1/invitations/accept",
-        Some(json!({"token":invitation["token"]})),
+        Some(valid_body(
+            "/api/v1/invitations/accept",
+            json!({"token":invitation["token"]}),
+        )),
     )
     .await;
-    assert_eq!(body(&r)["workspace_id"], json!(f.project));
+    assert!(
+        body(&r)["workspace_id"] == json!(f.project),
+        "unexpected value: body(&r)[\"workspace_id\"]"
+    );
     observed.observe(&r);
 
     // A second request on the Team, decided by its owner: approved with the
@@ -630,7 +674,7 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         Value::Null,
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert!(status == StatusCode::OK, "unexpected value: status");
     assert!(decided["membership_grant_id"].is_string());
     let r = send(
         &client,
@@ -642,8 +686,14 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
     )
     .await;
     let replayed = body(&r);
-    assert_eq!(replayed["status"], "approved");
-    assert_eq!(replayed["id"], json!(approved));
+    assert!(
+        replayed["status"] == "approved",
+        "unexpected value: replayed[\"status\"]"
+    );
+    assert!(
+        replayed["id"] == json!(approved),
+        "unexpected value: replayed[\"id\"]"
+    );
     assert!(replayed["membership_grant_id"].is_string());
     observed.observe(&r);
     let r = send(
@@ -655,7 +705,10 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         None,
     )
     .await;
-    assert_eq!(body(&r)["decided_by"], json!(f.owner.user_id));
+    assert!(
+        body(&r)["decided_by"] == json!(f.owner.user_id),
+        "unexpected value: body(&r)[\"decided_by\"]"
+    );
     observed.observe(&r);
     // A member asks for another workspace without a reason: denied by a Platform
     // Admin; and a second request that is withdrawn.
@@ -667,7 +720,7 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         Some(&second),
         "POST",
         "/api/v1/me/access-requests",
-        Some(denied_submission),
+        Some(valid_body("/api/v1/me/access-requests", denied_submission)),
     )
     .await;
     let denied_id = id(&body(&r));
@@ -682,7 +735,10 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         None,
     )
     .await;
-    assert_eq!(body(&r)["status"], "pending");
+    assert!(
+        body(&r)["status"] == "pending",
+        "unexpected value: body(&r)[\"status\"]"
+    );
     observed.observe(&r);
     let (status, _) = call(
         &f.s,
@@ -692,7 +748,7 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         Value::Null,
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert!(status == StatusCode::OK, "unexpected value: status");
     let r = send(
         &client,
         base,
@@ -702,7 +758,10 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         None,
     )
     .await;
-    assert_eq!(body(&r)["status"], "denied");
+    assert!(
+        body(&r)["status"] == "denied",
+        "unexpected value: body(&r)[\"status\"]"
+    );
     assert!(body(&r)["decided_at"].is_string());
     observed.observe(&r);
     let r = send(
@@ -711,7 +770,10 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         Some(&second),
         "POST",
         "/api/v1/me/access-requests",
-        Some(json!({"workspace_id":lab,"reason":null,"idempotency_key":"contract-withdrawn"})),
+        Some(valid_body(
+            "/api/v1/me/access-requests",
+            json!({"workspace_id":lab,"reason":null,"idempotency_key":"contract-withdrawn"}),
+        )),
     )
     .await;
     let withdrawn_id = id(&body(&r));
@@ -725,7 +787,10 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         None,
     )
     .await;
-    assert_eq!(body(&r)["status"], "withdrawn");
+    assert!(
+        body(&r)["status"] == "withdrawn",
+        "unexpected value: body(&r)[\"status\"]"
+    );
     assert!(body(&r)["reason"].is_null());
     observed.observe(&r);
     // The requester is removed from the Team again: the export keeps the revoked grant.
@@ -740,7 +805,7 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         Value::Null,
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert!(status == StatusCode::OK, "unexpected value: status");
     for who in [&requester, &second] {
         let r = send(
             &client,
@@ -780,10 +845,16 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         Some(&requester),
         "POST",
         "/api/v1/me/access-requests",
-        Some(json!([lab_two, null, "contract-positional"])),
+        Some(valid_body(
+            "/api/v1/me/access-requests",
+            json!([lab_two, null, "contract-positional"]),
+        )),
     )
     .await;
-    assert_eq!(body(&r)["status"], "pending");
+    assert!(
+        body(&r)["status"] == "pending",
+        "unexpected value: body(&r)[\"status\"]"
+    );
     assert!(body(&r)["reason"].is_null());
     observed.observe(&r);
     // The owner's own scope, every read as the signed-in browser.
@@ -803,8 +874,14 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         match path {
             "/api/v1/me" => assert!(!value.to_string().contains(&foreign_personal.to_string())),
             "/api/v1/me/summary" => {
-                assert_eq!(value["totals"]["current"]["attempts"], "3");
-                assert_eq!(value["totals"]["current"]["known_cost_microusd"], "70");
+                assert!(
+                    value["totals"]["current"]["attempts"] == "3",
+                    "unexpected value: value[\"totals\"][\"current\"][\"attempts\"]"
+                );
+                assert!(
+                    value["totals"]["current"]["known_cost_microusd"] == "70",
+                    "unexpected value: value[\"totals\"][\"current\"][\"known_cost_microusd\"]"
+                );
                 assert!(!value["workspaces"].as_array().unwrap().is_empty());
                 assert!(
                     value["workspaces"]
@@ -816,7 +893,10 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
             }
             "/api/v1/me/keys" => {
                 // Six of the owner's own keys; never the member's.
-                assert_eq!(value["data"].as_array().unwrap().len(), 6);
+                assert!(
+                    value["data"].as_array().unwrap().len() == 6,
+                    "unexpected value: value[\"data\"].as_array().unwrap().len()"
+                );
                 assert!(
                     !value
                         .to_string()
@@ -830,18 +910,24 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
                         .filter(|k| k["status"] == status)
                         .count()
                 };
-                assert_eq!(
+                assert!(
                     (
                         by_status("active"),
                         by_status("disabled"),
                         by_status("revoked")
-                    ),
-                    (4, 1, 1)
+                    ) == (4, 1, 1),
+                    "unexpected value: ( by_status(\"active\"), by_status(\"disabled\"), by_status(\"revoked\") )"
                 );
             }
             "/api/v1/me/models" => {
-                assert_eq!(value["models"].as_array().unwrap().len(), 1);
-                assert_eq!(value["not_serving"].as_array().unwrap().len(), 1);
+                assert!(
+                    value["models"].as_array().unwrap().len() == 1,
+                    "unexpected value: value[\"models\"].as_array().unwrap().len()"
+                );
+                assert!(
+                    value["not_serving"].as_array().unwrap().len() == 1,
+                    "unexpected value: value[\"not_serving\"].as_array().unwrap().len()"
+                );
             }
             "/api/v1/me/notifications" | "/api/v1/me/sessions" => {
                 assert!(!value["data"].as_array().unwrap().is_empty());
@@ -851,16 +937,23 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
             }
             "/api/v1/me/notifications/summary" => assert!(value["unread"].as_u64().unwrap() > 0),
             "/api/v1/me/export" => {
-                assert_eq!(value["requests"]["items"].as_array().unwrap().len(), 3);
-                assert!(value["requests"]["items"].to_string().contains("\"70\""));
-                assert_eq!(value["files"]["items"].as_array().unwrap().len(), 2);
-                assert_eq!(
-                    value["platform_roles"]["items"].as_array().unwrap().len(),
-                    2
+                assert!(
+                    value["requests"]["items"].as_array().unwrap().len() == 3,
+                    "unexpected value: value[\"requests\"][\"items\"].as_array().unwrap().len()"
                 );
-                assert_eq!(
-                    r.headers["x-omg-export-sha256"].to_str().unwrap(),
-                    hex::encode(Sha256::digest(&r.bytes))
+                assert!(value["requests"]["items"].to_string().contains("\"70\""));
+                assert!(
+                    value["files"]["items"].as_array().unwrap().len() == 2,
+                    "unexpected value: value[\"files\"][\"items\"].as_array().unwrap().len()"
+                );
+                assert!(
+                    value["platform_roles"]["items"].as_array().unwrap().len() == 2,
+                    "unexpected value: value[\"platform_roles\"][\"items\"].as_array().unwrap().len()"
+                );
+                assert!(
+                    r.headers["x-omg-export-sha256"].to_str().unwrap()
+                        == hex::encode(Sha256::digest(&r.bytes)),
+                    "unexpected value: r.headers[\"x-omg-export-sha256\"].to_str().unwrap()"
                 );
             }
             _ => unreachable!(),
@@ -905,7 +998,10 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
     // Admins and Auditors export too; the Admin's own audit trail has events with no resource.
     for who in [&admin, &requester] {
         let r = send(&client, base, Some(who), "GET", "/api/v1/me/export", None).await;
-        assert_eq!(body(&r)["format"], "omg.subject-export.v1");
+        assert!(
+            body(&r)["format"] == "omg.subject-export.v1",
+            "unexpected value: body(&r)[\"format\"]"
+        );
         observed.observe(&r);
     }
     // Both live redaction variants, independently of the generic feed shape.
@@ -930,8 +1026,14 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
             assert!(ceiling["workspace"].is_null());
             assert!(ceiling["details"].get("workspace_name").is_none());
         } else {
-            assert_eq!(ceiling["workspace"]["id"], json!(f.team));
-            assert_eq!(ceiling["details"]["workspace_name"], "Team");
+            assert!(
+                ceiling["workspace"]["id"] == json!(f.team),
+                "unexpected value: ceiling[\"workspace\"][\"id\"]"
+            );
+            assert!(
+                ceiling["details"]["workspace_name"] == "Team",
+                "unexpected value: ceiling[\"details\"][\"workspace_name\"]"
+            );
         }
         let personal = value["data"]
             .as_array()
@@ -1105,7 +1207,7 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
             json!({"email":f.outsider.email,"role":"member"}),
         )
         .await;
-        assert_eq!(status, StatusCode::OK);
+        assert!(status == StatusCode::OK, "unexpected value: status");
         invitation["token"].clone()
     };
     let token = invite().await;
@@ -1158,7 +1260,10 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         Some(&owner),
         "POST",
         "/api/v1/me/notifications/read",
-        Some(json!({"all":true})),
+        Some(valid_body(
+            "/api/v1/me/notifications/read",
+            json!({"all":true}),
+        )),
     )
     .await;
     assert!(body(&r)["marked"].as_u64().unwrap() > 0);
@@ -1207,7 +1312,10 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         None,
     )
     .await;
-    assert_eq!(body(&r)["revoked"], 1);
+    assert!(
+        body(&r)["revoked"] == 1,
+        "unexpected value: body(&r)[\"revoked\"]"
+    );
     observed.observe(&r);
     let r = send(
         &client,
@@ -1229,7 +1337,10 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
     assert!(revoked);
     // Refusals supplement existing matrices, and must not earn positive coverage.
     let r = send(&client, base, None, "GET", "/api/v1/me", None).await;
-    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    assert!(
+        r.status == StatusCode::UNAUTHORIZED,
+        "unexpected value: r.status"
+    );
     observed.observe(&r);
     let r = send(
         &client,
@@ -1240,7 +1351,10 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         None,
     )
     .await;
-    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    assert!(
+        r.status == StatusCode::NOT_FOUND,
+        "unexpected value: r.status"
+    );
     observed.observe(&r);
     let r = send(&client, base, Some(&owner), "HEAD", "/api/v1/me", None).await;
     assert!(r.bytes.is_empty());
@@ -1254,17 +1368,23 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         json!({"email":f.outsider.email,"role":"member"}),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert!(status == StatusCode::OK, "unexpected value: status");
     let r = send(
         &client,
         base,
         Some(&requester),
         "POST",
         "/api/v1/invitations/accept",
-        Some(json!([again["token"]])),
+        Some(valid_body(
+            "/api/v1/invitations/accept",
+            json!([again["token"]]),
+        )),
     )
     .await;
-    assert_eq!(body(&r)["workspace_id"], json!(f.project));
+    assert!(
+        body(&r)["workspace_id"] == json!(f.project),
+        "unexpected value: body(&r)[\"workspace_id\"]"
+    );
     observed.observe(&r);
     let r = send(
         &client,
@@ -1272,7 +1392,10 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         Some(&owner),
         "POST",
         "/api/v1/me/notifications/read",
-        Some(json!([null, true])),
+        Some(valid_body(
+            "/api/v1/me/notifications/read",
+            json!([null, true]),
+        )),
     )
     .await;
     assert!(body(&r)["marked"].is_u64());
@@ -1286,7 +1409,10 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         Some(json!({"token":"a".repeat(2 * MIB)})),
     )
     .await;
-    assert_eq!(r.status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(
+        r.status == StatusCode::PAYLOAD_TOO_LARGE,
+        "unexpected value: r.status"
+    );
     drop(servers);
     observed.finish(openapi::responses::IDENTITY_SELF_SERVICE_AREAS);
 }
