@@ -15,7 +15,6 @@ pub(super) struct Vx<'a> {
     pub start: String,
     pub end: String,
     pub team: Uuid,
-    pub clean: Uuid,
     pub cc: Uuid,
     pub key: Uuid,
     pub account: Uuid,

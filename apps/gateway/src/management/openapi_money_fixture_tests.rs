@@ -1891,7 +1891,6 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
         start: start.clone(),
         end: end.clone(),
         team: f.team,
-        clean,
         cc,
         key: id(&team_key),
         account,
