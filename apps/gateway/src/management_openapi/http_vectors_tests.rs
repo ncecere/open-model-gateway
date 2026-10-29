@@ -881,3 +881,21 @@ async fn management_openapi_http_vectors_decided_probes_still_fail_on_unexpected
     // proving the decision (not the 400) was used.
     assert!(message(result).contains("schema refuses but handler accepts"));
 }
+
+#[test]
+fn management_openapi_http_vectors_query_values_stay_within_the_request_target_limit() {
+    let document = json!({"openapi":"3.1.0","paths":{TEMPLATE:{"get":{"parameters":[
+        parameter("code", true, json!({"type":"string","maxLength":9000})),
+    ],"responses":{"200":{"description":"ok"}}}}},"components":{"schemas":{}}});
+    let operation = &document["paths"][TEMPLATE]["get"];
+    let base = vec![("code".to_owned(), "good".to_owned())];
+    let cases = query_cases(&document, operation, &base, &[]).unwrap();
+    for case in &cases {
+        if let Edit::Set(raw) = &case.edit {
+            assert!(raw.len() * 3 <= 60_000, "{} bytes", raw.len());
+        }
+    }
+    // Multibyte values that do fit are still sent around the character limit.
+    assert!(cases.iter().any(|c| c.kind == "multibyte maxLength"
+        && matches!(&c.edit, Edit::Set(r) if r.starts_with('\u{e9}'))));
+}

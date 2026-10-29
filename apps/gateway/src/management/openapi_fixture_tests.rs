@@ -2,7 +2,9 @@
 //! comes from a real handler; this suite also runs the gateway over loopback.
 use super::*;
 use openapi::{
-    http_vectors::{Probe, body_vectors_http, query_vectors, query_vectors_fixed},
+    http_vectors::{
+        Probe, body_vectors_http, body_vectors_seeded, query_vectors, query_vectors_fixed,
+    },
     responses::{Captured, PositiveFixtures, capture_http},
 };
 use sha2::{Digest, Sha256};
@@ -587,6 +589,28 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         },
     )
     .await;
+    // The positional wire form [workspace_id, reason, idempotency_key] replays the
+    // same pending request (same key and payload) and gets the same boundaries.
+    body_vectors_http(
+        &mut observed,
+        "POST",
+        "/api/v1/me/access-requests",
+        json!([f.team, "Join team", "contract-vector"]),
+        async |request| {
+            Probe::from(
+                send(
+                    &client,
+                    base,
+                    Some(&requester),
+                    "POST",
+                    "/api/v1/me/access-requests",
+                    Some(request),
+                )
+                .await,
+            )
+        },
+    )
+    .await;
     let approved: Uuid = sqlx::query_scalar(
         "SELECT id FROM access_requests WHERE requester=$1 AND workspace_id=$2 AND status='pending'",
     )
@@ -1139,18 +1163,25 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
     .await;
     assert!(body(&r)["marked"].as_u64().unwrap() > 0);
     observed.observe(&r);
-    // Marking read: everything, then one named incident, in both wire forms.
-    for valid in [
-        json!({"ids":[first_event],"all":false}),
-        json!({"all":true}),
-        json!([[first_event], false]),
-        json!([null, true]),
+    // Marking read: everything, then one named incident, in both wire forms. The
+    // seeds add the declared optional sibling the base omits, so the cross-field
+    // rule (exactly one of `all: true` or `ids`) is exercised: `{"ids":[x],
+    // "all":true}` and `[[x], true]` reach the handler, which refuses them.
+    let event = json!([first_event]);
+    for (valid, seeds) in [
+        (json!({"ids":[first_event],"all":false}), vec![]),
+        (json!({"ids":[first_event]}), vec![("/all", json!(true))]),
+        (json!({"all":true}), vec![("/ids", event.clone())]),
+        (json!([[first_event], false]), vec![]),
+        (json!([[first_event]]), vec![("/1", json!(true))]),
+        (json!([null, true]), vec![]),
     ] {
-        body_vectors_http(
+        body_vectors_seeded(
             &mut observed,
             "POST",
             "/api/v1/me/notifications/read",
             valid,
+            &seeds,
             async |request| {
                 Probe::from(
                     send(

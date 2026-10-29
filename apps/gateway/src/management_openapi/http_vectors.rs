@@ -139,6 +139,10 @@ fn repeat_to(seed: &str, length: usize) -> String {
 /// Longest string vector (bytes of characters) the harness will send.
 const LONGEST: u64 = 100_000;
 
+/// Longest percent-encoded query value the harness sends (the `http` crate
+/// refuses request targets over 65534 bytes).
+const MAX_QUERY_BYTES: usize = 60_000;
+
 /// Reviewed extension on a string schema: the handler limits the UTF-8 BYTES of
 /// the value (JSON Schema `maxLength` counts characters, so it can only state a
 /// necessary bound). The vector oracle refuses a value over the byte limit and
@@ -575,6 +579,11 @@ pub(super) fn query_cases(
         for (kind, value) in scalar_mutations(document, schema, &nodes, &coerce(&kinds, raw), true)?
         {
             let raw = render(&value);
+            // A request target is limited to 65534 bytes by the HTTP stack (and
+            // every byte may be percent-encoded): oversized candidates cannot be sent.
+            if raw.len() * 3 > MAX_QUERY_BYTES {
+                continue;
+            }
             if seen.insert(raw.clone()) {
                 let accept = accepts(document, schema, &coerce(&kinds, &raw))?;
                 out.push(QueryCase {

@@ -199,7 +199,13 @@ pub(crate) async fn management_openapi_auth_fixtures(
     const BROWSER_AGENT: &str =
         "Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0";
     let mock = MockProvider::start(None).await;
-    let identity = mock.state(pool.clone()).await;
+    // The vectors sign in dozens of times a minute from one (peerless) client:
+    // the supported maximum login/callback rate keeps the throttle out of the way.
+    let mut config = mock.config();
+    config.login_rate_per_minute = 10_000;
+    let identity = IdentityState::new(Store::new(pool.clone()), Some(config))
+        .await
+        .unwrap();
     sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES($1,$2,'entitled','platform','user')")
         .bind(Uuid::new_v4()).bind(&mock.issuer).execute(pool).await.unwrap();
     let engine = crate::inference::Engine::new(
@@ -328,10 +334,14 @@ pub(crate) async fn management_openapi_auth_fixtures(
     .await;
     // The callback answers 400 for malformed input AND for any refused sign-in,
     // so its status cannot tell them apart: the verdict is decided from server
-    // state. The handler ACCEPTS the query when it consumed the one-use login
-    // attempt (a well-formed `state` with the right browser cookie) and then
-    // either reached the token exchange (a usable `code`) or the provider's own
-    // `error` refusal branch (any `error` text is accepted, then refused 400).
+    // state. A `state` other than the real one names no login attempt, so each
+    // request first gets a COPY of the real attempt stored under the state it
+    // carries (same browser, nonce and verifier). The handler then ACCEPTS the
+    // value exactly when it consumes that row (the state passed validation and
+    // matched the attempt), and refuses it when the row survives. An accepted
+    // attempt must then reach the token exchange (a usable `code`) or the
+    // provider's own `error` refusal branch (any `error` text is accepted, then
+    // refused 400). A status outside 303/400 still fails (Probe::decided).
     query_vectors(
         observed,
         "GET",
@@ -349,6 +359,24 @@ pub(crate) async fn management_openapi_auth_fixtures(
         },
         async |context: &(String, String), query: String| {
             let before = mock.exchanges.load(Ordering::SeqCst);
+            let pairs: Vec<(String, String)> =
+                Url::parse(&format!("http://localhost/?{query}"))
+                    .unwrap()
+                    .query_pairs()
+                    .map(|(k, v)| (k.into_owned(), v.into_owned()))
+                    .collect();
+            let sent = pairs
+                .iter()
+                .find(|(name, _)| name == "state")
+                .map(|(_, value)| value.clone());
+            if let Some(sent) = sent.as_deref().filter(|sent| *sent != context.0) {
+                sqlx::query("INSERT INTO oidc_login_attempts(state_hash,browser_hash,nonce,pkce_verifier,expires_at,return_to) SELECT $1,browser_hash,nonce,pkce_verifier,expires_at,return_to FROM oidc_login_attempts WHERE state_hash=$2 ON CONFLICT (state_hash) DO UPDATE SET browser_hash=EXCLUDED.browser_hash,nonce=EXCLUDED.nonce,pkce_verifier=EXCLUDED.pkce_verifier,expires_at=EXCLUDED.expires_at,return_to=EXCLUDED.return_to")
+                    .bind(hash(sent))
+                    .bind(hash(&context.0))
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
             let path = format!("/api/v1/auth/callback?{query}");
             let captured = open_get(
                 &app,
@@ -356,15 +384,22 @@ pub(crate) async fn management_openapi_auth_fixtures(
                 &[("cookie", format!("{BROWSER}={}", context.1))],
             )
             .await;
-            let consumed: i64 =
-                sqlx::query_scalar("SELECT count(*) FROM oidc_login_attempts WHERE state_hash=$1")
-                    .bind(hash(&context.0))
+            let consumed = match &sent {
+                Some(sent) => {
+                    let left: i64 = sqlx::query_scalar(
+                        "SELECT count(*) FROM oidc_login_attempts WHERE state_hash=$1",
+                    )
+                    .bind(hash(sent))
                     .fetch_one(pool)
                     .await
                     .unwrap();
+                    left == 0
+                }
+                None => false,
+            };
             let exchanged = mock.exchanges.load(Ordering::SeqCst) > before;
-            let provider_error = query.split('&').any(|pair| pair.starts_with("error="));
-            Probe::decided(captured, consumed == 0 && (exchanged || provider_error))
+            let provider_error = pairs.iter().any(|(name, _)| name == "error");
+            Probe::decided(captured, consumed && (exchanged || provider_error))
         },
     )
     .await;
