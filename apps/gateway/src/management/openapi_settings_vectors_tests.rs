@@ -510,80 +510,6 @@ pub(super) async fn logo(g: &Gateway, pool: &PgPool, observed: &mut PositiveFixt
     }
 }
 
-/// Controls for the logo harness pieces, so a vacuous gate cannot pass.
-#[cfg(test)]
-mod logo_controls {
-    use super::*;
-
-    #[test]
-    fn verdict_maps_input_statuses_and_nothing_else() {
-        for refused in [400, 413, 415] {
-            assert!(!logo_verdict(StatusCode::from_u16(refused).unwrap()));
-        }
-        for accepted in [200, 201, 204] {
-            assert!(logo_verdict(StatusCode::from_u16(accepted).unwrap()));
-        }
-    }
-    #[test]
-    fn verdict_fails_on_every_other_status() {
-        for other in [401u16, 403, 404, 409, 429, 500, 503] {
-            let caught =
-                std::panic::catch_unwind(|| logo_verdict(StatusCode::from_u16(other).unwrap()));
-            assert!(caught.is_err(), "status {other} must fail the vector");
-        }
-    }
-    #[test]
-    fn table_is_independent_and_covers_every_documented_rule() {
-        let rows = logo_table();
-        let accepted = rows.iter().filter(|r| r.3).count();
-        assert!(accepted >= 9 && rows.len() - accepted >= 17);
-        for label in [
-            "svg",
-            "gif",
-            "png polyglot",
-            "truncated jpeg",
-            "png declared jpeg",
-            "size at the limit",
-            "size over the limit",
-        ] {
-            assert!(rows.iter().any(|r| r.0 == label), "{label}");
-        }
-        // The limit rows are exactly the documented size and one more.
-        let size = |label: &str| rows.iter().find(|r| r.0 == label).unwrap().2.len();
-        assert_eq!(size("size at the limit"), 524_288);
-        assert_eq!(size("size over the limit"), 524_289);
-    }
-    /// The schema oracle's image branch must really inspect the bytes: with the
-    /// flag it refuses what the documented rules refuse and accepts valid images,
-    /// without the flag only the length bounds apply.
-    #[test]
-    fn binary_oracle_inspects_images_only_when_flagged() {
-        let flagged = json!({"type":"string","format":"binary","minLength":1,"maxLength":524_288,"x-omg-validate-image":true});
-        let plain = json!({"type":"string","format":"binary","minLength":1,"maxLength":524_288});
-        let table = logo_table();
-        let row = |label: &str| table.iter().find(|r| r.0 == label).unwrap();
-        for label in ["png", "jpeg", "webp"] {
-            let (_, media, bytes, _) = row(label);
-            assert!(binary_accepts(&flagged, media, bytes), "{label}");
-        }
-        for label in [
-            "svg",
-            "gif",
-            "png polyglot",
-            "png declared jpeg",
-            "truncated jpeg",
-        ] {
-            let (_, media, bytes, _) = row(label);
-            assert!(!binary_accepts(&flagged, media, bytes), "{label}");
-            // Unflagged, the same bytes are only length-checked.
-            assert!(binary_accepts(&plain, media, bytes), "{label}");
-        }
-        let (_, media, bytes, _) = row("size over the limit");
-        assert!(!binary_accepts(&flagged, media, bytes));
-        assert!(!binary_accepts(&plain, media, bytes));
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Pinned schema-versus-handler verdicts the derived vectors cannot generate
 // ---------------------------------------------------------------------------
@@ -934,4 +860,78 @@ pub(super) async fn pinned_webhooks(g: &Gateway, pool: &PgPool) {
     )
     .await;
     forget_webhooks(g, pool, &admin, &keep).await;
+}
+
+/// Controls for the logo harness pieces, so a vacuous gate cannot pass.
+#[cfg(test)]
+mod logo_controls {
+    use super::*;
+
+    #[test]
+    fn verdict_maps_input_statuses_and_nothing_else() {
+        for refused in [400, 413, 415] {
+            assert!(!logo_verdict(StatusCode::from_u16(refused).unwrap()));
+        }
+        for accepted in [200, 201, 204] {
+            assert!(logo_verdict(StatusCode::from_u16(accepted).unwrap()));
+        }
+    }
+    #[test]
+    fn verdict_fails_on_every_other_status() {
+        for other in [401u16, 403, 404, 409, 429, 500, 503] {
+            let caught =
+                std::panic::catch_unwind(|| logo_verdict(StatusCode::from_u16(other).unwrap()));
+            assert!(caught.is_err(), "status {other} must fail the vector");
+        }
+    }
+    #[test]
+    fn table_is_independent_and_covers_every_documented_rule() {
+        let rows = logo_table();
+        let accepted = rows.iter().filter(|r| r.3).count();
+        assert!(accepted >= 9 && rows.len() - accepted >= 17);
+        for label in [
+            "svg",
+            "gif",
+            "png polyglot",
+            "truncated jpeg",
+            "png declared jpeg",
+            "size at the limit",
+            "size over the limit",
+        ] {
+            assert!(rows.iter().any(|r| r.0 == label), "{label}");
+        }
+        // The limit rows are exactly the documented size and one more.
+        let size = |label: &str| rows.iter().find(|r| r.0 == label).unwrap().2.len();
+        assert_eq!(size("size at the limit"), 524_288);
+        assert_eq!(size("size over the limit"), 524_289);
+    }
+    /// The schema oracle's image branch must really inspect the bytes: with the
+    /// flag it refuses what the documented rules refuse and accepts valid images,
+    /// without the flag only the length bounds apply.
+    #[test]
+    fn binary_oracle_inspects_images_only_when_flagged() {
+        let flagged = json!({"type":"string","format":"binary","minLength":1,"maxLength":524_288,"x-omg-validate-image":true});
+        let plain = json!({"type":"string","format":"binary","minLength":1,"maxLength":524_288});
+        let table = logo_table();
+        let row = |label: &str| table.iter().find(|r| r.0 == label).unwrap();
+        for label in ["png", "jpeg", "webp"] {
+            let (_, media, bytes, _) = row(label);
+            assert!(binary_accepts(&flagged, media, bytes), "{label}");
+        }
+        for label in [
+            "svg",
+            "gif",
+            "png polyglot",
+            "png declared jpeg",
+            "truncated jpeg",
+        ] {
+            let (_, media, bytes, _) = row(label);
+            assert!(!binary_accepts(&flagged, media, bytes), "{label}");
+            // Unflagged, the same bytes are only length-checked.
+            assert!(binary_accepts(&plain, media, bytes), "{label}");
+        }
+        let (_, media, bytes, _) = row("size over the limit");
+        assert!(!binary_accepts(&flagged, media, bytes));
+        assert!(!binary_accepts(&plain, media, bytes));
+    }
 }
