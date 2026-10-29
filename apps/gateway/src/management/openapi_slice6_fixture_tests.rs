@@ -1710,9 +1710,10 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
     // The window (1 to 93 days, ending by tomorrow) holds whichever bound is omitted.
     let today = chrono::Utc::now().date_naive();
     let (start_date, end_date) = (
-        (today - chrono::Duration::days(2)).to_string(),
-        today.to_string(),
+        (today - chrono::Duration::days(1)).to_string(),
+        (today + chrono::Duration::days(1)).to_string(),
     );
+    let (log_key_text, root_prefix) = (log_key.to_string(), a.to_string()[..8].to_owned());
     let logs: [(&str, &str); 12] = [
         ("start_date", &start_date),
         ("end_date", &end_date),
@@ -1742,6 +1743,16 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
     }
     let mut platform_session = platform_filters.clone();
     platform_session.retain(|(n, _)| *n != "session_id");
+    // A session read answers 200 only when the filters match one of its requests.
+    for (n, v) in platform_session.iter_mut() {
+        match *n {
+            "key_id" => *v = &log_key_text,
+            "q" => *v = &root_prefix,
+            "status" => *v = "succeeded",
+            "finish_reason" => *v = "stop",
+            _ => {}
+        }
+    }
     let workspace_logs: Vec<(&str, &str)> = logs.to_vec();
     query_ops(
         &mut w,

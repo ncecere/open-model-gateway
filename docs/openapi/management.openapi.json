@@ -3445,7 +3445,7 @@
             "$ref": "#/components/schemas/IdentityTime"
           },
           "expires_at": {
-            "$ref": "#/components/schemas/IdentityNullableTime"
+            "$ref": "#/components/schemas/IdentityTime"
           },
           "filename": {
             "type": "string"
@@ -25055,7 +25055,8 @@
               }
             }
           },
-          "required": true
+          "required": true,
+          "x-omg-no-boundary-vectors": "The parts are read by the streaming multipart parser in filestore::upload, whose purpose vocabulary, content checks (JSONL, images) and policy gates depend on installation settings and on the file's bytes; JSON-derived vectors cannot decide them. The fixture sends the unknown, duplicate, missing, empty, mistyped and out-of-range parts explicitly and compares the exact statuses."
         },
         "responses": {
           "200": {
