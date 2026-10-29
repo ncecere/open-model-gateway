@@ -807,15 +807,15 @@
             "issuer": {
               "type": "string",
               "maxLength": 2048,
-              "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{0,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
-              "description": "An https URL without credentials, query or fragment (directory.rs mapping_valid), at most 2048 bytes. A development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host."
+              "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+              "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; the schema's maxLength counts characters, so a multibyte value of at most 2048 characters can exceed the handler's limit). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces in the path are accepted by the parser (they are percent-encoded) and refused by the schema; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development)."
             },
             "group_value": {
               "type": "string",
               "minLength": 1,
               "maxLength": 512,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "OIDC group value: 1 to 512 bytes (the schema bound counts characters), no control characters."
+              "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The schema's maxLength counts characters, so a multibyte value of at most 512 characters can exceed the handler's limit."
             },
             "target_kind": {
               "const": "platform"
@@ -848,15 +848,15 @@
             "issuer": {
               "type": "string",
               "maxLength": 2048,
-              "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{0,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
-              "description": "An https URL without credentials, query or fragment (directory.rs mapping_valid), at most 2048 bytes. A development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host."
+              "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+              "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; the schema's maxLength counts characters, so a multibyte value of at most 2048 characters can exceed the handler's limit). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces in the path are accepted by the parser (they are percent-encoded) and refused by the schema; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development)."
             },
             "group_value": {
               "type": "string",
               "minLength": 1,
               "maxLength": 512,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "OIDC group value: 1 to 512 bytes (the schema bound counts characters), no control characters."
+              "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The schema's maxLength counts characters, so a multibyte value of at most 512 characters can exceed the handler's limit."
             },
             "target_kind": {
               "const": "workspace"
@@ -893,15 +893,15 @@
             {
               "type": "string",
               "maxLength": 2048,
-              "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{0,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
-              "description": "An https URL without credentials, query or fragment (directory.rs mapping_valid), at most 2048 bytes. A development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host."
+              "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+              "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; the schema's maxLength counts characters, so a multibyte value of at most 2048 characters can exceed the handler's limit). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces in the path are accepted by the parser (they are percent-encoded) and refused by the schema; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development)."
             },
             {
               "type": "string",
               "minLength": 1,
               "maxLength": 512,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "OIDC group value: 1 to 512 bytes (the schema bound counts characters), no control characters."
+              "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The schema's maxLength counts characters, so a multibyte value of at most 512 characters can exceed the handler's limit."
             },
             {
               "enum": [
@@ -955,15 +955,15 @@
         "issuer": {
           "type": "string",
           "maxLength": 2048,
-          "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{0,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
-          "description": "An https URL without credentials, query or fragment (directory.rs mapping_valid), at most 2048 bytes. A development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host."
+          "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+          "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; the schema's maxLength counts characters, so a multibyte value of at most 2048 characters can exceed the handler's limit). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces in the path are accepted by the parser (they are percent-encoded) and refused by the schema; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development)."
         },
         "group_value": {
           "type": "string",
           "minLength": 1,
           "maxLength": 512,
           "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-          "description": "OIDC group value: 1 to 512 bytes (the schema bound counts characters), no control characters."
+          "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The schema's maxLength counts characters, so a multibyte value of at most 512 characters can exceed the handler's limit."
         },
         "target_kind": {
           "enum": [
@@ -1003,7 +1003,62 @@
       },
       "required": [],
       "additionalProperties": false,
-      "description": "Fields merged onto the stored mapping (an omitted field keeps its value, an explicit null clears platform_role, workspace_id or workspace_role) and then validated as a complete mapping; the cross-field rule therefore depends on the stored row."
+      "description": "Fields merged onto the stored mapping (an omitted field keeps its value, an explicit null clears platform_role, workspace_id or workspace_role) and then validated as a complete mapping. Cross-field rule, as far as the body decides it: when target_kind is present, platform requires a platform_role and null workspace_id and workspace_role, and workspace requires a workspace_id and workspace_role (admin or member) and a null platform_role, each for the fields the body names (directory.rs mapping_valid on the merged row). Without target_kind the stored row's kind decides, which the schema cannot see: a body that names only a workspace field for a platform mapping is accepted by the schema and refused by the handler.",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "target_kind": {
+                "const": "platform"
+              }
+            },
+            "required": [
+              "target_kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "platform_role": {
+                "$ref": "#/components/schemas/IdentityRole"
+              },
+              "workspace_id": {
+                "type": "null"
+              },
+              "workspace_role": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "target_kind": {
+                "const": "workspace"
+              }
+            },
+            "required": [
+              "target_kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "platform_role": {
+                "type": "null"
+              },
+              "workspace_id": {
+                "$ref": "#/components/schemas/IdentityUuid"
+              },
+              "workspace_role": {
+                "enum": [
+                  "admin",
+                  "member"
+                ]
+              }
+            }
+          }
+        }
+      ]
     },
     "AccessMappingExistingPreview": {
       "type": "object",
@@ -1011,15 +1066,15 @@
         "issuer": {
           "type": "string",
           "maxLength": 2048,
-          "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::[0-9]{0,5})?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
-          "description": "An https URL without credentials, query or fragment (directory.rs mapping_valid), at most 2048 bytes. A development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host."
+          "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+          "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; the schema's maxLength counts characters, so a multibyte value of at most 2048 characters can exceed the handler's limit). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces in the path are accepted by the parser (they are percent-encoded) and refused by the schema; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development)."
         },
         "group_value": {
           "type": "string",
           "minLength": 1,
           "maxLength": 512,
           "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-          "description": "OIDC group value: 1 to 512 bytes (the schema bound counts characters), no control characters."
+          "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The schema's maxLength counts characters, so a multibyte value of at most 512 characters can exceed the handler's limit."
         },
         "target_kind": {
           "enum": [
@@ -1062,7 +1117,62 @@
       },
       "required": [],
       "additionalProperties": false,
-      "description": "The same merge body as PATCH, or delete:true (an empty object also previews a delete)."
+      "description": "The PATCH merge body plus an optional delete flag (a boolean). The handler previews a DELETE when delete is true OR when no mapping field is present (group_mapping_preview.rs: is_delete = delete || patch.is_empty()), so {} and {\"delete\":false} both preview a delete, while {\"delete\":false,\"enabled\":true} previews the merge. With delete:true every other mapping field is ignored and its value is not validated ({\"delete\":true,\"enabled\":\"x\"} succeeds), although an unknown key is still refused with 422; the schema keeps typing those fields (a wildcard value is not expressible), so it refuses such a body that the handler accepts. Cross-field rule, as far as the body decides it: when target_kind is present, platform requires a platform_role and null workspace_id and workspace_role, and workspace requires a workspace_id and workspace_role (admin or member) and a null platform_role, each for the fields the body names (directory.rs mapping_valid on the merged row). Without target_kind the stored row's kind decides, which the schema cannot see: a body that names only a workspace field for a platform mapping is accepted by the schema and refused by the handler.",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "target_kind": {
+                "const": "platform"
+              }
+            },
+            "required": [
+              "target_kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "platform_role": {
+                "$ref": "#/components/schemas/IdentityRole"
+              },
+              "workspace_id": {
+                "type": "null"
+              },
+              "workspace_role": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "target_kind": {
+                "const": "workspace"
+              }
+            },
+            "required": [
+              "target_kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "platform_role": {
+                "type": "null"
+              },
+              "workspace_id": {
+                "$ref": "#/components/schemas/IdentityUuid"
+              },
+              "workspace_role": {
+                "enum": [
+                  "admin",
+                  "member"
+                ]
+              }
+            }
+          }
+        }
+      ]
     },
     "AccessMapping": {
       "oneOf": [
@@ -2948,7 +3058,9 @@
               "reasons"
             ],
             "additionalProperties": false
-          }
+          },
+          "maxItems": 200,
+          "description": "At most 200 models, ordered by public name: the handler reads 201 rows, returns the first 200 and sets truncated (access.rs)."
         },
         "truncated": {
           "type": "boolean"
@@ -3340,7 +3452,7 @@
               "type": "string",
               "maxLength": 320,
               "pattern": "^\\s*[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+\\s*$",
-              "description": "Trimmed and lower-cased by the handler (directory.rs email_valid): exactly one '@' with a non-empty local part and domain, at most 320 characters, no interior whitespace or control characters. Length is counted after trimming."
+              "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 UTF-8 bytes of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 grows from 2 to 3 bytes). The schema's maxLength counts characters of the value as sent, untrimmed: it refuses a padded value the handler accepts and accepts a multibyte or lower-case-expanding value the handler refuses."
             },
             "platform_role": {
               "$ref": "#/components/schemas/IdentityRole"
@@ -3359,7 +3471,7 @@
               "type": "string",
               "maxLength": 320,
               "pattern": "^\\s*[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+\\s*$",
-              "description": "Trimmed and lower-cased by the handler (directory.rs email_valid): exactly one '@' with a non-empty local part and domain, at most 320 characters, no interior whitespace or control characters. Length is counted after trimming."
+              "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 UTF-8 bytes of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 grows from 2 to 3 bytes). The schema's maxLength counts characters of the value as sent, untrimmed: it refuses a padded value the handler accepts and accepts a multibyte or lower-case-expanding value the handler refuses."
             },
             {
               "$ref": "#/components/schemas/IdentityRole"
@@ -3383,7 +3495,7 @@
                   "type": "string",
                   "maxLength": 320,
                   "pattern": "^\\s*[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+\\s*$",
-                  "description": "Trimmed and lower-cased by the handler (directory.rs email_valid): exactly one '@' with a non-empty local part and domain, at most 320 characters, no interior whitespace or control characters. Length is counted after trimming."
+                  "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 UTF-8 bytes of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 grows from 2 to 3 bytes). The schema's maxLength counts characters of the value as sent, untrimmed: it refuses a padded value the handler accepts and accepts a multibyte or lower-case-expanding value the handler refuses."
                 },
                 {
                   "type": "null"
@@ -3423,7 +3535,7 @@
                   "type": "string",
                   "maxLength": 320,
                   "pattern": "^\\s*[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+\\s*$",
-                  "description": "Trimmed and lower-cased by the handler (directory.rs email_valid): exactly one '@' with a non-empty local part and domain, at most 320 characters, no interior whitespace or control characters. Length is counted after trimming."
+                  "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 UTF-8 bytes of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 grows from 2 to 3 bytes). The schema's maxLength counts characters of the value as sent, untrimmed: it refuses a padded value the handler accepts and accepts a multibyte or lower-case-expanding value the handler refuses."
                 },
                 {
                   "type": "null"
@@ -3495,7 +3607,7 @@
               "type": "string",
               "maxLength": 120,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-              "description": "Workspace name (mod.rs valid_name): not blank after trimming, at most 120 UTF-8 bytes (the schema bound counts characters), no control characters."
+              "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 UTF-8 bytes of the value as sent (the handler counts bytes, without trimming). The schema's maxLength counts characters, so a multibyte name of at most 120 characters can exceed the handler's limit."
             },
             "kind": {
               "enum": [
@@ -3521,7 +3633,7 @@
               "type": "string",
               "maxLength": 120,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-              "description": "Workspace name (mod.rs valid_name): not blank after trimming, at most 120 UTF-8 bytes (the schema bound counts characters), no control characters."
+              "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 UTF-8 bytes of the value as sent (the handler counts bytes, without trimming). The schema's maxLength counts characters, so a multibyte name of at most 120 characters can exceed the handler's limit."
             },
             {
               "enum": [
@@ -3551,7 +3663,7 @@
                   "type": "string",
                   "maxLength": 120,
                   "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                  "description": "Workspace name (mod.rs valid_name): not blank after trimming, at most 120 UTF-8 bytes (the schema bound counts characters), no control characters."
+                  "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 UTF-8 bytes of the value as sent (the handler counts bytes, without trimming). The schema's maxLength counts characters, so a multibyte name of at most 120 characters can exceed the handler's limit."
                 },
                 {
                   "type": "null"
@@ -3584,7 +3696,7 @@
                   "type": "string",
                   "maxLength": 120,
                   "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                  "description": "Workspace name (mod.rs valid_name): not blank after trimming, at most 120 UTF-8 bytes (the schema bound counts characters), no control characters."
+                  "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 UTF-8 bytes of the value as sent (the handler counts bytes, without trimming). The schema's maxLength counts characters, so a multibyte name of at most 120 characters can exceed the handler's limit."
                 },
                 {
                   "type": "null"
@@ -3623,7 +3735,7 @@
                   "type": "string",
                   "maxLength": 120,
                   "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                  "description": "Workspace name (mod.rs valid_name): not blank after trimming, at most 120 UTF-8 bytes (the schema bound counts characters), no control characters."
+                  "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 UTF-8 bytes of the value as sent (the handler counts bytes, without trimming). The schema's maxLength counts characters, so a multibyte name of at most 120 characters can exceed the handler's limit."
                 },
                 {
                   "type": "null"
@@ -3650,7 +3762,7 @@
                   "type": "string",
                   "maxLength": 120,
                   "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                  "description": "Workspace name (mod.rs valid_name): not blank after trimming, at most 120 UTF-8 bytes (the schema bound counts characters), no control characters."
+                  "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 UTF-8 bytes of the value as sent (the handler counts bytes, without trimming). The schema's maxLength counts characters, so a multibyte name of at most 120 characters can exceed the handler's limit."
                 },
                 {
                   "type": "null"
@@ -3724,7 +3836,7 @@
               "type": "string",
               "maxLength": 320,
               "pattern": "^\\s*[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+\\s*$",
-              "description": "Trimmed and lower-cased by the handler (directory.rs email_valid): exactly one '@' with a non-empty local part and domain, at most 320 characters, no interior whitespace or control characters. Length is counted after trimming."
+              "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 UTF-8 bytes of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 grows from 2 to 3 bytes). The schema's maxLength counts characters of the value as sent, untrimmed: it refuses a padded value the handler accepts and accepts a multibyte or lower-case-expanding value the handler refuses."
             },
             "role": {
               "enum": [
@@ -3746,7 +3858,7 @@
               "type": "string",
               "maxLength": 320,
               "pattern": "^\\s*[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+\\s*$",
-              "description": "Trimmed and lower-cased by the handler (directory.rs email_valid): exactly one '@' with a non-empty local part and domain, at most 320 characters, no interior whitespace or control characters. Length is counted after trimming."
+              "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 UTF-8 bytes of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 grows from 2 to 3 bytes). The schema's maxLength counts characters of the value as sent, untrimmed: it refuses a padded value the handler accepts and accepts a multibyte or lower-case-expanding value the handler refuses."
             },
             {
               "enum": [

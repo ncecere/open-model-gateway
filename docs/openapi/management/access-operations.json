@@ -58,7 +58,8 @@
             "schema": {
               "type": "string",
               "maxLength": 200
-            }
+            },
+            "description": "Case-insensitive substring search over email and display name, at most 200 characters (the handler counts characters of the value as sent, without trimming). Control characters are not supported and are not refused: they reach PostgreSQL, and a NUL currently yields 503 (a product bug, tracked as #404). No client should send them."
           },
           {
             "name": "role",
@@ -688,7 +689,8 @@
             "schema": {
               "type": "string",
               "maxLength": 200
-            }
+            },
+            "description": "Case-insensitive substring search over the workspace name, at most 200 characters (the handler counts characters of the value as sent, without trimming). Control characters are not supported and are not refused: they reach PostgreSQL, and a NUL currently yields 503 (a product bug, tracked as #404). No client should send them."
           },
           {
             "name": "kind",
@@ -1242,7 +1244,7 @@
               "pattern": "^\\s*[^\\s\\u0000-\\u001f\\u007f-\\u009f](?:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?\\s*$"
             },
             "required": true,
-            "description": "Trimmed nonempty email fragment of at most 200 characters (counted after trimming) without control characters; at most 20 active, entitled nonmembers."
+            "description": "Email fragment; at most 20 active, entitled nonmembers are returned. The handler trims and LOWER-CASES the value, then refuses an empty result, control characters and more than 200 characters of the trimmed, lower-cased text (members.rs candidates; lower-casing can lengthen a value, for example U+0130 becomes two characters). The schema's maxLength counts the value as sent: it refuses a whitespace-padded value the handler accepts and accepts a lower-case-expanding value the handler refuses."
           }
         ]
       },
@@ -1319,7 +1321,7 @@
               "maxLength": 200,
               "pattern": "^\\s*(?:[^\\s\\u0000-\\u001f\\u007f-\\u009f](?:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?)?\\s*$"
             },
-            "description": "Trimmed name or email search of at most 200 characters (counted after trimming) without control characters; an empty trimmed value is ignored."
+            "description": "Name or email search. The handler trims the value, ignores an empty result, and refuses control characters and more than 200 characters COUNTED AFTER TRIMMING (members.rs MemberQuery::bounds). The schema's maxLength counts the value as sent, so it refuses a whitespace-padded value of more than 200 characters that the handler accepts."
           }
         ]
       },
@@ -2633,7 +2635,7 @@
     "POST /api/v1/platform/oidc/group-mappings/{id}/preview": {
       "access": "PlatformWrite",
       "operation": {
-        "description": "Browser-session Admin only. Empty object or delete:true previews deletion; otherwise partial PATCH merge (omission keeps, explicit null clears nullable fields). Returns observation digest, immediate revocations and net effects, without authorizing a commit.",
+        "description": "Browser-session Admin only. A body with delete:true, an empty object or {\"delete\":false} previews deletion (is_delete = delete || no mapping field); otherwise it is a partial PATCH merge (omission keeps, explicit null clears nullable fields). With delete:true other mapping fields are ignored. Returns observation digest, immediate revocations and net effects, without authorizing a commit.",
         "responses": {
           "200": {
             "description": "Successful handler representation",
@@ -3358,7 +3360,7 @@
               "maxLength": 200,
               "pattern": "^\\s*(?:[^\\s\\u0000-\\u001f\\u007f-\\u009f](?:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?)?\\s*$"
             },
-            "description": "Trimmed name or email search of at most 200 characters (counted after trimming) without control characters; an empty trimmed value is ignored."
+            "description": "Name or email search. The handler trims the value, ignores an empty result, and refuses control characters and more than 200 characters COUNTED AFTER TRIMMING (members.rs MemberQuery::bounds). The schema's maxLength counts the value as sent, so it refuses a whitespace-padded value of more than 200 characters that the handler accepts."
           }
         ]
       },
@@ -3557,7 +3559,7 @@
               "pattern": "^\\s*[^\\s\\u0000-\\u001f\\u007f-\\u009f](?:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?\\s*$"
             },
             "required": true,
-            "description": "Trimmed nonempty email fragment of at most 200 characters (counted after trimming) without control characters; at most 20 active, entitled nonmembers."
+            "description": "Email fragment; at most 20 active, entitled nonmembers are returned. The handler trims and LOWER-CASES the value, then refuses an empty result, control characters and more than 200 characters of the trimmed, lower-cased text (members.rs candidates; lower-casing can lengthen a value, for example U+0130 becomes two characters). The schema's maxLength counts the value as sent: it refuses a whitespace-padded value the handler accepts and accepts a lower-case-expanding value the handler refuses."
           }
         ]
       },
@@ -3567,7 +3569,7 @@
     "GET /api/v1/workspaces/{ws}/sessions": {
       "access": "WorkspaceMember",
       "operation": {
-        "description": "Inference sessions, not browser devices. Shared members see only their own human-key activity; workspace admins/owners see workspace-wide activity. Foreign/personal details hidden with 404; platform authority alone never grants detail access. Counts and money strings preserve unknown usage as null. Dates are half-open UTC [start_date,end_date), default last 30 days and tomorrow end; at most 93 days. The detail route rejects paging and session_id query fields.",
+        "description": "Inference sessions, not browser devices. Shared members see only their own human-key activity; workspace admins/owners see workspace-wide activity. A personal workspace that is not yours, and an unknown workspace, are 404. A SHARED workspace you do not belong to is 403, even for a Platform Admin or Auditor (resources.rs detail_access), so platform authority alone never grants detail access. Inside a workspace you belong to, a session that is not visible to you is 404, and so is a session label that is not a valid client session id. Counts and money strings preserve unknown usage as null. Dates are half-open UTC [start_date,end_date), default last 30 days and tomorrow end; at most 93 days. The detail route rejects paging and session_id query fields.",
         "responses": {
           "200": {
             "description": "Successful handler representation",
@@ -3635,7 +3637,7 @@
               "maxLength": 200,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             },
-            "description": "Public model name: 1 to 200 bytes (the schema counts characters), no control characters."
+            "description": "Public model name: 1 to 200 UTF-8 bytes (logs.rs filters counts bytes, without trimming), no control characters. The schema's maxLength counts characters, so a multibyte name of at most 200 characters can exceed the handler's limit."
           },
           {
             "name": "status",
@@ -3712,7 +3714,7 @@
               "type": "string",
               "pattern": "^-?[0-9]{1,19}_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}_(?:[0-9a-fA-F]{2}){1,512}$"
             },
-            "description": "Opaque next_cursor of the previous page: last-activity microseconds, workspace id and the hex-encoded session id."
+            "description": "Opaque: send only a next_cursor returned by a previous page of the same filters. Today it is '<last-activity microseconds since the epoch>_<workspace uuid>_<hex of the UTF-8 session id>'. The handler (logs.rs session_cursor) splits at the first two underscores, parses the first part as a signed 64-bit integer (a leading '+' is accepted) that must be a representable timestamp, parses the second with uuid::Uuid::parse_str (which also accepts the simple, braced and URN spellings), and requires an even-length hex third part of at most 1024 hex characters that decodes to a valid session id; anything else is 400. The schema pattern admits only the form the gateway emits (hyphenated uuid, no '+', at most 19 digits) and cannot check the 64-bit or timestamp range or the decoded session id."
           },
           {
             "name": "limit",
@@ -3732,7 +3734,7 @@
     "GET /api/v1/workspaces/{ws}/sessions/{session}": {
       "access": "WorkspaceMember",
       "operation": {
-        "description": "Inference sessions, not browser devices. Shared members see only their own human-key activity; workspace admins/owners see workspace-wide activity. Foreign/personal details hidden with 404; platform authority alone never grants detail access. Counts and money strings preserve unknown usage as null. Dates are half-open UTC [start_date,end_date), default last 30 days and tomorrow end; at most 93 days. The detail route rejects paging and session_id query fields.",
+        "description": "Inference sessions, not browser devices. Shared members see only their own human-key activity; workspace admins/owners see workspace-wide activity. A personal workspace that is not yours, and an unknown workspace, are 404. A SHARED workspace you do not belong to is 403, even for a Platform Admin or Auditor (resources.rs detail_access), so platform authority alone never grants detail access. Inside a workspace you belong to, a session that is not visible to you is 404, and so is a session label that is not a valid client session id. Counts and money strings preserve unknown usage as null. Dates are half-open UTC [start_date,end_date), default last 30 days and tomorrow end; at most 93 days. The detail route rejects paging and session_id query fields.",
         "responses": {
           "200": {
             "description": "Successful handler representation",
@@ -3800,7 +3802,7 @@
               "maxLength": 200,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             },
-            "description": "Public model name: 1 to 200 bytes (the schema counts characters), no control characters."
+            "description": "Public model name: 1 to 200 UTF-8 bytes (logs.rs filters counts bytes, without trimming), no control characters. The schema's maxLength counts characters, so a multibyte name of at most 200 characters can exceed the handler's limit."
           },
           {
             "name": "status",

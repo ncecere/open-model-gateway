@@ -1601,7 +1601,10 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             None,
         )
         .await;
-    assert_eq!(detail["session_id"], "contract-session");
+    assert!(
+        detail["session_id"] == "contract-session",
+        "the detail answers a different session"
+    );
 
     // Platform subject exports are distinct, closed privacy projections.
     let export = c
@@ -2190,7 +2193,10 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         "/api/v1/platform/oidc/group-mappings/{id}",
         &admin,
         format!("/api/v1/platform/oidc/group-mappings/{vector_mapping}"),
-        json!({"enabled":true})
+        // Every mapping field, so each optional field's constraints run; the
+        // merge is then fully determined by the body, whatever an accepted
+        // vector stored before.
+        json!({"issuer":ISSUER,"group_value":"vector-group","target_kind":"platform","platform_role":"user","workspace_id":null,"workspace_role":null,"enabled":true})
     );
     body!(
         "POST /platform/oidc/group-mappings/{id}/preview",
@@ -2198,8 +2204,510 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         "/api/v1/platform/oidc/group-mappings/{id}/preview",
         &admin,
         format!("/api/v1/platform/oidc/group-mappings/{vector_mapping}/preview"),
-        json!({"enabled":true,"delete":false})
+        json!({"issuer":ISSUER,"group_value":"vector-group","target_kind":"platform","platform_role":"user","workspace_id":null,"workspace_role":null,"enabled":true,"delete":false})
     );
+
+    // Handler-derived probes the derived vectors cannot generate. Each pins the
+    // schema's verdict AND the handler's verdict on the same input, so every
+    // documented divergence (a byte limit against a character limit, trimming,
+    // lower-casing, the stored row deciding a merge) stays visible.
+    let probe_mapping = create_mapping_row(
+        c,
+        &admin,
+        json!({"issuer":ISSUER,"group_value":"probe-group","target_kind":"platform","platform_role":"user","workspace_id":null,"workspace_role":null,"enabled":true}),
+    )
+    .await;
+    let probe_path = format!("/api/v1/platform/oidc/group-mappings/{probe_mapping}");
+    let probe_preview = format!("{probe_path}/preview");
+    let mappings = "/api/v1/platform/oidc/group-mappings";
+    let platform_with = |issuer: &str, group: &str| json!({"issuer":issuer,"group_value":group,"target_kind":"platform","platform_role":"user","workspace_id":null,"workspace_role":null,"enabled":true});
+    let development = std::env::var("GATEWAY_ENV").as_deref() == Ok("development");
+    c.guarded("issuer probes", async {
+        let long_path = format!("https://issuer.example.test/{}", "\u{e9}".repeat(1011));
+        let exact_path = format!("https://issuer.example.test/{}", "\u{e9}".repeat(1010));
+        // (what, issuer, schema accepts, handler accepts)
+        let probes: Vec<(&str, &str, bool, bool)> = vec![
+            (
+                "upper-case scheme",
+                "HTTPS://issuer.example.test",
+                true,
+                true,
+            ),
+            ("port zero", "https://issuer.example.test:0", true, true),
+            ("empty port", "https://issuer.example.test:", true, true),
+            (
+                "highest port",
+                "https://issuer.example.test:65535",
+                true,
+                true,
+            ),
+            (
+                "port above the highest",
+                "https://issuer.example.test:65536",
+                false,
+                false,
+            ),
+            (
+                "five-digit port above the highest",
+                "https://issuer.example.test:99999",
+                false,
+                false,
+            ),
+            (
+                "port with leading zeros",
+                "https://issuer.example.test:000080",
+                false,
+                true,
+            ),
+            (
+                "percent sign in the host",
+                "https://iss%er.example.test",
+                false,
+                false,
+            ),
+            (
+                "percent-encoded host character",
+                "https://iss%75er.example.test",
+                false,
+                true,
+            ),
+            (
+                "angle bracket in the host",
+                "https://iss<er.example.test",
+                false,
+                false,
+            ),
+            (
+                "caret in the host",
+                "https://iss^er.example.test",
+                false,
+                false,
+            ),
+            (
+                "pipe in the host",
+                "https://iss|er.example.test",
+                false,
+                false,
+            ),
+            (
+                "backslash ends the host",
+                "https://iss\\er.example.test",
+                false,
+                true,
+            ),
+            (
+                "backslash path separator",
+                "https://issuer.example.test\\path",
+                false,
+                true,
+            ),
+            (
+                "scheme without slashes",
+                "https:issuer.example.test",
+                false,
+                true,
+            ),
+            (
+                "scheme with one slash",
+                "https:/issuer.example.test",
+                false,
+                true,
+            ),
+            (
+                "scheme with three slashes",
+                "https:///issuer.example.test",
+                false,
+                true,
+            ),
+            (
+                "leading whitespace",
+                " https://issuer.example.test",
+                false,
+                true,
+            ),
+            (
+                "trailing whitespace",
+                "https://issuer.example.test ",
+                false,
+                true,
+            ),
+            (
+                "tab inside the host",
+                "https://iss\tuer.example.test",
+                false,
+                true,
+            ),
+            (
+                "space in the path",
+                "https://issuer.example.test/a b",
+                false,
+                true,
+            ),
+            (
+                "numeric host outside the IPv4 range",
+                "https://256.1.1.1",
+                true,
+                false,
+            ),
+            (
+                "bracketed host that is not IPv6",
+                "https://[:::]",
+                true,
+                false,
+            ),
+            ("empty query", "https://issuer.example.test?", false, false),
+            (
+                "empty fragment",
+                "https://issuer.example.test#",
+                false,
+                false,
+            ),
+            (
+                "user info",
+                "https://user@issuer.example.test",
+                false,
+                false,
+            ),
+            (
+                "http outside development",
+                "http://localhost",
+                false,
+                development,
+            ),
+            (
+                "multibyte path above 2048 bytes",
+                long_path.as_str(),
+                true,
+                false,
+            ),
+            (
+                "multibyte path of exactly 2048 bytes",
+                exact_path.as_str(),
+                true,
+                true,
+            ),
+        ];
+        for (what, issuer, schema, handler) in probes {
+            c.pin_body(
+                &admin,
+                "POST",
+                &format!("{mappings}/preview"),
+                what,
+                platform_with(issuer, "probe-group"),
+                schema,
+                handler,
+            )
+            .await;
+        }
+    })
+    .await;
+    c.guarded("group value probes", async {
+        let wide = "\u{20ac}".repeat(171);
+        let exact = "\u{20ac}".repeat(170);
+        for (method, path) in [
+            ("POST", mappings.to_owned()),
+            ("POST", format!("{mappings}/preview")),
+        ] {
+            c.pin_body(
+                &admin,
+                method,
+                &path,
+                "group value above 512 bytes",
+                platform_with(ISSUER, &wide),
+                true,
+                false,
+            )
+            .await;
+        }
+        c.pin_body(
+            &admin,
+            "POST",
+            &format!("{mappings}/preview"),
+            "group value of exactly 510 bytes",
+            platform_with(ISSUER, &exact),
+            true,
+            true,
+        )
+        .await;
+        c.pin_body(
+            &admin,
+            "PATCH",
+            &probe_path,
+            "patched group value above 512 bytes",
+            json!({"group_value":wide}),
+            true,
+            false,
+        )
+        .await;
+        c.pin_body(
+            &admin,
+            "POST",
+            &probe_preview,
+            "previewed group value above 512 bytes",
+            json!({"group_value":wide}),
+            true,
+            false,
+        )
+        .await;
+    })
+    .await;
+    c.guarded("mapping variant probes", async {
+        let workspace = |kind: &str, role: Value, id: Value, ws_role: Value| {
+            json!({"issuer":ISSUER,"group_value":"probe-group","target_kind":kind,"platform_role":role,"workspace_id":id,"workspace_role":ws_role,"enabled":true})
+        };
+        let new_preview = format!("{mappings}/preview");
+        let wid = json!(vector_ws);
+        for (what, body, schema, handler) in [
+            ("workspace kind with a platform role", workspace("workspace", json!("user"), wid.clone(), json!("member")), false, false),
+            ("platform kind with workspace fields", workspace("platform", json!("user"), wid.clone(), json!("member")), false, false),
+            ("workspace kind without a workspace role", workspace("workspace", Value::Null, wid.clone(), Value::Null), false, false),
+            ("platform kind without a platform role", workspace("platform", Value::Null, Value::Null, Value::Null), false, false),
+            ("workspace kind with its fields", workspace("workspace", Value::Null, wid.clone(), json!("member")), true, true),
+        ] {
+            c.pin_body(&admin, "POST", &new_preview, what, body, schema, handler).await;
+        }
+        // The merge onto the stored platform mapping: first as a stateless preview,
+        // then as the real PATCH (the last accepted body switches the row).
+        let patches: Vec<(&str, Value, bool, bool)> = vec![
+            ("workspace kind keeping the platform role", json!({"target_kind":"workspace","platform_role":"user"}), false, false),
+            ("workspace kind with every field and a platform role", json!({"target_kind":"workspace","platform_role":"user","workspace_id":vector_ws,"workspace_role":"member"}), false, false),
+            ("platform kind with a workspace id", json!({"target_kind":"platform","workspace_id":vector_ws}), false, false),
+            ("platform kind with a workspace role", json!({"target_kind":"platform","workspace_role":"member"}), false, false),
+            ("platform kind with a null platform role", json!({"target_kind":"platform","platform_role":null}), false, false),
+            ("workspace kind with a null workspace id", json!({"target_kind":"workspace","platform_role":null,"workspace_id":null,"workspace_role":"member"}), false, false),
+            ("workspace kind with a null workspace role", json!({"target_kind":"workspace","platform_role":null,"workspace_id":vector_ws,"workspace_role":null}), false, false),
+            // Without target_kind the stored row decides, which the schema cannot see.
+            ("workspace id without a kind on a platform mapping", json!({"workspace_id":vector_ws}), true, false),
+            ("null platform role without a kind on a platform mapping", json!({"platform_role":null}), true, false),
+            ("platform kind restated", json!({"target_kind":"platform","platform_role":"auditor","workspace_id":null,"workspace_role":null}), true, true),
+            ("switch to a workspace mapping", json!({"target_kind":"workspace","platform_role":null,"workspace_id":vector_ws,"workspace_role":"admin"}), true, true),
+        ];
+        for (what, body, schema, handler) in &patches {
+            c.pin_body(&admin, "POST", &probe_preview, what, body.clone(), *schema, *handler).await;
+        }
+        for (what, body, schema, handler) in &patches {
+            c.pin_body(&admin, "PATCH", &probe_path, what, body.clone(), *schema, *handler).await;
+        }
+    })
+    .await;
+    c.guarded("delete preview probes", async {
+        let full = json!({"issuer":ISSUER,"group_value":"probe-group","target_kind":"workspace","platform_role":null,"workspace_id":vector_ws,"workspace_role":"member","enabled":true});
+        let mut with_delete = full.clone();
+        with_delete["delete"] = json!(true);
+        // `is_delete = delete || no mapping field`; with delete:true the other
+        // fields are ignored, which the schema (typing them) cannot express.
+        for (what, body, schema, handler) in [
+            ("empty body", json!({}), true, true),
+            ("delete flag false alone", json!({"delete":false}), true, true),
+            ("delete flag true alone", json!({"delete":true}), true, true),
+            ("delete flag true with every field", with_delete, true, true),
+            ("delete flag true with ignored invalid fields", json!({"delete":true,"enabled":"x","issuer":1}), false, true),
+            ("delete flag true with an ignored cross-field conflict", json!({"delete":true,"target_kind":"platform","workspace_id":vector_ws}), false, true),
+            ("delete flag true with an unknown key", json!({"delete":true,"unexpected_configuration":true}), false, false),
+            ("delete flag false with an invalid field", json!({"delete":false,"issuer":1}), false, false),
+        ] {
+            c.pin_body(&admin, "POST", &probe_preview, what, body, schema, handler).await;
+        }
+    })
+    .await;
+    // Email: the handler counts UTF-8 bytes of the trimmed, lower-cased text.
+    c.guarded("email probes", async {
+        let wide = format!("{}@t.test", "\u{e9}".repeat(157));
+        let expanding = format!("{}@{}", "\u{130}".repeat(100), "a".repeat(20));
+        let targets: Vec<(&str, &str, String, Box<dyn Fn(&str) -> Value>)> = vec![
+            (
+                "user create",
+                "POST",
+                "/api/v1/platform/users".to_owned(),
+                Box::new(|e: &str| json!({"email":e,"platform_role":"user"})),
+            ),
+            (
+                "user update",
+                "PATCH",
+                format!("/api/v1/platform/users/{}", vector_user.user_id),
+                Box::new(|e: &str| json!({"email":e})),
+            ),
+            (
+                "invitation",
+                "POST",
+                format!("{vector_path}/invitations"),
+                Box::new(|e: &str| json!({"email":e,"role":"member"})),
+            ),
+        ];
+        for (i, (name, method, path, body)) in targets.iter().enumerate() {
+            let fill = ["p", "q", "r"][i];
+            let padded = format!("  {}@t.test  ", fill.repeat(313));
+            let who = if *name == "invitation" {
+                &owner
+            } else {
+                &admin
+            };
+            c.pin_body(
+                who,
+                method,
+                path,
+                &format!("{name} email padded beyond 320 characters"),
+                body(&padded),
+                false,
+                true,
+            )
+            .await;
+            c.pin_body(
+                who,
+                method,
+                path,
+                &format!("{name} email above 320 bytes in fewer characters"),
+                body(&wide),
+                true,
+                false,
+            )
+            .await;
+            c.pin_body(
+                who,
+                method,
+                path,
+                &format!("{name} email lengthened by lower-casing"),
+                body(&expanding),
+                true,
+                false,
+            )
+            .await;
+        }
+    })
+    .await;
+    // Workspace names: UTF-8 bytes of the value as sent.
+    c.guarded("workspace name probes", async {
+        let owner_id = f.owner.user_id;
+        let wide = "\u{20ac}".repeat(41);
+        let targets: Vec<(&str, &str, String, &Browser, Value)> = vec![
+            (
+                "create",
+                "POST",
+                "/api/v1/platform/workspaces".to_owned(),
+                &admin,
+                json!({"name":wide,"kind":"project","owner_user_id":owner_id}),
+            ),
+            (
+                "platform rename",
+                "PATCH",
+                vector_platform.clone(),
+                &admin,
+                json!({"name":wide}),
+            ),
+            (
+                "own rename",
+                "PATCH",
+                vector_path.clone(),
+                &owner,
+                json!({"name":wide}),
+            ),
+        ];
+        for (name, method, path, who, body) in targets {
+            c.pin_body(
+                who,
+                method,
+                &path,
+                &format!("workspace {name} above 120 bytes in fewer characters"),
+                body,
+                true,
+                false,
+            )
+            .await;
+        }
+    })
+    .await;
+    // Query values: bytes against characters, trimming and lower-casing.
+    c.guarded("query probes", async {
+        let padded = format!("{}  ", "a".repeat(200));
+        let expanding = "\u{130}".repeat(150);
+        for (who, template, path) in [
+            (
+                &auditor,
+                "/api/v1/platform/workspaces/{ws}/members",
+                format!("{platform}/members"),
+            ),
+            (
+                &owner,
+                "/api/v1/workspaces/{ws}/members",
+                format!("{own}/members"),
+            ),
+        ] {
+            c.pin_query(
+                who,
+                template,
+                &path,
+                "members q padded beyond 200 characters",
+                &[("q", padded.as_str())],
+                false,
+                true,
+            )
+            .await;
+        }
+        for (who, template, path) in [
+            (
+                &auditor,
+                "/api/v1/platform/workspaces/{ws}/member-candidates",
+                format!("{platform}/member-candidates"),
+            ),
+            (
+                &owner,
+                "/api/v1/workspaces/{ws}/member-candidates",
+                format!("{own}/member-candidates"),
+            ),
+        ] {
+            c.pin_query(
+                who,
+                template,
+                &path,
+                "candidates q padded beyond 200 characters",
+                &[("q", padded.as_str())],
+                false,
+                true,
+            )
+            .await;
+            c.pin_query(
+                who,
+                template,
+                &path,
+                "candidates q lengthened by lower-casing",
+                &[("q", expanding.as_str())],
+                true,
+                false,
+            )
+            .await;
+        }
+        let wide = "\u{e9}".repeat(101);
+        let exact = "\u{e9}".repeat(100);
+        for (template, path) in [
+            ("/api/v1/workspaces/{ws}/sessions", session_path.clone()),
+            (
+                "/api/v1/workspaces/{ws}/sessions/{session}",
+                detail_path.clone(),
+            ),
+        ] {
+            c.pin_query(
+                &owner,
+                template,
+                &path,
+                "model above 200 bytes in fewer characters",
+                &[("model", wide.as_str())],
+                true,
+                false,
+            )
+            .await;
+            c.pin_query(
+                &owner,
+                template,
+                &path,
+                "model of exactly 200 bytes",
+                &[("model", exact.as_str())],
+                true,
+                true,
+            )
+            .await;
+        }
+    })
+    .await;
 
     let mut failures = c.failures.borrow().clone();
     // The coverage gates last: they judge every positive and vector set above.
