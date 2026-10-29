@@ -348,7 +348,10 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                 h.insert("x-content-type-options", "nosniff".parse().unwrap());
                 h.insert("x-export-limit", "1000".parse().unwrap());
                 h.insert("x-export-rows", "1".parse().unwrap());
-                h.insert("x-export-offset", "0".parse().unwrap());
+                // The scheduled CSV (scheduled_report_csv.rs) has no offset header.
+                if !scheduled {
+                    h.insert("x-export-offset", "0".parse().unwrap());
+                }
                 h.insert(
                     "content-disposition",
                     if scheduled {

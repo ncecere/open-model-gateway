@@ -1859,6 +1859,29 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
     .await;
     // HTTP boundary vectors: every query parameter and request body, compared
     // with the real handler over HTTP. Refusals are collected, not fatal.
+    let new_schedule = |recipient: Uuid| {
+        json!({"cadence":"weekly","timezone":"UTC","delivery_time":"00:01","recipient_user_ids":[recipient]})
+    };
+    let platform_schedule = id(&observe(
+        &mut seen,
+        &client,
+        &base,
+        &admin,
+        "POST",
+        "/api/v1/platform/report-schedules",
+        Some(new_schedule(f.admin.user_id)),
+    )
+    .await);
+    let workspace_schedule = id(&observe(
+        &mut seen,
+        &client,
+        &base,
+        &owner,
+        "POST",
+        &format!("{wsbase}/report-schedules"),
+        Some(new_schedule(f.owner.user_id)),
+    )
+    .await);
     let vx = vectors::Vx {
         client: &client,
         base: &base,
@@ -1880,6 +1903,8 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
         connection,
         import: import_first,
         mapping: mapping_revised,
+        platform_schedule,
+        workspace_schedule,
         failures: Default::default(),
     };
     vx.queries(&mut seen).await;

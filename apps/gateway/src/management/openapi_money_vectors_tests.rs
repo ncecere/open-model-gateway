@@ -25,6 +25,8 @@ pub(super) struct Vx<'a> {
     pub connection: Uuid,
     pub import: Uuid,
     pub mapping: Uuid,
+    pub platform_schedule: Uuid,
+    pub workspace_schedule: Uuid,
     pub failures: std::cell::RefCell<Vec<String>>,
 }
 
@@ -276,29 +278,23 @@ impl Vx<'_> {
             schedules("10"),
         )
         .await;
-        for (actor, template, scope) in [
+        for (actor, template, path) in [
             (
                 self.admin,
                 "/api/v1/platform/report-schedules/{id}/runs",
-                "/api/v1/platform".to_owned(),
+                format!(
+                    "/api/v1/platform/report-schedules/{}/runs",
+                    self.platform_schedule
+                ),
             ),
             (
                 self.owner,
                 "/api/v1/workspaces/{ws}/report-schedules/{id}/runs",
-                wsbase.clone(),
+                format!("{wsbase}/report-schedules/{}/runs", self.workspace_schedule),
             ),
         ] {
-            // Any schedule of the scope: a missing one is a hidden 404, which
-            // is past input validation.
-            let path = format!("{scope}/report-schedules/{}/runs", Uuid::nil());
-            self.query(
-                seen,
-                actor,
-                template,
-                &path,
-                vec![("limit", "10".to_owned())],
-            )
-            .await;
+            self.query(seen, actor, template, &path, vec![("limit", "10".to_owned())])
+                .await;
         }
         let imports = "/api/v1/platform/provider-cost-imports";
         self.query(seen, self.auditor, imports, imports, page())
@@ -477,15 +473,69 @@ impl Vx<'_> {
         upload["exported_at"] = json!(format!("{}T00:00:00Z", day + chrono::TimeDelta::days(1)));
         upload["pages"][0]["data"][0]["starting_at"] = upload["request"]["starting_at"].clone();
         upload["pages"][0]["data"][0]["ending_at"] = upload["request"]["ending_at"].clone();
-        self.body(seen, self.admin, "POST", imports, imports, upload)
-            .await;
+        // A chain of pages or buckets must be contiguous and linked by
+        // has_more/next_page, which per-element schemas cannot state: a
+        // schema-valid repetition (2..=31 elements) is refused by the parser.
+        self.guard(
+            imports,
+            body_vectors_http(seen, "POST", imports, upload, async |input: Value| {
+                let captured = send(
+                    self.client,
+                    self.base,
+                    Some(self.admin),
+                    "POST",
+                    imports,
+                    Some(input.clone()),
+                )
+                .await;
+                let chained = |v: &Value| v.as_array().is_some_and(|a| (2..=31).contains(&a.len()));
+                let chain = chained(&input["pages"])
+                    || input["pages"]
+                        .as_array()
+                        .is_some_and(|pages| pages.iter().any(|p| chained(&p["data"])));
+                if chain && captured.status == StatusCode::BAD_REQUEST {
+                    Probe::decided(captured, true)
+                } else {
+                    Probe::from(captured)
+                }
+            }),
+        )
         let mappings = "/api/v1/platform/provider-cost-mappings";
         let mut mapping = provider_cost_tests::mapping(self.connection, Some(self.team));
         mapping["account_id"] = json!("vector-account");
         mapping["bindings"][0]["effective_start"] = json!(format!("{day}T00:00:00Z"));
         mapping["bindings"][0]["effective_end"] =
             json!(format!("{}T00:00:00Z", day + chrono::TimeDelta::days(1)));
-        self.body(seen, self.admin, "POST", mappings, mappings, mapping)
+        // Bindings may not overlap in time or ownership, and a binding's
+        // provider models are unique: relations between elements that a schema
+        // cannot state, so a schema-valid repetition is refused.
+        self.guard(
+            mappings,
+            body_vectors_http(seen, "POST", mappings, mapping, async |input: Value| {
+                let captured = send(
+                    self.client,
+                    self.base,
+                    Some(self.admin),
+                    "POST",
+                    mappings,
+                    Some(input.clone()),
+                )
+                .await;
+                let repeated = input["bindings"].as_array().is_some_and(|bindings| {
+                    (2..=1000).contains(&bindings.len())
+                        || bindings.iter().any(|b| {
+                            b["model_mappings"]
+                                .as_array()
+                                .is_some_and(|m| (2..=100).contains(&m.len()))
+                        })
+                });
+                if repeated && captured.status == StatusCode::BAD_REQUEST {
+                    Probe::decided(captured, true)
+                } else {
+                    Probe::from(captured)
+                }
+            }),
+        )
             .await;
         let recon = "/api/v1/platform/provider-reconciliations";
         self.body(

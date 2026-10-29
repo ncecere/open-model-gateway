@@ -1268,7 +1268,10 @@
               ]
             },
             "evidence": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
             },
             "meter_usage": {
               "anyOf": [
@@ -1345,7 +1348,10 @@
               ]
             },
             {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
             },
             {
               "anyOf": [
@@ -1434,10 +1440,16 @@
           "type": "object",
           "properties": {
             "name": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
             },
             "code": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
             }
           },
           "required": [
@@ -1450,10 +1462,16 @@
           "type": "array",
           "prefixItems": [
             {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
             },
             {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$"
             }
           ],
           "items": false,
@@ -4069,19 +4087,30 @@
           "type": "object",
           "properties": {
             "starting_at": {
-              "type": "string"
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 40
             },
             "ending_at": {
-              "type": "string"
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 40
             },
             "bucket_width": {
-              "type": "string"
+              "const": "1d"
             },
             "group_by": {
               "type": "array",
               "items": {
-                "type": "string"
-              }
+                "type": "string",
+                "enum": [
+                  "workspace_id",
+                  "description"
+                ]
+              },
+              "minItems": 2,
+              "maxItems": 2,
+              "uniqueItems": true
             },
             "limit": {
               "type": "integer",
@@ -4102,19 +4131,30 @@
           "type": "array",
           "prefixItems": [
             {
-              "type": "string"
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 40
             },
             {
-              "type": "string"
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 40
             },
             {
-              "type": "string"
+              "const": "1d"
             },
             {
               "type": "array",
               "items": {
-                "type": "string"
-              }
+                "type": "string",
+                "enum": [
+                  "workspace_id",
+                  "description"
+                ]
+              },
+              "minItems": 2,
+              "maxItems": 2,
+              "uniqueItems": true
             },
             {
               "type": "integer",
@@ -4256,7 +4296,10 @@
             "workspace_id": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
                 },
                 {
                   "type": "null"
@@ -4266,7 +4309,10 @@
             "description": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
                 },
                 {
                   "type": "null"
@@ -4276,7 +4322,10 @@
             "model": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
                 },
                 {
                   "type": "null"
@@ -4286,7 +4335,10 @@
             "service_tier": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
                 },
                 {
                   "type": "null"
@@ -4296,7 +4348,10 @@
             "context_window": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
                 },
                 {
                   "type": "null"
@@ -4306,7 +4361,10 @@
             "cost_type": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
                 },
                 {
                   "type": "null"
@@ -4316,7 +4374,10 @@
             "token_type": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
                 },
                 {
                   "type": "null"
@@ -4326,7 +4387,10 @@
             "inference_geo": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
                 },
                 {
                   "type": "null"
@@ -4336,7 +4400,10 @@
             "speed": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
                 },
                 {
                   "type": "null"
@@ -4365,7 +4432,10 @@
             {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
                 },
                 {
                   "type": "null"
@@ -4375,7 +4445,10 @@
             {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
                 },
                 {
                   "type": "null"
@@ -4385,7 +4458,10 @@
             {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
                 },
                 {
                   "type": "null"
@@ -4395,7 +4471,10 @@
             {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
                 },
                 {
                   "type": "null"
@@ -4405,7 +4484,10 @@
             {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
                 },
                 {
                   "type": "null"
@@ -4415,7 +4497,10 @@
             {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
                 },
                 {
                   "type": "null"
@@ -4425,7 +4510,10 @@
             {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
                 },
                 {
                   "type": "null"
@@ -4435,7 +4523,10 @@
             {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
                 },
                 {
                   "type": "null"
@@ -4445,7 +4536,10 @@
             {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
                 },
                 {
                   "type": "null"
@@ -4465,10 +4559,14 @@
           "type": "object",
           "properties": {
             "starting_at": {
-              "type": "string"
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 40
             },
             "ending_at": {
-              "type": "string"
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 40
             },
             "results": {
               "type": "array",
@@ -4488,10 +4586,14 @@
           "type": "array",
           "prefixItems": [
             {
-              "type": "string"
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 40
             },
             {
-              "type": "string"
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 40
             },
             {
               "type": "array",
@@ -4515,7 +4617,9 @@
               "type": "array",
               "items": {
                 "$ref": "#/components/schemas/MoneyProviderBucket"
-              }
+              },
+              "minItems": 1,
+              "maxItems": 31
             },
             "has_more": {
               "type": "boolean"
@@ -4523,7 +4627,10 @@
             "next_page": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
                 },
                 {
                   "type": "null"
@@ -4545,7 +4652,9 @@
               "type": "array",
               "items": {
                 "$ref": "#/components/schemas/MoneyProviderBucket"
-              }
+              },
+              "minItems": 1,
+              "maxItems": 31
             },
             {
               "type": "boolean"
@@ -4553,7 +4662,10 @@
             {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
                 },
                 {
                   "type": "null"
@@ -4573,13 +4685,21 @@
           "type": "object",
           "properties": {
             "account_id": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             },
             "evidence_reference": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             },
             "exported_at": {
-              "type": "string"
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 40
             },
             "supersedes": {
               "anyOf": [
@@ -4599,7 +4719,9 @@
               "type": "array",
               "items": {
                 "$ref": "#/components/schemas/MoneyProviderPage"
-              }
+              },
+              "minItems": 1,
+              "maxItems": 31
             }
           },
           "required": [
@@ -4615,13 +4737,21 @@
           "type": "array",
           "prefixItems": [
             {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             },
             {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             },
             {
-              "type": "string"
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 40
             },
             {
               "anyOf": [
@@ -4641,7 +4771,9 @@
               "type": "array",
               "items": {
                 "$ref": "#/components/schemas/MoneyProviderPage"
-              }
+              },
+              "minItems": 1,
+              "maxItems": 31
             }
           ],
           "items": false,
@@ -4656,10 +4788,16 @@
           "type": "object",
           "properties": {
             "provider_model": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             },
             "upstream_model": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             }
           },
           "required": [
@@ -4672,10 +4810,16 @@
           "type": "array",
           "prefixItems": [
             {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             },
             {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             }
           ],
           "items": false,
@@ -4692,7 +4836,10 @@
             "provider_workspace_id": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
                 },
                 {
                   "type": "null"
@@ -4740,16 +4887,21 @@
               "type": "boolean"
             },
             "attested": {
-              "type": "boolean"
+              "const": true,
+              "description": "Only attested historical scopes are accepted (create_mapping refuses attested=false)."
             },
             "evidence_reference": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             },
             "model_mappings": {
               "type": "array",
               "items": {
                 "$ref": "#/components/schemas/MoneyProviderModelMapping"
-              }
+              },
+              "maxItems": 100
             }
           },
           "required": [
@@ -4770,7 +4922,10 @@
             {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
                 },
                 {
                   "type": "null"
@@ -4818,16 +4973,21 @@
               "type": "boolean"
             },
             {
-              "type": "boolean"
+              "const": true,
+              "description": "Only attested historical scopes are accepted (create_mapping refuses attested=false)."
             },
             {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             },
             {
               "type": "array",
               "items": {
                 "$ref": "#/components/schemas/MoneyProviderModelMapping"
-              }
+              },
+              "maxItems": 100
             }
           ],
           "items": false,
@@ -4937,7 +5097,10 @@
           "type": "object",
           "properties": {
             "account_id": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             },
             "supersedes": {
               "anyOf": [
@@ -4951,13 +5114,17 @@
               ]
             },
             "evidence_reference": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             },
             "bindings": {
               "type": "array",
               "items": {
                 "$ref": "#/components/schemas/MoneyProviderBinding"
-              }
+              },
+              "maxItems": 1000
             }
           },
           "required": [
@@ -4971,7 +5138,10 @@
           "type": "array",
           "prefixItems": [
             {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             },
             {
               "anyOf": [
@@ -4985,13 +5155,17 @@
               ]
             },
             {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             },
             {
               "type": "array",
               "items": {
                 "$ref": "#/components/schemas/MoneyProviderBinding"
-              }
+              },
+              "maxItems": 1000
             }
           ],
           "items": false,
@@ -6266,7 +6440,8 @@
             }
           },
           "required": [],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "minProperties": 1
         },
         {
           "type": "array",
@@ -6308,7 +6483,7 @@
             }
           ],
           "items": false,
-          "minItems": 0,
+          "minItems": 1,
           "maxItems": 5
         }
       ]
@@ -7106,7 +7281,8 @@
             }
           },
           "required": [],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "minProperties": 1
         },
         {
           "type": "array",
@@ -7148,7 +7324,7 @@
             }
           ],
           "items": false,
-          "minItems": 0,
+          "minItems": 1,
           "maxItems": 5
         }
       ]
