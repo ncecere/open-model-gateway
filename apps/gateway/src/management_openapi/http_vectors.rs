@@ -498,13 +498,13 @@ pub(super) async fn run_query<C>(
         }
         let probe = send(&context, encode(&pairs)).await;
         same_operation(&probe.captured, method, template)?;
-        let handler = match probe.verdict() {
-            Ok(h) => h,
-            Err(e) => { eprintln!("SURVEY {method} {template}: {kind} vector at {location}: {e:#}"); continue }
-        };
+        let handler = probe
+            .verdict()
+            .with_context(|| format!("{method} {template}: {kind} vector at {location}"))?;
         if handler != expected {
-            eprintln!("SURVEY {:#}", mismatch(method, template, kind, &location, expected, &probe, handler));
-            continue;
+            return Err(mismatch(
+                method, template, kind, &location, expected, &probe, handler,
+            ));
         }
         accepted_seen |= handler;
         exchanges.push(probe.captured);
@@ -756,13 +756,13 @@ pub(super) async fn run_body(
     for (kind, location, body, expected) in plan {
         let probe = send(body).await;
         same_operation(&probe.captured, method, template)?;
-        let handler = match probe.verdict() {
-            Ok(h) => h,
-            Err(e) => { eprintln!("SURVEY {method} {template}: {kind} vector at {location}: {e:#}"); continue }
-        };
+        let handler = probe
+            .verdict()
+            .with_context(|| format!("{method} {template}: {kind} vector at {location}"))?;
         if handler != expected {
-            eprintln!("SURVEY {:#}", mismatch(method, template, kind, &location, expected, &probe, handler));
-            continue;
+            return Err(mismatch(
+                method, template, kind, &location, expected, &probe, handler,
+            ));
         }
         accepted_seen |= handler;
         exchanges.push(probe.captured);
@@ -899,13 +899,19 @@ pub(super) async fn run_binary(
     for (kind, declared, bytes, expected) in plan {
         let probe = send(declared, bytes).await;
         same_operation(&probe.captured, method, template)?;
-        let handler = match probe.verdict() {
-            Ok(h) => h,
-            Err(e) => { eprintln!("SURVEY {method} {template}: {kind} raw: {e:#}"); continue }
-        };
+        let handler = probe
+            .verdict()
+            .with_context(|| format!("{method} {template}: {kind} raw body vector"))?;
         if handler != expected {
-            eprintln!("SURVEY {:#}", mismatch(method, template, kind, "(raw body)", expected, &probe, handler));
-            continue;
+            return Err(mismatch(
+                method,
+                template,
+                kind,
+                "(raw body)",
+                expected,
+                &probe,
+                handler,
+            ));
         }
         accepted_seen |= handler;
         exchanges.push(probe.captured);
