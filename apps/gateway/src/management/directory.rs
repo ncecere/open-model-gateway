@@ -1095,11 +1095,21 @@ struct CostCenterInput {
 #[cfg(test)]
 #[test]
 fn management_openapi_money_cost_center_request_vectors() {
+    // valid_name(): non-blank, bounded, no control characters (the schema states it).
+    struct Decoded;
+    impl<'de> Deserialize<'de> for Decoded {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            let b = CostCenterInput::deserialize(d)?;
+            (valid_name(&b.name) && valid_name(&b.code))
+                .then_some(Self)
+                .ok_or_else(|| serde::de::Error::custom("name"))
+        }
+    }
     for (method, path) in [
         ("POST", "/api/v1/platform/cost-centers"),
         ("PATCH", "/api/v1/platform/cost-centers/{id}"),
     ] {
-        super::openapi::requests::vectors::<CostCenterInput>(
+        super::openapi::requests::vectors::<Decoded>(
             method,
             path,
             json!({"name":"Finance","code":"FIN"}),

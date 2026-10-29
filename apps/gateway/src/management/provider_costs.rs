@@ -278,15 +278,59 @@ struct Reconcile {
 #[test]
 fn management_openapi_money_provider_request_vectors() {
     let mapping = json!({"account_id":"account","supersedes":null,"evidence_reference":"receipt:map","bindings":[{"provider_workspace_id":"provider-workspace","connection_id":Uuid::nil(),"deployment_id":Uuid::nil(),"workspace_id":Uuid::nil(),"effective_start":"2025-08-01T00:00:00Z","effective_end":"2025-08-02T00:00:00Z","exclusive":true,"non_omg_traffic":false,"attested":true,"evidence_reference":"receipt:binding","model_mappings":[{"provider_model":"provider-model","upstream_model":"upstream-model"}]}]});
-    super::openapi::requests::component_vectors::<Binding>(
+    // The schema states the per-element rules create_mapping() enforces:
+    // attested scopes, bounded text and an owner workspace for exclusive ones.
+    fn binding_ok(b: &Binding) -> bool {
+        b.attested
+            && bounded(&b.evidence_reference, 256)
+            && b.provider_workspace_id
+                .as_ref()
+                .is_none_or(|s| bounded(s, 4096))
+            && b.model_mappings.len() <= 100
+            && b.model_mappings
+                .iter()
+                .all(|m| bounded(&m.provider_model, 512) && bounded(&m.upstream_model, 512))
+            && !(b.exclusive && (b.non_omg_traffic || b.workspace_id.is_none()))
+    }
+    struct DecodedBinding;
+    impl<'de> Deserialize<'de> for DecodedBinding {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            let b = Binding::deserialize(d)?;
+            binding_ok(&b)
+                .then_some(Self)
+                .ok_or_else(|| serde::de::Error::custom("binding"))
+        }
+    }
+    struct DecodedModelMapping;
+    impl<'de> Deserialize<'de> for DecodedModelMapping {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            let m = ModelMapping::deserialize(d)?;
+            (bounded(&m.provider_model, 512) && bounded(&m.upstream_model, 512))
+                .then_some(Self)
+                .ok_or_else(|| serde::de::Error::custom("model mapping"))
+        }
+    }
+    struct DecodedMapping;
+    impl<'de> Deserialize<'de> for DecodedMapping {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            let m = Mapping::deserialize(d)?;
+            (bounded(&m.account_id, 200)
+                && bounded(&m.evidence_reference, 256)
+                && m.bindings.len() <= 1000
+                && m.bindings.iter().all(binding_ok))
+            .then_some(Self)
+            .ok_or_else(|| serde::de::Error::custom("mapping"))
+        }
+    }
+    super::openapi::requests::component_vectors::<DecodedBinding>(
         "MoneyProviderBinding",
         mapping["bindings"][0].clone(),
     );
-    super::openapi::requests::component_vectors::<ModelMapping>(
+    super::openapi::requests::component_vectors::<DecodedModelMapping>(
         "MoneyProviderModelMapping",
         mapping["bindings"][0]["model_mappings"][0].clone(),
     );
-    super::openapi::requests::vectors::<Mapping>(
+    super::openapi::requests::vectors::<DecodedMapping>(
         "POST",
         "/api/v1/platform/provider-cost-mappings",
         mapping,

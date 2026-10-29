@@ -642,6 +642,13 @@ fn management_openapi_money_reconcile_request_vectors() {
             let b = Reconcile::deserialize(d)?;
             money(&b.input_tokens, false).map_err(|e| serde::de::Error::custom(e.1))?;
             money(&b.output_tokens, false).map_err(|e| serde::de::Error::custom(e.1))?;
+            // resolve_usage: non-blank, at most 200 characters, no control characters.
+            if b.evidence.trim().is_empty()
+                || b.evidence.chars().count() > 200
+                || b.evidence.chars().any(char::is_control)
+            {
+                return Err(serde::de::Error::custom("evidence"));
+            }
             if let Some(v) = b.provider_cost_microusd {
                 money(&v, false).map_err(|e| serde::de::Error::custom(e.1))?;
             }
