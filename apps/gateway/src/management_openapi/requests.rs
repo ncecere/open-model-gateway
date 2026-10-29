@@ -30,7 +30,55 @@ impl<'de> serde::Deserializer<'de> for &Fields {
     }
 }
 
+/// Operations whose HANDLER refuses values serde accepts (documented value
+/// rules: length, alphabet, ranges, exactly-one-of). The schema carries those
+/// rules, so against serde alone it may be STRICTER, never looser. Each entry
+/// is a reviewed claim; `finish()` still demands executed HTTP boundary vectors
+/// for the operation, which compare the schema with the real handler exactly.
+pub(crate) const SEMANTIC_REFINEMENTS: &[(&str, &str, &str)] = &[
+    (
+        "POST",
+        "/api/v1/platform/legal-holds",
+        "exactly one of user_id or workspace_id is a UUID; the reference is a short code of at most 64 characters",
+    ),
+    (
+        "POST",
+        "/api/v1/platform/admin-tokens",
+        "name 1 to 120 characters, one to five distinct known scopes, 1 to 90 days, an allowlist of 1 to 32 distinct networks",
+    ),
+    (
+        "POST",
+        "/api/v1/workspaces/{ws}/keys",
+        "name, 1 to 365 days, positive rate limits within 32 bits, at most four distinct budget periods with positive amounts",
+    ),
+    (
+        "PUT",
+        "/api/v1/workspaces/{ws}/keys/{key}/policy",
+        "positive 32-bit limits; no storage or issuance quota on a key; either budgets or the deprecated single budget",
+    ),
+    (
+        "POST",
+        "/api/v1/workspaces/{ws}/keys/{key}/rotate",
+        "expires_in_days is 1 to 365",
+    ),
+    (
+        "POST",
+        "/api/v1/workspaces/{ws}/service-accounts",
+        "the name is 1 to 120 bytes of printable text that is not all whitespace",
+    ),
+];
+
+/// May the contract's verdict differ from serde's? Equal always passes; a
+/// stricter contract passes only for a reviewed semantic refinement; a looser
+/// contract (accepting what serde rejects) never does.
+pub(super) fn agrees(refined: bool, contract: bool, serde: bool) -> bool {
+    contract == serde || (refined && !contract)
+}
+
 pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: Value) {
+    let refined = SEMANTIC_REFINEMENTS
+        .iter()
+        .any(|(m, t, _)| *m == method && *t == template);
     let document = super::responses::artifact();
     let operation = &document["paths"][template][method.to_ascii_lowercase()];
     let schema = &operation["requestBody"]["content"]["application/json"]["schema"];
@@ -68,7 +116,12 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
     let compare = |label: &str, value: Value| {
         let actual = serde_json::from_value::<T>(value.clone()).is_ok();
         let contract = super::responses::validate_value(document, schema, &value).is_ok();
-        assert_eq!(contract, actual, "{method} {template}: {label}");
+        assert!(
+            agrees(refined, contract, actual),
+            "{method} {template}: {label}: contract {} but serde {}",
+            if contract { "accepts" } else { "refuses" },
+            if actual { "accepts" } else { "refuses" },
+        );
     };
     compare("positive", valid.clone());
     // Preserve every nested object's positive fields before adding the probe:
@@ -199,4 +252,28 @@ fn management_openapi_invitation_and_notification_request_vectors() {
         "/api/v1/me/notifications/read",
         json!({"all":true}),
     );
+}
+
+#[test]
+fn management_openapi_request_refinements_are_reviewed_and_one_directional() {
+    assert!(agrees(false, true, true) && agrees(false, false, false));
+    assert!(
+        !agrees(false, false, true),
+        "stricter needs a reviewed refinement"
+    );
+    assert!(
+        agrees(true, false, true),
+        "reviewed refinement may be stricter"
+    );
+    assert!(!agrees(true, true, false), "never looser than serde");
+    assert!(!agrees(false, true, false));
+    let document = super::responses::artifact();
+    for (method, template, reason) in SEMANTIC_REFINEMENTS {
+        assert!(reason.trim().len() > 20, "{template}");
+        let operation = super::responses::operation(document, method, template).unwrap();
+        assert!(
+            operation.get("requestBody").is_some(),
+            "{method} {template} has no request body to refine"
+        );
+    }
 }
