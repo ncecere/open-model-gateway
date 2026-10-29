@@ -1110,37 +1110,31 @@
       },
       "IdentityExportProfile": {
         "additionalProperties": false,
+        "description": "Profile of the signed-in person. Every export sits behind a verified browser session (identity.rs verify_session joins effective_platform_roles and requires users.disabled_at and cleaned_at to be NULL), and the only session writer (identity.rs callback) stores first/last_signed_in_at in the same statement, so platform_role and both sign-in times are never null and disabled_at is always null. email is nulled only by account cleanup (lifecycle.rs), which subject_export PROFILE excludes.",
         "properties": {
           "created_at": {
             "$ref": "#/components/schemas/IdentityTime"
           },
           "disabled_at": {
-            "$ref": "#/components/schemas/IdentityNullableTime"
+            "type": "null"
           },
           "display_name": {
             "$ref": "#/components/schemas/IdentityNullableString"
           },
           "email": {
-            "$ref": "#/components/schemas/IdentityNullableString"
+            "type": "string"
           },
           "first_signed_in_at": {
-            "$ref": "#/components/schemas/IdentityNullableTime"
+            "$ref": "#/components/schemas/IdentityTime"
           },
           "id": {
             "$ref": "#/components/schemas/IdentityUuid"
           },
           "last_signed_in_at": {
-            "$ref": "#/components/schemas/IdentityNullableTime"
+            "$ref": "#/components/schemas/IdentityTime"
           },
           "platform_role": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/IdentityRole"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/IdentityRole"
           }
         },
         "required": [
@@ -1271,7 +1265,8 @@
         "additionalProperties": false,
         "properties": {
           "display_name": {
-            "$ref": "#/components/schemas/IdentityNullableString"
+            "description": "models.display_name is NOT NULL DEFAULT '' (0001_enterprise.sql); an unnamed model is the empty string, never null.",
+            "type": "string"
           },
           "model_id": {
             "$ref": "#/components/schemas/IdentityUuid"
@@ -1829,6 +1824,67 @@
       "IdentityUuid": {
         "format": "uuid",
         "type": "string"
+      },
+      "IdentityWithdrawnAccessRequest": {
+        "additionalProperties": false,
+        "description": "A withdrawn request. Always decided by the requester at the time of withdrawal and never linked to a membership grant: access_requests CHECKs (0066_access_requests.sql) require status='withdrawn' to carry decided_by=requester and a non-null decided_at, and only approved requests have an access_request_applications row. Requester-private projection: no requester_email or requester_display_name.",
+        "properties": {
+          "created_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "decided_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "decided_by": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "expires_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "membership_grant_id": {
+            "type": "null"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "requested_role": {
+            "const": "member"
+          },
+          "requester": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "status": {
+            "const": "withdrawn"
+          },
+          "target_kind": {
+            "const": "workspace_membership"
+          },
+          "workspace_id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "workspace_name_at_request": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "requester",
+          "target_kind",
+          "workspace_id",
+          "workspace_name_at_request",
+          "requested_role",
+          "status",
+          "reason",
+          "created_at",
+          "expires_at",
+          "decided_by",
+          "decided_at",
+          "membership_grant_id"
+        ],
+        "type": "object"
       },
       "IdentityWorkspaceKind": {
         "enum": [
@@ -2782,7 +2838,7 @@
                       "type": "boolean"
                     },
                     "used_microusd": {
-                      "$ref": "#/components/schemas/IdentityNullableDecimal"
+                      "$ref": "#/components/schemas/IdentityUnsignedDecimal"
                     },
                     "window_end": {
                       "$ref": "#/components/schemas/IdentityNullableTime"
@@ -2842,7 +2898,8 @@
               "additionalProperties": false,
               "properties": {
                 "display_name": {
-                  "$ref": "#/components/schemas/IdentityNullableString"
+                  "description": "models.display_name is NOT NULL DEFAULT '' (0001_enterprise.sql); an unnamed model is the empty string, never null.",
+                  "type": "string"
                 },
                 "model_id": {
                   "$ref": "#/components/schemas/IdentityUuid"
@@ -4252,7 +4309,7 @@
       },
       "post_api_v1_me_access_requests_by_id_withdrawRequest": false,
       "post_api_v1_me_access_requests_by_id_withdrawResponse": {
-        "$ref": "#/components/schemas/IdentityOwnAccessRequest"
+        "$ref": "#/components/schemas/IdentityWithdrawnAccessRequest"
       },
       "post_api_v1_me_notifications_readRequest": {
         "description": "Serde accepts the closed object or the positional array [ids, all], where only trailing all may be omitted. The handler refuses (400) unless EXACTLY ONE of all=true or a non-empty ids array of at most 200 is given; the schema carries that rule in both forms.",
@@ -5029,26 +5086,34 @@
         "operationId": "get_api_v1_auth_callback",
         "parameters": [
           {
+            "description": "The one-use login state: exactly 64 lowercase hexadecimal characters (identity.rs is_token); anything else is refused 400 before any database access.",
             "in": "query",
             "name": "state",
             "required": true,
             "schema": {
+              "pattern": "^[0-9a-f]{64}$",
               "type": "string"
             }
           },
           {
+            "description": "The authorization code. A callback without a non-empty code of at most 8192 bytes is refused 400 (after consuming the attempt), so only a request carrying one can succeed.",
             "in": "query",
             "name": "code",
+            "required": true,
             "schema": {
+              "maxLength": 8192,
+              "minLength": 1,
               "type": "string"
             }
           },
           {
+            "description": "The provider's refusal text. The handler consumes the login attempt and answers 400 to ANY request carrying it, whatever the other parameters.",
             "in": "query",
             "name": "error",
             "schema": {
               "type": "string"
-            }
+            },
+            "x-omg-unobserved-parameter": "The provider's refusal report: identity.rs callback consumes the one-use attempt and returns 400 for any request that carries `error` (before looking at `code`), so no positive 303 response can ever carry it. A real provider sends it when the user declines sign-in; the test cannot make a successful sign-in carry it."
           }
         ],
         "responses": {

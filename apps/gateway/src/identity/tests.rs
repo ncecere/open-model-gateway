@@ -150,11 +150,54 @@ impl MockProvider {
     }
 }
 #[cfg(feature = "integration-tests")]
+async fn open_get(
+    app: &Router,
+    path: &str,
+    headers: &[(&str, String)],
+) -> crate::management::openapi::responses::Captured {
+    let mut request = Request::builder().uri(path);
+    for (name, value) in headers {
+        request = request.header(*name, value);
+    }
+    crate::management::openapi::responses::capture(
+        "GET",
+        path,
+        app.clone()
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap(),
+    )
+    .await
+}
+/// A `Set-Cookie` value from a captured response.
+#[cfg(feature = "integration-tests")]
+fn captured_cookie(headers: &HeaderMap, name: &str) -> String {
+    headers
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .find_map(|h| {
+            let (key, value) = h
+                .to_str()
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap()
+                .split_once('=')?;
+            (key == name).then(|| value.to_owned())
+        })
+        .unwrap()
+}
+#[cfg(feature = "integration-tests")]
 pub(crate) async fn management_openapi_auth_fixtures(
     pool: &sqlx::PgPool,
     observed: &mut crate::management::openapi::responses::PositiveFixtures,
 ) {
-    use crate::management::openapi::responses::capture;
+    use crate::management::openapi::{
+        http_vectors::{Probe, query_vectors},
+        responses::capture,
+    };
+    const BROWSER_AGENT: &str =
+        "Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0";
     let mock = MockProvider::start(None).await;
     let identity = mock.state(pool.clone()).await;
     sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES($1,$2,'entitled','platform','user')")
@@ -166,117 +209,165 @@ pub(crate) async fn management_openapi_auth_fixtures(
     )
     .unwrap();
     let app = crate::http::router_with_identity(identity.store.clone(), None, engine, identity);
-    let request = |path: &str| Request::builder().uri(path).body(Body::empty()).unwrap();
-    let r = capture(
-        "GET",
-        "/api/v1/auth/config",
-        app.clone()
-            .oneshot(request("/api/v1/auth/config"))
-            .await
-            .unwrap(),
-    )
-    .await;
+    let r = open_get(&app, "/api/v1/auth/config", &[]).await;
     assert_eq!(r.status, StatusCode::OK);
     assert_eq!(
         serde_json::from_slice::<Value>(&r.bytes).unwrap()["enabled"],
         true
     );
     observed.observe(&r);
-    let r = capture(
-        "GET",
-        "/api/v1/auth/login",
-        app.clone()
-            .oneshot(request("/api/v1/auth/login"))
-            .await
-            .unwrap(),
-    )
-    .await;
-    assert_eq!(r.status, StatusCode::SEE_OTHER);
-    let url = Url::parse(r.headers[header::LOCATION].to_str().unwrap()).unwrap();
-    let params: HashMap<_, _> = url
-        .query_pairs()
-        .map(|(k, v)| (k.into_owned(), v.into_owned()))
-        .collect();
-    mock.claims.lock().unwrap()["nonce"] = json!(params["nonce"]);
-    let cookie = |headers: &HeaderMap, name: &str| {
-        headers
-            .get_all(header::SET_COOKIE)
-            .iter()
-            .find_map(|h| {
-                let (key, value) = h
-                    .to_str()
-                    .unwrap()
-                    .split(';')
-                    .next()
-                    .unwrap()
-                    .split_once('=')?;
-                (key == name).then(|| value.to_owned())
-            })
-            .unwrap()
+    // The verified token carries a display name, which the callback stores.
+    mock.claims.lock().unwrap()["name"] = json!("Contract Person");
+    // One real sign-in attempt: `(state, browser cookie)`; the mock signs the
+    // attempt's nonce into its next token.
+    let begin = async || {
+        let r = open_get(&app, "/api/v1/auth/login", &[]).await;
+        assert_eq!(r.status, StatusCode::SEE_OTHER);
+        let url = Url::parse(r.headers[header::LOCATION].to_str().unwrap()).unwrap();
+        let params: HashMap<_, _> = url
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        mock.claims.lock().unwrap()["nonce"] = json!(params["nonce"]);
+        (
+            params["state"].clone(),
+            captured_cookie(&r.headers, BROWSER),
+            r,
+        )
     };
-    let browser = cookie(&r.headers, BROWSER);
+    let (state, browser, r) = begin().await;
     observed.observe(&r);
-    let path = format!("/api/v1/auth/callback?state={}&code=good", params["state"]);
-    let r = capture(
-        "GET",
+    let path = format!("/api/v1/auth/callback?state={state}&code=good&unrelated_key=ignored");
+    let r = open_get(
+        &app,
         &path,
-        app.clone()
-            .oneshot(
-                Request::builder()
-                    .uri(&path)
-                    .header(header::COOKIE, format!("{BROWSER}={browser}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap(),
+        &[
+            ("cookie", format!("{BROWSER}={browser}")),
+            ("user-agent", BROWSER_AGENT.to_owned()),
+        ],
     )
     .await;
     assert_eq!(r.status, StatusCode::SEE_OTHER);
     assert_eq!(r.headers[header::LOCATION], "/");
-    let session = cookie(&r.headers, SESSION);
-    let csrf = cookie(&r.headers, CSRF);
+    let session = captured_cookie(&r.headers, SESSION);
+    let csrf = captured_cookie(&r.headers, CSRF);
     assert!(is_token(&session));
     assert!(is_token(&csrf));
     observed.observe(&r);
     // Real replay refusal; it cannot earn callback coverage.
+    let r = open_get(&app, &path, &[("cookie", format!("{BROWSER}={browser}"))]).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    observed.observe(&r);
+    // The new session is real: its identity, device label and own export come
+    // from the verified token, the callback's own writes and the live handlers.
+    let as_session = [("cookie", format!("{SESSION}={session}"))];
+    let r = open_get(&app, "/api/v1/me", &as_session).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let me: Value = serde_json::from_slice(&r.bytes).unwrap();
+    assert_eq!(me["user"]["display_name"], "Contract Person");
+    assert_eq!(me["user"]["email"], "newuser@example.test");
+    observed.observe(&r);
+    let r = open_get(&app, "/api/v1/me/sessions", &as_session).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let sessions: Value = serde_json::from_slice(&r.bytes).unwrap();
+    assert_eq!(sessions["data"][0]["client"], "Firefox on Linux");
+    assert_eq!(sessions["data"][0]["current"], true);
+    assert!(sessions["data"][0]["last_seen_at"].is_string());
+    observed.observe(&r);
+    let today = chrono::Utc::now().date_naive();
+    let r = open_get(
+        &app,
+        &format!("/api/v1/me/export?from={today}&to={today}"),
+        &as_session,
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK);
+    let exported: Value = serde_json::from_slice(&r.bytes).unwrap();
+    assert_eq!(exported["subject"]["display_name"], "Contract Person");
+    assert_eq!(exported["subject"]["platform_role"], "user");
+    observed.observe(&r);
     let r = capture(
-        "GET",
-        &path,
+        "POST",
+        "/api/v1/auth/logout",
         app.clone()
             .oneshot(
                 Request::builder()
-                    .uri(&path)
-                    .header(header::COOKIE, format!("{BROWSER}={browser}"))
+                    .method("POST")
+                    .uri("/api/v1/auth/logout")
+                    .header(header::COOKIE, format!("{SESSION}={session}"))
+                    .header("origin", "http://127.0.0.1:3000")
+                    .header("x-csrf-token", csrf)
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap(),
-    )
-    .await;
-    assert_eq!(r.status, StatusCode::BAD_REQUEST);
-    observed.observe(&r);
-    let r = capture(
-        "POST",
-        "/api/v1/auth/logout",
-        app.oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/auth/logout")
-                .header(header::COOKIE, format!("{SESSION}={session}"))
-                .header("origin", "http://127.0.0.1:3000")
-                .header("x-csrf-token", csrf)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap(),
     )
     .await;
     assert_eq!(r.status, StatusCode::NO_CONTENT);
     assert!(r.bytes.is_empty());
     observed.observe(&r);
+
+    // HTTP boundary vectors. Login stores a throw-away attempt per request; the
+    // handler ignores a malformed or unsafe `return_to`, so every value is accepted.
+    query_vectors(
+        observed,
+        "GET",
+        "/api/v1/auth/login",
+        &[("return_to", "/keys")],
+        async || ((), vec![]),
+        async |_: &(), query| {
+            let path = if query.is_empty() {
+                "/api/v1/auth/login".to_owned()
+            } else {
+                format!("/api/v1/auth/login?{query}")
+            };
+            Probe::from(open_get(&app, &path, &[]).await)
+        },
+    )
+    .await;
+    // The callback answers 400 for malformed input AND for any refused sign-in,
+    // so its status cannot tell them apart: the verdict is decided from server
+    // state. The handler ACCEPTS the query when it consumed the one-use login
+    // attempt (a well-formed `state` with the right browser cookie) and then
+    // either reached the token exchange (a usable `code`) or the provider's own
+    // `error` refusal branch (any `error` text is accepted, then refused 400).
+    query_vectors(
+        observed,
+        "GET",
+        "/api/v1/auth/callback",
+        &[("error", "access_denied")],
+        async || {
+            let (state, browser, _) = begin().await;
+            (
+                (state.clone(), browser),
+                vec![
+                    ("state".to_owned(), state),
+                    ("code".to_owned(), "good".to_owned()),
+                ],
+            )
+        },
+        async |context: &(String, String), query: String| {
+            let before = mock.exchanges.load(Ordering::SeqCst);
+            let path = format!("/api/v1/auth/callback?{query}");
+            let captured = open_get(
+                &app,
+                &path,
+                &[("cookie", format!("{BROWSER}={}", context.1))],
+            )
+            .await;
+            let consumed: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM oidc_login_attempts WHERE state_hash=$1")
+                    .bind(hash(&context.0))
+                    .fetch_one(pool)
+                    .await
+                    .unwrap();
+            let exchanged = mock.exchanges.load(Ordering::SeqCst) > before;
+            let provider_error = query.split('&').any(|pair| pair.starts_with("error="));
+            Probe::decided(captured, consumed == 0 && (exchanged || provider_error))
+        },
+    )
+    .await;
 }
 
 #[tokio::test]
