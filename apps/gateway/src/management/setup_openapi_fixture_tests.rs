@@ -1509,7 +1509,14 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     body_set(&mut j, a, "PATCH", "/api/v1/platform/models/{id}", &format!("/api/v1/platform/models/{vmodel}"), json!({"public_name":"vector/target","display_name":"Vector target","description":"A model","enabled":true,"supported_protocols":["chat_completions"]}), &["route_unsupported_capability"]).await;
     body_set(&mut j, a, "POST", "/api/v1/platform/providers", "/api/v1/platform/providers", json!({"name":"Vector provider","provider":"openrouter","credential_ref":"env:CONTRACT_REFERENCE","endpoint":null,"region":null,"enabled":false,"aws_external_id":null,"aws_session_name":null}), &[]).await;
     // AWS role options belong to a Bedrock connection; the stored kind is not in the body.
-    body_set_when(&mut j, a, "PATCH", "/api/v1/platform/providers/{id}", &format!("/api/v1/platform/providers/{vprov}"), json!({"enabled":true,"credential_ref":"env:CONTRACT_REFERENCE","aws_external_id":null,"aws_session_name":null}), (|b| !b["aws_external_id"].is_null() || !b["aws_session_name"].is_null(), &[])).await;
+    body_set_when(&mut j, a, "PATCH", "/api/v1/platform/providers/{id}", &format!("/api/v1/platform/providers/{vprov}"), json!({"enabled":true,"credential_ref":"env:CONTRACT_REFERENCE","aws_external_id":null,"aws_session_name":null}), (
+            |b| {
+                !b["aws_external_id"].is_null()
+                    || !b["aws_session_name"].is_null()
+                    || b["credential_ref"].as_str().is_some_and(|c| !c.is_empty() && !c.starts_with("env:"))
+            },
+            &[],
+        )).await;
     body_set(&mut j, a, "POST", "/api/v1/platform/deployments", "/api/v1/platform/deployments", json!({"model_id":vmodel,"provider_connection_id":vprov,"upstream_model":"vector/upstream","enabled":false}), &["route_unsupported_capability"]).await;
     body_set(
         &mut j,
@@ -1537,7 +1544,8 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     .await;
     body_set(&mut j, a, "PUT", "/api/v1/platform/deployments/{deployment}/routing", &format!("/api/v1/platform/deployments/{vdep}/routing"), json!({"priority":1,"weight":2,"residency":"eu","failure_threshold":3,"cooldown_seconds":30}), &[]).await;
     body_set(&mut j, a, "PUT", "/api/v1/platform/models/{model}/routing", &format!("/api/v1/platform/models/{vmodel}/routing"), json!({"strategy":"priority","max_attempts":2,"allow_ambiguous_failover":false,"required_residency":"eu"}), &[]).await;
-    body_set(&mut j, a, "PUT", "/api/v1/platform/deployments/{deployment}/batch-scheduling", &format!("/api/v1/platform/deployments/{vdep}/batch-scheduling"), json!({"max_concurrency":3,"yield_live_threshold":5,"window":{"timezone":"UTC","days":["mon","fri"],"start":"23:00","end":"06:00"}}), &[]).await;
+    // An IANA zone must be known to the server: another length-valid name is a domain refusal.
+    body_set_when(&mut j, a, "PUT", "/api/v1/platform/deployments/{deployment}/batch-scheduling", &format!("/api/v1/platform/deployments/{vdep}/batch-scheduling"), json!({"max_concurrency":3,"yield_live_threshold":5,"window":{"timezone":"UTC","days":["mon","fri"],"start":"23:00","end":"06:00"}}), (|b| b["window"]["timezone"].as_str().is_some_and(|z| (1..=64).contains(&z.len()) && z != "UTC"), &[])).await;
     body_set(
         &mut j,
         a,
@@ -1548,7 +1556,37 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         &[],
     )
     .await;
-    body_set(&mut j, a, "POST", "/api/v1/platform/model-setup", "/api/v1/platform/model-setup", json!({"model":{"public_name":"vector/setup","display_name":"Vector setup","description":"A model","enabled":true,"supported_protocols":["chat_completions"]},"route":{"provider_connection_id":vprov,"upstream_model":"vector/setup","enabled":false},"price":null,"catalog_ids":[vcat]}), &["route_unsupported_capability"]).await;
+    {
+        // The model is inserted (and may conflict on its unique alias) before the route
+        // is validated, so every request names a fresh alias unless the vector changes it.
+        let (client, root) = (j.client.clone(), j.base.clone());
+        let valid = json!({"model":{"public_name":"vector/setup","display_name":"Vector setup","description":"A model","enabled":true,"supported_protocols":["chat_completions"]},"route":{"provider_connection_id":vprov,"upstream_model":"vector/setup","enabled":false},"price":null,"catalog_ids":[vcat]});
+        http_vectors::body_vectors_http(
+            &mut j.observed,
+            "POST",
+            "/api/v1/platform/model-setup",
+            valid,
+            async |mut body: Value| {
+                if body["model"]["public_name"] == "vector/setup" {
+                    body["model"]["public_name"] =
+                        json!(format!("vector/setup-{}", Uuid::new_v4()));
+                }
+                judged(
+                    send(
+                        &client,
+                        &root,
+                        Some(a),
+                        "POST",
+                        "/api/v1/platform/model-setup",
+                        Some(body),
+                    )
+                    .await,
+                    &["route_unsupported_capability"],
+                )
+            },
+        )
+        .await;
+    }
     body_set(
         &mut j,
         o,

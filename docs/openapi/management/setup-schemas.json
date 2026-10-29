@@ -22460,11 +22460,11 @@
                 },
                 "start": {
                   "type": "string",
-                  "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+                  "description": "HH:MM (two-digit hour 00-23 and minute 00-59), as the stored minute of day is rendered by jobs/schedule.rs hhmm()."
                 },
                 "end": {
                   "type": "string",
-                  "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+                  "description": "HH:MM (two-digit hour 00-23 and minute 00-59), as the stored minute of day is rendered by jobs/schedule.rs hhmm()."
                 }
               },
               "required": [
