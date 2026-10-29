@@ -441,6 +441,16 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
             Some(json!({"name":"Project key","expires_in_days":30})),
         )
         .await);
+    // A throwaway key whose day window is then corrupted (below): its own
+    // maintained totals row is the only one touched.
+    let corrupt_key = id(&w
+        .json(
+            &owner,
+            "POST",
+            &format!("{ws}/keys"),
+            Some(json!({"name":"Corrupt key","expires_in_days":30,"budgets":[{"period":"day","amount_microusd":"100"}]})),
+        )
+        .await);
 
     // Request logs: every attempt shape the engine, settlement, the realtime
     // close and retention compaction can leave behind.
@@ -764,6 +774,23 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
         },
     )
     .await;
+    // One settled request of the throwaway key creates its day totals row (the
+    // trigger); the same corruption `governance/tests.rs` applies to a workspace
+    // row makes the report unavailable (`read_budget_report` returns None).
+    exec(
+        &pool,
+        Ex {
+            res: Res::Settled {
+                actual: 7,
+                price: priced,
+            },
+            ..Ex::rich(f.team, corrupt_key, deployment, Uuid::new_v4(), 9)
+        },
+    )
+    .await;
+    let corrupted = sqlx::query("UPDATE budget_totals SET settled_microusd=-1,held_microusd=0 WHERE scope_kind='key' AND period='day' AND scope_id=(SELECT governance_key_id FROM api_keys WHERE id=$1)")
+        .bind(corrupt_key).execute(&pool).await.unwrap().rows_affected();
+    assert_eq!(corrupted, 1, "the throwaway key has one day totals row");
     let private_root = Uuid::new_v4();
     exec(
         &pool,
@@ -1120,7 +1147,14 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
             .await;
         assert!(v.get("token").is_none() && v.get("secret_hash").is_none());
     }
-    for key in [full_key, month_key, service_key, log_key, off_key] {
+    for key in [
+        full_key,
+        month_key,
+        service_key,
+        log_key,
+        off_key,
+        corrupt_key,
+    ] {
         for suffix in ["", "/policy", "/stats"] {
             w.json(&owner, "GET", &format!("{ws}/keys/{key}{suffix}"), None)
                 .await;
