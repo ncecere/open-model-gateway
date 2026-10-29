@@ -486,6 +486,7 @@ pub(super) async fn run_query<C>(
         plan.push((Some(case), case.kind, case.param.clone(), case.accept));
     }
     let mut accepted_seen = false;
+    let mut failures: Vec<String> = Vec::new();
     for (case, kind, location, expected) in plan {
         let (context, mut pairs) = fresh().await;
         if let Some(case) = case {
@@ -498,17 +499,27 @@ pub(super) async fn run_query<C>(
         }
         let probe = send(&context, encode(&pairs)).await;
         same_operation(&probe.captured, method, template)?;
-        let handler = probe
-            .verdict()
-            .with_context(|| format!("{method} {template}: {kind} vector at {location}"))?;
+        // Every disagreement is reported (one build otherwise fixes one).
+        let handler = match probe.verdict() {
+            Ok(handler) => handler,
+            Err(error) => {
+                failures.push(format!(
+                    "{method} {template}: {kind} vector at {location}: {error:#}"
+                ));
+                continue;
+            }
+        };
         if handler != expected {
-            return Err(mismatch(
-                method, template, kind, &location, expected, &probe, handler,
+            failures.push(format!(
+                "{:#}",
+                mismatch(method, template, kind, &location, expected, &probe, handler,)
             ));
+            continue;
         }
         accepted_seen |= handler;
         exchanges.push(probe.captured);
     }
+    ensure!(failures.is_empty(), "{}", failures.join("\n"));
     ensure!(accepted_seen, "no query vector was accepted by the handler");
     Ok(exchanges)
 }
@@ -753,20 +764,30 @@ pub(super) async fn run_body(
     );
     let mut exchanges = Vec::new();
     let mut accepted_seen = false;
+    let mut failures: Vec<String> = Vec::new();
     for (kind, location, body, expected) in plan {
         let probe = send(body).await;
         same_operation(&probe.captured, method, template)?;
-        let handler = probe
-            .verdict()
-            .with_context(|| format!("{method} {template}: {kind} vector at {location}"))?;
+        let handler = match probe.verdict() {
+            Ok(handler) => handler,
+            Err(error) => {
+                failures.push(format!(
+                    "{method} {template}: {kind} vector at {location}: {error:#}"
+                ));
+                continue;
+            }
+        };
         if handler != expected {
-            return Err(mismatch(
-                method, template, kind, &location, expected, &probe, handler,
+            failures.push(format!(
+                "{:#}",
+                mismatch(method, template, kind, &location, expected, &probe, handler,)
             ));
+            continue;
         }
         accepted_seen |= handler;
         exchanges.push(probe.captured);
     }
+    ensure!(failures.is_empty(), "{}", failures.join("\n"));
     ensure!(accepted_seen, "no body vector was accepted by the handler");
     Ok(exchanges)
 }
