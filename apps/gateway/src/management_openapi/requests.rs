@@ -340,20 +340,36 @@ fn management_openapi_invitation_and_notification_request_vectors() {
 
 #[test]
 fn management_openapi_request_refinements_are_reviewed_and_one_directional() {
-    assert!(agrees(false, true, true) && agrees(false, false, false));
+    let fields: &[&str] = &["amount"];
+    assert!(agrees(&[], None, true, true) && agrees(&[], Some("amount"), false, false));
     assert!(
-        !agrees(false, false, true),
+        !agrees(&[], Some("amount"), false, true),
         "stricter needs a reviewed refinement"
     );
     assert!(
-        agrees(true, false, true),
-        "reviewed refinement may be stricter"
+        agrees(fields, Some("amount"), false, true),
+        "a refined field may be stricter"
     );
-    assert!(!agrees(true, true, false), "never looser than serde");
-    assert!(!agrees(false, true, false));
+    assert!(
+        !agrees(fields, Some("other"), false, true),
+        "an unrefined field must agree exactly"
+    );
+    assert!(
+        !agrees(fields, None, false, true),
+        "a structural probe must agree exactly"
+    );
+    assert!(
+        !agrees(fields, Some("amount"), true, false),
+        "never looser than serde"
+    );
+    assert!(!agrees(&[], None, true, false));
+    assert!(
+        positive_accepted(true) && !positive_accepted(false),
+        "the valid body is accepted unconditionally"
+    );
     let document = super::responses::artifact();
-    for (method, template, reason) in SEMANTIC_REFINEMENTS {
-        assert!(reason.trim().len() > 20, "{template}");
+    for (method, template, fields, reason) in SEMANTIC_REFINEMENTS {
+        assert!(reason.trim().len() > 20 && !fields.is_empty(), "{template}");
         let operation = super::responses::operation(document, method, template).unwrap();
         assert!(
             operation.get("requestBody").is_some(),
