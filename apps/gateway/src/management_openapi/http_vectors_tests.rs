@@ -948,14 +948,6 @@ fn management_openapi_http_vectors_an_unsendable_decisive_query_vector_fails() {
     // GREEN: a reviewed reason on the parameter excuses it, and those vectors are not sent.
     let cases = code_cases(json!({"type":"string","maxLength":70_000}), true).unwrap();
     assert!(cases.iter().all(|c| c.kind != "maxLength+1"));
-    // The annotation on the parameter's schema works as well.
-    let cases = code_cases(
-        json!({"type":"string","maxLength":70_000,
-            "x-omg-unsendable-boundary":"The handler caps this value far beyond one request target."}),
-        false,
-    )
-    .unwrap();
-    assert!(cases.iter().all(|c| c.kind != "maxLength+1"));
     // One kind sent in some variant is enough: the emoji variant of a multibyte
     // vector may be too long while the two-byte variant fits.
     code_cases(json!({"type":"string","maxLength":9000}), false).unwrap();
@@ -1054,4 +1046,461 @@ fn management_openapi_http_vectors_non_decisive_drops_are_counted_not_silent() {
     notes.settle("/big", &["maxItems"], &[], false);
     let text = format!("{:#}", notes.check().unwrap_err());
     assert!(text.contains("maxItems at /big"), "{text}");
+}
+
+// ----- fail-closed v2: unreached locations, sibling consts, unbounded patterns, bytes ----
+
+use super::request_reach;
+use std::collections::BTreeSet;
+
+fn body_schema_of(document: &Value) -> &Value {
+    &document["paths"][TEMPLATE]["post"]["requestBody"]["content"]["application/json"]["schema"]
+}
+/// The locations a valid body (plus seeds) reaches, and what is declared but not reached.
+fn reach_of(document: &Value, valid: &Value, seeds: &[(&str, Value)]) -> BTreeSet<String> {
+    let seeds: Vec<(String, Value)> = seeds
+        .iter()
+        .map(|(p, v)| ((*p).to_owned(), v.clone()))
+        .collect();
+    super::http_vectors::body_plan(
+        document,
+        &document["paths"][TEMPLATE]["post"],
+        valid,
+        &seeds,
+        &[],
+    )
+    .unwrap()
+    .reached
+}
+fn unreached_in(document: &Value, reached: &BTreeSet<String>) -> Vec<(String, &'static str)> {
+    request_reach::unreached(document, body_schema_of(document), reached).unwrap()
+}
+fn unreached_paths(document: &Value, reached: &BTreeSet<String>) -> Vec<String> {
+    unreached_in(document, reached)
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect()
+}
+
+#[test]
+fn management_openapi_http_vectors_report_declared_optional_properties_never_carried() {
+    let mut optional = json!({"type":"string","maxLength":5});
+    let schema = |b: &Value| {
+        body_only(
+            json!({"type":"object","required":["a"],"additionalProperties":false,
+        "properties":{"a":{"type":"string"},"b":b}}),
+        )
+    };
+    let document = schema(&optional);
+    // RED: the valid body omits the optional `b`, so nothing ever probes it.
+    let reached = reach_of(&document, &json!({"a":"x"}), &[]);
+    assert_eq!(
+        unreached_in(&document, &reached),
+        vec![("/properties/b".to_owned(), "property")]
+    );
+    // GREEN: a valid body that carries it, or a seed that adds it, reaches it.
+    let reached = reach_of(&document, &json!({"a":"x","b":"y"}), &[]);
+    assert!(unreached_paths(&document, &reached).is_empty());
+    let reached = reach_of(&document, &json!({"a":"x"}), &[("/b", json!("y"))]);
+    assert!(unreached_paths(&document, &reached).is_empty());
+    // A reviewed exemption excuses it (and only with a reason).
+    optional["x-omg-unprobed-location"] = json!("The server derives this value itself.");
+    let document = schema(&optional);
+    let reached = reach_of(&document, &json!({"a":"x"}), &[]);
+    assert!(unreached_paths(&document, &reached).is_empty());
+    optional["x-omg-unprobed-location"] = json!(" ");
+    let document = schema(&optional);
+    let reached = reach_of(&document, &json!({"a":"x"}), &[]);
+    assert_eq!(unreached_paths(&document, &reached), ["/properties/b"]);
+}
+
+#[test]
+fn management_openapi_http_vectors_report_map_values_never_carried() {
+    let map = |extra: Value| {
+        let mut node = json!({"type":"object"});
+        for (k, v) in extra.as_object().unwrap() {
+            node[k] = v.clone();
+        }
+        body_only(
+            json!({"type":"object","required":["m"],"additionalProperties":false,
+            "properties":{"m":node}}),
+        )
+    };
+    let additional = map(json!({"additionalProperties":{"type":"string","maxLength":4}}));
+    let reached = reach_of(&additional, &json!({"m":{}}), &[]);
+    assert_eq!(
+        unreached_in(&additional, &reached),
+        vec![("/properties/m/additionalProperties".to_owned(), "map value")]
+    );
+    let valid = json!({"m":{"k":"v"}});
+    let reached = reach_of(&additional, &valid, &[]);
+    assert!(unreached_paths(&additional, &reached).is_empty());
+    // ...and the carried map value is walked like any other location.
+    let cases = cases_of(&additional, &valid, &[]).unwrap();
+    assert!(has(&cases, "/m/k", "maxLength+1", false, |_| true));
+    assert!(has(&cases, "/m/k", "wrong type", false, |_| true));
+    // patternProperties values are map values too, selected by name.
+    let patterned = map(
+        json!({"patternProperties":{"^x-":{"type":"integer","maximum":9}},
+        "additionalProperties":false}),
+    );
+    let reached = reach_of(&patterned, &json!({"m":{}}), &[]);
+    assert_eq!(
+        unreached_paths(&patterned, &reached),
+        ["/properties/m/patternProperties/^x-"]
+    );
+    let valid = json!({"m":{"x-a":1}});
+    let reached = reach_of(&patterned, &valid, &[]);
+    assert!(unreached_paths(&patterned, &reached).is_empty());
+    let cases = cases_of(&patterned, &valid, &[]).unwrap();
+    assert!(has(&cases, "/m/x-a", "maximum+1", false, |_| true));
+}
+
+#[test]
+fn management_openapi_http_vectors_report_array_elements_beyond_the_first() {
+    let tuple = body_only(json!({"type":"array","prefixItems":[
+        {"type":"string"},{"type":"integer","maximum":9}],"minItems":1,"maxItems":2,"items":false}));
+    let reached = reach_of(&tuple, &json!(["a"]), &[]);
+    assert_eq!(
+        unreached_in(&tuple, &reached),
+        vec![("/prefixItems/1".to_owned(), "array element")]
+    );
+    let reached = reach_of(&tuple, &json!(["a", 1]), &[]);
+    assert!(unreached_paths(&tuple, &reached).is_empty());
+    let reached = reach_of(&tuple, &json!(["a"]), &[("/1", json!(1))]);
+    assert!(unreached_paths(&tuple, &reached).is_empty());
+    // The tail `items` schema after the positional prefix is a location, and its
+    // first element is walked (it used to be skipped: only index 0 was).
+    let tail = body_only(json!({"type":"array","prefixItems":[{"type":"string"}],
+        "items":{"type":"integer","maximum":9}}));
+    let reached = reach_of(&tail, &json!(["a"]), &[]);
+    assert_eq!(unreached_paths(&tail, &reached), ["/items"]);
+    let valid = json!(["a", 1]);
+    let reached = reach_of(&tail, &valid, &[]);
+    assert!(unreached_paths(&tail, &reached).is_empty());
+    let cases = cases_of(&tail, &valid, &[]).unwrap();
+    assert!(has(&cases, "/1", "maximum+1", false, |_| true));
+}
+
+#[test]
+fn management_openapi_http_vectors_report_union_arms_the_valid_body_did_not_match() {
+    let both = body_only(json!({"oneOf":[
+        {"type":"object","required":["a"],"additionalProperties":false,"properties":{"a":{"type":"string"}}},
+        {"type":"array","prefixItems":[{"type":"string"}],"minItems":1,"maxItems":1,"items":false}]}));
+    // One run per wire form: the object form alone leaves the positional arm and its items.
+    let object = reach_of(&both, &json!({"a":"x"}), &[]);
+    assert_eq!(
+        unreached_in(&both, &object),
+        vec![
+            ("/oneOf/1".to_owned(), "union arm"),
+            ("/oneOf/1/prefixItems/0".to_owned(), "array element")
+        ]
+    );
+    let positional = reach_of(&both, &json!(["x"]), &[]);
+    assert_eq!(
+        unreached_paths(&both, &positional),
+        ["/oneOf/0", "/oneOf/0/properties/a"]
+    );
+    // Together (two runs of one operation) nothing is left.
+    let union: BTreeSet<String> = object.union(&positional).cloned().collect();
+    assert!(unreached_paths(&both, &union).is_empty());
+    // An exempt arm excuses itself and its contents.
+    let mut exempt = both.clone();
+    exempt["paths"][TEMPLATE]["post"]["requestBody"]["content"]["application/json"]["schema"]["oneOf"]
+        [1]["x-omg-unprobed-location"] = json!("The positional form is retired.");
+    assert!(unreached_paths(&exempt, &object).is_empty());
+}
+
+fn consts(first: &str, second: &str) -> Value {
+    body_only(
+        json!({"type":"object","required":["period"],"additionalProperties":false,
+        "properties":{"period":{"oneOf":[{"const":first},{"const":second}]}}}),
+    )
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Period {
+    period: String,
+}
+fn month_only(b: &Period) -> bool {
+    b.period == "month"
+}
+fn month_or_day(b: &Period) -> bool {
+    b.period == "month" || b.period == "day"
+}
+
+#[tokio::test]
+async fn management_openapi_http_vectors_offer_sibling_consts_of_a_union() {
+    let document = consts("month", "day");
+    let valid = json!({"period":"month"});
+    let cases = cases_of(&document, &valid, &[]).unwrap();
+    // The sibling branch's const is sent as an enum member the schema accepts.
+    assert!(has(&cases, "/period", "enum member", true, |b| b["period"]
+        == json!("day")));
+    assert!(has(&cases, "/period", "enum non-member", false, |_| true));
+    // RED: a handler that refuses "day" disagrees with the schema.
+    let text = message(run_judged(&judge(month_only), &document, valid.clone(), &[]).await);
+    assert!(
+        text.contains("enum member")
+            && text.contains("/period")
+            && text.contains("schema accepts but handler refuses"),
+        "{text}"
+    );
+    assert!(!text.contains("day"), "{text}");
+    // GREEN: a handler that honours both consts agrees.
+    run_judged(&judge(month_or_day), &document, valid, &[])
+        .await
+        .unwrap();
+    // Enum members of sibling branches are offered too.
+    let document = body_only(json!({"type":"object","required":["period"],
+        "additionalProperties":false,"properties":{"period":{"anyOf":[
+            {"enum":["month","week"]},{"enum":["day","hour"]}]}}}));
+    let cases = cases_of(&document, &json!({"period":"month"}), &[]).unwrap();
+    for member in ["week", "day", "hour"] {
+        assert!(
+            has(&cases, "/period", "enum member", true, |b| b["period"]
+                == json!(member)),
+            "{member} was not offered"
+        );
+    }
+}
+
+fn unbounded_pattern(extra: Value) -> Value {
+    let mut number = json!({"type":"string","pattern":"^(0|[1-9][0-9]{0,14})$"});
+    for (k, v) in extra.as_object().unwrap() {
+        number[k] = v.clone();
+    }
+    body_only(
+        json!({"type":"object","required":["n"],"additionalProperties":false,
+        "properties":{"n":number}}),
+    )
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Number {
+    n: String,
+}
+fn digits_to(limit: usize, b: &Number) -> bool {
+    b.n == "0"
+        || (!b.n.starts_with('0')
+            && (1..=limit).contains(&b.n.len())
+            && b.n.bytes().all(|c| c.is_ascii_digit()))
+}
+fn capped_at_15(b: &Number) -> bool {
+    digits_to(15, b)
+}
+fn capped_at_16(b: &Number) -> bool {
+    digits_to(16, b)
+}
+fn candidate_values() -> Vec<(String, Value)> {
+    ["0", "7", &"1".repeat(15), &"1".repeat(16)]
+        .iter()
+        .map(|n| ("/n".to_owned(), json!(n)))
+        .collect()
+}
+async fn run_with_candidates(
+    app: &Router,
+    document: &Value,
+    candidates: &[(String, Value)],
+) -> anyhow::Result<Vec<Captured>> {
+    Ok(super::http_vectors::run_body_with(
+        document,
+        "POST",
+        TEMPLATE,
+        json!({"n":"15"}),
+        &[],
+        candidates,
+        &async |body: Value| {
+            let request = Request::builder()
+                .method("POST")
+                .uri(TEMPLATE)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap();
+            Probe::from(exchange(app, "POST", request).await)
+        },
+    )
+    .await?
+    .exchanges)
+}
+
+#[tokio::test]
+async fn management_openapi_http_vectors_unbounded_patterns_need_candidates_or_a_reason() {
+    let document = unbounded_pattern(json!({}));
+    // RED: nothing derives the 15/16 digit boundary from this pattern, so the
+    // run must refuse rather than pass without probing it.
+    let text = message(run_with_candidates(&judge(capped_at_15), &document, &[]).await);
+    assert!(
+        text.contains("/n")
+            && text.contains("no derivable length bounds")
+            && text.contains("x-omg-pattern-boundaries"),
+        "{text}"
+    );
+    assert!(!text.contains("15"), "{text}");
+    // GREEN: candidates at the boundary (judged by the SCHEMA) make it pass...
+    run_with_candidates(&judge(capped_at_15), &document, &candidate_values())
+        .await
+        .unwrap();
+    // ...and a handler whose cap is one digit off now fails.
+    let text =
+        message(run_with_candidates(&judge(capped_at_16), &document, &candidate_values()).await);
+    assert!(
+        text.contains("supplied candidate")
+            && text.contains("/n")
+            && text.contains("schema refuses but handler accepts"),
+        "{text}"
+    );
+    // A reviewed reason is the other way out.
+    let reviewed = unbounded_pattern(json!({"x-omg-pattern-boundaries":
+        "The cap is exercised by the handler's own unit tests."}));
+    run_with_candidates(&judge(capped_at_15), &reviewed, &[])
+        .await
+        .unwrap();
+    // A schema that leaves the pattern unbounded while the handler caps it is stricter.
+    let open = body_only(
+        json!({"type":"object","required":["n"],"additionalProperties":false,
+        "properties":{"n":{"type":"string","pattern":"^(0|[1-9][0-9]*)$"}}}),
+    );
+    let mut with_refusal = candidate_values();
+    with_refusal.push(("/n".to_owned(), json!("007")));
+    let text = message(run_with_candidates(&judge(capped_at_15), &open, &with_refusal).await);
+    assert!(
+        text.contains("supplied candidate") && text.contains("schema accepts but handler refuses"),
+        "{text}"
+    );
+    // A maxLength, or one plain character class, already derives the bounds.
+    run_with_candidates(
+        &judge(capped_at_15),
+        &unbounded_pattern(json!({"maxLength":15})),
+        &[],
+    )
+    .await
+    .unwrap();
+}
+
+#[test]
+fn management_openapi_http_vectors_candidates_are_checked() {
+    let document = unbounded_pattern(json!({}));
+    let plan = |candidates: &[(&str, Value)]| {
+        let candidates: Vec<(String, Value)> = candidates
+            .iter()
+            .map(|(p, v)| ((*p).to_owned(), v.clone()))
+            .collect();
+        super::http_vectors::body_plan(
+            &document,
+            &document["paths"][TEMPLATE]["post"],
+            &json!({"n":"15"}),
+            &[],
+            &candidates,
+        )
+    };
+    let text = format!("{:#}", plan(&[]).err().unwrap());
+    assert!(text.contains("no derivable length bounds"), "{text}");
+    // One-sided candidates prove nothing about the boundary.
+    let text = format!(
+        "{:#}",
+        plan(&[("/n", json!("0")), ("/n", json!("7"))])
+            .err()
+            .unwrap()
+    );
+    assert!(
+        text.contains("accepts") && text.contains("refuses"),
+        "{text}"
+    );
+    // A candidate must name a walked location.
+    let text = format!(
+        "{:#}",
+        plan(&[("/zzz", json!("1")), ("/n", json!("0")), ("/n", json!("x"))])
+            .err()
+            .unwrap()
+    );
+    assert!(text.contains("/zzz"), "{text}");
+    // Both sides present: the verdict of each comes from the schema.
+    let ok = plan(&[("/n", json!("0")), ("/n", json!("1".repeat(16)))]).unwrap();
+    let verdict = |digits: usize| {
+        ok.cases
+            .iter()
+            .find(|c| {
+                c.kind == "supplied candidate"
+                    && c.body["n"].as_str().is_some_and(|n| n.len() == digits)
+            })
+            .map(|c| c.accept)
+    };
+    assert_eq!((verdict(1), verdict(16)), (Some(true), Some(false)));
+}
+
+#[test]
+fn management_openapi_http_vectors_unbounded_query_patterns_need_candidates_too() {
+    let document = |extra: Value| {
+        let mut schema = json!({"type":"string","pattern":"^(0|[1-9][0-9]{0,14})$"});
+        for (k, v) in extra.as_object().unwrap() {
+            schema[k] = v.clone();
+        }
+        json!({"openapi":"3.1.0","paths":{TEMPLATE:{"get":{"parameters":[
+            parameter("n", true, schema)],"responses":{"200":{"description":"ok"}}}}},
+            "components":{"schemas":{}}})
+    };
+    let plan = |document: &Value, candidates: &[(&str, &str)]| {
+        let candidates: Vec<(String, String)> = candidates
+            .iter()
+            .map(|(n, v)| ((*n).to_owned(), (*v).to_owned()))
+            .collect();
+        super::http_vectors::query_plan(
+            document,
+            &document["paths"][TEMPLATE]["get"],
+            &[("n".to_owned(), "15".to_owned())],
+            &[],
+            &candidates,
+        )
+    };
+    let open = document(json!({}));
+    let text = format!("{:#}", plan(&open, &[]).err().unwrap());
+    assert!(
+        text.contains("no derivable length bounds") && text.contains("n"),
+        "{text}"
+    );
+    let sixteen = "1".repeat(16);
+    let good = plan(&open, &[("n", "0"), ("n", sixteen.as_str())]).unwrap();
+    assert!(good.cases.iter().any(|c| c.kind == "supplied candidate"
+        && matches!(&c.edit, Edit::Set(r) if r.len() == 16)
+        && !c.accept));
+    assert!(plan(&open, &[("n", "0"), ("n", "7")]).is_err());
+    assert!(plan(&open, &[("zzz", "0"), ("n", "0"), ("n", sixteen.as_str())]).is_err());
+    plan(
+        &document(json!({"x-omg-pattern-boundaries":"Covered by the handler's unit tests."})),
+        &[],
+    )
+    .unwrap();
+}
+
+#[test]
+fn management_openapi_http_vectors_the_byte_oracle_covers_every_element_and_map_value() {
+    let accepts = |schema: Value, instance: Value| {
+        let document = body_only(schema.clone());
+        super::http_vectors::accepts(&document, &schema, &instance).unwrap()
+    };
+    let limited = || json!({"type":"string","x-omg-max-bytes":4});
+    let two_byte = "\u{e9}\u{e9}\u{e9}"; // 3 characters, 6 bytes
+    // Homogeneous `items`: the SECOND element is checked as well as the first.
+    let items = json!({"type":"array","items":limited()});
+    assert!(accepts(items.clone(), json!(["ab", "ab"])));
+    assert!(!accepts(items.clone(), json!(["ab", two_byte])));
+    assert!(!accepts(items.clone(), json!([two_byte, "ab"])));
+    // The tail after a positional prefix, and positional elements themselves.
+    let tuple =
+        json!({"type":"array","prefixItems":[{"type":"string"},limited()],"items":limited()});
+    assert!(accepts(tuple.clone(), json!([two_byte, "ab", "ab"])));
+    assert!(!accepts(tuple.clone(), json!(["ab", two_byte, "ab"])));
+    assert!(!accepts(tuple, json!(["ab", "ab", "ab", two_byte])));
+    // Schema-valued map values, declared by pattern or by additionalProperties.
+    let map = json!({"type":"object","additionalProperties":limited()});
+    assert!(accepts(map.clone(), json!({"k":"ab"})));
+    assert!(!accepts(map, json!({"k":two_byte})));
+    let patterned = json!({"type":"object","patternProperties":{"^x-":limited()},
+        "additionalProperties":false});
+    assert!(accepts(patterned.clone(), json!({"x-a":"ab"})));
+    assert!(!accepts(patterned, json!({"x-a":two_byte})));
+    // Nested through properties, as before.
+    let nested = json!({"type":"object","properties":{"xs":{"type":"array","items":limited()}}});
+    assert!(!accepts(nested, json!({"xs":["ab", two_byte]})));
 }

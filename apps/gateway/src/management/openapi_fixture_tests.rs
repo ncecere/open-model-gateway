@@ -1280,6 +1280,9 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         (json!({"ids":[first_event],"all":false}), vec![]),
         (json!({"ids":[first_event]}), vec![("/all", json!(true))]),
         (json!({"all":true}), vec![("/ids", event.clone())]),
+        // `ids: null` beside `all: true` is the all-arm's own shape (ReadInput.ids is
+        // an Option): carrying it reaches that arm's `ids` location.
+        (json!({"all":true,"ids":null}), vec![]),
         (json!([[first_event], false]), vec![]),
         (json!([[first_event]]), vec![("/1", json!(true))]),
         (json!([null, true]), vec![]),

@@ -155,3 +155,59 @@ fn management_openapi_wiring_vectors_are_required_for_queries_and_bodies() {
     bare.observe_in(&document, &captured(StatusCode::OK, &full, &[]));
     gaps(&bare, &document).unwrap();
 }
+
+#[test]
+fn management_openapi_wiring_declared_request_locations_must_be_walked() {
+    let mut document = document();
+    let full = json!({"data":[{"name":"a","note":null},{"name":"b","note":"n"}]});
+    document["paths"]["/api/v1/x"]["get"]["parameters"] = json!([]);
+    document["paths"]["/api/v1/x"]["get"]["requestBody"] = json!({"required":true,"content":{
+        "application/json":{"schema":{"oneOf":[
+            {"type":"object","required":["a"],"additionalProperties":false,"properties":{
+                "a":{"type":"string"},"b":{"type":"string"}}},
+            {"type":"array","prefixItems":[{"type":"string"}],"minItems":1,"maxItems":1,"items":false}]}}}});
+    let mut fixtures = PositiveFixtures::default();
+    fixtures.observe_in(&document, &captured(StatusCode::OK, &full, &[]));
+    let reach = |fixtures: &mut PositiveFixtures, paths: &[&str]| {
+        fixtures.record_vectors("GET", "/api/v1/x", "body");
+        fixtures.record_reach(
+            "GET",
+            "/api/v1/x",
+            &paths.iter().map(|p| (*p).to_owned()).collect(),
+        );
+    };
+    // RED: one run of the object wire form leaves the optional `b`, the
+    // positional arm and its item unwalked; each is named by schema path.
+    reach(&mut fixtures, &["/oneOf/0", "/oneOf/0/properties/a"]);
+    let gap = message(gaps(&fixtures, &document));
+    for expected in [
+        "/oneOf/0/properties/b",
+        "/oneOf/1",
+        "/oneOf/1/prefixItems/0",
+        "x-omg-unprobed-location",
+    ] {
+        assert!(gap.contains(expected), "{expected}: {gap}");
+    }
+    assert!(!gap.contains("/oneOf/0/properties/a"), "{gap}");
+    // The runs of an operation accumulate: a seeded base carrying `b` and a run
+    // of the positional form complete the picture.
+    reach(&mut fixtures, &["/oneOf/0", "/oneOf/0/properties/b"]);
+    let gap = message(gaps(&fixtures, &document));
+    assert!(
+        gap.contains("/oneOf/1") && !gap.contains("/properties/b"),
+        "{gap}"
+    );
+    reach(&mut fixtures, &["/oneOf/1", "/oneOf/1/prefixItems/0"]);
+    gaps(&fixtures, &document).unwrap();
+    // A reviewed exemption on the location excuses it instead.
+    let mut exempt = document.clone();
+    let schema = &mut exempt["paths"]["/api/v1/x"]["get"]["requestBody"]["content"]["application/json"]
+        ["schema"];
+    schema["oneOf"][0]["properties"]["b"]["x-omg-unprobed-location"] =
+        json!("The server derives it.");
+    schema["oneOf"][1]["x-omg-unprobed-location"] = json!("The positional form is retired.");
+    let mut partial = PositiveFixtures::default();
+    partial.observe_in(&exempt, &captured(StatusCode::OK, &full, &[]));
+    reach(&mut partial, &["/oneOf/0", "/oneOf/0/properties/a"]);
+    gaps(&partial, &exempt).unwrap();
+}

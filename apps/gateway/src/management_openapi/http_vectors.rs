@@ -17,7 +17,7 @@
 //! Failure messages name method, template, vector kind, the schema-declared
 //! parameter name or JSON pointer and the status code: never a sent value.
 use super::{
-    coverage,
+    coverage, request_reach,
     responses::{self, Captured, PositiveFixtures},
 };
 use anyhow::{Context, Result, bail, ensure};
@@ -153,6 +153,13 @@ const MAX_ITEMS: u64 = 1000;
 /// being skipped silently. Without it an unsendable DECISIVE vector fails.
 pub(super) const UNSENDABLE: &str = "x-omg-unsendable-boundary";
 
+/// Reviewed exemption on a string schema whose `pattern` has no length bounds
+/// the harness can derive (no `maxLength`/`minLength`/[`MAX_BYTES`] and not one
+/// character class under a quantifier): the reason says why the boundary
+/// vectors of the pattern are covered some other way. Without it the fixture
+/// must supply explicit boundary candidates for the location.
+pub(super) const PATTERN_BOUNDARIES: &str = "x-omg-pattern-boundaries";
+
 /// Vector kinds that decide whether the handler enforces a declared length or
 /// item bound. If NONE of a kind can be sent for a location the run fails.
 const DECISIVE: &[&str] = &[
@@ -180,6 +187,9 @@ pub(super) struct Notes {
     pub(super) exempt: usize,
     /// Non-decisive candidates that were not sent (counted, never silent).
     pub(super) minor: usize,
+    /// Locations whose vectors cannot be trusted (unbounded patterns without
+    /// candidates, one-sided candidates).
+    pub(super) problems: Vec<String>,
 }
 impl Notes {
     /// `dropped` candidates of one location; `sent` are the kinds that WERE sent.
@@ -201,6 +211,7 @@ impl Notes {
         }
     }
     pub(super) fn check(&self) -> Result<()> {
+        ensure!(self.problems.is_empty(), "{}", self.problems.join("; "));
         ensure!(
             self.unsent.is_empty(),
             "decisive boundary vectors could not be sent ({}): annotate the query parameter or direct body property with {UNSENDABLE} and a reviewed reason, or tighten the bound",
@@ -245,7 +256,9 @@ fn bytes_ok(document: &Value, schema: &Value, instance: &Value, depth: usize) ->
         }
         Value::Object(map) => {
             for (name, child) in map {
-                if let Some(child_schema) = child_schema(&nodes, name)
+                // Properties AND typed map values (`patternProperties` /
+                // `additionalProperties`) carry byte limits too.
+                if let Some(child_schema) = member_schema(&nodes, name)?
                     && !bytes_ok(document, &child_schema, child, depth + 1)?
                 {
                     return Ok(false);
@@ -255,7 +268,8 @@ fn bytes_ok(document: &Value, schema: &Value, instance: &Value, depth: usize) ->
         }
         Value::Array(items) => {
             for (i, child) in items.iter().enumerate() {
-                if let Some(item_schema) = index_schema(&nodes, i)
+                // EVERY element: a positional schema, else the homogeneous `items`.
+                if let Some(item_schema) = element_schema(&nodes, i)
                     && !bytes_ok(document, &item_schema, child, depth + 1)?
                 {
                     return Ok(false);
@@ -268,7 +282,7 @@ fn bytes_ok(document: &Value, schema: &Value, instance: &Value, depth: usize) ->
 }
 
 /// The schema's verdict: JSON Schema validity plus the reviewed byte limits.
-fn accepts(document: &Value, schema: &Value, instance: &Value) -> Result<bool> {
+pub(super) fn accepts(document: &Value, schema: &Value, instance: &Value) -> Result<bool> {
     Ok(valid(document, schema, instance)? && bytes_ok(document, schema, instance, 0)?)
 }
 
@@ -362,6 +376,39 @@ struct Mutations {
     vectors: Vec<(&'static str, Value)>,
     /// Candidate kinds the harness refused to generate (past its caps).
     dropped: Vec<&'static str>,
+    /// The location has a pattern with no derivable length bounds, no reviewed
+    /// [`PATTERN_BOUNDARIES`] and no supplied candidates.
+    needs_candidates: bool,
+}
+
+/// Every `const` value and `enum` member a schema declares, including those of
+/// ALL its union and conjunction branches (not only the ones the current value
+/// matches), so `oneOf: [{const: "month"}, {const: "day"}]` offers "day" beside "month".
+fn declared_values(
+    document: &Value,
+    node: &Value,
+    out: &mut Vec<Value>,
+    depth: usize,
+) -> Result<()> {
+    ensure!(depth < 16, "schema nesting too deep");
+    let node = resolve(document, node)?;
+    let mut add = |value: &Value| {
+        if !out.contains(value) {
+            out.push(value.clone());
+        }
+    };
+    if let Some(constant) = node.get("const") {
+        add(constant);
+    }
+    for member in node["enum"].as_array().into_iter().flatten() {
+        add(member);
+    }
+    for keyword in ["oneOf", "anyOf", "allOf"] {
+        for branch in node[keyword].as_array().into_iter().flatten() {
+            declared_values(document, branch, out, depth + 1)?;
+        }
+    }
+    Ok(())
 }
 
 /// Candidate replacement values for one location, by the constraints that apply.
@@ -372,9 +419,11 @@ fn scalar_mutations(
     nodes: &[&Value],
     value: &Value,
     query: bool,
+    candidates: usize,
 ) -> Result<Mutations> {
     let mut out: Vec<(&'static str, Value)> = Vec::new();
     let mut dropped: Vec<&'static str> = Vec::new();
+    let mut needs_candidates = false;
     let kinds = types(nodes);
     if !query {
         for wrong in [
@@ -425,12 +474,6 @@ fn scalar_mutations(
         }
         out.push(("empty", json!("")));
     }
-    if let Some(members) = first(nodes, "enum").and_then(Value::as_array) {
-        out.push(("enum non-member", json!("~not-a-member~")));
-        for member in members.iter().filter(|m| !m.is_null() && *m != value) {
-            out.push(("enum member", member.clone()));
-        }
-    }
     // Flip booleans and consts, so a value that is valid alone but not beside its
     // siblings (`ids` together with `all: true`) reaches the handler.
     if let Value::Bool(flag) = value {
@@ -447,6 +490,23 @@ fn scalar_mutations(
             if other != *value {
                 out.push(("const flip", other));
             }
+        }
+    }
+    // Members of every applicable enum AND the consts/enums of sibling union
+    // branches the value does not match (a handler may refuse one of them).
+    let mut members: Vec<Value> = Vec::new();
+    for node in nodes {
+        for member in node["enum"].as_array().into_iter().flatten() {
+            if !members.contains(member) {
+                members.push(member.clone());
+            }
+        }
+    }
+    declared_values(document, schema, &mut members, 0)?;
+    if !members.is_empty() {
+        out.push(("enum non-member", json!("~not-a-member~")));
+        for member in members.iter().filter(|m| !m.is_null() && *m != value) {
+            out.push(("enum member", member.clone()));
         }
     }
     // Numeric bounds, each side and its neighbour.
@@ -524,6 +584,14 @@ fn scalar_mutations(
             }
         }
         if let Some(pattern) = first(nodes, "pattern").and_then(Value::as_str) {
+            let bounded = simple_bounds(pattern).is_some()
+                || ["minLength", "maxLength"]
+                    .iter()
+                    .any(|key| first(nodes, key).is_some())
+                || nodes.iter().any(|node| {
+                    node.get(MAX_BYTES).is_some() || node.get(PATTERN_BOUNDARIES).is_some()
+                });
+            needs_candidates = !bounded && candidates == 0;
             for candidate in pattern_candidates(pattern, seed, &mut dropped) {
                 // Genuine violations are the pattern-violation vectors; the rest
                 // (multibyte text, say) must be accepted by both sides.
@@ -557,6 +625,7 @@ fn scalar_mutations(
     Ok(Mutations {
         vectors: out,
         dropped,
+        needs_candidates,
     })
 }
 
@@ -657,7 +726,7 @@ pub(super) fn query_cases(
     base: &[(String, String)],
     seeds: &[(String, String)],
 ) -> Result<Vec<QueryCase>> {
-    Ok(query_plan(document, operation, base, seeds)?.cases)
+    Ok(query_plan(document, operation, base, seeds, &[])?.cases)
 }
 
 /// The request's query string with `name` set (replaced, or added) to `raw`.
@@ -673,11 +742,15 @@ fn with_param(base: &[(String, String)], name: &str, raw: &str) -> Vec<(String, 
     pairs
 }
 
+/// `candidates` are `(parameter, value)` pairs the fixture supplies for a
+/// parameter whose pattern has no derivable bounds; each is sent in place of
+/// the valid value and judged by the schema.
 pub(super) fn query_plan(
     document: &Value,
     operation: &Value,
     base: &[(String, String)],
     seeds: &[(String, String)],
+    candidates: &[(String, String)],
 ) -> Result<QueryPlan> {
     let mut notes = Notes::default();
     let parameters = query_parameters(document, operation)?;
@@ -711,7 +784,38 @@ pub(super) fn query_plan(
                 accept: !required,
             });
         }
-        let mutations = scalar_mutations(document, schema, &nodes, &coerce(&kinds, raw), true)?;
+        let supplied: Vec<&str> = candidates
+            .iter()
+            .filter(|(n, _)| n == name)
+            .map(|(_, v)| v.as_str())
+            .collect();
+        let mut mutations = scalar_mutations(
+            document,
+            schema,
+            &nodes,
+            &coerce(&kinds, raw),
+            true,
+            supplied.len(),
+        )?;
+        if mutations.needs_candidates {
+            notes.problems.push(format!(
+                "query parameter {name}: the pattern has no derivable length bounds; supply boundary candidates or annotate it with {PATTERN_BOUNDARIES}"
+            ));
+        }
+        if !supplied.is_empty() {
+            let verdicts = supplied
+                .iter()
+                .map(|v| accepts(document, schema, &coerce(&kinds, v)))
+                .collect::<Result<Vec<_>>>()?;
+            if !(verdicts.contains(&true) && verdicts.contains(&false)) {
+                notes.problems.push(format!(
+                    "query parameter {name}: supplied candidates must include a value the schema accepts and one it refuses"
+                ));
+            }
+            mutations
+                .vectors
+                .extend(supplied.iter().map(|v| ("supplied candidate", json!(v))));
+        }
         let mut dropped = mutations.dropped;
         let mut sent: Vec<&'static str> = Vec::new();
         for (kind, value) in mutations.vectors {
@@ -733,13 +837,19 @@ pub(super) fn query_plan(
                 });
             }
         }
-        let exempt = *unsendable || nodes.iter().any(|node| node.get(UNSENDABLE).is_some());
+        let exempt = *unsendable;
         notes.settle(name, &dropped, &sent, exempt);
     }
     for name in base.iter().chain(seeds).map(|(n, _)| n) {
         ensure!(
             parameters.iter().any(|(p, ..)| p == name),
             "the valid base request carries an undocumented query parameter"
+        );
+    }
+    for (name, _) in candidates {
+        ensure!(
+            parameters.iter().any(|(p, ..)| p == name),
+            "a supplied candidate names an undocumented query parameter"
         );
     }
     notes.check()?;
@@ -800,9 +910,22 @@ pub(super) async fn run_query<C>(
     fresh: &impl AsyncFn() -> (C, Vec<(String, String)>),
     send: &impl AsyncFn(&C, String) -> Probe,
 ) -> Result<Vec<Captured>> {
+    run_query_with(document, method, template, seeds, &[], fresh, send).await
+}
+
+/// [`run_query`] with fixture-supplied boundary `candidates` (see [`query_plan`]).
+pub(super) async fn run_query_with<C>(
+    document: &Value,
+    method: &str,
+    template: &str,
+    seeds: &[(String, String)],
+    candidates: &[(String, String)],
+    fresh: &impl AsyncFn() -> (C, Vec<(String, String)>),
+    send: &impl AsyncFn(&C, String) -> Probe,
+) -> Result<Vec<Captured>> {
     let operation = responses::operation(document, method, template)?;
     let (_, base) = fresh().await;
-    let plan = query_plan(document, operation, &base, seeds)
+    let plan = query_plan(document, operation, &base, seeds, candidates)
         .with_context(|| format!("{method} {template}"))?;
     plan.notes.report(method, template);
     let cases = plan.cases;
@@ -853,12 +976,30 @@ pub(crate) async fn query_vectors<C>(
     fresh: impl AsyncFn() -> (C, Vec<(String, String)>),
     send: impl AsyncFn(&C, String) -> Probe,
 ) {
+    query_vectors_extended(fixtures, method, template, seeds, &[], fresh, send).await;
+}
+
+/// [`query_vectors`] with `candidates`: `(parameter, value)` boundary values for a
+/// parameter whose pattern has no derivable length bounds (the expected verdict
+/// of each is computed from the schema; they must include accepted and refused ones).
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn query_vectors_extended<C>(
+    fixtures: &mut PositiveFixtures,
+    method: &str,
+    template: &str,
+    seeds: &[(&str, &str)],
+    candidates: &[(&str, &str)],
+    fresh: impl AsyncFn() -> (C, Vec<(String, String)>),
+    send: impl AsyncFn(&C, String) -> Probe,
+) {
     let seeds = own(seeds);
-    let exchanges = run_query(
+    let candidates = own(candidates);
+    let exchanges = run_query_with(
         responses::artifact(),
         method,
         template,
         &seeds,
+        &candidates,
         &fresh,
         &send,
     )
@@ -978,9 +1119,16 @@ struct Walk<'a> {
     /// Caller-supplied valid values for declared optional locations, by pointer.
     seeds: std::collections::BTreeMap<String, Value>,
     used: BTreeSet<String>,
+    /// Caller-supplied boundary candidates for locations whose pattern has no
+    /// derivable bounds, by pointer; `candidates_used` are the locations walked.
+    candidates: std::collections::BTreeMap<String, Vec<Value>>,
+    candidates_used: BTreeSet<String>,
     seen: BTreeSet<String>,
     out: Vec<BodyCase>,
     notes: Notes,
+    /// Declared request locations (schema paths) the valid body and every
+    /// seeded base carry, see `request_reach`.
+    reached: BTreeSet<String>,
 }
 impl Walk<'_> {
     fn push(&mut self, path: &[Step], kind: &'static str, new: Option<Value>) -> Result<()> {
@@ -1010,6 +1158,12 @@ impl Walk<'_> {
         self.used.insert(at);
         self.push(path, "optional added", Some(seed.clone()))?;
         let base = set(&self.valid_body, path, Some(seed.clone()));
+        // The seeded base is walked too: whatever it carries is reached.
+        self.reached.extend(request_reach::reached(
+            self.document,
+            self.root_schema,
+            &base,
+        )?);
         let saved = std::mem::replace(&mut self.valid_body, base);
         let walked = self.walk(child, &seed, path);
         self.valid_body = saved;
@@ -1019,13 +1173,35 @@ impl Walk<'_> {
         ensure!(path.len() < 12, "request body nesting too deep");
         let mut nodes = Vec::new();
         applicable(self.document, schema, value, &mut nodes, 0)?;
-        let mutations = scalar_mutations(self.document, schema, &nodes, value, false)?;
+        let here = pointer(path);
+        let supplied = self.candidates.get(&here).cloned().unwrap_or_default();
+        let mutations =
+            scalar_mutations(self.document, schema, &nodes, value, false, supplied.len())?;
+        if mutations.needs_candidates {
+            self.notes.problems.push(format!(
+                "{here}: the pattern has no derivable length bounds; supply boundary candidates or annotate it with {PATTERN_BOUNDARIES}"
+            ));
+        }
         let sent: Vec<&'static str> = mutations.vectors.iter().map(|(kind, _)| *kind).collect();
         let exempt = nodes.iter().any(|node| node.get(UNSENDABLE).is_some());
-        self.notes
-            .settle(&pointer(path), &mutations.dropped, &sent, exempt);
+        self.notes.settle(&here, &mutations.dropped, &sent, exempt);
         for (kind, new) in mutations.vectors {
             self.push(path, kind, Some(new))?;
+        }
+        if !supplied.is_empty() {
+            self.candidates_used.insert(here.clone());
+            let verdicts = supplied
+                .iter()
+                .map(|candidate| accepts(self.document, schema, candidate))
+                .collect::<Result<Vec<_>>>()?;
+            if !(verdicts.contains(&true) && verdicts.contains(&false)) {
+                self.notes.problems.push(format!(
+                    "{here}: supplied candidates must include a value the schema accepts and one it refuses"
+                ));
+            }
+            for candidate in supplied {
+                self.push(path, "supplied candidate", Some(candidate))?;
+            }
         }
         if !path.is_empty() {
             self.push(path, "omitted", None)?;
@@ -1036,8 +1212,9 @@ impl Walk<'_> {
                 unknown.insert("unexpected_configuration".into(), json!(true));
                 self.push(path, "unknown field", Some(Value::Object(unknown)))?;
                 for (name, child) in map {
-                    // Only schema-declared names are walked (and reported).
-                    if let Some(child_schema) = child_schema(&nodes, name) {
+                    // Only schema-declared names (properties and typed map
+                    // values) are walked (and reported).
+                    if let Some(child_schema) = member_schema(&nodes, name)? {
                         path.push(Step::Key(name.clone()));
                         self.walk(&child_schema, child, path)?;
                         path.pop();
@@ -1130,6 +1307,37 @@ fn child_schema(nodes: &[&Value], name: &str) -> Option<Value> {
             .collect(),
     )
 }
+/// The schema of an object member: its `properties` entry plus every
+/// `patternProperties` value whose pattern matches the name, or the schema-valued
+/// `additionalProperties` when neither selects it.
+fn member_schema(nodes: &[&Value], name: &str) -> Result<Option<Value>> {
+    let mut parts: Vec<Value> = nodes
+        .iter()
+        .filter_map(|node| node["properties"].get(name))
+        .cloned()
+        .collect();
+    let mut selected = !parts.is_empty();
+    for node in nodes {
+        for (pattern, child) in node["patternProperties"].as_object().into_iter().flatten() {
+            if child.is_object()
+                && super::validation::compile_schema(&json!({"type":"string","pattern":pattern}))?
+                    .is_valid(&Value::String(name.to_owned()))
+            {
+                selected = true;
+                parts.push(child.clone());
+            }
+        }
+    }
+    if !selected {
+        parts.extend(
+            nodes
+                .iter()
+                .filter_map(|node| node.get("additionalProperties").filter(|v| v.is_object()))
+                .cloned(),
+        );
+    }
+    Ok(combine(parts))
+}
 /// Does any applicable node declare a positional (`prefixItems`) schema at `index`?
 fn positional(nodes: &[&Value], index: usize) -> bool {
     nodes
@@ -1146,12 +1354,38 @@ fn index_schema(nodes: &[&Value], index: usize) -> Option<Value> {
                 .collect(),
         );
     }
-    // A homogeneous `items` schema is walked at its first element only.
-    if index == 0 {
+    // A homogeneous `items` schema (the tail after any `prefixItems`) is walked at
+    // its first element only.
+    if index == tail_start(nodes) {
         return nodes
             .iter()
             .find_map(|node| node.get("items").filter(|v| v.is_object()))
             .cloned();
+    }
+    None
+}
+/// The first index `items` governs: after every positional schema.
+fn tail_start(nodes: &[&Value]) -> usize {
+    nodes
+        .iter()
+        .filter_map(|node| node["prefixItems"].as_array().map(Vec::len))
+        .max()
+        .unwrap_or(0)
+}
+/// The schema every element at `index` must satisfy (a positional schema, else
+/// the tail `items` schema): unlike [`index_schema`], for ANY index.
+fn element_schema(nodes: &[&Value], index: usize) -> Option<Value> {
+    if positional(nodes, index) {
+        return index_schema(nodes, index);
+    }
+    if index >= tail_start(nodes) {
+        return combine(
+            nodes
+                .iter()
+                .filter_map(|node| node.get("items").filter(|v| v.is_object()))
+                .cloned()
+                .collect(),
+        );
     }
     None
 }
@@ -1165,6 +1399,9 @@ fn body_schema(operation: &Value) -> Result<&Value> {
 pub(super) struct BodyPlan {
     pub(super) cases: Vec<BodyCase>,
     pub(super) notes: Notes,
+    /// The declared request locations (schema paths) the valid body and the
+    /// seeded bases carry; see `request_reach`.
+    pub(super) reached: BTreeSet<String>,
 }
 
 /// Every body vector derived from the operation's request schema and a VALID body.
@@ -1174,7 +1411,7 @@ pub(super) fn body_cases(
     valid_body: &Value,
     seeds: &[(String, Value)],
 ) -> Result<Vec<BodyCase>> {
-    Ok(body_plan(document, operation, valid_body, seeds)?.cases)
+    Ok(body_plan(document, operation, valid_body, seeds, &[])?.cases)
 }
 
 /// [`body_cases`] with the account of what could not be sent. Fails when a
@@ -1184,6 +1421,7 @@ pub(super) fn body_plan(
     operation: &Value,
     valid_body: &Value,
     seeds: &[(String, Value)],
+    candidates: &[(String, Value)],
 ) -> Result<BodyPlan> {
     let schema = body_schema(operation)?;
     ensure!(
@@ -1197,9 +1435,20 @@ pub(super) fn body_plan(
         original: valid_body,
         seeds: seeds.iter().cloned().collect(),
         used: BTreeSet::new(),
+        candidates: candidates.iter().fold(
+            std::collections::BTreeMap::new(),
+            |mut all, (at, value)| {
+                all.entry(at.clone())
+                    .or_insert_with(Vec::new)
+                    .push(value.clone());
+                all
+            },
+        ),
+        candidates_used: BTreeSet::new(),
         seen: BTreeSet::new(),
         out: Vec::new(),
         notes: Notes::default(),
+        reached: request_reach::reached(document, schema, valid_body)?,
     };
     walk.walk(schema, valid_body, &mut Vec::new())?;
     for (at, _) in seeds {
@@ -1208,11 +1457,25 @@ pub(super) fn body_plan(
             "seed at {at} names no declared optional location that the valid body omits"
         );
     }
+    for (at, _) in candidates {
+        ensure!(
+            walk.candidates_used.contains(at),
+            "candidate at {at} names no walked location"
+        );
+    }
     walk.notes.check()?;
     Ok(BodyPlan {
         cases: walk.out,
         notes: walk.notes,
+        reached: walk.reached,
     })
+}
+
+/// One executed body vector run: the exchanges and the declared request
+/// locations (schema paths) its valid body and seeded bases carried.
+pub(super) struct BodyRun {
+    pub(super) exchanges: Vec<Captured>,
+    pub(super) reached: BTreeSet<String>,
 }
 
 pub(super) async fn run_body(
@@ -1223,10 +1486,27 @@ pub(super) async fn run_body(
     seeds: &[(String, Value)],
     send: &impl AsyncFn(Value) -> Probe,
 ) -> Result<Vec<Captured>> {
+    Ok(
+        run_body_with(document, method, template, valid_body, seeds, &[], send)
+            .await?
+            .exchanges,
+    )
+}
+
+pub(super) async fn run_body_with(
+    document: &Value,
+    method: &str,
+    template: &str,
+    valid_body: Value,
+    seeds: &[(String, Value)],
+    candidates: &[(String, Value)],
+    send: &impl AsyncFn(Value) -> Probe,
+) -> Result<BodyRun> {
     let operation = responses::operation(document, method, template)?;
-    let plan = body_plan(document, operation, &valid_body, seeds)
+    let plan = body_plan(document, operation, &valid_body, seeds, candidates)
         .with_context(|| format!("{method} {template}"))?;
     plan.notes.report(method, template);
+    let reached = plan.reached;
     let cases = plan.cases;
     let mut plan = vec![("valid", "(root)".to_owned(), valid_body.clone(), true)];
     plan.extend(
@@ -1251,7 +1531,7 @@ pub(super) async fn run_body(
         exchanges.push(probe.captured);
     }
     ensure!(accepted_seen, "no body vector was accepted by the handler");
-    Ok(exchanges)
+    Ok(BodyRun { exchanges, reached })
 }
 
 /// Body boundary vectors for one operation over real HTTP: top-level and nested
@@ -1283,22 +1563,44 @@ pub(crate) async fn body_vectors_seeded(
     seeds: &[(&str, Value)],
     send: impl AsyncFn(Value) -> Probe,
 ) {
-    let seeds: Vec<(String, Value)> = seeds
-        .iter()
-        .map(|(pointer, value)| ((*pointer).to_owned(), value.clone()))
-        .collect();
-    let exchanges = run_body(
+    body_vectors_extended(fixtures, method, template, valid, seeds, &[], send).await;
+}
+
+/// [`body_vectors_seeded`] with `candidates`: `(JSON pointer, value)` boundary
+/// values the fixture supplies for a string whose pattern has no derivable length
+/// bounds (for example `^(0|[1-9][0-9]{0,14})$`: 15 and 16 digits, and "0"). Each is
+/// sent in place of the value at its pointer and judged by the schema; they must
+/// include a value the schema accepts and one it refuses, and the pointer must be a
+/// walked location.
+pub(crate) async fn body_vectors_extended(
+    fixtures: &mut PositiveFixtures,
+    method: &str,
+    template: &str,
+    valid: Value,
+    seeds: &[(&str, Value)],
+    candidates: &[(&str, Value)],
+    send: impl AsyncFn(Value) -> Probe,
+) {
+    let own_values = |pairs: &[(&str, Value)]| -> Vec<(String, Value)> {
+        pairs
+            .iter()
+            .map(|(pointer, value)| ((*pointer).to_owned(), value.clone()))
+            .collect()
+    };
+    let run = run_body_with(
         responses::artifact(),
         method,
         template,
         valid,
-        &seeds,
+        &own_values(seeds),
+        &own_values(candidates),
         &send,
     )
     .await
     .unwrap_or_else(|e| responses::refuse(e));
-    for exchange in &exchanges {
+    for exchange in &run.exchanges {
         fixtures.observe(exchange);
     }
     fixtures.record_vectors(method, template, "body");
+    fixtures.record_reach(method, template, &run.reached);
 }

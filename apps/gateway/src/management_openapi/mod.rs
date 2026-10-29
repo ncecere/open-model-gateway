@@ -8,6 +8,7 @@ mod http_vectors_tests;
 mod middleware;
 mod mutation_tests;
 mod quality;
+mod request_reach;
 pub(crate) mod requests;
 pub(crate) mod responses;
 mod validation;
