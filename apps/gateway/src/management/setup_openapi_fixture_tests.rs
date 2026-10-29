@@ -1322,12 +1322,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     let vprov = id(&j.request("POST", "/api/v1/platform/providers", Some(json!({"name":"Vector connection","provider":"openrouter","credential_ref":"env:CONTRACT_REFERENCE","enabled":true}))).await);
     let vdep = id(&j.request("POST", "/api/v1/platform/deployments", Some(json!({"model_id":vmodel,"provider_connection_id":vprov,"upstream_model":"vector/upstream","enabled":true}))).await);
     let (a, o) = (&admin, &owner);
-    let (model_s, second_s, cat_s, prov_s) = (
-        model.to_string(),
-        second.to_string(),
-        cat.to_string(),
-        provider.to_string(),
-    );
+    let (model_s, second_s, prov_s) = (model.to_string(), second.to_string(), provider.to_string());
     let policy_s = policy_now;
     let ids = format!("{model_s},{second_s}");
     query_set(
