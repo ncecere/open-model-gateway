@@ -151,8 +151,13 @@ impl Harness {
     }
     fn no_private(&self, what: &str, v: &Value) {
         let text = v.to_string();
-        for secret in &self.secrets {
-            assert!(!text.contains(secret), "{what} leaked {secret}: {text}");
+        // Name only the check and the private value's index: never the value
+        // or the response body (they can carry the inference token).
+        for (index, secret) in self.secrets.iter().enumerate() {
+            assert!(
+                !text.contains(secret.as_str()),
+                "{what} leaked private value #{index}"
+            );
         }
     }
 }
