@@ -1859,9 +1859,7 @@ async fn management_openapi_slice4_money_fixtures(pool: PgPool) {
     .await;
     // HTTP boundary vectors: every query parameter and request body, compared
     // with the real handler over HTTP. Refusals are collected, not fatal.
-    let new_schedule = |recipient: Uuid| {
-        json!({"cadence":"weekly","timezone":"UTC","delivery_time":"00:01","recipient_user_ids":[recipient]})
-    };
+    let new_schedule = |recipient: Uuid| json!({"cadence":"weekly","timezone":"UTC","delivery_time":"00:01","recipient_user_ids":[recipient]});
     let platform_schedule = id(&observe(
         &mut seen,
         &client,

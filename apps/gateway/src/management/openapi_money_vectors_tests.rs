@@ -293,8 +293,14 @@ impl Vx<'_> {
                 format!("{wsbase}/report-schedules/{}/runs", self.workspace_schedule),
             ),
         ] {
-            self.query(seen, actor, template, &path, vec![("limit", "10".to_owned())])
-                .await;
+            self.query(
+                seen,
+                actor,
+                template,
+                &path,
+                vec![("limit", "10".to_owned())],
+            )
+            .await;
         }
         let imports = "/api/v1/platform/provider-cost-imports";
         self.query(seen, self.auditor, imports, imports, page())
@@ -500,6 +506,7 @@ impl Vx<'_> {
                 }
             }),
         )
+        .await;
         let mappings = "/api/v1/platform/provider-cost-mappings";
         let mut mapping = provider_cost_tests::mapping(self.connection, Some(self.team));
         mapping["account_id"] = json!("vector-account");
@@ -536,7 +543,7 @@ impl Vx<'_> {
                 }
             }),
         )
-            .await;
+        .await;
         let recon = "/api/v1/platform/provider-reconciliations";
         self.body(
             seen,
