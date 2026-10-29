@@ -55,7 +55,7 @@ fn management_openapi_slice6_key_policy_request_vectors() {
     // serde probe sends the arbitrary string "wrong", which this DTO deserializes
     // (the handler rejects it later with 400) but the schema, by design, refuses.
     // It is therefore probed explicitly below: omitted, null, and canonical.
-    let valid = json!({"requests_per_minute":null,"tokens_per_minute":30,"concurrent_requests":2,"concurrent_jobs":null,"storage_bytes":null,"key_issuances_per_holder":null,"key_issuances_per_workspace":null,"budget_period":"month","budgets":[{"period":"month","amount_microusd":"9007199254740993"}]});
+    let valid = json!({"requests_per_minute":null,"tokens_per_minute":30,"concurrent_requests":2,"concurrent_jobs":null,"storage_bytes":null,"key_issuances_per_holder":null,"key_issuances_per_workspace":null,"budgets":[{"period":"month","amount_microusd":"9007199254740993"}]});
     super::super::openapi::requests::vectors::<Policy>(
         "PUT",
         "/api/v1/workspaces/{ws}/keys/{key}/policy",
@@ -80,8 +80,15 @@ fn management_openapi_slice6_key_policy_request_vectors() {
         }
         let parsed = serde_json::from_value::<Policy>(body.clone()).unwrap();
         assert_eq!(parsed.monthly_budget_microusd, expected_present, "{label}");
-        super::super::openapi::responses::validate_value(document, schema, &body)
-            .unwrap_or_else(|_| panic!("schema refuses {label} monthly_budget_microusd"));
+        let accepted =
+            super::super::openapi::responses::validate_value(document, schema, &body).is_ok();
+        // Neither `budgets` nor `monthly_budget_microusd` is 400 in `Policy::limits`
+        // (`_ => invalid()`): a reviewed refinement stricter than serde.
+        assert_eq!(
+            accepted,
+            expected_present.is_some(),
+            "{label} monthly_budget_microusd"
+        );
     }
     for bad in ["05", "-1", "1.5", "wrong", ""] {
         let mut body = valid.clone();

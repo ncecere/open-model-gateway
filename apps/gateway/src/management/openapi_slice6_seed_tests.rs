@@ -171,9 +171,15 @@ pub(super) async fn price(pool: &PgPool, deployment: Uuid) -> Uuid {
 /// completed) when the session closed before the response did.
 pub(super) async fn realtime_response(pool: &PgPool, execution: Uuid, sequence: i32, state: &str) {
     let sql = match state {
-        "settled" => "INSERT INTO realtime_responses(execution_id,sequence,state,status,window_hold_microusd,actual_microusd,unbounded_cost,input_text_tokens,cached_text_tokens,input_audio_tokens,cached_audio_tokens,output_text_tokens,output_audio_tokens,completed_at) VALUES($1,$2,'settled','completed',6,4,false,3,1,2,0,5,6,clock_timestamp()+interval '40 milliseconds')",
-        "unknown" => "INSERT INTO realtime_responses(execution_id,sequence,state,window_hold_microusd,unbounded_cost,completed_at) VALUES($1,$2,'unknown',6,true,clock_timestamp()+interval '40 milliseconds')",
-        _ => "INSERT INTO realtime_responses(execution_id,sequence,state,window_hold_microusd,unbounded_cost) VALUES($1,$2,'pending',6,false)",
+        "settled" => {
+            "INSERT INTO realtime_responses(execution_id,sequence,state,status,window_hold_microusd,actual_microusd,unbounded_cost,input_text_tokens,cached_text_tokens,input_audio_tokens,cached_audio_tokens,output_text_tokens,output_audio_tokens,completed_at) VALUES($1,$2,'settled','completed',6,4,false,3,1,2,0,5,6,clock_timestamp()+interval '40 milliseconds')"
+        }
+        "unknown" => {
+            "INSERT INTO realtime_responses(execution_id,sequence,state,window_hold_microusd,unbounded_cost,completed_at) VALUES($1,$2,'unknown',6,true,clock_timestamp()+interval '40 milliseconds')"
+        }
+        _ => {
+            "INSERT INTO realtime_responses(execution_id,sequence,state,window_hold_microusd,unbounded_cost) VALUES($1,$2,'pending',6,false)"
+        }
     };
     sqlx::query(sql)
         .bind(execution)
