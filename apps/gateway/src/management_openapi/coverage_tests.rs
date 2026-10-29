@@ -755,8 +755,12 @@ fn management_openapi_coverage_nullable_exemptions_name_the_side_they_exempt() {
     let non_null_exempt = nullable(Some("non-null: cost is always unknown in fixtures"));
     run(&non_null_exempt, std::slice::from_ref(&null), &[]).unwrap();
     let gap = message(run(&non_null_exempt, std::slice::from_ref(&some), &[]));
+    // ...and the exempt non-null side WAS observed, so that exemption is stale too.
     assert!(
-        gap.contains("/cost") && gap.contains("null") && !gap.contains("non-null"),
+        gap.contains("/cost")
+            && gap.contains("branch 0 `null` never matched")
+            && gap.contains("branch 1 `non-null` carries")
+            && gap.contains("stale"),
         "{gap}"
     );
     // A reason with no side exempts neither.
@@ -834,4 +838,70 @@ fn management_openapi_coverage_byte_limits_are_reviewed() {
     }
     // Only a string schema has bytes.
     assert!(check(closed(json!({"n":{"type":"integer","x-omg-max-bytes":8}}))).is_err());
+}
+
+#[test]
+fn management_openapi_coverage_stale_array_and_branch_exemptions_are_refused() {
+    let may_be_empty = doc(
+        op(
+            closed(json!({"list":{"type":"array","items":{"type":"string"},
+                "x-omg-may-be-empty":"The list is always empty for this fixture."}})),
+            json!([]),
+        ),
+        json!({}),
+    );
+    // GREEN: the array was never non-empty, so the exemption is still needed.
+    run(&may_be_empty, &[json!({"list":[]})], &[]).unwrap();
+    // RED: it WAS non-empty, so the exemption is stale.
+    let gap = message(run(&may_be_empty, &[json!({"list":["a"]})], &[]));
+    assert!(
+        gap.contains("/list") && gap.contains("x-omg-may-be-empty") && gap.contains("stale"),
+        "{gap}"
+    );
+    let branch = |reason: &str| {
+        doc(
+            op(
+                closed(json!({"u":{"anyOf":[
+                    {"type":"string","x-omg-unobserved-branch":reason},{"type":"integer"}]}})),
+                json!([]),
+            ),
+            json!({}),
+        )
+    };
+    let document = branch("Strings never occur here.");
+    run(&document, &[json!({"u":1})], &[]).unwrap();
+    let gap = message(run(&document, &[json!({"u":1}), json!({"u":"a"})], &[]));
+    assert!(
+        gap.contains("branch 0")
+            && gap.contains("x-omg-unobserved-branch")
+            && gap.contains("stale"),
+        "{gap}"
+    );
+    // A nullable side exempted by `null:` is stale once null WAS observed, and
+    // `non-null:` once a value was.
+    let nullable = |reason: &str| {
+        doc(
+            op(
+                closed(json!({"n":{"type":["string","null"],"x-omg-unobserved-branch":reason}})),
+                json!([]),
+            ),
+            json!({}),
+        )
+    };
+    let null_exempt = nullable("null: the value is never unknown.");
+    run(&null_exempt, &[json!({"n":"a"})], &[]).unwrap();
+    let gap = message(run(
+        &null_exempt,
+        &[json!({"n":"a"}), json!({"n":null})],
+        &[],
+    ));
+    assert!(gap.contains("stale") && gap.contains("null"), "{gap}");
+    let value_exempt = nullable("non-null: the value is always unknown.");
+    run(&value_exempt, &[json!({"n":null})], &[]).unwrap();
+    let gap = message(run(
+        &value_exempt,
+        &[json!({"n":null}), json!({"n":"a"})],
+        &[],
+    ));
+    assert!(gap.contains("stale") && gap.contains("non-null"), "{gap}");
 }

@@ -22,9 +22,13 @@
 //!   `additionalProperties`) are walked at the wildcard location `<map>/*`.
 //! * On a NULLABLE node `x-omg-unobserved-branch` must start with `null:` or
 //!   `non-null:`, naming the one side it exempts; on a oneOf/anyOf branch it
-//!   exempts that branch. Annotations are refused on top-level component
-//!   schemas (they apply to every `$ref` of the component), so exemptions live
-//!   at the referencing location, inline.
+//!   exempts that branch. Annotations are refused anywhere under a component
+//!   referenced from more than one place (they would apply at every `$ref`), so
+//!   exemptions live inline or in a component referenced once (`quality.rs`).
+//!
+//! * A STALE `x-omg-may-be-empty` (the array WAS non-empty in a positive
+//!   response) or `x-omg-unobserved-branch` (that branch or nullable side WAS
+//!   observed) is refused, exactly like a stale `x-omg-unobserved-parameter`.
 //!
 //! Messages name schema/data JSON pointers only, never instance values.
 use anyhow::{Context, Result, ensure};
@@ -580,6 +584,12 @@ impl Observed {
             )?;
         }
         for (pattern, exempt) in &expected.arrays {
+            if *exempt && seen.arrays.get(pattern) == Some(&true) {
+                gaps.push(format!(
+                    "array `{}` carries {MAY_BE_EMPTY} but was non-empty in a positive response: the exemption is stale, remove it",
+                    show(pattern)
+                ));
+            }
             if !exempt && seen.arrays.get(pattern) != Some(&true) {
                 gaps.push(format!(
                     "array `{}` was never non-empty in a positive response (populate it, or annotate the array with {MAY_BE_EMPTY})",
@@ -589,6 +599,16 @@ impl Observed {
         }
         for ((data, union), branches) in &expected.branches {
             for (index, (description, exempt)) in branches {
+                if *exempt
+                    && seen
+                        .branches
+                        .contains(&(data.clone(), union.clone(), *index))
+                {
+                    gaps.push(format!(
+                        "`{}` ({union}): branch {index} `{description}` carries {UNOBSERVED_BRANCH} but was observed: the exemption is stale, remove it",
+                        show(data)
+                    ));
+                }
                 if !exempt
                     && !seen
                         .branches
