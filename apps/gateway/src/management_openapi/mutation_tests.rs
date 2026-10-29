@@ -51,7 +51,21 @@ fn sample(document: &Value, schema: &Value) -> Value {
                 .is_some_and(|p| p.starts_with("^file-")) =>
                 format!("file-{}", "0".repeat(32)),
             _ if schema["pattern"].as_str() == Some("^[0-9a-f]{32}$") => "0".repeat(32),
-            _ if schema.get("pattern").is_some() => "0".into(),
+            // The first plain candidate the pattern accepts (a counter, a
+            // positive integer or a two-decimal rate).
+            _ if schema.get("pattern").is_some() => {
+                let pattern = schema["pattern"].clone();
+                let accepts = |candidate: &&str| {
+                    super::validation::compile_schema(&json!({"type":"string","pattern":pattern}))
+                        .is_ok_and(|v| v.is_valid(&json!(candidate)))
+                };
+                ["0", "1", "0.00", "1.00"]
+                    .iter()
+                    .find(accepts)
+                    .copied()
+                    .unwrap_or("0")
+                    .into()
+            }
             _ => "fixture".into(),
         }),
         _ => json!({}), // conjunctive refinement or the reviewed stored JSON field
