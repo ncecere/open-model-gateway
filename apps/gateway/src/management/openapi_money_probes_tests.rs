@@ -712,8 +712,9 @@ impl Vx<'_> {
                 ],
             ),
             (
-                "write parts below the aggregate",
+                "write parts below the aggregate, total given",
                 vec![
+                    ("total_input_tokens", "5"),
                     ("cache_write_input_tokens", "5"),
                     ("cache_write_default_input_tokens", "2"),
                     ("cache_write_5m_input_tokens", "3"),
@@ -722,6 +723,19 @@ impl Vx<'_> {
         ] {
             self.reconcile_probe(label, billing(&set), accept).await;
         }
+        // Coherent, but the hold is pinned to a version-1 price, which values
+        // the input from billing_usage.total_input_tokens: without it there is
+        // no complete pinned valuation (409).
+        self.reconcile_probe(
+            "coherent usage without a total on a version-1 price",
+            billing(&[
+                ("cache_write_input_tokens", "5"),
+                ("cache_write_default_input_tokens", "2"),
+                ("cache_write_5m_input_tokens", "3"),
+            ]),
+            Want::Pinned(Handler::Status(409), true),
+        )
+        .await;
         // BillingUsage::validate refuses these, but the refusal surfaces as a
         // Storage error: 503 "Reconciliation unavailable" (usage_values in
         // src/governance.rs -> the error mapping of reconcile in
