@@ -1623,252 +1623,21 @@
       ],
       "additionalProperties": false
     },
-    "SettingsAlertRule": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "$ref": "#/components/schemas/IdentityUuid"
-        },
-        "scope": {
-          "enum": [
-            "installation",
-            "workspace"
-          ]
-        },
-        "workspace_id": {
-          "$ref": "#/components/schemas/IdentityNullableUuid"
-        },
-        "kind": {
-          "enum": [
-            "budget_threshold",
-            "spend_threshold",
-            "spend_spike",
-            "error_rate",
-            "provider_failing",
-            "batch_failed",
-            "batch_stalled",
-            "admission_ceiling"
-          ]
-        },
-        "name": {
-          "type": "string"
-        },
-        "enabled": {
-          "type": "boolean"
-        },
-        "budget_layers": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "thresholds": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "integer"
-              }
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "spike_factor_percent": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "min_spend_microusd": {
-          "$ref": "#/components/schemas/IdentityNullableDecimal"
-        },
-        "window_minutes": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "error_rate_percent": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "min_requests": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "consecutive_failures": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "provider_connection_id": {
-          "$ref": "#/components/schemas/IdentityNullableUuid"
-        },
-        "spend_period": {
-          "anyOf": [
-            {
-              "$ref": "#/components/schemas/IdentityPeriod"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "spend_amount_microusd": {
-          "$ref": "#/components/schemas/IdentityNullableDecimal"
-        },
-        "ceiling_requests_per_second": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "ceiling_lock_wait_ms": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "provider_connection": {
-          "anyOf": [
-            {
-              "type": "object",
-              "properties": {
-                "id": {
-                  "$ref": "#/components/schemas/IdentityUuid"
-                },
-                "name": {
-                  "type": "string"
-                },
-                "provider": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "id",
-                "name",
-                "provider"
-              ],
-              "additionalProperties": false
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "notify_workspace_admins": {
-          "type": "boolean"
-        },
-        "notify_platform_admins": {
-          "type": "boolean"
-        },
-        "notify_emails": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "firing": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "last_fired_at": {
-          "$ref": "#/components/schemas/IdentityNullableTime"
-        },
-        "created_at": {
-          "$ref": "#/components/schemas/IdentityTime"
-        },
-        "updated_at": {
-          "$ref": "#/components/schemas/IdentityTime"
-        }
-      },
-      "required": [
-        "id",
-        "scope",
-        "workspace_id",
-        "kind",
-        "name",
-        "enabled",
-        "budget_layers",
-        "thresholds",
-        "spike_factor_percent",
-        "min_spend_microusd",
-        "window_minutes",
-        "error_rate_percent",
-        "min_requests",
-        "consecutive_failures",
-        "provider_connection_id",
-        "spend_period",
-        "spend_amount_microusd",
-        "ceiling_requests_per_second",
-        "ceiling_lock_wait_ms",
-        "provider_connection",
-        "notify_workspace_admins",
-        "notify_platform_admins",
-        "notify_emails",
-        "firing",
-        "last_fired_at",
-        "created_at",
-        "updated_at"
-      ],
-      "additionalProperties": false
-    },
     "SettingsPlatformRules": {
       "type": "object",
       "properties": {
         "data": {
           "type": "array",
           "items": {
-            "$ref": "#/components/schemas/SettingsAlertRule"
+            "$ref": "#/components/schemas/SettingsPlatformRule"
           }
         }
       },
       "required": [
         "data"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Installation rules, at most 200, ordered by lower(name)."
     },
     "SettingsWorkspaceRules": {
       "oneOf": [
@@ -1878,7 +1647,7 @@
             "data": {
               "type": "array",
               "items": {
-                "$ref": "#/components/schemas/SettingsAlertRule"
+                "$ref": "#/components/schemas/SettingsWorkspaceRule"
               }
             },
             "builtin": {
@@ -1912,14 +1681,25 @@
                 "thresholds": {
                   "type": "array",
                   "items": {
-                    "type": "integer"
-                  }
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100
+                  },
+                  "minItems": 2,
+                  "maxItems": 2
                 },
                 "budget_layers": {
                   "type": "array",
                   "items": {
-                    "type": "string"
-                  }
+                    "enum": [
+                      "type",
+                      "override",
+                      "local",
+                      "key"
+                    ]
+                  },
+                  "minItems": 4,
+                  "maxItems": 4
                 }
               },
               "required": [
@@ -1940,7 +1720,8 @@
           ],
           "additionalProperties": false
         }
-      ]
+      ],
+      "description": "A Team/Project workspace lists its configurable rules (writable only for an administrator with actual membership); a personal workspace lists none and describes its fixed built-in budget alert (builtin), which is never writable."
     },
     "SettingsAlertEvent": {
       "type": "object",
@@ -1969,16 +1750,11 @@
         "rule": {
           "anyOf": [
             {
-              "type": "null"
+              "type": "null",
+              "x-omg-unobserved-branch": "Shared closed envelope: the concrete event variants refine this property to the alternatives reachable for them and each variant observes those; this base alternative is deliberately not an observation obligation of its own."
             },
             {
               "type": "object",
-              "required": [
-                "id",
-                "name",
-                "scope",
-                "deleted"
-              ],
               "properties": {
                 "id": {
                   "$ref": "#/components/schemas/IdentityUuid"
@@ -1996,7 +1772,14 @@
                   "type": "boolean"
                 }
               },
-              "additionalProperties": false
+              "required": [
+                "id",
+                "name",
+                "scope",
+                "deleted"
+              ],
+              "additionalProperties": false,
+              "x-omg-unobserved-branch": "Shared closed envelope: the concrete event variants refine this property to the alternatives reachable for them and each variant observes those; this base alternative is deliberately not an observation obligation of its own."
             }
           ]
         },
@@ -2027,58 +1810,52 @@
           ]
         },
         "severity": {
-          "type": "string"
+          "enum": [
+            "warning",
+            "critical"
+          ]
         },
         "level": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
         },
         "summary": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
         },
         "details": {
-          "$comment": "EVENT_JSON returns non-ceiling alert_events.details verbatim as stored producer-specific JSON; monetary refinements apply and ceiling details use the closed shared IdentityCeilingDetails schema.",
+          "$comment": "EVENT_JSON returns non-ceiling alert_events.details verbatim as stored producer-specific JSON; monetary refinements apply and ceiling variants refine it with the closed SettingsCeilingDetails schemas.",
           "type": "object",
           "patternProperties": {
             "(^|_)microusd$": {
               "$ref": "#/components/schemas/IdentityNullableDecimal"
             }
           },
-          "description": "Stored JSON incident payload, not a serde DTO. Fields vary by producer/kind; readers do not deserialize or close this map. Monetary fields remain integer micro-USD strings. Admission-ceiling identity redaction is constrained by the separate variants below."
+          "description": "Stored JSON incident payload, not a serde DTO. Fields vary by producer/kind; readers do not deserialize or close this map. Monetary fields remain integer micro-USD strings. Admission-ceiling incidents additionally refine it with the closed SettingsCeilingDetails* variants."
         },
         "workspace": {
           "anyOf": [
             {
-              "$ref": "#/components/schemas/IdentityWorkspaceRef"
+              "type": "null",
+              "x-omg-unobserved-branch": "Shared closed envelope: the concrete event variants refine this property to the alternatives reachable for them and each variant observes those; this base alternative is deliberately not an observation obligation of its own."
             },
             {
-              "type": "null"
+              "$ref": "#/components/schemas/IdentityWorkspaceRef",
+              "x-omg-unobserved-branch": "Shared closed envelope: the concrete event variants refine this property to the alternatives reachable for them and each variant observes those; this base alternative is deliberately not an observation obligation of its own."
             }
           ]
         },
         "connection": {
           "anyOf": [
             {
-              "type": "null"
+              "type": "null",
+              "x-omg-unobserved-branch": "Shared closed envelope: the concrete event variants refine this property to the alternatives reachable for them and each variant observes those; this base alternative is deliberately not an observation obligation of its own."
             },
             {
-              "type": "object",
-              "required": [
-                "id",
-                "name",
-                "provider"
-              ],
-              "properties": {
-                "id": {
-                  "$ref": "#/components/schemas/IdentityUuid"
-                },
-                "name": {
-                  "type": "string"
-                },
-                "provider": {
-                  "type": "string"
-                }
-              },
-              "additionalProperties": false
+              "$ref": "#/components/schemas/SettingsConnectionRef",
+              "x-omg-unobserved-branch": "Shared closed envelope: the concrete event variants refine this property to the alternatives reachable for them and each variant observes those; this base alternative is deliberately not an observation obligation of its own."
             }
           ]
         },
@@ -2089,7 +1866,18 @@
           "$ref": "#/components/schemas/IdentityNullableTime"
         },
         "resolution": {
-          "$ref": "#/components/schemas/IdentityNullableString"
+          "anyOf": [
+            {
+              "enum": [
+                "cleared",
+                "superseded",
+                "rule_disabled"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "email": {
           "anyOf": [
@@ -2113,136 +1901,7 @@
         }
       },
       "additionalProperties": false,
-      "if": {
-        "properties": {
-          "kind": {
-            "const": "admission_ceiling"
-          }
-        },
-        "required": [
-          "kind"
-        ]
-      },
-      "then": {
-        "properties": {
-          "details": {
-            "$ref": "#/components/schemas/IdentityCeilingDetails"
-          }
-        }
-      }
-    },
-    "SettingsOrdinaryEvent": {
-      "allOf": [
-        {
-          "$ref": "#/components/schemas/SettingsAlertEvent"
-        },
-        {
-          "properties": {
-            "kind": {
-              "not": {
-                "const": "admission_ceiling"
-              }
-            }
-          }
-        }
-      ]
-    },
-    "SettingsAdminCeilingEvent": {
-      "allOf": [
-        {
-          "$ref": "#/components/schemas/SettingsAlertEvent"
-        },
-        {
-          "properties": {
-            "kind": {
-              "const": "admission_ceiling"
-            },
-            "workspace": {
-              "anyOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "type": "object",
-                  "required": [
-                    "id",
-                    "name",
-                    "kind"
-                  ],
-                  "properties": {
-                    "id": {
-                      "$ref": "#/components/schemas/IdentityUuid"
-                    },
-                    "name": {
-                      "type": "string"
-                    },
-                    "kind": {
-                      "enum": [
-                        "team",
-                        "project"
-                      ]
-                    }
-                  },
-                  "additionalProperties": false
-                }
-              ]
-            },
-            "details": {
-              "required": [
-                "personal"
-              ],
-              "properties": {
-                "personal": {
-                  "type": "boolean"
-                }
-              }
-            }
-          },
-          "if": {
-            "properties": {
-              "details": {
-                "properties": {
-                  "personal": {
-                    "const": true
-                  }
-                },
-                "required": [
-                  "personal"
-                ]
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "workspace": {
-                "type": "null"
-              },
-              "details": {
-                "properties": {
-                  "workspace_name": {
-                    "type": "null"
-                  }
-                }
-              }
-            }
-          },
-          "else": {
-            "properties": {
-              "details": {
-                "required": [
-                  "workspace_name"
-                ],
-                "properties": {
-                  "workspace_name": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          }
-        }
-      ],
-      "description": "Even Platform Admins never receive a personal workspace identity: personal=true forces workspace=null and a null/absent workspace_name. Non-personal references are Team/Project only."
+      "description": "Closed envelope shared by every alert incident variant: identity and lifecycle fields. The variants (installation rule, built-in, aged hold, admission ceiling, workspace rule, personal built-in) pin rule, workspace, connection, kind and details exactly; this base `details` is the reviewed stored producer-specific JSON."
     },
     "SettingsRedactedCeilingEvent": {
       "allOf": [
@@ -2251,60 +1910,28 @@
         },
         {
           "properties": {
+            "builtin": {
+              "const": false
+            },
             "kind": {
               "const": "admission_ceiling"
+            },
+            "rule": {
+              "$ref": "#/components/schemas/SettingsInstallationRuleRef"
             },
             "workspace": {
               "type": "null"
             },
+            "connection": {
+              "type": "null"
+            },
             "details": {
-              "required": [
-                "personal"
-              ],
-              "properties": {
-                "personal": {
-                  "const": false
-                }
-              },
-              "not": {
-                "required": [
-                  "workspace_name"
-                ]
-              }
+              "$ref": "#/components/schemas/SettingsCeilingDetailsRedacted"
             }
           }
         }
       ],
-      "description": "Non-Admin projection of a non-personal event: no workspace identity/name, including nested details. A personal event carries no identity for any audience and matches only the personal branch of IdentityAdminCeilingNotification, keeping the oneOf exclusive."
-    },
-    "SettingsEvents": {
-      "type": "object",
-      "properties": {
-        "data": {
-          "type": "array",
-          "items": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/SettingsOrdinaryEvent"
-              },
-              {
-                "$ref": "#/components/schemas/SettingsAdminCeilingEvent"
-              },
-              {
-                "$ref": "#/components/schemas/SettingsRedactedCeilingEvent"
-              }
-            ]
-          }
-        },
-        "has_more": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "data",
-        "has_more"
-      ],
-      "additionalProperties": false
+      "description": "A Team/Project admission-ceiling incident as a non-Admin platform reader (Auditor) sees it: no workspace reference and no name, including in the details."
     },
     "SettingsWebhookRedacted": {
       "type": "object",
@@ -2313,7 +1940,9 @@
           "$ref": "#/components/schemas/IdentityUuid"
         },
         "label": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
         },
         "enabled": {
           "type": "boolean"
@@ -2371,7 +2000,9 @@
           "$ref": "#/components/schemas/IdentityUuid"
         },
         "label": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
         },
         "enabled": {
           "type": "boolean"
@@ -2406,7 +2037,11 @@
           "$ref": "#/components/schemas/IdentityNullableString"
         },
         "url": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "pattern": "^(https://[^/@?#\\s]+|http://(localhost|127(\\.[0-9]{1,3}){3}|\\[::1\\])(:[0-9]{1,5})?)(/[^?#\\s]*)?$",
+          "description": "Canonical approved destination: https, or http only for a loopback host in a development environment (config.rs AlertWebhookPolicy::canonical); never userinfo, query or fragment."
         },
         "current_secret_ref": {
           "type": "string",
@@ -2452,7 +2087,7 @@
           "$ref": "#/components/schemas/SettingsWebhookPrivileged"
         }
       ],
-      "description": "Privileged projection only for a live Platform Admin, and for tokens also settings:write. Auditor and platform:read-only tokens omit URL and both reference fields entirely. No response contains signing secret values."
+      "description": "Read projection: privileged (URL and both secret references) only for a live Platform Admin, and for a token also settings:write; an Auditor or a platform:read-only token gets the redacted projection with no URL or reference fields at all. No response contains signing secret values."
     },
     "SettingsWebhooks": {
       "type": "object",
@@ -2661,7 +2296,7 @@
     },
     "get_api_v1_platform_alerts_eventsRequest": false,
     "get_api_v1_platform_alerts_eventsResponse": {
-      "$ref": "#/components/schemas/SettingsEvents"
+      "$ref": "#/components/schemas/SettingsPlatformEvents"
     },
     "get_api_v1_platform_alerts_rulesRequest": false,
     "get_api_v1_platform_alerts_rulesResponse": {
@@ -2669,7 +2304,7 @@
     },
     "get_api_v1_platform_alerts_rules_by_idRequest": false,
     "get_api_v1_platform_alerts_rules_by_idResponse": {
-      "$ref": "#/components/schemas/SettingsAlertRule"
+      "$ref": "#/components/schemas/SettingsPlatformRule"
     },
     "get_api_v1_platform_alerts_webhooksRequest": false,
     "get_api_v1_platform_alerts_webhooksResponse": {
@@ -2717,7 +2352,7 @@
     },
     "get_api_v1_workspaces_by_ws_alerts_eventsRequest": false,
     "get_api_v1_workspaces_by_ws_alerts_eventsResponse": {
-      "$ref": "#/components/schemas/SettingsEvents"
+      "$ref": "#/components/schemas/SettingsWorkspaceEvents"
     },
     "get_api_v1_workspaces_by_ws_alerts_rulesRequest": false,
     "get_api_v1_workspaces_by_ws_alerts_rulesResponse": {
@@ -2725,7 +2360,7 @@
     },
     "get_api_v1_workspaces_by_ws_alerts_rules_by_idRequest": false,
     "get_api_v1_workspaces_by_ws_alerts_rules_by_idResponse": {
-      "$ref": "#/components/schemas/SettingsAlertRule"
+      "$ref": "#/components/schemas/SettingsWorkspaceRule"
     },
     "patch_api_v1_platform_alerts_webhooks_by_idRequest": {
       "$ref": "#/components/schemas/SettingsWebhookPatchInput"
@@ -2737,13 +2372,13 @@
       "$ref": "#/components/schemas/SettingsAlertRuleInput"
     },
     "post_api_v1_platform_alerts_rulesResponse": {
-      "$ref": "#/components/schemas/SettingsAlertRule"
+      "$ref": "#/components/schemas/SettingsPlatformCreatedRule"
     },
     "post_api_v1_platform_alerts_webhooksRequest": {
       "$ref": "#/components/schemas/SettingsWebhookCreateInput"
     },
     "post_api_v1_platform_alerts_webhooksResponse": {
-      "$ref": "#/components/schemas/SettingsWebhookPrivileged"
+      "$ref": "#/components/schemas/SettingsWebhookCreated"
     },
     "post_api_v1_platform_alerts_webhooks_by_id_testRequest": {
       "$ref": "#/components/schemas/SettingsEmptyConfiguration"
@@ -2773,13 +2408,13 @@
       "$ref": "#/components/schemas/SettingsAlertRuleInput"
     },
     "post_api_v1_workspaces_by_ws_alerts_rulesResponse": {
-      "$ref": "#/components/schemas/SettingsAlertRule"
+      "$ref": "#/components/schemas/SettingsWorkspaceCreatedRule"
     },
     "put_api_v1_platform_alerts_rules_by_idRequest": {
       "$ref": "#/components/schemas/SettingsAlertRuleInput"
     },
     "put_api_v1_platform_alerts_rules_by_idResponse": {
-      "$ref": "#/components/schemas/SettingsAlertRule"
+      "$ref": "#/components/schemas/SettingsPlatformRule"
     },
     "put_api_v1_platform_installation_policyRequest": false,
     "put_api_v1_platform_installation_policyResponse": {
@@ -2823,7 +2458,7 @@
       "$ref": "#/components/schemas/SettingsAlertRuleInput"
     },
     "put_api_v1_workspaces_by_ws_alerts_rules_by_idResponse": {
-      "$ref": "#/components/schemas/SettingsAlertRule"
+      "$ref": "#/components/schemas/SettingsWorkspaceRule"
     },
     "SettingsLogoMetadata": {
       "description": "Metadata of the uploaded installation logo (never the image bytes or a storage path).",
@@ -3308,6 +2943,1743 @@
           "$ref": "#/components/schemas/SettingsEmailConfiguredSaved"
         }
       ]
+    },
+    "SettingsConnectionRef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "provider"
+      ],
+      "additionalProperties": false,
+      "description": "Provider connection reference: identity only, never credentials or endpoints."
+    },
+    "SettingsPlatformRule": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "scope": {
+          "const": "installation"
+        },
+        "workspace_id": {
+          "type": "null"
+        },
+        "kind": {
+          "enum": [
+            "budget_threshold",
+            "spend_threshold",
+            "spend_spike",
+            "error_rate",
+            "provider_failing",
+            "batch_failed",
+            "batch_stalled",
+            "admission_ceiling"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "budget_layers": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "type",
+                  "override",
+                  "local",
+                  "key"
+                ]
+              },
+              "minItems": 1,
+              "maxItems": 4,
+              "uniqueItems": true
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thresholds": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "minItems": 1,
+              "maxItems": 5,
+              "uniqueItems": true
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spike_factor_percent": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 110,
+              "maximum": 100000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "min_spend_microusd": {
+          "$ref": "#/components/schemas/IdentityNullableDecimal"
+        },
+        "window_minutes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 1440
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error_rate_percent": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "min_requests": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "consecutive_failures": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provider_connection_id": {
+          "$ref": "#/components/schemas/IdentityNullableUuid"
+        },
+        "spend_period": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/IdentityPeriod"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spend_amount_microusd": {
+          "$ref": "#/components/schemas/IdentityNullableDecimal"
+        },
+        "ceiling_requests_per_second": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ceiling_lock_wait_ms": {
+          "anyOf": [
+            {
+              "enum": [
+                10,
+                25,
+                50,
+                100,
+                250,
+                500,
+                1000,
+                2500
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provider_connection": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/SettingsConnectionRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "notify_workspace_admins": {
+          "const": false
+        },
+        "notify_platform_admins": {
+          "type": "boolean"
+        },
+        "notify_emails": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10
+        },
+        "firing": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "last_fired_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "updated_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        }
+      },
+      "required": [
+        "id",
+        "scope",
+        "workspace_id",
+        "kind",
+        "name",
+        "enabled",
+        "budget_layers",
+        "thresholds",
+        "spike_factor_percent",
+        "min_spend_microusd",
+        "window_minutes",
+        "error_rate_percent",
+        "min_requests",
+        "consecutive_failures",
+        "provider_connection_id",
+        "spend_period",
+        "spend_amount_microusd",
+        "ceiling_requests_per_second",
+        "ceiling_lock_wait_ms",
+        "provider_connection",
+        "notify_workspace_admins",
+        "notify_platform_admins",
+        "notify_emails",
+        "firing",
+        "last_fired_at",
+        "created_at",
+        "updated_at"
+      ],
+      "additionalProperties": false,
+      "description": "A installation alert rule exactly as alerts::RULE_JSON returns it. Installation rules: workspace_id is always null; notify_workspace_admins is always false (rejected on write). firing counts the rule's open incidents; last_fired_at is the latest incident's time."
+    },
+    "SettingsPlatformCreatedRule": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "scope": {
+          "const": "installation"
+        },
+        "workspace_id": {
+          "type": "null"
+        },
+        "kind": {
+          "enum": [
+            "budget_threshold",
+            "spend_threshold",
+            "spend_spike",
+            "error_rate",
+            "provider_failing",
+            "batch_failed",
+            "batch_stalled",
+            "admission_ceiling"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "budget_layers": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "type",
+                  "override",
+                  "local",
+                  "key"
+                ]
+              },
+              "minItems": 1,
+              "maxItems": 4,
+              "uniqueItems": true
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thresholds": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "minItems": 1,
+              "maxItems": 5,
+              "uniqueItems": true
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spike_factor_percent": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 110,
+              "maximum": 100000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "min_spend_microusd": {
+          "$ref": "#/components/schemas/IdentityNullableDecimal"
+        },
+        "window_minutes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 1440
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error_rate_percent": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "min_requests": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "consecutive_failures": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provider_connection_id": {
+          "$ref": "#/components/schemas/IdentityNullableUuid"
+        },
+        "spend_period": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/IdentityPeriod"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spend_amount_microusd": {
+          "$ref": "#/components/schemas/IdentityNullableDecimal"
+        },
+        "ceiling_requests_per_second": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ceiling_lock_wait_ms": {
+          "anyOf": [
+            {
+              "enum": [
+                10,
+                25,
+                50,
+                100,
+                250,
+                500,
+                1000,
+                2500
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provider_connection": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/SettingsConnectionRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "notify_workspace_admins": {
+          "const": false
+        },
+        "notify_platform_admins": {
+          "type": "boolean"
+        },
+        "notify_emails": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10
+        },
+        "firing": {
+          "const": 0
+        },
+        "last_fired_at": {
+          "type": "null"
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "updated_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        }
+      },
+      "required": [
+        "id",
+        "scope",
+        "workspace_id",
+        "kind",
+        "name",
+        "enabled",
+        "budget_layers",
+        "thresholds",
+        "spike_factor_percent",
+        "min_spend_microusd",
+        "window_minutes",
+        "error_rate_percent",
+        "min_requests",
+        "consecutive_failures",
+        "provider_connection_id",
+        "spend_period",
+        "spend_amount_microusd",
+        "ceiling_requests_per_second",
+        "ceiling_lock_wait_ms",
+        "provider_connection",
+        "notify_workspace_admins",
+        "notify_platform_admins",
+        "notify_emails",
+        "firing",
+        "last_fired_at",
+        "created_at",
+        "updated_at"
+      ],
+      "additionalProperties": false,
+      "description": "A installation alert rule exactly as alerts::RULE_JSON returns it. Installation rules: workspace_id is always null; notify_workspace_admins is always false (rejected on write). A freshly created rule has no incidents: firing is 0 and last_fired_at is null."
+    },
+    "SettingsWorkspaceRule": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "scope": {
+          "const": "workspace"
+        },
+        "workspace_id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "kind": {
+          "enum": [
+            "budget_threshold",
+            "spend_spike",
+            "error_rate",
+            "batch_failed",
+            "batch_stalled"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "budget_layers": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "type",
+                  "override",
+                  "local",
+                  "key"
+                ]
+              },
+              "minItems": 1,
+              "maxItems": 4,
+              "uniqueItems": true
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thresholds": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "minItems": 1,
+              "maxItems": 5,
+              "uniqueItems": true
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spike_factor_percent": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 110,
+              "maximum": 100000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "min_spend_microusd": {
+          "$ref": "#/components/schemas/IdentityNullableDecimal"
+        },
+        "window_minutes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 1440
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error_rate_percent": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "min_requests": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "consecutive_failures": {
+          "type": "null"
+        },
+        "provider_connection_id": {
+          "type": "null"
+        },
+        "spend_period": {
+          "type": "null"
+        },
+        "spend_amount_microusd": {
+          "type": "null"
+        },
+        "ceiling_requests_per_second": {
+          "type": "null"
+        },
+        "ceiling_lock_wait_ms": {
+          "type": "null"
+        },
+        "provider_connection": {
+          "type": "null"
+        },
+        "notify_workspace_admins": {
+          "type": "boolean"
+        },
+        "notify_platform_admins": {
+          "type": "boolean"
+        },
+        "notify_emails": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10
+        },
+        "firing": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "last_fired_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "updated_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        }
+      },
+      "required": [
+        "id",
+        "scope",
+        "workspace_id",
+        "kind",
+        "name",
+        "enabled",
+        "budget_layers",
+        "thresholds",
+        "spike_factor_percent",
+        "min_spend_microusd",
+        "window_minutes",
+        "error_rate_percent",
+        "min_requests",
+        "consecutive_failures",
+        "provider_connection_id",
+        "spend_period",
+        "spend_amount_microusd",
+        "ceiling_requests_per_second",
+        "ceiling_lock_wait_ms",
+        "provider_connection",
+        "notify_workspace_admins",
+        "notify_platform_admins",
+        "notify_emails",
+        "firing",
+        "last_fired_at",
+        "created_at",
+        "updated_at"
+      ],
+      "additionalProperties": false,
+      "description": "A workspace alert rule exactly as alerts::RULE_JSON returns it. Team/Project rules only: budget, spend-spike, error-rate and batch kinds; connection, installation-spend and ceiling fields are always null. firing counts the rule's open incidents; last_fired_at is the latest incident's time."
+    },
+    "SettingsWorkspaceCreatedRule": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "scope": {
+          "const": "workspace"
+        },
+        "workspace_id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "kind": {
+          "enum": [
+            "budget_threshold",
+            "spend_spike",
+            "error_rate",
+            "batch_failed",
+            "batch_stalled"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "budget_layers": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "type",
+                  "override",
+                  "local",
+                  "key"
+                ]
+              },
+              "minItems": 1,
+              "maxItems": 4,
+              "uniqueItems": true
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thresholds": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "minItems": 1,
+              "maxItems": 5,
+              "uniqueItems": true
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spike_factor_percent": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 110,
+              "maximum": 100000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "min_spend_microusd": {
+          "$ref": "#/components/schemas/IdentityNullableDecimal"
+        },
+        "window_minutes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 1440
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error_rate_percent": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "min_requests": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "consecutive_failures": {
+          "type": "null"
+        },
+        "provider_connection_id": {
+          "type": "null"
+        },
+        "spend_period": {
+          "type": "null"
+        },
+        "spend_amount_microusd": {
+          "type": "null"
+        },
+        "ceiling_requests_per_second": {
+          "type": "null"
+        },
+        "ceiling_lock_wait_ms": {
+          "type": "null"
+        },
+        "provider_connection": {
+          "type": "null"
+        },
+        "notify_workspace_admins": {
+          "type": "boolean"
+        },
+        "notify_platform_admins": {
+          "type": "boolean"
+        },
+        "notify_emails": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10
+        },
+        "firing": {
+          "const": 0
+        },
+        "last_fired_at": {
+          "type": "null"
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "updated_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        }
+      },
+      "required": [
+        "id",
+        "scope",
+        "workspace_id",
+        "kind",
+        "name",
+        "enabled",
+        "budget_layers",
+        "thresholds",
+        "spike_factor_percent",
+        "min_spend_microusd",
+        "window_minutes",
+        "error_rate_percent",
+        "min_requests",
+        "consecutive_failures",
+        "provider_connection_id",
+        "spend_period",
+        "spend_amount_microusd",
+        "ceiling_requests_per_second",
+        "ceiling_lock_wait_ms",
+        "provider_connection",
+        "notify_workspace_admins",
+        "notify_platform_admins",
+        "notify_emails",
+        "firing",
+        "last_fired_at",
+        "created_at",
+        "updated_at"
+      ],
+      "additionalProperties": false,
+      "description": "A workspace alert rule exactly as alerts::RULE_JSON returns it. Team/Project rules only: budget, spend-spike, error-rate and batch kinds; connection, installation-spend and ceiling fields are always null. A freshly created rule has no incidents: firing is 0 and last_fired_at is null."
+    },
+    "SettingsInstallationRuleRef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "scope": {
+          "const": "installation"
+        },
+        "deleted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "scope",
+        "deleted"
+      ],
+      "additionalProperties": false,
+      "description": "The installation rule that raised an incident; deleted rules keep their history."
+    },
+    "SettingsWorkspaceRuleRef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "scope": {
+          "const": "workspace"
+        },
+        "deleted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "scope",
+        "deleted"
+      ],
+      "additionalProperties": false,
+      "description": "The workspace rule that raised an incident; deleted rules keep their history."
+    },
+    "SettingsSharedWorkspaceRef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "team",
+            "project"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "kind"
+      ],
+      "additionalProperties": false,
+      "description": "A Team or Project workspace reference."
+    },
+    "SettingsPersonalWorkspaceRef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "personal"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "kind"
+      ],
+      "additionalProperties": false,
+      "description": "The caller's own personal workspace (only its owner is ever shown it)."
+    },
+    "SettingsInstallationRuleEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "builtin": {
+              "const": false
+            },
+            "kind": {
+              "enum": [
+                "budget_threshold",
+                "spend_threshold",
+                "spend_spike",
+                "error_rate",
+                "provider_failing",
+                "batch_failed",
+                "batch_stalled"
+              ]
+            },
+            "rule": {
+              "$ref": "#/components/schemas/SettingsInstallationRuleRef"
+            },
+            "workspace": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/SettingsSharedWorkspaceRef"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "connection": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/SettingsConnectionRef"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "description": "An incident raised by an installation rule. Budget incidents name the Team/Project they concern; provider incidents name the connection."
+    },
+    "SettingsInstallationBuiltinEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "builtin": {
+              "const": true
+            },
+            "kind": {
+              "enum": [
+                "scim_last_admin",
+                "partitions_missing",
+                "history_orphans"
+              ]
+            },
+            "rule": {
+              "type": "null"
+            },
+            "workspace": {
+              "type": "null"
+            },
+            "connection": {
+              "type": "null"
+            }
+          }
+        }
+      ],
+      "description": "A built-in installation incident (last administrator via SCIM, missing partitions, history orphans): no rule, workspace or connection."
+    },
+    "SettingsAgedHoldEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "builtin": {
+              "const": false
+            },
+            "kind": {
+              "const": "aged_unknown_hold"
+            },
+            "rule": {
+              "type": "null"
+            },
+            "workspace": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/SettingsSharedWorkspaceRef"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "connection": {
+              "type": "null"
+            }
+          }
+        }
+      ],
+      "description": "Holds with unknown cost over the age threshold. A Team/Project incident names the workspace; a personal scope is only counted, never named, so its workspace is null."
+    },
+    "SettingsCeilingDetailsTeam": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "enum": [
+            "workspace",
+            "key"
+          ]
+        },
+        "personal": {
+          "const": false
+        },
+        "workspace_name": {
+          "type": "string"
+        },
+        "workspace_kind": {
+          "enum": [
+            "team",
+            "project"
+          ]
+        },
+        "window_minutes": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 10
+        },
+        "admissions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "admissions_per_second": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]$"
+        },
+        "by_rate": {
+          "type": "boolean"
+        },
+        "by_lock_wait": {
+          "type": "boolean"
+        },
+        "threshold_requests_per_second": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lock_wait_p95_at_least_ms": {
+          "anyOf": [
+            {
+              "enum": [
+                10,
+                25,
+                50,
+                100,
+                250,
+                500,
+                1000,
+                2500
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "threshold_lock_wait_ms": {
+          "anyOf": [
+            {
+              "enum": [
+                10,
+                25,
+                50,
+                100,
+                250,
+                500,
+                1000,
+                2500
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "scope",
+        "personal",
+        "workspace_name",
+        "workspace_kind",
+        "window_minutes",
+        "admissions",
+        "admissions_per_second",
+        "by_rate",
+        "by_lock_wait",
+        "threshold_requests_per_second",
+        "lock_wait_p95_at_least_ms",
+        "threshold_lock_wait_ms"
+      ],
+      "additionalProperties": false,
+      "description": "Admission-ceiling incident details for a Team/Project exactly as alerts::ceiling_conditions writes them, as shown to a Platform Admin: personal is false and the workspace name is present. No workspace id or owner identity is ever included."
+    },
+    "SettingsCeilingDetailsPersonal": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "enum": [
+            "workspace",
+            "key"
+          ]
+        },
+        "personal": {
+          "const": true
+        },
+        "workspace_name": {
+          "type": "null"
+        },
+        "workspace_kind": {
+          "const": "personal"
+        },
+        "window_minutes": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 10
+        },
+        "admissions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "admissions_per_second": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]$"
+        },
+        "by_rate": {
+          "type": "boolean"
+        },
+        "by_lock_wait": {
+          "type": "boolean"
+        },
+        "threshold_requests_per_second": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lock_wait_p95_at_least_ms": {
+          "anyOf": [
+            {
+              "enum": [
+                10,
+                25,
+                50,
+                100,
+                250,
+                500,
+                1000,
+                2500
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "threshold_lock_wait_ms": {
+          "anyOf": [
+            {
+              "enum": [
+                10,
+                25,
+                50,
+                100,
+                250,
+                500,
+                1000,
+                2500
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "scope",
+        "personal",
+        "workspace_kind",
+        "window_minutes",
+        "admissions",
+        "admissions_per_second",
+        "by_rate",
+        "by_lock_wait",
+        "threshold_requests_per_second",
+        "lock_wait_p95_at_least_ms",
+        "threshold_lock_wait_ms"
+      ],
+      "additionalProperties": false,
+      "description": "Admission-ceiling incident details for a personal workspace: personal is true, workspace_kind is personal and the name is null (or removed for a non-Admin). Never an id, name or owner, for any audience."
+    },
+    "SettingsCeilingDetailsRedacted": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "enum": [
+            "workspace",
+            "key"
+          ]
+        },
+        "personal": {
+          "const": false
+        },
+        "workspace_kind": {
+          "enum": [
+            "team",
+            "project"
+          ]
+        },
+        "window_minutes": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 10
+        },
+        "admissions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "admissions_per_second": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]$"
+        },
+        "by_rate": {
+          "type": "boolean"
+        },
+        "by_lock_wait": {
+          "type": "boolean"
+        },
+        "threshold_requests_per_second": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lock_wait_p95_at_least_ms": {
+          "anyOf": [
+            {
+              "enum": [
+                10,
+                25,
+                50,
+                100,
+                250,
+                500,
+                1000,
+                2500
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "threshold_lock_wait_ms": {
+          "anyOf": [
+            {
+              "enum": [
+                10,
+                25,
+                50,
+                100,
+                250,
+                500,
+                1000,
+                2500
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "scope",
+        "personal",
+        "workspace_kind",
+        "window_minutes",
+        "admissions",
+        "admissions_per_second",
+        "by_rate",
+        "by_lock_wait",
+        "threshold_requests_per_second",
+        "lock_wait_p95_at_least_ms",
+        "threshold_lock_wait_ms"
+      ],
+      "additionalProperties": false,
+      "description": "Admission-ceiling incident details of a Team/Project as shown to a non-Admin platform reader: the workspace name is removed entirely."
+    },
+    "SettingsTeamCeilingEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "builtin": {
+              "const": false
+            },
+            "kind": {
+              "const": "admission_ceiling"
+            },
+            "rule": {
+              "$ref": "#/components/schemas/SettingsInstallationRuleRef"
+            },
+            "workspace": {
+              "$ref": "#/components/schemas/SettingsSharedWorkspaceRef"
+            },
+            "connection": {
+              "type": "null"
+            },
+            "details": {
+              "$ref": "#/components/schemas/SettingsCeilingDetailsTeam"
+            }
+          }
+        }
+      ],
+      "description": "A Team/Project admission-ceiling incident as a Platform Admin sees it: the workspace reference and name are present."
+    },
+    "SettingsPersonalCeilingEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "builtin": {
+              "const": false
+            },
+            "kind": {
+              "const": "admission_ceiling"
+            },
+            "rule": {
+              "$ref": "#/components/schemas/SettingsInstallationRuleRef"
+            },
+            "workspace": {
+              "type": "null"
+            },
+            "connection": {
+              "type": "null"
+            },
+            "details": {
+              "$ref": "#/components/schemas/SettingsCeilingDetailsPersonal"
+            }
+          }
+        }
+      ],
+      "description": "A personal-workspace admission-ceiling incident. Even Platform Admins never receive the workspace identity: workspace is null and so is the name."
+    },
+    "SettingsPlatformEvents": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SettingsInstallationRuleEvent"
+              },
+              {
+                "$ref": "#/components/schemas/SettingsInstallationBuiltinEvent"
+              },
+              {
+                "$ref": "#/components/schemas/SettingsAgedHoldEvent"
+              },
+              {
+                "$ref": "#/components/schemas/SettingsTeamCeilingEvent"
+              },
+              {
+                "$ref": "#/components/schemas/SettingsPersonalCeilingEvent"
+              },
+              {
+                "$ref": "#/components/schemas/SettingsRedactedCeilingEvent"
+              }
+            ]
+          }
+        },
+        "has_more": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "data",
+        "has_more"
+      ],
+      "additionalProperties": false,
+      "description": "Installation history, newest first: installation-rule incidents, built-in installation incidents and aged-hold incidents; admission-ceiling identities follow the reader's role."
+    },
+    "SettingsWorkspaceRuleEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "builtin": {
+              "const": false
+            },
+            "kind": {
+              "enum": [
+                "budget_threshold",
+                "spend_spike",
+                "error_rate",
+                "batch_failed",
+                "batch_stalled"
+              ]
+            },
+            "rule": {
+              "$ref": "#/components/schemas/SettingsWorkspaceRuleRef"
+            },
+            "workspace": {
+              "$ref": "#/components/schemas/SettingsSharedWorkspaceRef"
+            },
+            "connection": {
+              "type": "null"
+            }
+          }
+        }
+      ],
+      "description": "An incident raised by a workspace rule of that Team/Project (the rule may since have been deleted)."
+    },
+    "SettingsPersonalBudgetEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "builtin": {
+              "const": true
+            },
+            "kind": {
+              "const": "budget_threshold"
+            },
+            "rule": {
+              "type": "null"
+            },
+            "workspace": {
+              "$ref": "#/components/schemas/SettingsPersonalWorkspaceRef"
+            },
+            "connection": {
+              "type": "null"
+            }
+          }
+        }
+      ],
+      "description": "The built-in personal budget alert, shown to the personal workspace's owner only."
+    },
+    "SettingsWorkspaceSystemEvent": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/SettingsAlertEvent"
+        },
+        {
+          "properties": {
+            "builtin": {
+              "const": false
+            },
+            "kind": {
+              "enum": [
+                "key_expiring",
+                "aged_unknown_hold"
+              ]
+            },
+            "rule": {
+              "type": "null"
+            },
+            "workspace": {
+              "$ref": "#/components/schemas/IdentityWorkspaceRef"
+            },
+            "connection": {
+              "type": "null"
+            }
+          }
+        }
+      ],
+      "description": "A key-expiry reminder or aged-unknown-hold incident of the workspace; neither has a rule."
+    },
+    "SettingsWorkspaceEvents": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SettingsWorkspaceRuleEvent"
+              },
+              {
+                "$ref": "#/components/schemas/SettingsPersonalBudgetEvent"
+              },
+              {
+                "$ref": "#/components/schemas/SettingsWorkspaceSystemEvent"
+              }
+            ]
+          }
+        },
+        "has_more": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "data",
+        "has_more"
+      ],
+      "additionalProperties": false,
+      "description": "One workspace's history, newest first: ordinary incidents only. Admission-ceiling incidents belong to installation rules and are never returned here."
+    },
+    "SettingsWebhookCreated": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "enabled": {
+          "const": false
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "updated_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "signing_configured": {
+          "const": true
+        },
+        "overlap_active": {
+          "const": false
+        },
+        "previous_secret_until": {
+          "type": "null"
+        },
+        "waiting": {
+          "const": 0
+        },
+        "exhausted": {
+          "const": 0
+        },
+        "last_success_at": {
+          "type": "null"
+        },
+        "last_error": {
+          "type": "null"
+        },
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "pattern": "^(https://[^/@?#\\s]+|http://(localhost|127(\\.[0-9]{1,3}){3}|\\[::1\\])(:[0-9]{1,5})?)(/[^?#\\s]*)?$",
+          "description": "Canonical approved destination: https, or http only for a loopback host in a development environment (config.rs AlertWebhookPolicy::canonical); never userinfo, query or fragment."
+        },
+        "current_secret_ref": {
+          "type": "string",
+          "pattern": "^env:[A-Z_][A-Z_0-9]{0,127}$"
+        },
+        "previous_secret_ref": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "enabled",
+        "created_at",
+        "updated_at",
+        "signing_configured",
+        "overlap_active",
+        "previous_secret_until",
+        "waiting",
+        "exhausted",
+        "last_success_at",
+        "last_error",
+        "url",
+        "current_secret_ref",
+        "previous_secret_ref"
+      ],
+      "additionalProperties": false,
+      "description": "A newly created destination: always disabled, with no rotation, deliveries or errors yet. Create responds with the privileged projection (the caller is a writer)."
     }
   }
 }
