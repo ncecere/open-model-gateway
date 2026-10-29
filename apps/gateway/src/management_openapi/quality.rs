@@ -293,10 +293,7 @@ fn direct_body_property(document: &Value, location: &str) -> bool {
         return false;
     };
     // Strip `/oneOf/<n>`, `/anyOf/<n>`, `/allOf/<n>` arms.
-    loop {
-        let Some((rest, index)) = parent.rsplit_once('/') else {
-            break;
-        };
+    while let Some((rest, index)) = parent.rsplit_once('/') {
         let Some(arm) = ["/oneOf", "/anyOf", "/allOf"]
             .iter()
             .find_map(|keyword| rest.strip_suffix(keyword))

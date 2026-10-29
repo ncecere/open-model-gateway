@@ -935,8 +935,7 @@ fn management_openapi_http_vectors_an_unsendable_decisive_query_vector_fails() {
     let text = format!(
         "{:#}",
         code_cases(json!({"type":"string","maxLength":70_000}), false)
-            .err()
-            .expect("an unsendable maxLength+1 must fail")
+            .expect_err("an unsendable maxLength+1 must fail")
     );
     assert!(
         text.contains("maxLength+1")
