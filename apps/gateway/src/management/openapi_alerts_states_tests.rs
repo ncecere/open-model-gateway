@@ -267,14 +267,10 @@ pub(super) async fn seed(pool: &PgPool, s: Seed<'_>) -> Uuid {
     } else {
         "critical"
     };
-    let (level, severity, subject, summary) = s.shape.clone().unwrap_or_else(|| {
-        (
-            80,
-            default_severity,
-            id.to_string(),
-            "Contract incident",
-        )
-    });
+    let (level, severity, subject, summary) = s
+        .shape
+        .clone()
+        .unwrap_or_else(|| (80, default_severity, id.to_string(), "Contract incident"));
     sqlx::query("INSERT INTO alert_events(id,rule_id,builtin,kind,subject_key,level,severity,workspace_id,provider_connection_id,summary,details,resolved_at,resolution) VALUES($1,$2,$3,$4,$10,$11,$5,$6,$7,$12,$8,CASE WHEN $9::text IS NULL THEN NULL ELSE clock_timestamp() END,$9)")
         .bind(id)
         .bind(s.rule)
