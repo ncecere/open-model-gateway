@@ -84,7 +84,7 @@ Every byte a workspace keeps counts against its **Storage** limit: live files of
 The maintenance task records storage in append-only hourly rows (`storage_usage_hours`, migration 0020): byte-seconds per workspace and purpose, derived exactly from each file's `committed_at` and `deleted_at`. Each hour is recorded once it has ended, after a 5-minute settle, and recording is replica-safe.
 
 - **Where it shows.** Usage & costs shows it as **GB-days** (1 GB = 2^30 bytes for 24 hours) with the cost state **Not charged**. That's a deliberate state, never "unknown" and never a $0 estimate.
-- **Who sees it.** Workspace admins and personal owners see their workspace by purpose. Platform Admins and Auditors see per-workspace totals; personal workspaces show totals only.
+- **Who sees it.** Workspace admins and personal owners see their workspace by purpose. Platform Admins and Auditors see per-workspace totals; personal workspaces show totals only (with the workspace id, name and kind; never files or purposes).
 - **Future pricing.** An optional installation storage price (micro-USD per GB-day) can be added later as an append-only, effective-dated price. It would apply to hours starting at or after its effective time; earlier hours stay Not charged. Usage rows hold quantities only, so adding a price never rewrites history.
 
 ## Dashboard

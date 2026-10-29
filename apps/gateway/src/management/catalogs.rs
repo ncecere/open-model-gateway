@@ -132,7 +132,11 @@ async fn catalog(
     Path(id): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, false).await?;
-    // Personal workspaces with their own choice are only counted: owner-private, never listed.
+    // `own_choice` is the platform-assigned per-workspace override, not an owner-made choice.
+    // Detail lists Team/Project workspaces with an override but only counts personal ones
+    // (`personal_count`), so no personal workspace is listed here. This is not a secrecy rule:
+    // per-workspace overrides are platform-managed and Admins/Auditors read a personal
+    // workspace's own override through `/platform/workspaces/{ws}/catalogs`.
     let v: Value = sqlx::query_scalar(&format!("SELECT {CATALOG_SUMMARY} || jsonb_build_object('own_choice',jsonb_build_object('workspaces',coalesce((SELECT jsonb_agg(jsonb_build_object('id',w.id,'name',w.name,'kind',w.kind,'disabled',w.disabled_at IS NOT NULL) ORDER BY w.name,w.id) FROM workspace_catalog_override_items i JOIN workspaces w ON w.id=i.workspace_id WHERE i.catalog_id=c.id AND w.kind IN ('team','project')),'[]'::jsonb),'personal_count',(SELECT count(*) FROM workspace_catalog_override_items i JOIN workspaces w ON w.id=i.workspace_id WHERE i.catalog_id=c.id AND w.kind='personal'))) FROM catalogs c WHERE c.id=$1"))
         .bind(id)
         .fetch_optional(&mut *tx)
