@@ -1063,7 +1063,10 @@ async fn cap_closes_an_in_flight_session(pool: PgPool, trip: Trip) {
     );
     assert!(responses[0]["actual"].is_null(), "{responses:?}");
     assert!(
-        g.ledger(id).await.iter().all(|(kind, _)| kind != "settlement"),
+        g.ledger(id)
+            .await
+            .iter()
+            .all(|(kind, _)| kind != "settlement"),
         "no settlement is fabricated"
     );
     // Neither the oversized bytes nor the excess events reached upstream.
