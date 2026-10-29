@@ -13,6 +13,12 @@ fn lists(f: &Fixture) -> Vec<(String, &BrowserPrincipal)> {
         ("/api/v1/platform/deployments".to_owned(), &f.admin),
         ("/api/v1/platform/models".to_owned(), &f.admin),
         (format!("/api/v1/workspaces/{}/catalog", f.team), &f.owner),
+        ("/api/v1/platform/catalogs".to_owned(), &f.admin),
+        (format!("/api/v1/workspaces/{}/models", f.team), &f.owner),
+        (
+            format!("/api/v1/workspaces/{}/available-models", f.team),
+            &f.owner,
+        ),
     ]
 }
 
