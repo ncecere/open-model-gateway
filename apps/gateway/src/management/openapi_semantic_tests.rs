@@ -96,6 +96,19 @@ pub(crate) fn manual_fields(method: &str, template: &str, fields: &[&str]) {
 }
 
 #[test]
+fn scratch_url_probe() {
+    let ok = |s: &str| reqwest::Url::parse(s).ok().and_then(|u| u.host_str().map(|_| ())).is_some();
+    let first = |build: &dyn Fn(usize) -> String| (1..4200usize).find(|n| !ok(&build(*n)));
+    println!("URLPROBE e+a*N {:?}", first(&|n| format!("https://\u{e9}{}", "a".repeat(n))));
+    println!("URLPROBE a*N+e {:?}", first(&|n| format!("https://{}\u{e9}", "a".repeat(n))));
+    println!("URLPROBE (e a)*N/2 {:?}", first(&|n| format!("https://{}", "\u{e9}a".repeat(n))));
+    println!("URLPROBE e*N.test {:?}", first(&|n| format!("https://{}.test", "\u{e9}".repeat(n))));
+    println!("URLPROBE sub.e*N {:?}", first(&|n| format!("https://sub.{}", "\u{e9}".repeat(n))));
+    println!("URLPROBE e*60.e*N {:?}", first(&|n| format!("https://{}.{}", "\u{e9}".repeat(60), "\u{e9}".repeat(n))));
+    println!("URLPROBE ascii a*N {:?}", first(&|n| format!("https://{}", "a".repeat(n))));
+    println!("URLPROBE tick*N {:?}", first(&|n| format!("https://{}", "\u{2713}".repeat(n))));
+}
+#[test]
 fn scratch_q_probe() {
     use serde_json::json;
     let doc = crate::management::openapi::responses::artifact();

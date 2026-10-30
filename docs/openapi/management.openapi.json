@@ -13980,9 +13980,17 @@
             "x-omg-max-bytes": 512
           },
           "issuer": {
-            "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; x-omg-max-bytes states the byte limit and maxLength counts characters). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development).",
+            "anyOf": [
+              {
+                "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[\\u0021-\\u0022\\u0024\\u0026-\\u002E\\u0030-\\u0039\\u003B\\u003D\\u0041-\\u005A\\u005F-\\u007B\\u007D-\\u007E]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000?#\\u0000-\\u001f\\u007f-\\u009f]*)?$"
+              },
+              {
+                "maxLength": 1000,
+                "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000?#\\u0000-\\u001f\\u007f-\\u009f]*)?$"
+              }
+            ],
+            "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; x-omg-max-bytes states the byte limit and maxLength counts characters). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). A host with any non-ASCII character is limited to 1000 characters: the URL parser refuses a longer label (probed over HTTP) while an ASCII-only host has no such limit. The schema states it as two alternatives: an ASCII-only host (up to 2048 bytes) or a value of at most 1000 characters; it therefore also refuses a longer non-ASCII value whose host is short, which the parser accepts.",
             "maxLength": 2048,
-            "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
             "type": "string",
             "x-omg-max-bytes": 2048
           },
@@ -14194,19 +14202,17 @@
         "$ref": "#/components/schemas/AccessOk"
       },
       "patch_api_v1_workspaces_by_wsRequest": {
-        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies.",
+        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies. The handler refuses a body that gives neither a name nor a visibility: a null counts as absent (directory.rs:406-408), so the contract has one arm per way of giving at least one of them.",
         "oneOf": [
           {
             "additionalProperties": false,
+            "description": "A name is given (a string); the visibility is optional (null is absence).",
             "properties": {
               "name": {
                 "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 UTF-8 bytes of the value as sent (the handler counts bytes, without trimming). The byte limit is stated by x-omg-max-bytes (maxLength counts characters).",
                 "maxLength": 120,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                "type": [
-                  "string",
-                  "null"
-                ],
+                "type": "string",
                 "x-omg-max-bytes": 120
               },
               "object_visibility": {
@@ -14217,7 +14223,28 @@
                 ]
               }
             },
-            "required": [],
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "No name (absent or null); a visibility string is given.",
+            "properties": {
+              "name": {
+                "type": "null"
+              },
+              "object_visibility": {
+                "enum": [
+                  "member",
+                  "workspace"
+                ]
+              }
+            },
+            "required": [
+              "object_visibility"
+            ],
             "type": "object"
           },
           {
@@ -14229,10 +14256,7 @@
                 "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 UTF-8 bytes of the value as sent (the handler counts bytes, without trimming). The byte limit is stated by x-omg-max-bytes (maxLength counts characters).",
                 "maxLength": 120,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                "type": [
-                  "string",
-                  "null"
-                ],
+                "type": "string",
                 "x-omg-max-bytes": 120
               },
               {
@@ -14240,6 +14264,23 @@
                   "member",
                   "workspace",
                   null
+                ]
+              }
+            ],
+            "type": "array"
+          },
+          {
+            "items": false,
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "null"
+              },
+              {
+                "enum": [
+                  "member",
+                  "workspace"
                 ]
               }
             ],
@@ -14875,9 +14916,17 @@
                 "x-omg-max-bytes": 512
               },
               "issuer": {
-                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; x-omg-max-bytes states the byte limit and maxLength counts characters). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development).",
+                "anyOf": [
+                  {
+                    "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[\\u0021-\\u0022\\u0024\\u0026-\\u002E\\u0030-\\u0039\\u003B\\u003D\\u0041-\\u005A\\u005F-\\u007B\\u007D-\\u007E]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000?#\\u0000-\\u001f\\u007f-\\u009f]*)?$"
+                  },
+                  {
+                    "maxLength": 1000,
+                    "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000?#\\u0000-\\u001f\\u007f-\\u009f]*)?$"
+                  }
+                ],
+                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; x-omg-max-bytes states the byte limit and maxLength counts characters). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). A host with any non-ASCII character is limited to 1000 characters: the URL parser refuses a longer label (probed over HTTP) while an ASCII-only host has no such limit. The schema states it as two alternatives: an ASCII-only host (up to 2048 bytes) or a value of at most 1000 characters; it therefore also refuses a longer non-ASCII value whose host is short, which the parser accepts.",
                 "maxLength": 2048,
-                "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
                 "type": "string",
                 "x-omg-max-bytes": 2048
               },
@@ -14918,9 +14967,17 @@
                 "x-omg-max-bytes": 512
               },
               "issuer": {
-                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; x-omg-max-bytes states the byte limit and maxLength counts characters). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development).",
+                "anyOf": [
+                  {
+                    "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[\\u0021-\\u0022\\u0024\\u0026-\\u002E\\u0030-\\u0039\\u003B\\u003D\\u0041-\\u005A\\u005F-\\u007B\\u007D-\\u007E]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000?#\\u0000-\\u001f\\u007f-\\u009f]*)?$"
+                  },
+                  {
+                    "maxLength": 1000,
+                    "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000?#\\u0000-\\u001f\\u007f-\\u009f]*)?$"
+                  }
+                ],
+                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; x-omg-max-bytes states the byte limit and maxLength counts characters). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). A host with any non-ASCII character is limited to 1000 characters: the URL parser refuses a longer label (probed over HTTP) while an ASCII-only host has no such limit. The schema states it as two alternatives: an ASCII-only host (up to 2048 bytes) or a value of at most 1000 characters; it therefore also refuses a longer non-ASCII value whose host is short, which the parser accepts.",
                 "maxLength": 2048,
-                "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
                 "type": "string",
                 "x-omg-max-bytes": 2048
               },
@@ -14956,9 +15013,17 @@
             "minItems": 7,
             "prefixItems": [
               {
-                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; x-omg-max-bytes states the byte limit and maxLength counts characters). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development).",
+                "anyOf": [
+                  {
+                    "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[\\u0021-\\u0022\\u0024\\u0026-\\u002E\\u0030-\\u0039\\u003B\\u003D\\u0041-\\u005A\\u005F-\\u007B\\u007D-\\u007E]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000?#\\u0000-\\u001f\\u007f-\\u009f]*)?$"
+                  },
+                  {
+                    "maxLength": 1000,
+                    "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000?#\\u0000-\\u001f\\u007f-\\u009f]*)?$"
+                  }
+                ],
+                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; x-omg-max-bytes states the byte limit and maxLength counts characters). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). A host with any non-ASCII character is limited to 1000 characters: the URL parser refuses a longer label (probed over HTTP) while an ASCII-only host has no such limit. The schema states it as two alternatives: an ASCII-only host (up to 2048 bytes) or a value of at most 1000 characters; it therefore also refuses a longer non-ASCII value whose host is short, which the parser accepts.",
                 "maxLength": 2048,
-                "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
                 "type": "string",
                 "x-omg-max-bytes": 2048
               },
@@ -15087,9 +15152,17 @@
             "x-omg-max-bytes": 512
           },
           "issuer": {
-            "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; x-omg-max-bytes states the byte limit and maxLength counts characters). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development).",
+            "anyOf": [
+              {
+                "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[\\u0021-\\u0022\\u0024\\u0026-\\u002E\\u0030-\\u0039\\u003B\\u003D\\u0041-\\u005A\\u005F-\\u007B\\u007D-\\u007E]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000?#\\u0000-\\u001f\\u007f-\\u009f]*)?$"
+              },
+              {
+                "maxLength": 1000,
+                "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000?#\\u0000-\\u001f\\u007f-\\u009f]*)?$"
+              }
+            ],
+            "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; x-omg-max-bytes states the byte limit and maxLength counts characters). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). A host with any non-ASCII character is limited to 1000 characters: the URL parser refuses a longer label (probed over HTTP) while an ASCII-only host has no such limit. The schema states it as two alternatives: an ASCII-only host (up to 2048 bytes) or a value of at most 1000 characters; it therefore also refuses a longer non-ASCII value whose host is short, which the parser accepts.",
             "maxLength": 2048,
-            "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
             "type": "string",
             "x-omg-max-bytes": 2048
           },
@@ -15150,9 +15223,17 @@
                 "x-omg-max-bytes": 512
               },
               "issuer": {
-                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; x-omg-max-bytes states the byte limit and maxLength counts characters). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development).",
+                "anyOf": [
+                  {
+                    "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[\\u0021-\\u0022\\u0024\\u0026-\\u002E\\u0030-\\u0039\\u003B\\u003D\\u0041-\\u005A\\u005F-\\u007B\\u007D-\\u007E]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000?#\\u0000-\\u001f\\u007f-\\u009f]*)?$"
+                  },
+                  {
+                    "maxLength": 1000,
+                    "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000?#\\u0000-\\u001f\\u007f-\\u009f]*)?$"
+                  }
+                ],
+                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; x-omg-max-bytes states the byte limit and maxLength counts characters). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). A host with any non-ASCII character is limited to 1000 characters: the URL parser refuses a longer label (probed over HTTP) while an ASCII-only host has no such limit. The schema states it as two alternatives: an ASCII-only host (up to 2048 bytes) or a value of at most 1000 characters; it therefore also refuses a longer non-ASCII value whose host is short, which the parser accepts.",
                 "maxLength": 2048,
-                "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
                 "type": "string",
                 "x-omg-max-bytes": 2048
               },
@@ -15193,9 +15274,17 @@
                 "x-omg-max-bytes": 512
               },
               "issuer": {
-                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; x-omg-max-bytes states the byte limit and maxLength counts characters). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development).",
+                "anyOf": [
+                  {
+                    "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[\\u0021-\\u0022\\u0024\\u0026-\\u002E\\u0030-\\u0039\\u003B\\u003D\\u0041-\\u005A\\u005F-\\u007B\\u007D-\\u007E]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000?#\\u0000-\\u001f\\u007f-\\u009f]*)?$"
+                  },
+                  {
+                    "maxLength": 1000,
+                    "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000?#\\u0000-\\u001f\\u007f-\\u009f]*)?$"
+                  }
+                ],
+                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; x-omg-max-bytes states the byte limit and maxLength counts characters). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). A host with any non-ASCII character is limited to 1000 characters: the URL parser refuses a longer label (probed over HTTP) while an ASCII-only host has no such limit. The schema states it as two alternatives: an ASCII-only host (up to 2048 bytes) or a value of at most 1000 characters; it therefore also refuses a longer non-ASCII value whose host is short, which the parser accepts.",
                 "maxLength": 2048,
-                "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
                 "type": "string",
                 "x-omg-max-bytes": 2048
               },
@@ -15231,9 +15320,17 @@
             "minItems": 7,
             "prefixItems": [
               {
-                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; x-omg-max-bytes states the byte limit and maxLength counts characters). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development).",
+                "anyOf": [
+                  {
+                    "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[\\u0021-\\u0022\\u0024\\u0026-\\u002E\\u0030-\\u0039\\u003B\\u003D\\u0041-\\u005A\\u005F-\\u007B\\u007D-\\u007E]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000?#\\u0000-\\u001f\\u007f-\\u009f]*)?$"
+                  },
+                  {
+                    "maxLength": 1000,
+                    "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000?#\\u0000-\\u001f\\u007f-\\u009f]*)?$"
+                  }
+                ],
+                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; x-omg-max-bytes states the byte limit and maxLength counts characters). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). A host with any non-ASCII character is limited to 1000 characters: the URL parser refuses a longer label (probed over HTTP) while an ASCII-only host has no such limit. The schema states it as two alternatives: an ASCII-only host (up to 2048 bytes) or a value of at most 1000 characters; it therefore also refuses a longer non-ASCII value whose host is short, which the parser accepts.",
                 "maxLength": 2048,
-                "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
                 "type": "string",
                 "x-omg-max-bytes": 2048
               },
@@ -37370,6 +37467,7 @@
             "name": "start_date",
             "schema": {
               "format": "date",
+              "maxLength": 10,
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
@@ -37380,6 +37478,7 @@
             "name": "end_date",
             "schema": {
               "format": "date",
+              "maxLength": 10,
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
@@ -37576,6 +37675,7 @@
             "name": "start_date",
             "schema": {
               "format": "date",
+              "maxLength": 10,
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
@@ -37586,6 +37686,7 @@
             "name": "end_date",
             "schema": {
               "format": "date",
+              "maxLength": 10,
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }

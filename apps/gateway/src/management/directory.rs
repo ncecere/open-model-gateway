@@ -28,11 +28,16 @@ fn management_openapi_slice2_directory_request_vectors() {
     // by hand (`member`/`workspace`, else 400). The vectors therefore run on a
     // typed wire mirror that does include object_visibility; the HTTP probes
     // (openapi_slice2_fixture_tests) compare the real handler with the schema.
-    vectors::<slice2_wire::OwnWorkspaceUpdateWire>(
-        "PATCH",
-        "/api/v1/workspaces/{ws}",
+    for body in [
         json!({"name":"Fixture","object_visibility":"workspace"}),
-    );
+        json!({"object_visibility":"member"}),
+    ] {
+        vectors::<Checked<slice2_wire::OwnWorkspaceUpdateWire>>(
+            "PATCH",
+            "/api/v1/workspaces/{ws}",
+            body,
+        );
+    }
     vectors::<Checked<NewWorkspace>>(
         "POST",
         "/api/v1/platform/workspaces",
@@ -115,6 +120,14 @@ mod slice2_wire {
         name: Option<String>,
         #[allow(dead_code)]
         object_visibility: Option<Visibility>,
+    }
+    /// `update_own_workspace`: a name or a visibility must be given (a null is
+    /// absence), a given name must satisfy `valid_name`.
+    impl crate::management::openapi_semantic::Semantic for OwnWorkspaceUpdateWire {
+        fn accepted(&self) -> bool {
+            (self.name.is_some() || self.object_visibility.is_some())
+                && self.name.as_deref().is_none_or(valid_name)
+        }
     }
     #[allow(dead_code)]
     fn same_fields_as_production(p: OwnWorkspaceUpdate) {

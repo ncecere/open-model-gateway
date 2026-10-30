@@ -1930,12 +1930,17 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         ("finish_reason", "stop".to_owned()),
         ("finish_reason", cut("stop")),
         ("cursor", cursor.clone()),
-        ("cursor", cut(&cursor)),
+        ("cursor", cursor.replacen('_', "", 1)),
         ("q", "abcd".to_owned()),
         ("q", "abc".to_owned()),
         ("q", "a".repeat(36)),
         ("q", "a".repeat(37)),
     ];
+    let detail_candidates: Vec<(&str, &str)> = session_candidates
+        .iter()
+        .filter(|(name, _)| *name != "cursor")
+        .map(|(name, value)| (*name, value.as_str()))
+        .collect();
     let session_candidates: Vec<(&str, &str)> = session_candidates
         .iter()
         .map(|(name, value)| (*name, value.as_str()))
@@ -1973,7 +1978,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
                 "GET",
                 "/api/v1/workspaces/{ws}/sessions/{session}",
                 &[],
-                &session_candidates,
+                &detail_candidates,
                 async || ((), detail_base.clone()),
                 async |_: &(), q| {
                     Probe::from(
@@ -2144,10 +2149,26 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             template,
             &admin,
             path,
-            // Every rate non-null, so each bound runs.
-            json!({"requests_per_minute":100,"tokens_per_minute":100,"concurrent_requests":3,"concurrent_jobs":2,"storage_bytes":1024,"key_issuances_per_holder":3,"key_issuances_per_workspace":9,"budgets":[{"period":"month","amount_microusd":"9007199254740993"}]})
+            // Every rate non-null, so each bound runs; one budget per period, so the
+            // array at its maxItems limit is the valid array itself (a repeated
+            // period is refused by the handler and not expressible in the contract).
+            json!({"requests_per_minute":100,"tokens_per_minute":100,"concurrent_requests":3,"concurrent_jobs":2,"storage_bytes":1024,"key_issuances_per_holder":3,"key_issuances_per_workspace":9,"budgets":[{"period":"day","amount_microusd":"5"},{"period":"week","amount_microusd":"6"},{"period":"month","amount_microusd":"9007199254740993"},{"period":"lifetime","amount_microusd":"7"}]})
         );
     }
+    // The monthly (deprecated single-budget) form is refused with 409 while more
+    // than one budget is stored (policies.rs:372-374), whatever the body says, so
+    // each of its runs starts from a single stored budget.
+    let reset_policy = async |path: &str| {
+        c.setup(
+            &admin,
+            "PUT",
+            path,
+            Some(policy_body(
+                json!({"budgets":[{"period":"month","amount_microusd":"5"}]}),
+            )),
+        )
+        .await;
+    };
     for (label, template, path) in [
         (
             "PUT /platform/workspace-types/{kind}/policy (monthly)",
@@ -2160,6 +2181,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             format!("{vector_platform}/policy"),
         ),
     ] {
+        reset_policy(&path).await;
         body!(
             label,
             "PUT",
@@ -2182,6 +2204,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         c.guarded(
             &format!("PUT policy probes ({target})"),
             async {
+                reset_policy(&path).await;
                 // (what, extra fields, schema accepts, handler accepts)
                 let probes: Vec<(&str, Value, bool, bool)> = vec![
                     ("monthly money i64 max", json!({"monthly_budget_microusd":"9223372036854775807"}), true, true),
@@ -2315,6 +2338,22 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         json!(["Vector renamed positional", false, cost_center])
     );
     body!(
+        "PATCH /workspaces/{ws} (visibility only)",
+        "PATCH",
+        "/api/v1/workspaces/{ws}",
+        &owner,
+        vector_path.clone(),
+        json!({"name":null,"object_visibility":"member"})
+    );
+    body!(
+        "PATCH /workspaces/{ws} (positional, visibility only)",
+        "PATCH",
+        "/api/v1/workspaces/{ws}",
+        &owner,
+        vector_path.clone(),
+        json!([null, "member"])
+    );
+    body!(
         "PATCH /workspaces/{ws} (positional)",
         "PATCH",
         "/api/v1/workspaces/{ws}",
@@ -2378,6 +2417,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         "/api/v1/platform/workspace-types/team/catalogs".to_owned(),
         json!([[catalog]])
     );
+    reset_policy("/api/v1/platform/workspace-types/team/policy").await;
     body!(
         "PUT /platform/workspace-types/{kind}/policy (positional)",
         "PUT",
@@ -2386,6 +2426,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         "/api/v1/platform/workspace-types/team/policy".to_owned(),
         positional_policy.clone()
     );
+    reset_policy(&format!("{vector_platform}/policy")).await;
     body!(
         "PUT /platform/workspaces/{ws}/policy (positional)",
         "PUT",
