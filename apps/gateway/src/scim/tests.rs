@@ -1416,4 +1416,52 @@ mod database {
             1
         );
     }
+
+    /// #414: a JSON-escaped control character in a filter value (`\u0000`, `\u0007`,
+    /// `\u001f`, `\u007f`, `\u0085`) was decoded into the bound parameter, and
+    /// PostgreSQL's refusal of NUL surfaced as 500. Every control character is a
+    /// 400 `invalidFilter` on Users and Groups, for each filterable attribute,
+    /// and an ordinary filter still matches.
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn filter_values_with_control_characters_are_invalid_filters(pool: PgPool) {
+        let app = app(pool.clone(), true);
+        let auth = bearer();
+        let ada = person(&pool, "ada@example.com", None).await;
+        for (resource, attribute) in [
+            ("Users", "userName"),
+            ("Users", "externalId"),
+            ("Groups", "displayName"),
+            ("Groups", "externalId"),
+        ] {
+            for (index, escape) in [
+                "%5Cu0000",
+                "a%5Cu0000b",
+                "%5Cu0007",
+                "%5Cu001f",
+                "%5Cu007f",
+                "%5Cu0085",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let uri = format!("/scim/v2/{resource}?filter={attribute}%20eq%20%22{escape}%22");
+                let (status, _, body) = send(&app, Method::GET, &uri, Some(&auth), None).await;
+                assert_eq!(
+                    (status, body["scimType"].clone()),
+                    (StatusCode::BAD_REQUEST, json!("invalidFilter")),
+                    "{resource} {attribute} control vector #{index}"
+                );
+            }
+        }
+        let (status, _, found) = send(
+            &app,
+            Method::GET,
+            "/scim/v2/Users?filter=userName%20eq%20%22ada%40example.com%22",
+            Some(&auth),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(found["Resources"][0]["id"], ada.to_string());
+    }
 }
