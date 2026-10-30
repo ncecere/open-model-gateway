@@ -124,7 +124,7 @@ impl Client {
         if let Some(input) = &input
             && expected == StatusCode::OK
         {
-            openapi::responses::check_request(method, path, input).unwrap();
+            crate::management::openapi_semantic::check_request(method, path, input).unwrap();
         }
         let r = self.raw(who, method, path, input, headers).await;
         assert_eq!(
@@ -169,7 +169,7 @@ impl Client {
         schema_accepts: bool,
     ) {
         assert_eq!(
-            openapi::responses::check_request(method, path, &body).is_ok(),
+            crate::management::openapi_semantic::check_request(method, path, &body).is_ok(),
             schema_accepts,
             "{method} {status}: request schema verdict disagrees with the handler class"
         );
@@ -201,7 +201,7 @@ impl Client {
         handler_accepts: bool,
     ) {
         self.pins.set(self.pins.get() + 1);
-        let schema = openapi::responses::check_request(method, path, &body).is_ok();
+        let schema = crate::management::openapi_semantic::check_request(method, path, &body).is_ok();
         let r = self.raw(who, method, path, Some(body), &[]).await;
         self.expect(
             schema == schema_accepts,
@@ -1892,6 +1892,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
                     &mut o,
                     "GET",
                     template,
+                    &[],
                     async || ((), page_base()),
                     async |_: &(), q| {
                         Probe::from(c.raw(who, "GET", &target(&path, &q), None, &[]).await)
@@ -1928,6 +1929,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
                 &mut o,
                 "GET",
                 "/api/v1/workspaces/{ws}/sessions",
+                &[],
                 async || ((), list_base.clone()),
                 async |_: &(), q| {
                     Probe::from(
@@ -1948,6 +1950,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
                 &mut o,
                 "GET",
                 "/api/v1/workspaces/{ws}/sessions/{session}",
+                &[],
                 async || ((), detail_base.clone()),
                 async |_: &(), q| {
                     Probe::from(

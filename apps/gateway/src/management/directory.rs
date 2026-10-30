@@ -49,12 +49,12 @@ fn management_openapi_slice2_directory_request_vectors() {
     ] {
         vectors::<Checked<MappingInput>>("POST", "/api/v1/platform/oidc/group-mappings", body);
     }
-    crate::management::openapi::requests::manual_fields(
+    crate::management::openapi_semantic::manual_fields(
         "PATCH",
         "/api/v1/platform/oidc/group-mappings/{id}",
         &MAPPING_PATCH_FIELDS,
     );
-    crate::management::openapi::requests::manual_fields(
+    crate::management::openapi_semantic::manual_fields(
         "POST",
         "/api/v1/platform/oidc/group-mappings/{id}/preview",
         &[MAPPING_PATCH_FIELDS.as_slice(), &["delete"]].concat(),
@@ -199,7 +199,9 @@ async fn workspaces(
     }
     .bounds()?;
     if p.kind.as_deref().is_some_and(|k| !shared(k))
-        || p.q.as_ref().is_some_and(|q| q.chars().count() > 200)
+        || p.q
+            .as_ref()
+            .is_some_and(|q| q.chars().count() > 200 || q.chars().any(char::is_control))
         || p.status
             .as_deref()
             .is_some_and(|v| !matches!(v, "active" | "disabled"))
@@ -477,7 +479,9 @@ async fn users(
         offset: p.offset,
     }
     .bounds()?;
-    if p.q.as_ref().is_some_and(|q| q.chars().count() > 200)
+    if p.q
+        .as_ref()
+        .is_some_and(|q| q.chars().count() > 200 || q.chars().any(char::is_control))
         || p.role
             .as_deref()
             .is_some_and(|r| r != "none" && r != "any" && !platform_role_valid(r))

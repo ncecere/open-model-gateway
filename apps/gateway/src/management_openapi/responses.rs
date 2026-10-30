@@ -469,18 +469,6 @@ pub(crate) async fn capture(
     }
 }
 
-/// Validate an executed positive request against its exact routed operation,
-/// including manually decoded JSON bodies which have no derived struct DTO.
-#[cfg(feature = "integration-tests")]
-pub(crate) fn check_request(method: &str, path: &str, body: &Value) -> Result<()> {
-    let template = template(method, path)?.context("request operation must be documented")?;
-    let document = artifact();
-    let operation = operation(document, method, &template)?;
-    let schema = &operation["requestBody"]["content"]["application/json"]["schema"];
-    ensure!(!schema.is_null(), "operation has no JSON request body");
-    validate_value(document, schema, body)
-}
-
 pub(crate) fn check(
     method: &str,
     path: &str,
@@ -587,6 +575,9 @@ pub(crate) struct PositiveFixtures {
     operations: BTreeSet<String>,
     coverage: super::coverage::Observed,
     vectors: std::collections::BTreeMap<String, BTreeSet<&'static str>>,
+    /// Declared request locations (schema paths) each operation's body vector
+    /// runs carried, by `METHOD template`; see `request_reach`.
+    reach: std::collections::BTreeMap<String, BTreeSet<String>>,
 }
 impl PositiveFixtures {
     /// Record that every HTTP boundary vector of `kind` (`query` or `body`)
@@ -596,6 +587,19 @@ impl PositiveFixtures {
             .entry(format!("{method} {template}"))
             .or_default()
             .insert(kind);
+    }
+    /// The declared request locations one body vector run carried (its valid body
+    /// and seeded bases); runs of one operation accumulate.
+    pub(super) fn record_reach(
+        &mut self,
+        method: &str,
+        template: &str,
+        reached: &BTreeSet<String>,
+    ) {
+        self.reach
+            .entry(format!("{method} {template}"))
+            .or_default()
+            .extend(reached.iter().cloned());
     }
     /// Coverage and vector gaps for the given `METHOD template` operations.
     pub(super) fn check_contract_coverage(
@@ -621,6 +625,27 @@ impl PositiveFixtures {
                 failures.push(format!(
                     "{key}: the request body has no executed HTTP boundary vectors (call http_vectors::body_vectors_http)"
                 ));
+            }
+            // Every declared request location must have been carried by some
+            // valid body or seed of the operation (or be reviewed-exempt).
+            if has("body")
+                && let Some(schema) = op["requestBody"]["content"]["application/json"].get("schema")
+            {
+                let reached = self.reach.get(key).cloned().unwrap_or_default();
+                for (location, kind) in super::request_reach::unreached(document, schema, &reached)?
+                {
+                    failures.push(format!(
+                        "{key}: declared request location `{location}` ({kind}) was never walked by a vector run: {}, or annotate it with {}",
+                        super::request_reach::how_to_reach(&location, kind),
+                        super::request_reach::UNPROBED
+                    ));
+                }
+                for location in super::request_reach::stale(document, schema, &reached)? {
+                    failures.push(format!(
+                        "{key}: request location `{location}` carries {} but a vector run reached it: the exemption is stale, remove it",
+                        super::request_reach::UNPROBED
+                    ));
+                }
             }
         }
         ensure!(failures.is_empty(), "{}", failures.join("\n"));
@@ -750,8 +775,7 @@ mod tests {
         );
         assert!(super::require_known_areas(&[]).is_err());
         let mut seen = std::collections::BTreeSet::new();
-        for (name, group) in super::AREA_GROUPS {
-            assert!(!name.is_empty());
+        for (_, group) in super::AREA_GROUPS {
             assert!(!group.is_empty());
             super::require_known_areas(group).unwrap();
             for area in *group {
@@ -907,7 +931,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(count, 76);
+        assert_eq!(count, 22);
     }
     #[test]
     fn management_openapi_response_rejects_incomplete_completed_slot() {

@@ -16,7 +16,19 @@
 //!
 //! * A query parameter that can never ride a positive request (its handler
 //!   always refuses a request carrying it) is exempt only with
-//!   `x-omg-unobserved-parameter: "<reason>"` on the parameter.
+//!   `x-omg-unobserved-parameter: "<reason>"` on the parameter. The exemption
+//!   is STALE (and refused) once any positive request accepted the parameter.
+//! * Typed map values (`patternProperties` / schema-valued
+//!   `additionalProperties`) are walked at the wildcard location `<map>/*`.
+//! * On a NULLABLE node `x-omg-unobserved-branch` must start with `null:` or
+//!   `non-null:`, naming the one side it exempts; on a oneOf/anyOf branch it
+//!   exempts that branch. Annotations are refused anywhere under a component
+//!   referenced from more than one place (they would apply at every `$ref`), so
+//!   exemptions live inline or in a component referenced once (`quality.rs`).
+//!
+//! * A STALE `x-omg-may-be-empty` (the array WAS non-empty in a positive
+//!   response) or `x-omg-unobserved-branch` (that branch or nullable side WAS
+//!   observed) is refused, exactly like a stale `x-omg-unobserved-parameter`.
 //!
 //! Messages name schema/data JSON pointers only, never instance values.
 use anyhow::{Context, Result, ensure};
@@ -30,8 +42,10 @@ pub(super) const UNOBSERVED_PARAMETER: &str = "x-omg-unobserved-parameter";
 #[derive(Default)]
 struct OpObserved {
     queries: BTreeSet<String>,
-    /// Array data pattern -> seen non-empty.
-    arrays: BTreeMap<String, bool>,
+    /// (array data pattern, schema pointer of the array) -> seen non-empty.
+    /// The schema pointer keeps `items`, `prefixItems`, map values and union-arm
+    /// arrays that share a data pattern apart.
+    arrays: BTreeMap<(String, String), bool>,
     /// (data pattern, schema pointer of the union, branch index).
     branches: BTreeSet<(String, String, usize)>,
 }
@@ -88,6 +102,21 @@ fn reason<'a>(node: &'a Value, key: &str) -> Option<&'a str> {
         .as_str()
         .map(str::trim)
         .filter(|s| !s.is_empty())
+}
+/// Which side of a nullable node an `x-omg-unobserved-branch` reason exempts:
+/// `Some(true)` for `null: <reason>`, `Some(false)` for `non-null: <reason>`.
+/// A reason naming no side (or no reason after it) exempts nothing.
+pub(super) fn exempt_side(node: &Value) -> Option<bool> {
+    let text = reason(node, UNOBSERVED_BRANCH)?;
+    let (side, rest) = text.split_once(':')?;
+    if rest.trim().is_empty() {
+        return None;
+    }
+    match side {
+        "null" => Some(true),
+        "non-null" => Some(false),
+        _ => None,
+    }
 }
 fn describe(branch: &Value) -> String {
     if let Some(reference) = branch["$ref"].as_str() {
@@ -150,8 +179,9 @@ fn unobservable_queries(document: &Value, operation: &Value) -> Result<BTreeSet<
 
 #[derive(Default)]
 struct Expected {
-    /// Array data pattern -> every declaring node carries a may-be-empty reason.
-    arrays: BTreeMap<String, bool>,
+    /// (array data pattern, schema pointer) -> the declaring node carries a
+    /// may-be-empty reason.
+    arrays: BTreeMap<(String, String), bool>,
     /// (data pattern, union schema pointer) -> branch -> (description, exempt).
     branches: BTreeMap<(String, String), BTreeMap<usize, (String, bool)>>,
 }
@@ -175,22 +205,26 @@ fn expect(
     if is_array_schema(node) {
         let exempt = reason(node, MAY_BE_EMPTY).is_some();
         out.arrays
-            .entry(data.to_owned())
+            .entry((data.to_owned(), sptr.to_owned()))
             .and_modify(|all| *all &= exempt)
             .or_insert(exempt);
     }
     if nullable(node) {
-        let exempt = reason(node, UNOBSERVED_BRANCH).is_some();
+        let side = exempt_side(node);
         let entry = out
             .branches
             .entry((data.to_owned(), format!("{sptr}/type")))
             .or_default();
-        entry.entry(0).or_insert(("null".into(), exempt));
-        entry.entry(1).or_insert(("non-null".into(), exempt));
+        entry
+            .entry(0)
+            .or_insert(("null".into(), side == Some(true)));
+        entry
+            .entry(1)
+            .or_insert(("non-null".into(), side == Some(false)));
     }
     for keyword in ["oneOf", "anyOf"] {
         for (i, branch) in node[keyword].as_array().into_iter().flatten().enumerate() {
-            let exempt = reason(branch, UNOBSERVED_BRANCH).is_some();
+            let exempt = !nullable(branch) && reason(branch, UNOBSERVED_BRANCH).is_some();
             out.branches
                 .entry((data.to_owned(), format!("{sptr}/{keyword}")))
                 .or_default()
@@ -267,6 +301,32 @@ fn expect(
             stack,
         )?;
     }
+    // Typed map values live at the wildcard location of their map.
+    for (pattern, child) in node["patternProperties"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(_, child)| child.is_object())
+    {
+        expect(
+            document,
+            child,
+            &format!("{data}/*"),
+            &format!("{sptr}/patternProperties/{}", segment(pattern)),
+            out,
+            stack,
+        )?;
+    }
+    if let Some(child) = node.get("additionalProperties").filter(|v| v.is_object()) {
+        expect(
+            document,
+            child,
+            &format!("{data}/*"),
+            &format!("{sptr}/additionalProperties"),
+            out,
+            stack,
+        )?;
+    }
     Ok(())
 }
 
@@ -279,17 +339,37 @@ fn observe_node(
     data: &str,
     sptr: &str,
     seen: &mut OpObserved,
+    active: &mut Vec<(String, String)>,
 ) -> Result<()> {
+    // A reference followed twice at the SAME data location made no progress
+    // through the instance: a cycle, reported instead of overflowing the stack.
+    ensure!(
+        active.len() < 256,
+        "schema nesting too deep at `{}`",
+        show(data)
+    );
     let matches = |schema: &Value| -> Result<bool> {
         Ok(super::responses::validator(document, schema)?.is_valid(instance))
     };
     if let Some((target, pointer)) = follow(document, node)? {
-        observe_node(document, target, instance, data, &pointer, seen)?;
+        let frame = (pointer.clone(), data.to_owned());
+        ensure!(
+            !active.contains(&frame),
+            "schema reference cycle at {pointer} (data location `{}`)",
+            show(data)
+        );
+        active.push(frame);
+        let walked = observe_node(document, target, instance, data, &pointer, seen, active);
+        active.pop();
+        walked?;
     }
     if let Some(array) = instance.as_array()
         && is_array_schema(node)
     {
-        *seen.arrays.entry(data.to_owned()).or_insert(false) |= !array.is_empty();
+        *seen
+            .arrays
+            .entry((data.to_owned(), sptr.to_owned()))
+            .or_insert(false) |= !array.is_empty();
     }
     if nullable(node) {
         seen.branches.insert((
@@ -310,6 +390,7 @@ fn observe_node(
                     data,
                     &format!("{sptr}/{keyword}/{i}"),
                     seen,
+                    active,
                 )?;
             }
         }
@@ -322,6 +403,7 @@ fn observe_node(
             data,
             &format!("{sptr}/allOf/{i}"),
             seen,
+            active,
         )?;
     }
     if let Some(condition) = node.get("if") {
@@ -334,6 +416,7 @@ fn observe_node(
                 data,
                 &format!("{sptr}/{keyword}"),
                 seen,
+                active,
             )?;
         }
     }
@@ -348,13 +431,63 @@ fn observe_node(
                     &format!("{data}/{name}"),
                     &format!("{sptr}/properties/{name}"),
                     seen,
+                    active,
+                )?;
+            }
+        }
+    }
+    if let Some(object) = instance.as_object() {
+        let patterns: Vec<(&String, &Value, _)> = node["patternProperties"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(_, child)| child.is_object())
+            .map(|(pattern, child)| {
+                super::validation::compile_schema(
+                    &serde_json::json!({"type":"string","pattern":pattern}),
+                )
+                .map(|validator| (pattern, child, validator))
+            })
+            .collect::<Result<_>>()?;
+        let declared = node["properties"].as_object();
+        for (name, value) in object {
+            let name_value = Value::String(name.clone());
+            let mut selected = false;
+            for (pattern, child, validator) in &patterns {
+                if validator.is_valid(&name_value) {
+                    selected = true;
+                    observe_node(
+                        document,
+                        child,
+                        value,
+                        &format!("{data}/*"),
+                        &format!("{sptr}/patternProperties/{}", segment(pattern)),
+                        seen,
+                        active,
+                    )?;
+                }
+            }
+            if !selected
+                && declared.is_none_or(|d| !d.contains_key(name))
+                && let Some(child) = node.get("additionalProperties").filter(|v| v.is_object())
+            {
+                observe_node(
+                    document,
+                    child,
+                    value,
+                    &format!("{data}/*"),
+                    &format!("{sptr}/additionalProperties"),
+                    seen,
+                    active,
                 )?;
             }
         }
     }
     if let Some(array) = instance.as_array() {
+        // `items` governs only the elements AFTER the positional prefix.
+        let prefix = node["prefixItems"].as_array().map_or(0, Vec::len);
         if let Some(items) = node.get("items").filter(|v| v.is_object()) {
-            for value in array {
+            for value in array.iter().skip(prefix) {
                 observe_node(
                     document,
                     items,
@@ -362,6 +495,7 @@ fn observe_node(
                     &format!("{data}/*"),
                     &format!("{sptr}/items"),
                     seen,
+                    active,
                 )?;
             }
         }
@@ -379,6 +513,7 @@ fn observe_node(
                     &format!("{data}/*"),
                     &format!("{sptr}/prefixItems/{i}"),
                     seen,
+                    active,
                 )?;
             }
         }
@@ -417,6 +552,7 @@ impl Observed {
                     "",
                     &format!("/response/{status}"),
                     seen,
+                    &mut Vec::new(),
                 )?;
             }
         }
@@ -430,6 +566,13 @@ impl Observed {
         let seen = self.0.get(op_key).unwrap_or(&empty);
         let mut gaps = Vec::new();
         let unobservable = unobservable_queries(document, operation)?;
+        for name in &unobservable {
+            if seen.queries.contains(name) {
+                gaps.push(format!(
+                    "query parameter `{name}` carries {UNOBSERVED_PARAMETER} but a positive request accepted it: the exemption is stale, remove it"
+                ));
+            }
+        }
         for name in documented_queries(document, operation)? {
             if !seen.queries.contains(&name) && !unobservable.contains(&name) {
                 gaps.push(format!(
@@ -448,16 +591,33 @@ impl Observed {
                 &mut Vec::new(),
             )?;
         }
-        for (pattern, exempt) in &expected.arrays {
-            if !exempt && seen.arrays.get(pattern) != Some(&true) {
+        for (key, exempt) in &expected.arrays {
+            let (pattern, schema) = key;
+            if *exempt && seen.arrays.get(key) == Some(&true) {
                 gaps.push(format!(
-                    "array `{}` was never non-empty in a positive response (populate it, or annotate the array with {MAY_BE_EMPTY})",
+                    "array `{}` ({schema}) carries {MAY_BE_EMPTY} but was non-empty in a positive response: the exemption is stale, remove it",
+                    show(pattern)
+                ));
+            }
+            if !exempt && seen.arrays.get(key) != Some(&true) {
+                gaps.push(format!(
+                    "array `{}` ({schema}) was never non-empty in a positive response (populate it, or annotate the array with {MAY_BE_EMPTY})",
                     show(pattern)
                 ));
             }
         }
         for ((data, union), branches) in &expected.branches {
             for (index, (description, exempt)) in branches {
+                if *exempt
+                    && seen
+                        .branches
+                        .contains(&(data.clone(), union.clone(), *index))
+                {
+                    gaps.push(format!(
+                        "`{}` ({union}): branch {index} `{description}` carries {UNOBSERVED_BRANCH} but was observed: the exemption is stale, remove it",
+                        show(data)
+                    ));
+                }
                 if !exempt
                     && !seen
                         .branches

@@ -132,6 +132,191 @@ fn money(document: &Value, node: &Value, depth: usize) -> Result<Money> {
     })
 }
 
+/// Annotations that excuse ONE gap at ONE location. Each is refused anywhere
+/// under a component that more than one place references (they would silently
+/// apply at every reference), and an exemption lives only on a location owned
+/// by a single operation.
+const EXEMPTIONS: [&str; 6] = [
+    super::coverage::MAY_BE_EMPTY,
+    super::coverage::UNOBSERVED_BRANCH,
+    super::coverage::UNOBSERVED_PARAMETER,
+    super::request_reach::UNPROBED,
+    super::http_vectors::UNSENDABLE,
+    super::http_vectors::PATTERN_BOUNDARIES,
+];
+
+/// `/components/<kind>/<name>` when `path` is that component or lies under it.
+fn component_of(path: &str) -> Option<String> {
+    let rest = path.strip_prefix("/components/")?;
+    let mut parts = rest.splitn(3, '/');
+    let (kind, name) = (parts.next()?, parts.next()?);
+    Some(format!("/components/{kind}/{name}"))
+}
+
+/// Every `$ref` target (a JSON pointer) with the component that holds the
+/// reference (`None` for a reference outside `components`).
+fn ref_sites(document: &Value) -> Vec<(String, Option<String>)> {
+    fn walk(node: &Value, path: &str, out: &mut Vec<(String, Option<String>)>) {
+        match node {
+            Value::Object(map) => {
+                if let Some(target) = map
+                    .get("$ref")
+                    .and_then(Value::as_str)
+                    .and_then(|r| r.strip_prefix('#'))
+                {
+                    out.push((target.to_owned(), component_of(path)));
+                }
+                for (key, child) in map {
+                    // The generated slot aliases repeat the reference of the
+                    // request/response schema they name: not a second place.
+                    if matches!(
+                        key.as_str(),
+                        "x-omg-request-schema" | "x-omg-response-schema"
+                    ) {
+                        continue;
+                    }
+                    walk(child, &format!("{path}/{}", segment(key)), out);
+                }
+            }
+            Value::Array(items) => {
+                for (i, child) in items.iter().enumerate() {
+                    walk(child, &format!("{path}/{i}"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(document, "", &mut out);
+    out
+}
+
+/// How many places (capped at 2) reach `component`: each reference outside
+/// `components` counts once, each reference inside another component as often as
+/// that component is reached (an annotation under a component referenced once by
+/// a component referenced twice still applies twice).
+fn instances(
+    component: &str,
+    sites: &[(String, Option<String>)],
+    stack: &mut Vec<String>,
+) -> usize {
+    if stack.iter().any(|c| c == component) {
+        return 1;
+    }
+    stack.push(component.to_owned());
+    let mut total = 0;
+    for (target, holder) in sites {
+        // A reference INTO the component (`#/components/schemas/S/properties/p`)
+        // reaches the annotations under `S` just like a reference to `S`.
+        if target != component && !target.starts_with(&format!("{component}/")) {
+            continue;
+        }
+        total += match holder {
+            None => 1,
+            Some(holder) => instances(holder, sites, stack).max(1),
+        };
+        if total >= 2 {
+            break;
+        }
+    }
+    stack.pop();
+    total
+}
+
+/// Is `location` under a component that more than one place references?
+fn shared_location(document: &Value, location: &str) -> bool {
+    component_of(location)
+        .is_some_and(|component| instances(&component, &ref_sites(document), &mut Vec::new()) >= 2)
+}
+
+/// Component schema pointers reachable from any operation's JSON request body,
+/// and the pointers of the request body schemas themselves.
+fn request_schemas(document: &Value) -> (BTreeSet<String>, BTreeSet<String>) {
+    let mut roots = BTreeSet::new();
+    let mut reachable = BTreeSet::new();
+    let mut pending: Vec<&Value> = Vec::new();
+    for item in document["paths"]
+        .as_object()
+        .into_iter()
+        .flat_map(|m| m.values())
+    {
+        for operation in item.as_object().into_iter().flat_map(|m| m.values()) {
+            let body = &operation["requestBody"];
+            let body = body
+                .get("$ref")
+                .and_then(Value::as_str)
+                .and_then(|r| document.pointer(r.strip_prefix('#')?))
+                .unwrap_or(body);
+            if let Some(schema) = body["content"]["application/json"].get("schema") {
+                if let Some(target) = schema
+                    .get("$ref")
+                    .and_then(Value::as_str)
+                    .and_then(|r| r.strip_prefix('#'))
+                {
+                    roots.insert(target.to_owned());
+                }
+                pending.push(schema);
+            }
+        }
+    }
+    while let Some(node) = pending.pop() {
+        match node {
+            Value::Object(map) => {
+                if let Some(target) = map
+                    .get("$ref")
+                    .and_then(Value::as_str)
+                    .and_then(|r| r.strip_prefix('#'))
+                    && reachable.insert(target.to_owned())
+                    && let Some(next) = document.pointer(target)
+                {
+                    pending.push(next);
+                }
+                pending.extend(map.values());
+            }
+            Value::Array(items) => pending.extend(items),
+            _ => {}
+        }
+    }
+    (roots, reachable)
+}
+
+/// Does `location` lie within a JSON request body schema?
+fn in_request_schema(document: &Value, location: &str) -> bool {
+    location.starts_with("/operation/requestBody")
+        || location.starts_with("/components/requestBodies/")
+        || component_of(location)
+            .is_some_and(|component| request_schemas(document).1.contains(&component))
+}
+
+/// Is `location` a property (or positional item) declared DIRECTLY on a request
+/// body's root object/array, in the root itself or in one of its union arms?
+fn direct_body_property(document: &Value, location: &str) -> bool {
+    let Some((head, _)) = location.rsplit_once('/') else {
+        return false;
+    };
+    let Some(mut parent) = head
+        .strip_suffix("/properties")
+        .or_else(|| head.strip_suffix("/prefixItems"))
+    else {
+        return false;
+    };
+    // Strip `/oneOf/<n>`, `/anyOf/<n>`, `/allOf/<n>` arms.
+    while let Some((rest, index)) = parent.rsplit_once('/') {
+        let Some(arm) = ["/oneOf", "/anyOf", "/allOf"]
+            .iter()
+            .find_map(|keyword| rest.strip_suffix(keyword))
+        else {
+            break;
+        };
+        if index.is_empty() || !index.bytes().all(|b| b.is_ascii_digit()) {
+            break;
+        }
+        parent = arm;
+    }
+    (parent.starts_with("/operation/requestBody") && parent.ends_with("/application~1json/schema"))
+        || request_schemas(document).0.contains(parent)
+}
+
 fn arbitrary(location: &str, node: &Value) -> bool {
     ARBITRARY_JSON
         .iter()
@@ -348,6 +533,51 @@ fn schema(
     effective.merge(facts(document, node, location, &mut BTreeSet::new())?);
     // Coverage exemptions are reviewed claims: each needs a real reason and the
     // right kind of node, or it would silently excuse unrelated schemas.
+    // An exemption under a component that more than one place references (at
+    // any depth, through nested components too) would silently apply at every
+    // reference: exemptions live inline, or in a component referenced once.
+    if EXEMPTIONS.iter().any(|key| node.get(*key).is_some()) {
+        ensure!(
+            !shared_location(document, location),
+            "an exemption annotation is refused under a shared component ({location}): it would apply everywhere the component is referenced; annotate the one inline location, or move the schema to a component referenced once"
+        );
+    }
+    if let Some(value) = node.get(super::request_reach::UNPROBED) {
+        ensure!(
+            value.as_str().is_some_and(|r| !r.trim().is_empty()),
+            "{} needs a non-empty reason at {location}",
+            super::request_reach::UNPROBED
+        );
+        ensure!(
+            in_request_schema(document, location),
+            "{} is only valid inside a request body schema at {location}",
+            super::request_reach::UNPROBED
+        );
+    }
+    if let Some(value) = node.get(super::http_vectors::UNSENDABLE) {
+        ensure!(
+            value.as_str().is_some_and(|r| !r.trim().is_empty()),
+            "{} needs a non-empty reason at {location}",
+            super::http_vectors::UNSENDABLE
+        );
+        ensure!(
+            direct_body_property(document, location),
+            "{} is only valid on a query parameter or a direct request body property at {location}",
+            super::http_vectors::UNSENDABLE
+        );
+    }
+    if let Some(value) = node.get(super::http_vectors::PATTERN_BOUNDARIES) {
+        ensure!(
+            value.as_str().is_some_and(|r| !r.trim().is_empty()),
+            "{} needs a non-empty reason at {location}",
+            super::http_vectors::PATTERN_BOUNDARIES
+        );
+        ensure!(
+            node["pattern"].is_string(),
+            "{} is only valid on a schema with a pattern at {location}",
+            super::http_vectors::PATTERN_BOUNDARIES
+        );
+    }
     if let Some(value) = node.get(super::coverage::MAY_BE_EMPTY) {
         ensure!(
             value.as_str().is_some_and(|r| !r.trim().is_empty()),
@@ -369,12 +599,51 @@ fn schema(
             "{} needs a non-empty reason at {location}",
             super::coverage::UNOBSERVED_BRANCH
         );
+        let nullable = super::coverage::nullable(node);
         ensure!(
-            in_branch || super::coverage::nullable(node),
+            in_branch || nullable,
             "{} is only valid on a oneOf/anyOf branch or a nullable node at {location}",
             super::coverage::UNOBSERVED_BRANCH
         );
+        if nullable {
+            ensure!(
+                !in_branch,
+                "{} on a nullable union branch is ambiguous at {location}: give the null its own branch",
+                super::coverage::UNOBSERVED_BRANCH
+            );
+            ensure!(
+                super::coverage::exempt_side(node).is_some(),
+                "{} on a nullable node must read `null: <reason>` or `non-null: <reason>` at {location}",
+                super::coverage::UNOBSERVED_BRANCH
+            );
+        }
     }
+    if let Some(value) = node.get(super::http_vectors::MAX_BYTES) {
+        let limit = value.as_u64().filter(|n| *n > 0);
+        ensure!(
+            limit.is_some(),
+            "{} must be a positive integer at {location}",
+            super::http_vectors::MAX_BYTES
+        );
+        ensure!(
+            node["type"] == "string"
+                || node["type"]
+                    .as_array()
+                    .is_some_and(|t| t.iter().any(|v| v == "string")),
+            "{} is only valid on a string schema at {location}",
+            super::http_vectors::MAX_BYTES
+        );
+        // maxLength counts characters, each at least one byte: it can never
+        // permit more than the byte limit does.
+        ensure!(
+            node["maxLength"]
+                .as_u64()
+                .is_none_or(|max| Some(max) <= limit),
+            "maxLength exceeds {} at {location}",
+            super::http_vectors::MAX_BYTES
+        );
+    }
+    unprobed_request_keywords(document, node, location)?;
     // Reviewed arbitrary JSON still declares its JSON type (e.g. "object").
     if arbitrary(location, node) {
         ensure!(
@@ -501,7 +770,213 @@ fn schema(
     Ok(())
 }
 
+/// Keywords the vector harness cannot probe: a REQUEST schema using one would
+/// pass `finish` with the constraint never exercised, so they are refused there
+/// (add vectors for the keyword first, or restructure the schema).
+const UNPROBED_REQUEST_KEYWORDS: &[&str] = &[
+    "minProperties",
+    "maxProperties",
+    "multipleOf",
+    "propertyNames",
+    "contains",
+    "minContains",
+    "maxContains",
+    "not",
+];
+
+/// Numeric bounds the vectors can probe are integers within i64 (the vectors
+/// are `bound` and `bound` +/- 1 as i64).
+const NUMERIC_BOUNDS: &[&str] = &["minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"];
+
+fn unprobed_request_keywords(document: &Value, node: &Value, location: &str) -> Result<()> {
+    let keyword = UNPROBED_REQUEST_KEYWORDS
+        .iter()
+        .find(|keyword| node.get(**keyword).is_some())
+        .copied()
+        .or_else(|| {
+            NUMERIC_BOUNDS
+                .iter()
+                .find(|keyword| node.get(**keyword).is_some_and(|v| v.as_i64().is_none()))
+                .copied()
+        });
+    if let Some(keyword) = keyword
+        && in_request_schema(document, location)
+    {
+        let why = if NUMERIC_BOUNDS.contains(&keyword) {
+            "a request bound must be an integer within i64"
+        } else {
+            "the vector harness cannot probe it"
+        };
+        anyhow::bail!("{keyword} is not allowed in a request schema at {location}: {why}");
+    }
+    Ok(())
+}
+
+/// `x-omg-max-bytes` is read from every APPLICABLE node of a value, so it must
+/// state a limit that always applies: it is refused on a oneOf/anyOf branch (the
+/// limit would hold only when that branch matches, and a sibling branch could
+/// state another) and anywhere under `if`/`then`/`else`/`not` (conditional or
+/// inverted). Properties, items and map values INSIDE a branch are separate
+/// instances and may carry their own.
+fn bytes_placement(
+    document: &Value,
+    node: &Value,
+    location: &str,
+    volatile: bool,
+    branch: bool,
+    seen: &mut BTreeSet<(String, bool, bool)>,
+) -> Result<()> {
+    if !node.is_object() {
+        return Ok(());
+    }
+    if node.get(super::http_vectors::MAX_BYTES).is_some() {
+        ensure!(
+            !volatile && !branch,
+            "{} is refused on a oneOf/anyOf branch and under if/then/else/not at {location}: it must state a limit that always applies",
+            super::http_vectors::MAX_BYTES
+        );
+    }
+    if let Some(target) = node
+        .get("$ref")
+        .and_then(Value::as_str)
+        .and_then(|r| r.strip_prefix('#'))
+        && seen.insert((target.to_owned(), volatile, branch))
+        && let Some(next) = document.pointer(target)
+    {
+        bytes_placement(document, next, target, volatile, branch, seen)?;
+    }
+    for keyword in ["allOf", "anyOf", "oneOf"] {
+        for (i, child) in node[keyword].as_array().into_iter().flatten().enumerate() {
+            bytes_placement(
+                document,
+                child,
+                &format!("{location}/{keyword}/{i}"),
+                volatile,
+                branch || keyword != "allOf",
+                seen,
+            )?;
+        }
+    }
+    for keyword in ["if", "then", "else", "not"] {
+        if let Some(child) = node.get(keyword) {
+            bytes_placement(
+                document,
+                child,
+                &format!("{location}/{keyword}"),
+                true,
+                false,
+                seen,
+            )?;
+        }
+    }
+    for keyword in ["properties", "patternProperties"] {
+        for (name, child) in node[keyword].as_object().into_iter().flatten() {
+            bytes_placement(
+                document,
+                child,
+                &format!("{location}/{keyword}/{}", segment(name)),
+                volatile,
+                false,
+                seen,
+            )?;
+        }
+    }
+    for (i, child) in node["prefixItems"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        bytes_placement(
+            document,
+            child,
+            &format!("{location}/prefixItems/{i}"),
+            volatile,
+            false,
+            seen,
+        )?;
+    }
+    for keyword in [
+        "items",
+        "additionalProperties",
+        "unevaluatedProperties",
+        "unevaluatedItems",
+        "contains",
+        "propertyNames",
+    ] {
+        if let Some(child) = node.get(keyword) {
+            bytes_placement(
+                document,
+                child,
+                &format!("{location}/{keyword}"),
+                volatile,
+                false,
+                seen,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Run [`bytes_placement`] over every complete component and every inline schema.
+fn bytes_placements(document: &Value) -> Result<()> {
+    fn crawl(
+        document: &Value,
+        node: &Value,
+        location: &str,
+        seen: &mut BTreeSet<(String, bool, bool)>,
+    ) -> Result<()> {
+        match node {
+            Value::Object(map) => {
+                for (key, child) in map {
+                    let at = format!("{location}/{}", segment(key));
+                    if key == "schema" {
+                        bytes_placement(document, child, &at, false, false, seen)?;
+                    } else {
+                        crawl(document, child, &at, seen)?;
+                    }
+                }
+            }
+            Value::Array(items) => {
+                for (i, child) in items.iter().enumerate() {
+                    crawl(document, child, &format!("{location}/{i}"), seen)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    let mut seen = BTreeSet::new();
+    for (name, node) in document["components"]["schemas"]
+        .as_object()
+        .into_iter()
+        .flatten()
+    {
+        if node["x-omg-schema-status"] != "incomplete" {
+            bytes_placement(
+                document,
+                node,
+                &format!("/components/schemas/{}", segment(name)),
+                false,
+                false,
+                &mut seen,
+            )?;
+        }
+    }
+    crawl(document, &document["paths"], "/paths", &mut seen)?;
+    for kind in ["responses", "headers", "parameters", "requestBodies"] {
+        crawl(
+            document,
+            &document["components"][kind],
+            &format!("/components/{kind}"),
+            &mut seen,
+        )?;
+    }
+    Ok(())
+}
+
 pub(super) fn completed(document: &Value) -> Result<()> {
+    bytes_placements(document)?;
     for (name, node) in document["components"]["schemas"]
         .as_object()
         .context("schemas missing")?
@@ -518,13 +993,19 @@ pub(super) fn completed(document: &Value) -> Result<()> {
     }
     // Generated reusable responses/headers are complete contracts too, even
     // when only an area that is still incomplete references them today.
+    // Each reusable component is checked AT ITS OWN LOCATION, so the shared
+    // component ban does not depend on an operation referencing it.
     for kind in ["responses", "headers", "parameters", "requestBodies"] {
-        for node in document["components"][kind]
+        for (name, node) in document["components"][kind]
             .as_object()
             .into_iter()
-            .flat_map(|m| m.values())
+            .flatten()
         {
-            operation(document, node)?;
+            operation_at(
+                document,
+                node,
+                &format!("/components/{kind}/{}", segment(name)),
+            )?;
         }
     }
     for (path, item) in document["paths"].as_object().context("paths missing")? {
@@ -538,6 +1019,11 @@ pub(super) fn completed(document: &Value) -> Result<()> {
 }
 
 pub(super) fn operation(document: &Value, operation: &Value) -> Result<()> {
+    operation_at(document, operation, "/operation")
+}
+
+/// [`operation`] for a node that lives at `location` in the document.
+fn operation_at(document: &Value, operation: &Value, location: &str) -> Result<()> {
     fn discover(
         document: &Value,
         node: &Value,
@@ -568,6 +1054,24 @@ pub(super) fn operation(document: &Value, operation: &Value) -> Result<()> {
                         super::coverage::UNOBSERVED_PARAMETER
                     );
                 }
+                if let Some(value) = map.get(super::http_vectors::UNSENDABLE) {
+                    ensure!(
+                        value.as_str().is_some_and(|r| !r.trim().is_empty()),
+                        "{} needs a non-empty reason at {location}",
+                        super::http_vectors::UNSENDABLE
+                    );
+                    ensure!(
+                        map.get("in").is_some_and(|v| v == "query"),
+                        "{} is only valid on a query parameter or a direct request body property at {location}",
+                        super::http_vectors::UNSENDABLE
+                    );
+                }
+                if EXEMPTIONS.iter().any(|key| map.contains_key(*key)) && map.get("in").is_some() {
+                    ensure!(
+                        !shared_location(document, location),
+                        "an exemption annotation is refused under a shared component ({location}): it would apply everywhere the component is referenced"
+                    );
+                }
                 for (key, child) in map {
                     let pointer = format!("{location}/{}", segment(key));
                     if key == "schema" {
@@ -586,5 +1090,5 @@ pub(super) fn operation(document: &Value, operation: &Value) -> Result<()> {
         }
         Ok(())
     }
-    discover(document, operation, "/operation", &mut BTreeSet::new())
+    discover(document, operation, location, &mut BTreeSet::new())
 }

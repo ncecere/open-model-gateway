@@ -167,7 +167,7 @@ mod slice2_wire {
 #[test]
 fn management_openapi_slice2_policy_request_vectors() {
     use crate::management::openapi_semantic::Checked;
-    use slice2_wire::{BudgetWire, PolicyWire};
+    use slice2_wire::PolicyWire;
     for path in [
         "/api/v1/platform/workspace-types/{kind}/policy",
         "/api/v1/platform/workspaces/{ws}/policy",
@@ -182,12 +182,7 @@ fn management_openapi_slice2_policy_request_vectors() {
             path,
             json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"monthly_budget_microusd":null,"budget_period":"month"}),
         );
-        crate::management::openapi::requests::nested_vectors::<BudgetWire>(
-            "PUT",
-            path,
-            "/oneOf/0/properties/budgets/items",
-            json!({"period":"month","amount_microusd":"9007199254740993"}),
-        );
+        // The nested budget item is walked by the HTTP body vectors of this operation.
     }
 }
 

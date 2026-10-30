@@ -84,7 +84,11 @@ async fn list(
         || q.purpose
             .as_deref()
             .is_some_and(|p| !API_PURPOSES.contains(&p))
-        || q.search.as_deref().is_some_and(|t| t.chars().count() > 120)
+        || q.search.as_deref().is_some_and(|t| {
+            // Like resources::search(): surrounding whitespace is trimmed, and a
+            // control character inside the search never reaches PostgreSQL.
+            t.chars().count() > 120 || t.trim().chars().any(char::is_control)
+        })
     {
         return Err(invalid());
     }
