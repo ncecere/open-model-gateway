@@ -26,6 +26,15 @@ pub(super) const ARBITRARY_JSON: &[(&str, &str)] = &[
         "/components/schemas/SettingsAlertEvent/properties/details",
         "EVENT_JSON returns alert_events.details verbatim as stored producer-specific JSON; monetary refinements apply on this shared base, and every concrete event variant refines it with the closed schema of its kind (Settings*Details).",
     ),
+    // Slice 6: audit rows are stored jsonb objects, not deserialized DTOs.
+    (
+        "/components/schemas/S6WorkspaceAudit/properties/metadata",
+        "Stored audit_events.metadata object. audit() keeps only typed safe keys (flags, counts, closed vocabulary values) for new rows; older rows and database-trigger rows carry action-specific keys.",
+    ),
+    (
+        "/components/schemas/S6PlatformAudit/properties/metadata",
+        "Stored audit_events.metadata object. audit() keeps only typed safe keys (flags, counts, closed vocabulary values) for new rows; older rows and database-trigger rows carry action-specific keys.",
+    ),
 ];
 
 /// Decimal RATE fields that legitimately carry fractions, so the integer
