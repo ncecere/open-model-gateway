@@ -31,6 +31,7 @@ async fn mapping_issuer_refuses_control_characters(pool: PgPool) {
         format!("\n{ISSUER}/"),
         format!("{ISSUER}/a\u{7}b"),
         format!("{ISSUER}/a\u{85}b"),
+        format!("{ISSUER}/a\u{7f}b"),
         format!("{ISSUER}\t/"),
     ];
     // Collect every case so one run reports all of them (labels only, never values).
@@ -91,4 +92,28 @@ async fn mapping_issuer_refuses_control_characters(pool: PgPool) {
         .await
         .unwrap();
     assert!(stored == ISSUER, "the stored issuer must be unchanged");
+}
+
+/// A row stored before #427 with a control character in its issuer (it could
+/// never match a real OIDC `iss`): a PATCH of another field now answers 400,
+/// because the merged mapping is validated, and DELETE still removes it.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn legacy_control_character_issuer_can_be_deleted_not_patched(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let legacy = Uuid::new_v4();
+    sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role,enabled) VALUES($1,$2,'legacy','platform','user',true)")
+        .bind(legacy)
+        .bind(format!("{ISSUER}/\n"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let path = format!("/api/v1/platform/oidc/group-mappings/{legacy}");
+    let (status, body) = call(&f.s, &f.admin, "PATCH", &path, json!({"enabled":false})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        !body.to_string().contains(ISSUER),
+        "the refusal never echoes the stored issuer"
+    );
+    let (status, _) = call(&f.s, &f.admin, "DELETE", &path, Value::Null).await;
+    assert!(status.is_success(), "a legacy row can still be deleted");
 }
