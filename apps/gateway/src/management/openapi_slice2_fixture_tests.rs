@@ -8,7 +8,7 @@
 //! vectors run last because their accepted variants change state.
 use super::*;
 use futures::FutureExt;
-use openapi::http_vectors::{Probe, body_vectors_http, query_vectors, query_vectors_fixed};
+use openapi::http_vectors::{Probe, body_vectors_http, query_vectors, query_vectors_extended, query_vectors_fixed};
 use openapi::responses::{Captured, PositiveFixtures, SLICE2_AREAS, capture_http};
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
@@ -635,6 +635,8 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
     c.send(&outsider, "GET", &own, None, StatusCode::FORBIDDEN)
         .await;
 
+    // An entitled non-member who never set a display name (the picker row's null side).
+    user(&pool, "member-unnamed", "user").await;
     // Candidate pickers are populated before adding a manual member.
     for path in [
         format!("{own}/member-candidates?q=member"),
@@ -1919,17 +1921,37 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             ("cursor", cursor.clone()),
             ("limit", "1".to_owned()),
         ]);
-        let list_base: Vec<(String, String)> = base
+        // Boundary candidates for the query patterns whose length the harness cannot
+    // derive: each pair straddles the boundary within one edit.
+    let cut = |text: &str| text.chars().skip(1).collect::<String>();
+    let session_candidates: Vec<(&str, String)> = vec![
+        ("status", "succeeded".to_owned()),
+        ("status", cut("succeeded")),
+        ("finish_reason", "stop".to_owned()),
+        ("finish_reason", cut("stop")),
+        ("cursor", cursor.clone()),
+        ("cursor", cut(&cursor)),
+        ("q", "abcd".to_owned()),
+        ("q", "abc".to_owned()),
+        ("q", "a".repeat(36)),
+        ("q", "a".repeat(37)),
+    ];
+    let session_candidates: Vec<(&str, &str)> = session_candidates
+        .iter()
+        .map(|(name, value)| (*name, value.as_str()))
+        .collect();
+    let list_base: Vec<(String, String)> = base
             .iter()
             .map(|(n, v)| ((*n).to_owned(), v.clone()))
             .collect();
         c.guarded(
             "GET /workspaces/{ws}/sessions",
-            query_vectors(
+            query_vectors_extended(
                 &mut o,
                 "GET",
                 "/api/v1/workspaces/{ws}/sessions",
                 &[],
+                &session_candidates,
                 async || ((), list_base.clone()),
                 async |_: &(), q| {
                     Probe::from(
@@ -1946,11 +1968,12 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             .collect();
         c.guarded(
             "GET /workspaces/{ws}/sessions/{session}",
-            query_vectors(
+            query_vectors_extended(
                 &mut o,
                 "GET",
                 "/api/v1/workspaces/{ws}/sessions/{session}",
                 &[],
+                &session_candidates,
                 async || ((), detail_base.clone()),
                 async |_: &(), q| {
                     Probe::from(
@@ -2183,11 +2206,13 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
                     ("null monthly alone", json!({"monthly_budget_microusd":null}), true, true),
                     ("monthly with a period", json!({"monthly_budget_microusd":"5000","budget_period":"day"}), true, true),
                     ("monthly with a null period", json!({"monthly_budget_microusd":"5000","budget_period":null}), false, false),
-                    // A repeated period is refused even with different amounts (parse_budgets).
-                    ("repeated period, same amount", json!({"budgets":[{"period":"month","amount_microusd":"5"},{"period":"month","amount_microusd":"5"}]}), false, false),
-                    ("repeated period, other amount", json!({"budgets":[{"period":"month","amount_microusd":"5"},{"period":"month","amount_microusd":"6"}]}), false, false),
-                    ("repeated period, positional", json!({"budgets":[["day","5"],["day","6"]]}), false, false),
-                    ("repeated period, mixed forms", json!({"budgets":[{"period":"week","amount_microusd":"5"},["week","6"]]}), false, false),
+                    // A repeated period is refused even with different amounts (parse_budgets,
+                    // policies.rs:569-581); the contract cannot state it (no contains/maxContains
+                    // in request schemas), so the schema accepts and the handler refuses.
+                    ("repeated period, same amount", json!({"budgets":[{"period":"month","amount_microusd":"5"},{"period":"month","amount_microusd":"5"}]}), true, false),
+                    ("repeated period, other amount", json!({"budgets":[{"period":"month","amount_microusd":"5"},{"period":"month","amount_microusd":"6"}]}), true, false),
+                    ("repeated period, positional", json!({"budgets":[["day","5"],["day","6"]]}), true, false),
+                    ("repeated period, mixed forms", json!({"budgets":[{"period":"week","amount_microusd":"5"},["week","6"]]}), true, false),
                     ("two distinct periods", json!({"budgets":[["day","5"],{"period":"lifetime","amount_microusd":"6"}]}), true, true),
                 ];
                 for (what, extra, schema, handler) in probes {
@@ -2244,6 +2269,158 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         format!("/api/v1/platform/oidc/group-mappings/{vector_mapping}/preview"),
         json!({"issuer":ISSUER,"group_value":"vector-group","target_kind":"platform","platform_role":"user","workspace_id":null,"workspace_role":null,"enabled":true,"delete":false})
     );
+
+    // The positional wire form (serde's struct-as-array representation) of every
+    // DTO the handler deserializes, each with its own valid body: the arm of the
+    // contract that the object-form runs above do not reach.
+    let positional_policy = json!([100, 100, 3, 2, 1024, 3, 9, "5000", "month"]);
+    body!(
+        "POST /platform/users (positional)",
+        "POST",
+        "/api/v1/platform/users",
+        &admin,
+        "/api/v1/platform/users".to_owned(),
+        json!(["vector-created-positional@example.test", "user"])
+    );
+    body!(
+        "PATCH /platform/users/{user} (positional)",
+        "PATCH",
+        "/api/v1/platform/users/{user}",
+        &admin,
+        format!("/api/v1/platform/users/{}", vector_user.user_id),
+        json!(["vector-patched-positional@example.test", false, true])
+    );
+    body!(
+        "POST /platform/users/{user}/roles (positional)",
+        "POST",
+        "/api/v1/platform/users/{user}/roles",
+        &admin,
+        format!("/api/v1/platform/users/{}/roles", vector_role_user.user_id),
+        json!(["user"])
+    );
+    body!(
+        "POST /platform/workspaces (positional)",
+        "POST",
+        "/api/v1/platform/workspaces",
+        &admin,
+        "/api/v1/platform/workspaces".to_owned(),
+        json!(["Vector created positional", "project", f.owner.user_id])
+    );
+    body!(
+        "PATCH /platform/workspaces/{ws} (positional)",
+        "PATCH",
+        "/api/v1/platform/workspaces/{ws}",
+        &admin,
+        vector_platform.clone(),
+        json!(["Vector renamed positional", false, cost_center])
+    );
+    body!(
+        "PATCH /workspaces/{ws} (positional)",
+        "PATCH",
+        "/api/v1/workspaces/{ws}",
+        &owner,
+        vector_path.clone(),
+        json!(["Vector own positional", "workspace"])
+    );
+    body!(
+        "PUT /platform/workspaces/{ws}/discoverable (positional)",
+        "PUT",
+        "/api/v1/platform/workspaces/{ws}/discoverable",
+        &admin,
+        format!("{vector_platform}/discoverable"),
+        json!([true])
+    );
+    body!(
+        "POST /platform/workspaces/{ws}/members (positional)",
+        "POST",
+        "/api/v1/platform/workspaces/{ws}/members",
+        &admin,
+        format!("{vector_platform}/members"),
+        json!([vector_member.user_id, "member"])
+    );
+    body!(
+        "POST /workspaces/{ws}/members (positional)",
+        "POST",
+        "/api/v1/workspaces/{ws}/members",
+        &owner,
+        format!("{vector_path}/members"),
+        json!([vector_member2.user_id, "member"])
+    );
+    body!(
+        "POST /workspaces/{ws}/invitations (positional)",
+        "POST",
+        "/api/v1/workspaces/{ws}/invitations",
+        &owner,
+        format!("{vector_path}/invitations"),
+        json!(["vector-invite-positional@example.test", "member"])
+    );
+    body!(
+        "POST /platform/workspaces/{ws}/models (positional)",
+        "POST",
+        "/api/v1/platform/workspaces/{ws}/models",
+        &admin,
+        format!("{vector_platform}/models"),
+        json!([m])
+    );
+    body!(
+        "PUT /platform/workspaces/{ws}/catalogs (positional)",
+        "PUT",
+        "/api/v1/platform/workspaces/{ws}/catalogs",
+        &admin,
+        format!("{vector_platform}/catalogs"),
+        json!(["replace", [catalog]])
+    );
+    body!(
+        "PUT /platform/workspace-types/{kind}/catalogs (positional)",
+        "PUT",
+        "/api/v1/platform/workspace-types/{kind}/catalogs",
+        &admin,
+        "/api/v1/platform/workspace-types/team/catalogs".to_owned(),
+        json!([[catalog]])
+    );
+    body!(
+        "PUT /platform/workspace-types/{kind}/policy (positional)",
+        "PUT",
+        "/api/v1/platform/workspace-types/{kind}/policy",
+        &admin,
+        "/api/v1/platform/workspace-types/team/policy".to_owned(),
+        positional_policy.clone()
+    );
+    body!(
+        "PUT /platform/workspaces/{ws}/policy (positional)",
+        "PUT",
+        "/api/v1/platform/workspaces/{ws}/policy",
+        &admin,
+        format!("{vector_platform}/policy"),
+        positional_policy
+    );
+    for (kind, positional) in [
+        (
+            "platform",
+            json!([ISSUER, "vector-positional", "platform", "user", null, null, true]),
+        ),
+        (
+            "workspace",
+            json!([ISSUER, "vector-positional", "workspace", null, vector_ws, "member", true]),
+        ),
+    ] {
+        body!(
+            &format!("POST /platform/oidc/group-mappings ({kind}, positional)"),
+            "POST",
+            "/api/v1/platform/oidc/group-mappings",
+            &admin,
+            "/api/v1/platform/oidc/group-mappings".to_owned(),
+            positional.clone()
+        );
+        body!(
+            &format!("POST /platform/oidc/group-mappings/preview ({kind}, positional)"),
+            "POST",
+            "/api/v1/platform/oidc/group-mappings/preview",
+            &admin,
+            "/api/v1/platform/oidc/group-mappings/preview".to_owned(),
+            positional
+        );
+    }
 
     // Handler-derived probes the derived vectors cannot generate. Each pins the
     // schema's verdict AND the handler's verdict on the same input, so every

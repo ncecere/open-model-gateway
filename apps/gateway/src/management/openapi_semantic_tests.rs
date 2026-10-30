@@ -94,3 +94,44 @@ pub(crate) fn manual_fields(method: &str, template: &str, fields: &[&str]) {
         "{method} {template}: manual parser/schema field inventory drift"
     );
 }
+
+#[test]
+fn scratch_q_probe() {
+    use serde_json::json;
+    let doc = crate::management::openapi::responses::artifact();
+    for (tpl, cand) in [
+        ("/api/v1/workspaces/{ws}/members", false),
+        ("/api/v1/workspaces/{ws}/member-candidates", true),
+    ] {
+        let params = doc["paths"][tpl]["get"]["parameters"].as_array().unwrap();
+        let q = params.iter().find(|p| p["name"] == "q").unwrap();
+        let schema = &q["schema"];
+        let seed = if cand { "member" } else { "group" };
+        let mut values = vec![];
+        for control in ['\n', '\0', '\u{7f}', '\u{85}'] {
+            values.push(control.to_string());
+            values.push(format!("{seed}{control}"));
+            values.push(format!("{control}{seed}"));
+            values.push(format!("a{control}b"));
+        }
+        for v in ["!", " ", "~", "\u{e9}"] {
+            values.push(v.to_owned());
+            values.push(format!("{seed}{v}"));
+            values.push(format!("{v}{seed}"));
+        }
+        for v in values {
+            let t = v.trim();
+            let handler = if cand {
+                let l = t.to_lowercase();
+                !(l.is_empty() || l.chars().count() > 200 || l.chars().any(char::is_control))
+            } else {
+                t.is_empty() || !(t.chars().count() > 200 || t.chars().any(char::is_control))
+            };
+            let schema_ok =
+                crate::management::openapi::responses::validate_value(doc, schema, &json!(v)).is_ok();
+            if handler != schema_ok {
+                println!("MISMATCH {tpl} {:?} handler={handler} schema={schema_ok}", v);
+            }
+        }
+    }
+}

@@ -57,9 +57,10 @@
             "in": "query",
             "schema": {
               "type": "string",
-              "maxLength": 200
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*$"
             },
-            "description": "Case-insensitive substring search over email and display name, at most 200 characters (the handler counts characters of the value as sent, without trimming). Control characters are not supported and are not refused: they reach PostgreSQL, and a NUL currently yields 503 (a product bug, tracked as #404). No client should send them."
+            "description": "Case-insensitive substring search over email and display name, at most 200 characters, counted as sent: the value is not trimmed. Any control character (U+0000-U+001F, U+007F-U+009F) is refused with 400 (directory.rs:482-484, #404)."
           },
           {
             "name": "role",
@@ -758,9 +759,10 @@
             "in": "query",
             "schema": {
               "type": "string",
-              "maxLength": 200
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*$"
             },
-            "description": "Case-insensitive substring search over the workspace name, at most 200 characters (the handler counts characters of the value as sent, without trimming). Control characters are not supported and are not refused: they reach PostgreSQL, and a NUL currently yields 503 (a product bug, tracked as #404). No client should send them."
+            "description": "Case-insensitive substring search over the workspace name, at most 200 characters, counted as sent: the value is not trimmed. Any control character (U+0000-U+001F, U+007F-U+009F) is refused with 400 (directory.rs:202-204, #404)."
           },
           {
             "name": "kind",
@@ -1379,7 +1381,7 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^\\s*[^\\s\\u0000-\\u001f\\u007f-\\u009f](?:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?\\s*$"
+              "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001f\\u007f-\\u009f](?:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001f\\u007f-\\u009f])?[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
             },
             "required": true,
             "description": "Email fragment; at most 20 active, entitled nonmembers are returned. The handler trims and LOWER-CASES the value, then refuses an empty result, control characters and more than 200 characters of the trimmed, lower-cased text (members.rs candidates; lower-casing can lengthen a value, for example U+0130 becomes two characters). The schema's maxLength counts the value as sent: it refuses a whitespace-padded value the handler accepts and accepts a lower-case-expanding value the handler refuses."
@@ -1465,7 +1467,7 @@
             "schema": {
               "type": "string",
               "maxLength": 200,
-              "pattern": "^\\s*(?:[^\\s\\u0000-\\u001f\\u007f-\\u009f](?:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?)?\\s*$"
+              "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*(?:[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001f\\u007f-\\u009f](?:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001f\\u007f-\\u009f])?)?[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
             },
             "description": "Name or email search. The handler trims the value, ignores an empty result, and refuses control characters and more than 200 characters COUNTED AFTER TRIMMING (members.rs MemberQuery::bounds). The schema's maxLength counts the value as sent, so it refuses a whitespace-padded value of more than 200 characters that the handler accepts."
           }
@@ -3752,7 +3754,7 @@
             "schema": {
               "type": "string",
               "maxLength": 200,
-              "pattern": "^\\s*(?:[^\\s\\u0000-\\u001f\\u007f-\\u009f](?:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?)?\\s*$"
+              "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*(?:[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001f\\u007f-\\u009f](?:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001f\\u007f-\\u009f])?)?[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
             },
             "description": "Name or email search. The handler trims the value, ignores an empty result, and refuses control characters and more than 200 characters COUNTED AFTER TRIMMING (members.rs MemberQuery::bounds). The schema's maxLength counts the value as sent, so it refuses a whitespace-padded value of more than 200 characters that the handler accepts."
           }
@@ -3986,7 +3988,7 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^\\s*[^\\s\\u0000-\\u001f\\u007f-\\u009f](?:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?\\s*$"
+              "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001f\\u007f-\\u009f](?:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001f\\u007f-\\u009f])?[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
             },
             "required": true,
             "description": "Email fragment; at most 20 active, entitled nonmembers are returned. The handler trims and LOWER-CASES the value, then refuses an empty result, control characters and more than 200 characters of the trimmed, lower-cased text (members.rs candidates; lower-casing can lengthen a value, for example U+0130 becomes two characters). The schema's maxLength counts the value as sent: it refuses a whitespace-padded value the handler accepts and accepts a lower-case-expanding value the handler refuses."
@@ -4091,7 +4093,7 @@
             "in": "query",
             "schema": {
               "type": "string",
-              "pattern": "^\\s*(?:[0-9a-fA-F-]{4,36})?\\s*$"
+              "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*(?:[0-9a-fA-F-]{4,36})?[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
             },
             "description": "Trimmed request/attempt id prefix of 4 to 36 hexadecimal characters or hyphens; blank is ignored."
           },
@@ -4264,7 +4266,7 @@
             "in": "query",
             "schema": {
               "type": "string",
-              "pattern": "^\\s*(?:[0-9a-fA-F-]{4,36})?\\s*$"
+              "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*(?:[0-9a-fA-F-]{4,36})?[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
             },
             "description": "Trimmed request/attempt id prefix of 4 to 36 hexadecimal characters or hyphens; blank is ignored."
           },
