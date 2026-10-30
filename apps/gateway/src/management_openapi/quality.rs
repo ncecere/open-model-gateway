@@ -7,6 +7,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) const ARBITRARY_JSON: &[(&str, &str)] = &[
     (
+        "/components/schemas/SettingsWorkspaceAlertEvent/properties/details",
+        "Workspace history rows return alert_events.details verbatim as stored producer-specific JSON; monetary refinements apply on this shared base, and every concrete workspace event variant refines it with the closed schema of its kind (Settings*Details).",
+    ),
+    (
         "/components/schemas/SettingsAlertEvent/properties/details",
         "EVENT_JSON returns alert_events.details verbatim as stored producer-specific JSON; monetary refinements apply on this shared base, and every concrete event variant refines it with the closed schema of its kind (Settings*Details).",
     ),

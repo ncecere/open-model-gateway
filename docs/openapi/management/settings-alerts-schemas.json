@@ -1732,8 +1732,7 @@
         "rule": {
           "anyOf": [
             {
-              "type": "null",
-              "x-omg-unobserved-branch": "Coverage-engine limitation, not unreachable: the engine demands that every alternative of this SHARED envelope is observed in every operation that embeds it, but each concrete event variant pins exactly one alternative, and the alternatives are observed across the variants, not within one operation (for example the workspace history never carries a connection, the installation history never carries a personal workspace reference). The envelope alternatives cannot carry a real output outside those variants: every event is validated against its variant, which narrows the envelope."
+              "type": "null"
             },
             {
               "type": "object",
@@ -1760,8 +1759,7 @@
                 "scope",
                 "deleted"
               ],
-              "additionalProperties": false,
-              "x-omg-unobserved-branch": "Coverage-engine limitation, not unreachable: the engine demands that every alternative of this SHARED envelope is observed in every operation that embeds it, but each concrete event variant pins exactly one alternative, and the alternatives are observed across the variants, not within one operation (for example the workspace history never carries a connection, the installation history never carries a personal workspace reference). The envelope alternatives cannot carry a real output outside those variants: every event is validated against its variant, which narrows the envelope."
+              "additionalProperties": false
             }
           ]
         },
@@ -1820,24 +1818,20 @@
         "workspace": {
           "anyOf": [
             {
-              "type": "null",
-              "x-omg-unobserved-branch": "Coverage-engine limitation, not unreachable: the engine demands that every alternative of this SHARED envelope is observed in every operation that embeds it, but each concrete event variant pins exactly one alternative, and the alternatives are observed across the variants, not within one operation (for example the workspace history never carries a connection, the installation history never carries a personal workspace reference). The envelope alternatives cannot carry a real output outside those variants: every event is validated against its variant, which narrows the envelope."
+              "type": "null"
             },
             {
-              "$ref": "#/components/schemas/IdentityWorkspaceRef",
-              "x-omg-unobserved-branch": "Coverage-engine limitation, not unreachable: the engine demands that every alternative of this SHARED envelope is observed in every operation that embeds it, but each concrete event variant pins exactly one alternative, and the alternatives are observed across the variants, not within one operation (for example the workspace history never carries a connection, the installation history never carries a personal workspace reference). The envelope alternatives cannot carry a real output outside those variants: every event is validated against its variant, which narrows the envelope."
+              "$ref": "#/components/schemas/IdentityWorkspaceRef"
             }
           ]
         },
         "connection": {
           "anyOf": [
             {
-              "type": "null",
-              "x-omg-unobserved-branch": "Coverage-engine limitation, not unreachable: the engine demands that every alternative of this SHARED envelope is observed in every operation that embeds it, but each concrete event variant pins exactly one alternative, and the alternatives are observed across the variants, not within one operation (for example the workspace history never carries a connection, the installation history never carries a personal workspace reference). The envelope alternatives cannot carry a real output outside those variants: every event is validated against its variant, which narrows the envelope."
+              "type": "null"
             },
             {
-              "$ref": "#/components/schemas/SettingsConnectionRef",
-              "x-omg-unobserved-branch": "Coverage-engine limitation, not unreachable: the engine demands that every alternative of this SHARED envelope is observed in every operation that embeds it, but each concrete event variant pins exactly one alternative, and the alternatives are observed across the variants, not within one operation (for example the workspace history never carries a connection, the installation history never carries a personal workspace reference). The envelope alternatives cannot carry a real output outside those variants: every event is validated against its variant, which narrows the envelope."
+              "$ref": "#/components/schemas/SettingsConnectionRef"
             }
           ]
         },
@@ -1876,7 +1870,7 @@
         }
       },
       "additionalProperties": false,
-      "description": "Closed envelope shared by every alert incident variant: identity and lifecycle fields. Every incident has its `fired` email delivery (each producer inserts it in the incident's own transaction, deliveries are immutable), so `email` is never null. `cleared_email` exists only for a cleared incident (alerts.rs resolve: superseded and rule_disabled never enqueue one, and a silently cleared key-expiry reminder or aged-hold incident has none); a cleared incident of a rule kind (budget, spend, spike, error rate, provider, batch, admission ceiling; never a built-in, which includes the personal budget alert, never a key reminder or an aged hold) always has one: every `cleared` resolution of a rule incident goes through alerts.rs resolve, which inserts the `resolved` delivery in the same transaction. The variants (installation rules by kind, built-ins, aged holds, admission ceilings, workspace rules by kind, personal budget, key expiry) pin rule, workspace, connection, kind and the closed per-kind details exactly; this base `details` is the reviewed stored producer-specific JSON.",
+      "description": "Closed envelope shared by every alert incident variant: identity and lifecycle fields. Every incident has its `fired` email delivery (each producer inserts it in the incident's own transaction, deliveries are immutable), so `email` is never null. `cleared_email` exists only for a cleared incident (alerts.rs resolve: superseded and rule_disabled never enqueue one, and a silently cleared key-expiry reminder or aged-hold incident has none); a cleared incident of a rule kind (budget, spend, spike, error rate, provider, batch, admission ceiling; never a built-in, which includes the personal budget alert, never a key reminder or an aged hold) always has one: every `cleared` resolution of a rule incident goes through alerts.rs resolve, which inserts the `resolved` delivery in the same transaction. The variants (installation rules by kind, built-ins, aged holds, admission ceilings, workspace rules by kind, personal budget, key expiry) pin rule, workspace, connection, kind and the closed per-kind details exactly; this base `details` is the reviewed stored producer-specific JSON. This is the base of the installation history.",
       "allOf": [
         {
           "if": {
@@ -4573,7 +4567,7 @@
     "SettingsPersonalBudgetEvent": {
       "allOf": [
         {
-          "$ref": "#/components/schemas/SettingsAlertEvent"
+          "$ref": "#/components/schemas/SettingsWorkspaceAlertEvent"
         },
         {
           "properties": {
@@ -7332,7 +7326,7 @@
     "SettingsWorkspaceBudgetEvent": {
       "allOf": [
         {
-          "$ref": "#/components/schemas/SettingsAlertEvent"
+          "$ref": "#/components/schemas/SettingsWorkspaceAlertEvent"
         },
         {
           "properties": {
@@ -7362,7 +7356,7 @@
     "SettingsWorkspaceSpikeEvent": {
       "allOf": [
         {
-          "$ref": "#/components/schemas/SettingsAlertEvent"
+          "$ref": "#/components/schemas/SettingsWorkspaceAlertEvent"
         },
         {
           "properties": {
@@ -7392,7 +7386,7 @@
     "SettingsWorkspaceErrorRateEvent": {
       "allOf": [
         {
-          "$ref": "#/components/schemas/SettingsAlertEvent"
+          "$ref": "#/components/schemas/SettingsWorkspaceAlertEvent"
         },
         {
           "properties": {
@@ -7422,7 +7416,7 @@
     "SettingsWorkspaceBatchFailedEvent": {
       "allOf": [
         {
-          "$ref": "#/components/schemas/SettingsAlertEvent"
+          "$ref": "#/components/schemas/SettingsWorkspaceAlertEvent"
         },
         {
           "properties": {
@@ -7452,7 +7446,7 @@
     "SettingsWorkspaceBatchStalledEvent": {
       "allOf": [
         {
-          "$ref": "#/components/schemas/SettingsAlertEvent"
+          "$ref": "#/components/schemas/SettingsWorkspaceAlertEvent"
         },
         {
           "properties": {
@@ -7482,7 +7476,7 @@
     "SettingsWorkspaceKeyExpiryEvent": {
       "allOf": [
         {
-          "$ref": "#/components/schemas/SettingsAlertEvent"
+          "$ref": "#/components/schemas/SettingsWorkspaceAlertEvent"
         },
         {
           "properties": {
@@ -7512,7 +7506,7 @@
     "SettingsWorkspaceAgedHoldEvent": {
       "allOf": [
         {
-          "$ref": "#/components/schemas/SettingsAlertEvent"
+          "$ref": "#/components/schemas/SettingsWorkspaceAlertEvent"
         },
         {
           "properties": {
@@ -7604,6 +7598,223 @@
         }
       ],
       "description": "An aged-unknown-hold incident of this Team/Project, with the same fixed shape (a personal scope is never attributed to a workspace, so it never appears in a workspace history)."
+    },
+    "SettingsWorkspaceAlertEvent": {
+      "type": "object",
+      "required": [
+        "id",
+        "rule",
+        "builtin",
+        "kind",
+        "state",
+        "severity",
+        "level",
+        "summary",
+        "details",
+        "workspace",
+        "connection",
+        "fired_at",
+        "resolved_at",
+        "resolution",
+        "email",
+        "cleared_email"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "rule": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "$ref": "#/components/schemas/IdentityUuid"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "scope": {
+                  "enum": [
+                    "installation",
+                    "workspace"
+                  ]
+                },
+                "deleted": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "scope",
+                "deleted"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "builtin": {
+          "type": "boolean"
+        },
+        "kind": {
+          "enum": [
+            "budget_threshold",
+            "spend_threshold",
+            "spend_spike",
+            "error_rate",
+            "provider_failing",
+            "batch_failed",
+            "batch_stalled",
+            "admission_ceiling",
+            "key_expiring",
+            "aged_unknown_hold",
+            "scim_last_admin",
+            "partitions_missing",
+            "history_orphans"
+          ]
+        },
+        "state": {
+          "enum": [
+            "firing",
+            "resolved"
+          ]
+        },
+        "severity": {
+          "enum": [
+            "warning",
+            "critical"
+          ]
+        },
+        "level": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "details": {
+          "$comment": "Workspace history rows return alert_events.details verbatim as stored producer-specific JSON; monetary refinements apply on this shared base, and every concrete workspace event variant refines it with the closed schema of its kind (Settings*Details).",
+          "type": "object",
+          "patternProperties": {
+            "(^|_)microusd$": {
+              "$ref": "#/components/schemas/IdentityNullableDecimal"
+            }
+          },
+          "description": "Stored JSON incident payload, not a serde DTO; its fields depend on the kind. Every event variant binds it to the closed Settings*Details schema of that kind, so an identity can never be added silently. Monetary fields remain integer micro-USD strings."
+        },
+        "workspace": {
+          "$ref": "#/components/schemas/IdentityWorkspaceRef"
+        },
+        "connection": {
+          "type": "null"
+        },
+        "fired_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "resolved_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "resolution": {
+          "anyOf": [
+            {
+              "enum": [
+                "cleared",
+                "superseded",
+                "rule_disabled"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "email": {
+          "$ref": "#/components/schemas/SettingsAlertDelivery"
+        },
+        "cleared_email": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/SettingsAlertDelivery"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "description": "Closed envelope shared by every alert incident variant: identity and lifecycle fields. Every incident has its `fired` email delivery (each producer inserts it in the incident's own transaction, deliveries are immutable), so `email` is never null. `cleared_email` exists only for a cleared incident (alerts.rs resolve: superseded and rule_disabled never enqueue one, and a silently cleared key-expiry reminder or aged-hold incident has none); a cleared incident of a rule kind (budget, spend, spike, error rate, provider, batch, admission ceiling; never a built-in, which includes the personal budget alert, never a key reminder or an aged hold) always has one: every `cleared` resolution of a rule incident goes through alerts.rs resolve, which inserts the `resolved` delivery in the same transaction. The variants (installation rules by kind, built-ins, aged holds, admission ceilings, workspace rules by kind, personal budget, key expiry) pin rule, workspace, connection, kind and the closed per-kind details exactly; this base `details` is the reviewed stored producer-specific JSON. This is the base of the workspace history: a workspace history always names its workspace and never carries a connection, so those two fields are fixed here, and only the rule slot varies (null for built-ins, key reminders and aged holds).",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "resolution": {
+                "enum": [
+                  "superseded",
+                  "rule_disabled",
+                  null
+                ]
+              }
+            },
+            "required": [
+              "resolution"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cleared_email": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "resolution": {
+                "const": "cleared"
+              },
+              "builtin": {
+                "const": false
+              },
+              "kind": {
+                "enum": [
+                  "budget_threshold",
+                  "spend_threshold",
+                  "spend_spike",
+                  "error_rate",
+                  "provider_failing",
+                  "batch_failed",
+                  "batch_stalled",
+                  "admission_ceiling"
+                ]
+              }
+            },
+            "required": [
+              "resolution",
+              "builtin",
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "cleared_email": {
+                "$ref": "#/components/schemas/SettingsAlertDelivery"
+              }
+            },
+            "required": [
+              "cleared_email"
+            ]
+          }
+        }
+      ]
     }
   }
 }
