@@ -97,6 +97,31 @@ pub(super) struct RuleInput {
     #[serde(default)]
     notify_emails: Vec<String>,
 }
+#[test]
+fn management_openapi_rule_request_vectors() {
+    for (method, path) in [
+        ("POST", "/api/v1/platform/alerts/rules"),
+        ("PUT", "/api/v1/platform/alerts/rules/{id}"),
+        ("POST", "/api/v1/workspaces/{ws}/alerts/rules"),
+        ("PUT", "/api/v1/workspaces/{ws}/alerts/rules/{id}"),
+    ] {
+        crate::management::openapi::requests::vectors::<RuleInput>(
+            method,
+            path,
+            json!({
+                "name":"Contract", "kind":"budget_threshold", "enabled":true,
+                "budget_layers":["type"], "thresholds":[80], "spike_factor_percent":null,
+                "min_spend_microusd":null, "window_minutes":null, "error_rate_percent":null,
+                "min_requests":null, "consecutive_failures":null, "provider_connection_id":null,
+                "spend_period":null, "spend_amount_microusd":null,
+                "ceiling_requests_per_second":null, "ceiling_lock_wait_ms":null,
+                "notify_workspace_admins":path.contains("/workspaces/"), "notify_platform_admins":true,
+                "notify_emails":["admin@example.test"]
+            }),
+        );
+    }
+}
+
 fn enabled_default() -> bool {
     true
 }
