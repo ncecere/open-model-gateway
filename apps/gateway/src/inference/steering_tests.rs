@@ -1280,13 +1280,11 @@ async fn steering_world_dispatch_is_independent_of_the_provided_pool(pool: PgPoo
         .unwrap();
     let w = world(provided.clone()).await;
     let held = provided.acquire().await.unwrap();
-    // The strict bound belongs here: with the only connection held, a second
-    // acquire can never succeed, so timing out is load-independent proof that
-    // the pool is exhausted while the dispatch below runs.
+    // With the only connection held, no further connection is available: a
+    // non-blocking acquire proves the pool is exhausted, with no timing at all,
+    // while the dispatch below runs.
     assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(100), provided.acquire())
-            .await
-            .is_err(),
+        provided.try_acquire().is_none(),
         "the provided pool must be exhausted while the dispatch runs"
     );
     let (status, text) = send(
