@@ -500,452 +500,6 @@
       ],
       "additionalProperties": false
     },
-    "SetupProviderInput": {
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "name": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 120,
-              "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
-              "x-omg-max-bytes": 120
-            },
-            "provider": {
-              "enum": [
-                "openai",
-                "anthropic",
-                "openrouter",
-                "bedrock",
-                "vllm",
-                "sglang",
-                "ollama",
-                "openai_compatible"
-              ]
-            },
-            "credential_ref": {
-              "type": "string",
-              "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints. Every provider kind constrains it by a pattern below (credential_valid), which also refuses an empty value.",
-              "x-omg-unsendable-boundary": "The 2057-character bound applies only on the Bedrock branch, where padding cannot keep an aws:role: ARN valid; setup_openapi_fixture_tests pins 2057 characters (schema accepts, handler refuses: the 510-character role path limit) and 2058 (both refuse)."
-            },
-            "endpoint": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "region": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "x-omg-unsendable-boundary": "The 32-character bound applies only on the Bedrock branch, where padding cannot keep a region code valid; setup_openapi_fixture_tests pins 32 characters (both accept) and 33 (both refuse)."
-            },
-            "enabled": {
-              "type": "boolean"
-            },
-            "aws_external_id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "aws_session_name": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            }
-          },
-          "required": [
-            "name",
-            "provider",
-            "credential_ref",
-            "enabled"
-          ],
-          "additionalProperties": false,
-          "allOf": [
-            {
-              "if": {
-                "properties": {
-                  "provider": {
-                    "const": "openai"
-                  }
-                },
-                "required": [
-                  "provider"
-                ]
-              },
-              "then": {
-                "properties": {
-                  "credential_ref": {
-                    "pattern": "^env:[A-Z_][A-Z0-9_]*$"
-                  },
-                  "endpoint": {
-                    "anyOf": [
-                      {
-                        "type": "null"
-                      },
-                      {
-                        "enum": [
-                          "https://api.openai.com/v1",
-                          "https://api.openai.com/v1/"
-                        ]
-                      }
-                    ]
-                  },
-                  "region": {
-                    "anyOf": [
-                      {
-                        "type": "null"
-                      },
-                      {
-                        "const": ""
-                      }
-                    ]
-                  },
-                  "aws_external_id": {
-                    "type": "null"
-                  },
-                  "aws_session_name": {
-                    "type": "null"
-                  }
-                }
-              }
-            },
-            {
-              "if": {
-                "properties": {
-                  "provider": {
-                    "const": "anthropic"
-                  }
-                },
-                "required": [
-                  "provider"
-                ]
-              },
-              "then": {
-                "properties": {
-                  "credential_ref": {
-                    "pattern": "^env:[A-Z_][A-Z0-9_]*$"
-                  },
-                  "endpoint": {
-                    "anyOf": [
-                      {
-                        "type": "null"
-                      },
-                      {
-                        "enum": [
-                          "https://api.anthropic.com/v1",
-                          "https://api.anthropic.com/v1/"
-                        ]
-                      }
-                    ]
-                  },
-                  "region": {
-                    "anyOf": [
-                      {
-                        "type": "null"
-                      },
-                      {
-                        "const": ""
-                      }
-                    ]
-                  },
-                  "aws_external_id": {
-                    "type": "null"
-                  },
-                  "aws_session_name": {
-                    "type": "null"
-                  }
-                }
-              }
-            },
-            {
-              "if": {
-                "properties": {
-                  "provider": {
-                    "const": "openrouter"
-                  }
-                },
-                "required": [
-                  "provider"
-                ]
-              },
-              "then": {
-                "properties": {
-                  "credential_ref": {
-                    "pattern": "^env:[A-Z_][A-Z0-9_]*$"
-                  },
-                  "endpoint": {
-                    "anyOf": [
-                      {
-                        "type": "null"
-                      },
-                      {
-                        "enum": [
-                          "https://openrouter.ai/api/v1",
-                          "https://openrouter.ai/api/v1/"
-                        ]
-                      }
-                    ]
-                  },
-                  "region": {
-                    "anyOf": [
-                      {
-                        "type": "null"
-                      },
-                      {
-                        "const": ""
-                      }
-                    ]
-                  },
-                  "aws_external_id": {
-                    "type": "null"
-                  },
-                  "aws_session_name": {
-                    "type": "null"
-                  }
-                }
-              }
-            },
-            {
-              "if": {
-                "properties": {
-                  "provider": {
-                    "const": "bedrock"
-                  }
-                },
-                "required": [
-                  "provider"
-                ]
-              },
-              "then": {
-                "required": [
-                  "region"
-                ],
-                "properties": {
-                  "credential_ref": {
-                    "maxLength": 2057,
-                    "pattern": "^aws:(?:default|profile:[A-Za-z0-9_.+][A-Za-z0-9_.+-]{0,63}|role:arn:(?:aws|aws-[a-z]+(?:-[a-z]+)*):iam::[0-9]{12}:role/(?:[A-Za-z0-9_+=,.@-]+/)*[A-Za-z0-9_+=,.@-]{1,64})$"
-                  },
-                  "region": {
-                    "type": "string",
-                    "maxLength": 32,
-                    "pattern": "^[a-z]{2}(?:-[a-z]+)+-[0-9]{1,2}$"
-                  },
-                  "endpoint": {
-                    "anyOf": [
-                      {
-                        "type": "null"
-                      },
-                      {
-                        "type": "string",
-                        "pattern": "^https://[a-z0-9.-]+(?::[0-9]{1,5})?/?$",
-                        "description": "A canonical HTTPS origin without credentials, path, query or fragment (canonical_endpoint); Bedrock endpoints must also be allowlisted by the server (GATEWAY_BEDROCK_ENDPOINT_ALLOWLIST, not expressible here)."
-                      }
-                    ]
-                  }
-                },
-                "allOf": [
-                  {
-                    "if": {
-                      "properties": {
-                        "credential_ref": {
-                          "pattern": "^aws:role:"
-                        }
-                      },
-                      "required": [
-                        "credential_ref"
-                      ]
-                    },
-                    "then": {
-                      "properties": {
-                        "aws_external_id": {
-                          "anyOf": [
-                            {
-                              "type": "string",
-                              "pattern": "^[A-Za-z0-9_+=,.@:/-]{2,1224}$"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "aws_session_name": {
-                          "anyOf": [
-                            {
-                              "type": "string",
-                              "pattern": "^[A-Za-z0-9_+=,.@-]{2,64}$"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        }
-                      }
-                    },
-                    "else": {
-                      "properties": {
-                        "aws_external_id": {
-                          "type": "null"
-                        },
-                        "aws_session_name": {
-                          "type": "null"
-                        }
-                      }
-                    }
-                  }
-                ]
-              }
-            },
-            {
-              "if": {
-                "properties": {
-                  "provider": {
-                    "enum": [
-                      "vllm",
-                      "sglang",
-                      "ollama",
-                      "openai_compatible"
-                    ]
-                  }
-                },
-                "required": [
-                  "provider"
-                ]
-              },
-              "then": {
-                "properties": {
-                  "credential_ref": {
-                    "pattern": "^(none|env:[A-Z_][A-Z0-9_]*)$"
-                  },
-                  "endpoint": {
-                    "type": "string"
-                  },
-                  "aws_external_id": {
-                    "type": "null"
-                  },
-                  "aws_session_name": {
-                    "type": "null"
-                  },
-                  "region": {
-                    "anyOf": [
-                      {
-                        "type": "null"
-                      },
-                      {
-                        "const": ""
-                      }
-                    ]
-                  }
-                },
-                "required": [
-                  "endpoint"
-                ]
-              }
-            }
-          ],
-          "description": "Cross-field rules by provider kind: the fixed-origin cloud profiles take an env: reference, their exact HTTPS base (or none), no region and no AWS options; Bedrock requires a region (valid_region: a two-letter prefix, lowercase words and a one or two digit suffix such as us-east-1, at most 32 characters) and an aws:default, aws:profile:NAME or aws:role:ARN reference without ';' options; aws_external_id (2-1224 characters) and aws_session_name (2-64 characters) belong to an aws:role: reference only (AwsAuth::from_parts) and are otherwise refused unless null; the role ARN path is at most 510 characters and the whole ARN at most 2048 (the schema bounds the length only); local kinds (vllm, sglang, ollama, openai_compatible) take none or an env: reference, a required endpoint and no region (null or an empty string: validate_connection refuses a non-empty region). Server-controlled allowlists (profiles, Bedrock endpoints, local endpoint approvals, env references) are checked on top and are not expressible here."
-        },
-        {
-          "type": "array",
-          "prefixItems": [
-            {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 120,
-              "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
-              "x-omg-max-bytes": 120
-            },
-            {
-              "enum": [
-                "openai",
-                "anthropic",
-                "openrouter",
-                "bedrock",
-                "vllm",
-                "sglang",
-                "ollama",
-                "openai_compatible"
-              ]
-            },
-            {
-              "type": "string",
-              "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints.",
-              "minLength": 1
-            },
-            {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            {
-              "type": "boolean"
-            },
-            {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            }
-          ],
-          "minItems": 6,
-          "maxItems": 8,
-          "items": false,
-          "description": "The positional array form carries none of the object form's cross-field rules (provider kind, region, reference and AWS option couplings): for example a Bedrock array without a region is schema-valid and refused with 400 (valid_region; documented divergence, probed)."
-        }
-      ],
-      "description": "Closed serde object or existing positional struct array in declared field order. Handler semantic validation is additional."
-    },
     "SetupProviderUpdate": {
       "oneOf": [
         {
@@ -11343,7 +10897,450 @@
       "additionalProperties": false
     },
     "post_api_v1_platform_providersRequest": {
-      "$ref": "#/components/schemas/SetupProviderInput"
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
+              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
+              "x-omg-max-bytes": 120
+            },
+            "provider": {
+              "enum": [
+                "openai",
+                "anthropic",
+                "openrouter",
+                "bedrock",
+                "vllm",
+                "sglang",
+                "ollama",
+                "openai_compatible"
+              ]
+            },
+            "credential_ref": {
+              "type": "string",
+              "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints. Every provider kind constrains it by a pattern below (credential_valid), which also refuses an empty value.",
+              "x-omg-unsendable-boundary": "The 2057-character bound applies only on the Bedrock branch, where padding cannot keep an aws:role: ARN valid; setup_openapi_fixture_tests pins 2057 characters (schema accepts, handler refuses: the 510-character role path limit) and 2058 (both refuse)."
+            },
+            "endpoint": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "region": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "x-omg-unsendable-boundary": "The 32-character bound applies only on the Bedrock branch, where padding cannot keep a region code valid; setup_openapi_fixture_tests pins 32 characters (both accept) and 33 (both refuse)."
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "aws_external_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "aws_session_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "name",
+            "provider",
+            "credential_ref",
+            "enabled"
+          ],
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "provider": {
+                    "const": "openai"
+                  }
+                },
+                "required": [
+                  "provider"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "credential_ref": {
+                    "pattern": "^env:[A-Z_][A-Z0-9_]*$"
+                  },
+                  "endpoint": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "enum": [
+                          "https://api.openai.com/v1",
+                          "https://api.openai.com/v1/"
+                        ]
+                      }
+                    ]
+                  },
+                  "region": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "const": ""
+                      }
+                    ]
+                  },
+                  "aws_external_id": {
+                    "type": "null"
+                  },
+                  "aws_session_name": {
+                    "type": "null"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "provider": {
+                    "const": "anthropic"
+                  }
+                },
+                "required": [
+                  "provider"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "credential_ref": {
+                    "pattern": "^env:[A-Z_][A-Z0-9_]*$"
+                  },
+                  "endpoint": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "enum": [
+                          "https://api.anthropic.com/v1",
+                          "https://api.anthropic.com/v1/"
+                        ]
+                      }
+                    ]
+                  },
+                  "region": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "const": ""
+                      }
+                    ]
+                  },
+                  "aws_external_id": {
+                    "type": "null"
+                  },
+                  "aws_session_name": {
+                    "type": "null"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "provider": {
+                    "const": "openrouter"
+                  }
+                },
+                "required": [
+                  "provider"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "credential_ref": {
+                    "pattern": "^env:[A-Z_][A-Z0-9_]*$"
+                  },
+                  "endpoint": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "enum": [
+                          "https://openrouter.ai/api/v1",
+                          "https://openrouter.ai/api/v1/"
+                        ]
+                      }
+                    ]
+                  },
+                  "region": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "const": ""
+                      }
+                    ]
+                  },
+                  "aws_external_id": {
+                    "type": "null"
+                  },
+                  "aws_session_name": {
+                    "type": "null"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "provider": {
+                    "const": "bedrock"
+                  }
+                },
+                "required": [
+                  "provider"
+                ]
+              },
+              "then": {
+                "required": [
+                  "region"
+                ],
+                "properties": {
+                  "credential_ref": {
+                    "maxLength": 2057,
+                    "pattern": "^aws:(?:default|profile:[A-Za-z0-9_.+][A-Za-z0-9_.+-]{0,63}|role:arn:(?:aws|aws-[a-z]+(?:-[a-z]+)*):iam::[0-9]{12}:role/(?:[A-Za-z0-9_+=,.@-]+/)*[A-Za-z0-9_+=,.@-]{1,64})$"
+                  },
+                  "region": {
+                    "type": "string",
+                    "maxLength": 32,
+                    "pattern": "^[a-z]{2}(?:-[a-z]+)+-[0-9]{1,2}$"
+                  },
+                  "endpoint": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^https://[a-z0-9.-]+(?::[0-9]{1,5})?/?$",
+                        "description": "A canonical HTTPS origin without credentials, path, query or fragment (canonical_endpoint); Bedrock endpoints must also be allowlisted by the server (GATEWAY_BEDROCK_ENDPOINT_ALLOWLIST, not expressible here)."
+                      }
+                    ]
+                  }
+                },
+                "allOf": [
+                  {
+                    "if": {
+                      "properties": {
+                        "credential_ref": {
+                          "pattern": "^aws:role:"
+                        }
+                      },
+                      "required": [
+                        "credential_ref"
+                      ]
+                    },
+                    "then": {
+                      "properties": {
+                        "aws_external_id": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9_+=,.@:/-]{2,1224}$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "aws_session_name": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9_+=,.@-]{2,64}$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "else": {
+                      "properties": {
+                        "aws_external_id": {
+                          "type": "null"
+                        },
+                        "aws_session_name": {
+                          "type": "null"
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "provider": {
+                    "enum": [
+                      "vllm",
+                      "sglang",
+                      "ollama",
+                      "openai_compatible"
+                    ]
+                  }
+                },
+                "required": [
+                  "provider"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "credential_ref": {
+                    "pattern": "^(none|env:[A-Z_][A-Z0-9_]*)$"
+                  },
+                  "endpoint": {
+                    "type": "string"
+                  },
+                  "aws_external_id": {
+                    "type": "null"
+                  },
+                  "aws_session_name": {
+                    "type": "null"
+                  },
+                  "region": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "const": ""
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "endpoint"
+                ]
+              }
+            }
+          ],
+          "description": "Cross-field rules by provider kind: the fixed-origin cloud profiles take an env: reference, their exact HTTPS base (or none), no region and no AWS options; Bedrock requires a region (valid_region: a two-letter prefix, lowercase words and a one or two digit suffix such as us-east-1, at most 32 characters) and an aws:default, aws:profile:NAME or aws:role:ARN reference without ';' options; aws_external_id (2-1224 characters) and aws_session_name (2-64 characters) belong to an aws:role: reference only (AwsAuth::from_parts) and are otherwise refused unless null; the role ARN path is at most 510 characters and the whole ARN at most 2048 (the schema bounds the length only); local kinds (vllm, sglang, ollama, openai_compatible) take none or an env: reference, a required endpoint and no region (null or an empty string: validate_connection refuses a non-empty region). Server-controlled allowlists (profiles, Bedrock endpoints, local endpoint approvals, env references) are checked on top and are not expressible here."
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
+              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
+              "x-omg-max-bytes": 120
+            },
+            {
+              "enum": [
+                "openai",
+                "anthropic",
+                "openrouter",
+                "bedrock",
+                "vllm",
+                "sglang",
+                "ollama",
+                "openai_compatible"
+              ]
+            },
+            {
+              "type": "string",
+              "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints.",
+              "minLength": 1
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          ],
+          "minItems": 6,
+          "maxItems": 8,
+          "items": false,
+          "description": "The positional array form carries none of the object form's cross-field rules (provider kind, region, reference and AWS option couplings): for example a Bedrock array without a region is schema-valid and refused with 400 (valid_region; documented divergence, probed)."
+        }
+      ],
+      "description": "Closed serde object or existing positional struct array in declared field order. Handler semantic validation is additional."
     },
     "post_api_v1_platform_providersResponse": {
       "$ref": "#/components/schemas/SetupIdentifier"
