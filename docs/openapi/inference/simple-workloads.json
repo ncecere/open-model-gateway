@@ -529,9 +529,6 @@
               "minimum": 1,
               "maximum": 16384,
               "description": "Requested dimensions (providers/embeddings.rs MAX_DIMENSIONS); a deployment that cannot honor them is refused with 501 unsupported_capability."
-            },
-            "user": {
-              "type": "string"
             }
           }
         },
