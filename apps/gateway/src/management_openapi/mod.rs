@@ -1,6 +1,18 @@
 //! Test-only management contract: no runtime endpoint or production dependency.
+pub(crate) mod coverage;
+mod coverage_tests;
 mod generator;
+mod hardening_tests;
+pub(crate) mod http_vectors;
+mod http_vectors_tests;
+mod middleware;
+mod mutation_tests;
+mod quality;
+mod request_reach;
+pub(crate) mod requests;
+pub(crate) mod responses;
 mod validation;
+mod wiring_tests;
 
 #[cfg(test)]
 mod tests {
@@ -46,7 +58,7 @@ mod tests {
             "review route additions and update this progress baseline"
         );
         assert_eq!(
-            placeholders, 502,
+            placeholders, 372,
             "review schema completion and update this progress baseline"
         );
     }
@@ -156,6 +168,77 @@ mod tests {
             g::load_fragments_from(dir.path()).is_err(),
             "duplicate key in one fragment file"
         );
+    }
+
+    #[test]
+    fn management_openapi_typed_path_parameters_are_reviewed_overrides() {
+        let key = "GET /api/v1/workspaces/{ws}";
+        let typed = json!({"name":"ws","in":"path","required":true,"schema":{"type":"string","format":"uuid"}});
+        let with = |parameter: Value| {
+            let mut fragments = g::load_fragments().unwrap();
+            fragments
+                .operations
+                .get_mut(key)
+                .unwrap()
+                .operation
+                .insert("parameters".into(), json!([parameter]));
+            g::generate(&fragments)
+        };
+        // A reviewed fragment may type a generated path parameter.
+        let document = with(typed.clone()).unwrap();
+        g::verify(&document).unwrap();
+        let parameters = document["paths"]["/api/v1/workspaces/{ws}"]["get"]["parameters"]
+            .as_array()
+            .unwrap();
+        assert_eq!(parameters.iter().filter(|p| p["name"] == "ws").count(), 1);
+        assert_eq!(parameters[0]["schema"]["format"], "uuid");
+        // Never a new, renamed, optional, referenced or untyped path parameter.
+        for (what, bad) in [
+            (
+                "unknown",
+                json!({"name":"other","in":"path","required":true,"schema":{"type":"string"}}),
+            ),
+            (
+                "optional",
+                json!({"name":"ws","in":"path","required":false,"schema":{"type":"string"}}),
+            ),
+            ("reference", json!({"$ref":"#/components/parameters/Ws"})),
+            ("untyped", json!({"name":"ws","in":"path","required":true})),
+            (
+                "boolean",
+                json!({"name":"ws","in":"path","required":true,"schema":true}),
+            ),
+        ] {
+            assert!(with(bad).is_err(), "accepted {what} path parameter");
+        }
+        let mut duplicated = g::load_fragments().unwrap();
+        duplicated
+            .operations
+            .get_mut(key)
+            .unwrap()
+            .operation
+            .insert("parameters".into(), json!([typed.clone(), typed]));
+        assert!(
+            g::generate(&duplicated).is_err(),
+            "accepted duplicate path parameter"
+        );
+        // The artifact check still rejects drift of the parameter identity.
+        for (what, edit) in [
+            ("name", json!({"name":"workspace"})),
+            ("required", json!({"required":false})),
+            ("location", json!({"in":"query"})),
+            ("schema", json!({"schema":true})),
+        ] {
+            let mut bad = document.clone();
+            let parameter = &mut bad["paths"]["/api/v1/workspaces/{ws}"]["get"]["parameters"][0];
+            for (field, value) in edit.as_object().unwrap() {
+                parameter[field] = value.clone();
+            }
+            assert!(
+                g::verify(&bad).is_err(),
+                "accepted {what} path parameter drift"
+            );
+        }
     }
 
     #[test]

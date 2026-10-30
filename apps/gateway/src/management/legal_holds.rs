@@ -50,6 +50,16 @@ struct PlaceHold {
     reference: String,
 }
 
+#[cfg(test)]
+#[test]
+fn management_openapi_slice6_legal_hold_request_vectors() {
+    super::openapi::requests::vectors::<PlaceHold>(
+        "POST",
+        "/api/v1/platform/legal-holds",
+        json!({"user_id":Uuid::nil(),"workspace_id":null,"reference":"CONTRACT-1"}),
+    );
+}
+
 fn reference_valid(r: &str) -> bool {
     let mut bytes = r.bytes();
     (1..=64).contains(&r.len())

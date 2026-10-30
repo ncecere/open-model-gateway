@@ -253,15 +253,35 @@ pub(super) fn generate(fragments: &Fragments) -> Result<Value> {
                     .as_array()
                     .context("fragment parameters must be an array")?;
                 ensure!(
-                    parameters
-                        .iter()
-                        .all(|p| p["in"] != "path" && p.get("$ref").is_none()),
-                    "path parameters are generated; fragments may add only inline non-path parameters"
+                    parameters.iter().all(|p| p.get("$ref").is_none()),
+                    "fragment parameters must be inline"
                 );
+                // Path parameters are generated from the template; a fragment
+                // may only TYPE one (same name, `in` and `required`), once.
+                let mut typed = BTreeSet::new();
+                for parameter in parameters.iter().filter(|p| p["in"] == "path") {
+                    let name = parameter["name"]
+                        .as_str()
+                        .context("path parameter needs a name")?;
+                    ensure!(
+                        parameter.as_object().is_some_and(|o| o.len() == 4)
+                            && parameter["required"] == true
+                            && parameter["schema"].is_object(),
+                        "a typed path parameter is exactly name, in, required:true and an object schema ({key})"
+                    );
+                    ensure!(typed.insert(name), "duplicate typed path parameter ({key})");
+                    let slot = operation["parameters"]
+                        .as_array_mut()
+                        .unwrap()
+                        .iter_mut()
+                        .find(|generated| generated["name"] == name)
+                        .with_context(|| format!("unknown path parameter in {key}"))?;
+                    *slot = parameter.clone();
+                }
                 operation["parameters"]
                     .as_array_mut()
                     .unwrap()
-                    .extend(parameters.iter().cloned());
+                    .extend(parameters.iter().filter(|p| p["in"] != "path").cloned());
             } else {
                 operation[field] = value.clone();
             }
@@ -276,7 +296,7 @@ pub(super) fn generate(fragments: &Fragments) -> Result<Value> {
         );
         schemas.insert(name.clone(), schema.clone());
     }
-    Ok(json!({
+    let mut document = json!({
         "openapi":"3.1.0",
         "jsonSchemaDialect":"https://spec.openapis.org/oas/3.1/dialect/base",
         "info":{"title":"Open Model Gateway management API","version":env!("CARGO_PKG_VERSION"),
@@ -288,7 +308,9 @@ pub(super) fn generate(fragments: &Fragments) -> Result<Value> {
             "origin":{"type":"apiKey","in":"header","name":"Origin","description":"Must exactly equal the server-configured Origin; conjunctive with session and CSRF on browser mutations."},
             "adminToken":{"type":"http","scheme":"bearer","description":"Admin API token, never an inference key. Only Scope operations admit this alternative; x-omg-required-scope is exact, not an OAuth scope. Live token and owner authority is rechecked."}
         }}
-    }))
+    });
+    super::middleware::apply(&mut document)?;
+    Ok(document)
 }
 
 pub(super) fn verify(document: &Value) -> Result<()> {
@@ -347,8 +369,19 @@ pub(super) fn verify(document: &Value) -> Result<()> {
                 .filter(|p| p["in"] == "path")
                 .cloned()
                 .collect::<Vec<_>>();
+            // Identity is generated; the schema may be typed by a reviewed fragment.
+            let identity = |parameters: &[Value]| {
+                parameters
+                    .iter()
+                    .map(|p| (p["name"].clone(), p["in"].clone(), p["required"].clone()))
+                    .collect::<Vec<_>>()
+            };
             ensure!(
-                actual_path == path_parameters(path),
+                identity(&actual_path) == identity(&path_parameters(path))
+                    && actual_path
+                        .iter()
+                        .all(|p| p.as_object().is_some_and(|o| o.len() == 4)
+                            && p["schema"].is_object()),
                 "path parameters drift for {key}"
             );
         }
@@ -508,14 +541,16 @@ fn quote_cfg_test(attr: &syn::Attribute) -> bool {
 fn error_schema() -> Result<Value> {
     Ok(
         json!({"type":"object","required":["error"],"additionalProperties":false,
-            "description":"Shared management handler envelope, not a universal framework response. code equals the HTTP status string. Selected reasons add period, limit, missing_meters or retry details. Reason-specific details are not yet exhaustive (#81).",
-            "properties":{"error":{"type":"object","required":["code","message"],"additionalProperties":true,
+            "description":"Shared management handler envelope, not a universal framework response. code equals the HTTP status string. Selected reasons add period, limit, missing_meters or retry details. Detail keys are closed over the inventoried handler vocabulary (policy period/limit, price missing_meters, and access/key-issuance retry details).",
+            "properties":{"error":{"type":"object","required":["code","message"],"additionalProperties":false,
                 "properties":{
                     "code":{"type":"string","pattern":"^[1-5][0-9]{2}$"},
                     "message":{"type":"string"},"reason":{"type":"string","enum":error_reasons()?},
                     "period":{"type":"string"},"limit":{"type":"string"},
                     "missing_meters":{"type":"array","items":{"type":"string"}},
-                    "retry_after_seconds":{"type":"integer","minimum":0}
+                    "retry_after_seconds":{"type":"integer","minimum":0},
+                    "scope":{"type":"string"},"operation":{"type":"string"},
+                    "window_seconds":{"type":"integer","minimum":0}
                 }}}
         }),
     )

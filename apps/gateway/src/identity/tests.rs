@@ -149,6 +149,378 @@ impl MockProvider {
             .unwrap()
     }
 }
+#[cfg(feature = "integration-tests")]
+async fn open_get(
+    app: &Router,
+    path: &str,
+    headers: &[(&str, String)],
+) -> crate::management::openapi::responses::Captured {
+    let mut request = Request::builder().uri(path);
+    for (name, value) in headers {
+        request = request.header(*name, value);
+    }
+    crate::management::openapi::responses::capture(
+        "GET",
+        path,
+        app.clone()
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap(),
+    )
+    .await
+}
+/// A `Set-Cookie` value from a captured response.
+#[cfg(feature = "integration-tests")]
+fn captured_cookie(headers: &HeaderMap, name: &str) -> String {
+    headers
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .find_map(|h| {
+            let (key, value) = h
+                .to_str()
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap()
+                .split_once('=')?;
+            (key == name).then(|| value.to_owned())
+        })
+        .unwrap()
+}
+#[cfg(feature = "integration-tests")]
+pub(crate) async fn management_openapi_auth_fixtures(
+    pool: &sqlx::PgPool,
+    observed: &mut crate::management::openapi::responses::PositiveFixtures,
+) {
+    use crate::management::openapi::{
+        http_vectors::{Probe, query_vectors},
+        responses::capture,
+    };
+    const BROWSER_AGENT: &str =
+        "Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0";
+    let mock = MockProvider::start(None).await;
+    // The vectors sign in dozens of times a minute from one (peerless) client:
+    // the supported maximum login/callback rate keeps the throttle out of the way.
+    let mut config = mock.config();
+    config.login_rate_per_minute = 10_000;
+    let identity = IdentityState::new(Store::new(pool.clone()), Some(config))
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES($1,$2,'entitled','platform','user')")
+        .bind(Uuid::new_v4()).bind(&mock.issuer).execute(pool).await.unwrap();
+    let engine = crate::inference::Engine::new(
+        std::sync::Arc::new(identity.store.clone()),
+        crate::providers::ProviderRegistry::default(),
+        crate::inference::EngineLimits::default(),
+    )
+    .unwrap();
+    let app = crate::http::router_with_identity(identity.store.clone(), None, engine, identity);
+    let r = open_get(&app, "/api/v1/auth/config", &[]).await;
+    assert!(r.status == StatusCode::OK, "unexpected value: r.status");
+    assert!(
+        serde_json::from_slice::<Value>(&r.bytes).unwrap()["enabled"] == true,
+        "unexpected value: serde_json::from_slice::<Value>(&r.bytes).unwrap()[\"enabled\"]"
+    );
+    observed.observe(&r);
+    // The verified token carries a display name, which the callback stores.
+    mock.claims.lock().unwrap()["name"] = json!("Contract Person");
+    // One real sign-in attempt: `(state, browser cookie)`; the mock signs the
+    // attempt's nonce into its next token.
+    let begin = async || {
+        let r = open_get(&app, "/api/v1/auth/login", &[]).await;
+        assert!(
+            r.status == StatusCode::SEE_OTHER,
+            "unexpected value: r.status"
+        );
+        let url = Url::parse(r.headers[header::LOCATION].to_str().unwrap()).unwrap();
+        let params: HashMap<_, _> = url
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        mock.claims.lock().unwrap()["nonce"] = json!(params["nonce"]);
+        (
+            params["state"].clone(),
+            captured_cookie(&r.headers, BROWSER),
+            r,
+        )
+    };
+    let (state, browser, r) = begin().await;
+    observed.observe(&r);
+    let path = format!("/api/v1/auth/callback?state={state}&code=good&unrelated_key=ignored");
+    let r = open_get(
+        &app,
+        &path,
+        &[
+            ("cookie", format!("{BROWSER}={browser}")),
+            ("user-agent", BROWSER_AGENT.to_owned()),
+        ],
+    )
+    .await;
+    assert!(
+        r.status == StatusCode::SEE_OTHER,
+        "unexpected value: r.status"
+    );
+    assert!(
+        r.headers[header::LOCATION] == "/",
+        "unexpected value: r.headers[header::LOCATION]"
+    );
+    let session = captured_cookie(&r.headers, SESSION);
+    let csrf = captured_cookie(&r.headers, CSRF);
+    assert!(is_token(&session));
+    assert!(is_token(&csrf));
+    observed.observe(&r);
+    // Real replay refusal; it cannot earn callback coverage.
+    let r = open_get(&app, &path, &[("cookie", format!("{BROWSER}={browser}"))]).await;
+    assert!(
+        r.status == StatusCode::BAD_REQUEST,
+        "unexpected value: r.status"
+    );
+    observed.observe(&r);
+    // The new session is real: its identity, device label and own export come
+    // from the verified token, the callback's own writes and the live handlers.
+    let as_session = [("cookie", format!("{SESSION}={session}"))];
+    let r = open_get(&app, "/api/v1/me", &as_session).await;
+    assert!(r.status == StatusCode::OK, "unexpected value: r.status");
+    let me: Value = serde_json::from_slice(&r.bytes).unwrap();
+    assert!(
+        me["user"]["display_name"] == "Contract Person",
+        "unexpected value: me[\"user\"][\"display_name\"]"
+    );
+    assert!(
+        me["user"]["email"] == "newuser@example.test",
+        "unexpected value: me[\"user\"][\"email\"]"
+    );
+    observed.observe(&r);
+    let r = open_get(&app, "/api/v1/me/sessions", &as_session).await;
+    assert!(r.status == StatusCode::OK, "unexpected value: r.status");
+    let sessions: Value = serde_json::from_slice(&r.bytes).unwrap();
+    assert!(
+        sessions["data"][0]["client"] == "Firefox on Linux",
+        "unexpected value: sessions[\"data\"][0][\"client\"]"
+    );
+    assert!(
+        sessions["data"][0]["current"] == true,
+        "unexpected value: sessions[\"data\"][0][\"current\"]"
+    );
+    assert!(sessions["data"][0]["last_seen_at"].is_string());
+    observed.observe(&r);
+    let today = chrono::Utc::now().date_naive();
+    let r = open_get(
+        &app,
+        &format!("/api/v1/me/export?from={today}&to={today}"),
+        &as_session,
+    )
+    .await;
+    assert!(r.status == StatusCode::OK, "unexpected value: r.status");
+    let exported: Value = serde_json::from_slice(&r.bytes).unwrap();
+    assert!(
+        exported["subject"]["display_name"] == "Contract Person",
+        "unexpected value: exported[\"subject\"][\"display_name\"]"
+    );
+    assert!(
+        exported["subject"]["platform_role"] == "user",
+        "unexpected value: exported[\"subject\"][\"platform_role\"]"
+    );
+    observed.observe(&r);
+    let r = capture(
+        "POST",
+        "/api/v1/auth/logout",
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/auth/logout")
+                    .header(header::COOKIE, format!("{SESSION}={session}"))
+                    .header("origin", "http://127.0.0.1:3000")
+                    .header("x-csrf-token", csrf)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(
+        r.status == StatusCode::NO_CONTENT,
+        "unexpected value: r.status"
+    );
+    assert!(r.bytes.is_empty());
+    observed.observe(&r);
+
+    // HTTP boundary vectors. Login stores a throw-away attempt per request; the
+    // handler ignores a malformed or unsafe `return_to`, so every value is accepted.
+    query_vectors(
+        observed,
+        "GET",
+        "/api/v1/auth/login",
+        &[("return_to", "/keys")],
+        async || ((), vec![]),
+        async |_: &(), query| {
+            let path = if query.is_empty() {
+                "/api/v1/auth/login".to_owned()
+            } else {
+                format!("/api/v1/auth/login?{query}")
+            };
+            Probe::from(open_get(&app, &path, &[]).await)
+        },
+    )
+    .await;
+    // The callback answers 400 for malformed input AND for any refused sign-in,
+    // so its status cannot tell them apart: the verdict is decided from server
+    // state. A `state` other than the real one names no login attempt, so each
+    // request first gets a COPY of the real attempt stored under the state it
+    // carries (same browser, nonce and verifier). The handler then ACCEPTS the
+    // value exactly when it consumes that row (the state passed validation and
+    // matched the attempt), and refuses it when the row survives. An accepted
+    // attempt must then reach the token exchange (a usable `code`) or the
+    // provider's own `error` refusal branch (any `error` text is accepted, then
+    // refused 400). A status outside 303/400 still fails (Probe::decided).
+    query_vectors(
+        observed,
+        "GET",
+        "/api/v1/auth/callback",
+        &[("error", "access_denied")],
+        async || {
+            let (state, browser, _) = begin().await;
+            (
+                (state.clone(), browser),
+                vec![
+                    ("state".to_owned(), state),
+                    ("code".to_owned(), "good".to_owned()),
+                ],
+            )
+        },
+        async |context: &(String, String), query: String| {
+            let before = mock.exchanges.load(Ordering::SeqCst);
+            let pairs: Vec<(String, String)> =
+                Url::parse(&format!("http://localhost/?{query}"))
+                    .unwrap()
+                    .query_pairs()
+                    .map(|(k, v)| (k.into_owned(), v.into_owned()))
+                    .collect();
+            let sent = pairs
+                .iter()
+                .find(|(name, _)| name == "state")
+                .map(|(_, value)| value.clone());
+            if let Some(sent) = sent.as_deref().filter(|sent| *sent != context.0) {
+                sqlx::query("INSERT INTO oidc_login_attempts(state_hash,browser_hash,nonce,pkce_verifier,expires_at,return_to) SELECT $1,browser_hash,nonce,pkce_verifier,expires_at,return_to FROM oidc_login_attempts WHERE state_hash=$2 ON CONFLICT (state_hash) DO UPDATE SET browser_hash=EXCLUDED.browser_hash,nonce=EXCLUDED.nonce,pkce_verifier=EXCLUDED.pkce_verifier,expires_at=EXCLUDED.expires_at,return_to=EXCLUDED.return_to")
+                    .bind(hash(sent))
+                    .bind(hash(&context.0))
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
+            let path = format!("/api/v1/auth/callback?{query}");
+            let captured = open_get(
+                &app,
+                &path,
+                &[("cookie", format!("{BROWSER}={}", context.1))],
+            )
+            .await;
+            let consumed = match &sent {
+                Some(sent) => {
+                    let left: i64 = sqlx::query_scalar(
+                        "SELECT count(*) FROM oidc_login_attempts WHERE state_hash=$1",
+                    )
+                    .bind(hash(sent))
+                    .fetch_one(pool)
+                    .await
+                    .unwrap();
+                    left == 0
+                }
+                None => false,
+            };
+            let exchanged = mock.exchanges.load(Ordering::SeqCst) > before;
+            let provider_error = pairs.iter().any(|(name, _)| name == "error");
+            Probe::decided(captured, consumed && (exchanged || provider_error))
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn management_openapi_review_middleware_throttle_raw_wire() {
+    // Closed before constructing the state: a regression cannot accidentally
+    // connect to any database, even if it dispatches past the exhausted gate.
+    let pool = lazy_pool();
+    pool.close().await;
+    let state = IdentityState::new(Store::new(pool), None)
+        .await
+        .unwrap()
+        .with_admin_token_limits(1, 1);
+    state
+        .admin_token_replica_limiter
+        .check(std::time::Instant::now())
+        .unwrap();
+    let document = crate::management::openapi::responses::artifact();
+    for (path, item) in document["paths"].as_object().unwrap() {
+        if !crate::management::openapi::responses::completed(
+            crate::management::openapi::responses::area(path),
+        ) {
+            continue;
+        }
+        for (method, operation) in item.as_object().unwrap() {
+            if operation["x-omg-access"] != "Browser" {
+                continue;
+            }
+            let app = Router::new()
+                .route(path, axum::routing::any(|| async { StatusCode::OK }))
+                .route_layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    authenticate_management,
+                ));
+            let concrete = path
+                .replace("{id}", &Uuid::nil().to_string())
+                .replace("{session}", &Uuid::nil().to_string());
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method(method.to_ascii_uppercase().as_str())
+                        .uri(concrete)
+                        .header(header::AUTHORIZATION, "Bearer omg_admin_unknown")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let (parts, body) = response.into_parts();
+            let bytes = axum::body::to_bytes(body, 16384).await.unwrap();
+            assert_eq!(parts.status, StatusCode::TOO_MANY_REQUESTS);
+            assert!(
+                parts.headers[header::RETRY_AFTER]
+                    .to_str()
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap()
+                    > 0
+            );
+            crate::management::openapi::responses::validate(
+                document,
+                &method.to_ascii_uppercase(),
+                path,
+                parts.status,
+                &parts.headers,
+                &bytes,
+            )
+            .unwrap();
+            let mut missing_retry = parts.headers.clone();
+            missing_retry.remove(header::RETRY_AFTER);
+            assert!(
+                crate::management::openapi::responses::validate(
+                    document,
+                    &method.to_ascii_uppercase(),
+                    path,
+                    parts.status,
+                    &missing_retry,
+                    &bytes
+                )
+                .is_err(),
+                "accepted identity throttle without Retry-After"
+            );
+        }
+    }
+}
+
 fn lazy_pool() -> sqlx::PgPool {
     sqlx::postgres::PgPoolOptions::new()
         .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
@@ -1226,6 +1598,8 @@ mod database {
             .oneshot(Request::builder().uri(login).body(Body::empty()).unwrap())
             .await
             .unwrap();
+        let response =
+            crate::management::openapi::responses::checked_response("GET", login, response).await;
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
         let url = Url::parse(response.headers()[header::LOCATION].to_str().unwrap()).unwrap();
         let params: HashMap<_, _> = url
@@ -1251,6 +1625,12 @@ mod database {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let response = crate::management::openapi::responses::checked_response(
+            "GET",
+            "/api/v1/auth/callback",
+            response,
+        )
+        .await;
         (
             response_cookie(&response, SESSION),
             response_cookie(&response, CSRF),

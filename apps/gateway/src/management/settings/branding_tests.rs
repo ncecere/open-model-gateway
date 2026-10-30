@@ -38,11 +38,10 @@ async fn send(
         )
         .await
         .unwrap();
-    let status = response.status();
-    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let captured = openapi::responses::capture(method, path, response).await;
     (
-        status,
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        captured.status,
+        serde_json::from_slice(&captured.bytes).unwrap_or(Value::Null),
     )
 }
 
@@ -52,18 +51,108 @@ async fn public(
     rt: Option<&FileStoreRuntime>,
     etag: Option<&str>,
 ) -> axum::http::Response<Body> {
+    public_at(s, rt, etag, "v=abc").await
+}
+
+/// [`public`] with an explicit raw query string (empty: none).
+async fn public_at(
+    s: &Store,
+    rt: Option<&FileStoreRuntime>,
+    etag: Option<&str>,
+    query: &str,
+) -> axum::http::Response<Body> {
     let mut router = crate::http::router(s.clone());
     if let Some(rt) = rt {
         router = router.layer(Extension(rt.clone()));
     }
-    let mut request = Request::builder().uri(format!("{PUBLIC}?v=abc"));
+    let uri = if query.is_empty() {
+        PUBLIC.to_owned()
+    } else {
+        format!("{PUBLIC}?{query}")
+    };
+    let mut request = Request::builder().uri(uri);
     if let Some(etag) = etag {
         request = request.header("if-none-match", etag);
     }
-    router
+    let response = router
         .oneshot(request.body(Body::empty()).unwrap())
         .await
-        .unwrap()
+        .unwrap();
+    openapi::responses::checked_response("GET", PUBLIC, response).await
+}
+
+/// Uploads three logos (each replacing the previous object) into `rt`, leaving the
+/// last one as the installation logo, and runs the public endpoint's HTTP vectors.
+pub(super) async fn management_openapi_branding_fixtures(
+    f: &Fixture,
+    rt: &FileStoreRuntime,
+    observed: &mut openapi::responses::PositiveFixtures,
+) {
+    let r = openapi::responses::capture("GET", PUBLIC, public(&f.s, Some(rt), None).await).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    observed.observe(&r);
+    for (content_type, bytes) in [
+        ("image/png", png(64, 64)),
+        ("image/jpeg", jpeg(64, 64)),
+        ("image/webp", webp_lossless(64, 64)),
+    ] {
+        let (status, _) = send(
+            &f.s,
+            &f.admin,
+            Some(rt),
+            "PUT",
+            LOGO,
+            content_type,
+            bytes.clone(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let r =
+            openapi::responses::capture("GET", PUBLIC, public(&f.s, Some(rt), None).await).await;
+        assert_eq!(r.status, StatusCode::OK);
+        assert_eq!(r.bytes.as_ref(), bytes.as_slice());
+        assert_eq!(r.headers["content-type"], content_type);
+        let etag = r.headers["etag"].to_str().unwrap().to_owned();
+        observed.observe(&r);
+        let r =
+            openapi::responses::capture("GET", PUBLIC, public(&f.s, Some(rt), Some(&etag)).await)
+                .await;
+        assert_eq!(r.status, StatusCode::NOT_MODIFIED);
+        assert!(r.bytes.is_empty());
+        observed.observe(&r);
+    }
+    let response = crate::http::router(f.s.clone())
+        .layer(Extension(rt.clone()))
+        .oneshot(
+            Request::builder()
+                .method("HEAD")
+                .uri(PUBLIC)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let r = openapi::responses::capture("HEAD", PUBLIC, response).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert!(r.bytes.is_empty());
+    observed.observe(&r);
+    // `v` is a cache-busting hint the handler never decodes: every value is accepted.
+    openapi::http_vectors::query_vectors_fixed(
+        observed,
+        "GET",
+        PUBLIC,
+        &[("v", "abc")],
+        async |query| {
+            let path = if query.is_empty() {
+                PUBLIC.to_owned()
+            } else {
+                format!("{PUBLIC}?{query}")
+            };
+            openapi::responses::capture("GET", &path, public_at(&f.s, Some(rt), None, &query).await)
+                .await
+        },
+    )
+    .await;
 }
 
 async fn audit_count(pool: &PgPool, action: &str) -> i64 {

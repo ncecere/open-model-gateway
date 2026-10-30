@@ -107,6 +107,10 @@ pub(super) fn compile_schema(schema: &Value) -> Result<Validator> {
     // keywords, including underneath `not` (where treating errors as false is unsafe).
     jsonschema::options()
         .with_draft(Draft::Draft202012)
+        .should_validate_formats(true)
+        // JSON UUID fields use uuid's serde parser, which also accepts compact,
+        // braced and URN forms; do not silently narrow the request boundary.
+        .with_format("uuid", |value: &str| uuid::Uuid::parse_str(value).is_ok())
         .with_retriever(local_schemas()?)
         .with_pattern_options(PatternOptions::regex().size_limit(1 << 20))
         .build(schema)
@@ -224,11 +228,24 @@ pub(super) fn validate_document(document: &Value) -> Result<()> {
         pointers.insert(format!("/components/schemas/{}", pointer_segment(name)));
     }
     inline_schema_pointers(document, "", &mut pointers);
+    // Serving-layer contracts repeat the same schemas at many operations.
+    // With $id rebasing forbidden, identical ordinary schemas have identical
+    // local-reference meaning in this immutable document. Deduplicate only
+    // within THIS validation call; mutated documents never reuse a result.
+    let mut compiled = BTreeSet::new();
     for pointer in pointers {
+        let node = document
+            .pointer(&pointer)
+            .context("schema pointer missing")?;
+        let key = serde_json::to_string(node)?;
+        if !key.contains("$dynamic") && !key.contains("$anchor") && !compiled.insert(key) {
+            continue;
+        }
         let mut schema = document.clone();
         schema["$ref"] = json!(format!("#{}", fragment(&pointer)));
         compile_schema(&schema).with_context(|| format!("compile contract schema at {pointer}"))?;
     }
+    super::quality::completed(document)?;
     Ok(())
 }
 
