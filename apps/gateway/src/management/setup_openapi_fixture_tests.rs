@@ -2027,6 +2027,32 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             json!({"credential_ref":"aws:role:arn:aws:iam:::role/r","aws_external_id":null,"aws_session_name":null}),
             BOTH_REFUSE,
         ),
+        // The decisive length pairs the generated vectors cannot build (padding
+        // breaks a structured region or ARN): x-omg-unsendable-boundary points here.
+        // valid_region: at most 32 characters.
+        (
+            "a 32-character region",
+            json!({"region":format!("us-{}-1", "a".repeat(27))}),
+            BOTH_ACCEPT,
+        ),
+        (
+            "a 33-character region",
+            json!({"region":format!("us-{}-1", "a".repeat(28))}),
+            BOTH_REFUSE,
+        ),
+        // A 2057-character role reference (the schema's bound: aws:role: plus a
+        // 2048-character ARN) is refused by valid_role_arn's 510-character path
+        // limit, the documented divergence; one more character is refused by both.
+        (
+            "a 2057-character role reference",
+            json!({"credential_ref":format!("aws:role:arn:aws:iam::123456789012:role/{}n", format!("{}/", "a".repeat(125)).repeat(16)),"aws_external_id":null,"aws_session_name":null}),
+            SCHEMA_ONLY,
+        ),
+        (
+            "a 2058-character role reference",
+            json!({"credential_ref":format!("aws:role:arn:aws:iam::123456789012:role/{}nn", format!("{}/", "a".repeat(125)).repeat(16)),"aws_external_id":null,"aws_session_name":null}),
+            BOTH_REFUSE,
+        ),
     ] {
         let mut body = bedrock_body.clone();
         body["name"] = json!(format!("Vector Bedrock {}", Uuid::new_v4()));
