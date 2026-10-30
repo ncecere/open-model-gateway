@@ -5,6 +5,14 @@ async fn incident(pool: &PgPool, ws: Option<Uuid>) -> Uuid {
     let event = Uuid::new_v4();
     sqlx::query("INSERT INTO alert_events(id,kind,subject_key,workspace_id,level,severity,summary,details) VALUES($1,'aged_unknown_hold',$2,$3,1,'warning','Holds with unknown cost are over 24 hours old','{\"threshold_hours\":24}')")
         .bind(event).bind(ws.map_or_else(|| "personal".into(), |ws| format!("workspace:{ws}"))).bind(ws).execute(pool).await.unwrap();
+    // As `aged_hold_tick` writes it: the fired email comes with the incident.
+    sqlx::query(
+        "INSERT INTO alert_deliveries(id,event_id,transition) VALUES(gen_random_uuid(),$1,'fired')",
+    )
+    .bind(event)
+    .execute(pool)
+    .await
+    .unwrap();
     event
 }
 

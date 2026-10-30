@@ -683,6 +683,27 @@ async fn sign_in(
 #[cfg(test)]
 mod body_tests {
     #[test]
+    fn management_openapi_settings_request_vectors() {
+        use crate::management::openapi::requests::vectors;
+        use serde_json::json;
+        vectors::<super::GeneralInput>(
+            "PUT",
+            "/api/v1/platform/settings/general",
+            json!({"display_name":"Contract", "support_url":"https://support.example.test", "logo_url":null, "human_key_max_lifetime_days":30}),
+        );
+        vectors::<super::PrivacyInput>(
+            "PUT",
+            "/api/v1/platform/settings/privacy",
+            json!({"openrouter_data_collection":"deny", "request_log_retention_days":30}),
+        );
+        vectors::<super::EmailInput>(
+            "PUT",
+            "/api/v1/platform/settings/email",
+            json!({"host":"localhost", "port":2525, "tls":"none", "username":null, "password_ref":null, "from_address":"gateway@example.test", "from_name":"Contract"}),
+        );
+    }
+
+    #[test]
     fn test_actions_accept_only_no_body_or_an_empty_object() {
         for body in ["", "{}", " {} "] {
             assert!(super::no_configuration(body.as_bytes()).is_ok());

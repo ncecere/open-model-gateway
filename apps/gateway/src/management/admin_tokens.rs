@@ -77,6 +77,16 @@ struct NewAdminTokenInput {
     ip_allowlist: Option<Vec<String>>,
 }
 
+#[cfg(test)]
+#[test]
+fn management_openapi_slice6_admin_token_request_vectors() {
+    super::openapi::requests::vectors::<NewAdminTokenInput>(
+        "POST",
+        "/api/v1/platform/admin-tokens",
+        json!({"name":"contract","scopes":["platform:read"],"expires_in_days":30,"ip_allowlist":["127.0.0.1/32"]}),
+    );
+}
+
 fn create_error(error: CreateAdminTokenError) -> ApiError {
     match error {
         CreateAdminTokenError::Invalid(NewAdminTokenError::InvalidName) => {

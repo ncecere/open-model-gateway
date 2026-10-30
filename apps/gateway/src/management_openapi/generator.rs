@@ -253,15 +253,35 @@ pub(super) fn generate(fragments: &Fragments) -> Result<Value> {
                     .as_array()
                     .context("fragment parameters must be an array")?;
                 ensure!(
-                    parameters
-                        .iter()
-                        .all(|p| p["in"] != "path" && p.get("$ref").is_none()),
-                    "path parameters are generated; fragments may add only inline non-path parameters"
+                    parameters.iter().all(|p| p.get("$ref").is_none()),
+                    "fragment parameters must be inline"
                 );
+                // Path parameters are generated from the template; a fragment
+                // may only TYPE one (same name, `in` and `required`), once.
+                let mut typed = BTreeSet::new();
+                for parameter in parameters.iter().filter(|p| p["in"] == "path") {
+                    let name = parameter["name"]
+                        .as_str()
+                        .context("path parameter needs a name")?;
+                    ensure!(
+                        parameter.as_object().is_some_and(|o| o.len() == 4)
+                            && parameter["required"] == true
+                            && parameter["schema"].is_object(),
+                        "a typed path parameter is exactly name, in, required:true and an object schema ({key})"
+                    );
+                    ensure!(typed.insert(name), "duplicate typed path parameter ({key})");
+                    let slot = operation["parameters"]
+                        .as_array_mut()
+                        .unwrap()
+                        .iter_mut()
+                        .find(|generated| generated["name"] == name)
+                        .with_context(|| format!("unknown path parameter in {key}"))?;
+                    *slot = parameter.clone();
+                }
                 operation["parameters"]
                     .as_array_mut()
                     .unwrap()
-                    .extend(parameters.iter().cloned());
+                    .extend(parameters.iter().filter(|p| p["in"] != "path").cloned());
             } else {
                 operation[field] = value.clone();
             }
@@ -349,8 +369,19 @@ pub(super) fn verify(document: &Value) -> Result<()> {
                 .filter(|p| p["in"] == "path")
                 .cloned()
                 .collect::<Vec<_>>();
+            // Identity is generated; the schema may be typed by a reviewed fragment.
+            let identity = |parameters: &[Value]| {
+                parameters
+                    .iter()
+                    .map(|p| (p["name"].clone(), p["in"].clone(), p["required"].clone()))
+                    .collect::<Vec<_>>()
+            };
             ensure!(
-                actual_path == path_parameters(path),
+                identity(&actual_path) == identity(&path_parameters(path))
+                    && actual_path
+                        .iter()
+                        .all(|p| p.as_object().is_some_and(|o| o.len() == 4)
+                            && p["schema"].is_object()),
                 "path parameters drift for {key}"
             );
         }

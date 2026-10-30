@@ -2,7 +2,7 @@
 use super::*;
 
 pub(in crate::management::openapi) fn ceiling(personal: bool) -> Value {
-    json!({"id":uuid::Uuid::nil(),"rule":null,"builtin":false,"kind":"admission_ceiling","state":"firing","severity":"warning","level":1,"summary":"An API key is near its admission ceiling","details":{"scope":"key","personal":personal,"workspace_name":if personal { Value::Null } else { json!("Team") },"workspace_kind":if personal { "personal" } else { "team" },"window_minutes":5,"admissions":60000,"admissions_per_second":"200.0","by_rate":true,"by_lock_wait":false,"threshold_requests_per_second":200,"lock_wait_p95_at_least_ms":null,"threshold_lock_wait_ms":250},"workspace":null,"connection":null,"fired_at":"2026-10-28T00:00:00Z","resolved_at":null,"resolution":null,"email":null,"cleared_email":null,"read":false})
+    json!({"id":uuid::Uuid::nil(),"rule":null,"builtin":false,"kind":"admission_ceiling","state":"firing","severity":"warning","level":1,"summary":"An API key is near its admission ceiling","details":{"scope":"key","personal":personal,"workspace_name":if personal { Value::Null } else { json!("Team") },"workspace_kind":if personal { "personal" } else { "team" },"window_minutes":5,"admissions":60000,"admissions_per_second":"200.0","by_rate":true,"by_lock_wait":false,"threshold_requests_per_second":200,"lock_wait_p95_at_least_ms":null,"threshold_lock_wait_ms":250},"workspace":null,"connection":null,"fired_at":"2026-10-28T00:00:00Z","resolved_at":null,"resolution":null,"email":{"status":"pending","recipients":0,"sent":0,"failed":0,"error":null,"attempt_count":0,"retrying":false,"next_attempt_at":null,"waiting":0,"exhausted":0,"suppression_reason":null},"cleared_email":null,"read":false})
 }
 
 #[test]
@@ -354,4 +354,80 @@ async fn management_openapi_review_capture_panics_never_echo_captured_values() {
         message.contains("/api/v1/me/access-requests/{id}"),
         "the panic does not name the operation template"
     );
+}
+
+/// Slice 6 patterns stay in the portable ECMA-262 subset that every client
+/// generator and the Rust validator read alike: no Unicode property escapes
+/// (`\p{..}`, `\P{..}`), no braced code points, no named groups, no flags. The
+/// control set is the explicit class that equals `char::is_control`.
+#[test]
+fn management_openapi_slice6_patterns_are_portable() {
+    fn walk(value: &Value, found: &mut Vec<String>, at: &str) {
+        match value {
+            Value::Object(map) => {
+                for (key, child) in map {
+                    if key == "pattern"
+                        && let Some(pattern) = child.as_str()
+                    {
+                        let banned = ["\\p", "\\P", "\\u{", "\\k<", "(?", "\\N{"];
+                        if banned.iter().any(|b| pattern.contains(b)) {
+                            found.push(at.to_owned());
+                        }
+                    }
+                    walk(child, found, &format!("{at}/{key}"));
+                }
+            }
+            Value::Array(items) => {
+                for (i, child) in items.iter().enumerate() {
+                    walk(child, found, &format!("{at}/{i}"));
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    for (name, text) in [
+        (
+            "operations",
+            include_str!(
+                "../../../../docs/openapi/management/activity-credentials-operations.json"
+            ),
+        ),
+        (
+            "schemas",
+            include_str!("../../../../docs/openapi/management/activity-credentials-schemas.json"),
+        ),
+    ] {
+        walk(&serde_json::from_str(text).unwrap(), &mut found, name);
+    }
+    assert!(found.is_empty(), "non-portable slice 6 patterns: {found:?}");
+    // The explicit class is exactly `char::is_control`.
+    let class = json!({"type":"string","pattern":"^[\\u0000-\\u001F\\u007F-\\u009F]$"});
+    for c in (0..=0x2FFu32).filter_map(char::from_u32) {
+        let matched = validate_value(artifact(), &class, &json!(c.to_string())).is_ok();
+        assert_eq!(matched, c.is_control(), "code point {}", c as u32);
+    }
+}
+
+/// A known budget window is exact: no unresolved usage and no unknown hold
+/// (`read_budget_report` reports a zero unknown count only when every counter
+/// is zero).
+#[test]
+fn management_openapi_slice6_known_budget_window_is_exact() {
+    let schema = json!({"$ref":"#/components/schemas/S6KnownBudgetWindow"});
+    let known = json!({"layer":"key","period":"month","amount_microusd":"100","monthly_budget_microusd":"100","budget_period":"month","window_start":"2026-10-01T00:00:00Z","window_end":"2026-11-01T00:00:00Z","usage_visible":true,"used_microusd":"7","unresolved_usage":false,"exhausted":false,"settled_microusd":"5","pending_held_microusd":"2","unknown_held_microusd":"0","unknown_cost_requests":"0","remaining_microusd":"93","headroom_status":"known"});
+    assert!(validate_value(artifact(), &schema, &known).is_ok());
+    for (field, value) in [
+        ("unresolved_usage", json!(true)),
+        ("unknown_held_microusd", json!("1")),
+        ("unknown_cost_requests", json!("1")),
+        ("remaining_microusd", Value::Null),
+    ] {
+        let mut window = known.clone();
+        window[field] = value;
+        assert!(
+            validate_value(artifact(), &schema, &window).is_err(),
+            "a known window accepted a contradictory {field}"
+        );
+    }
 }

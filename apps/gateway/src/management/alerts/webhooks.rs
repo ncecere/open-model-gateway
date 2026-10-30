@@ -223,6 +223,21 @@ struct Patch {
     #[serde(default, deserialize_with = "present")]
     previous_secret_until: Option<Option<DateTime<Utc>>>,
 }
+#[test]
+fn management_openapi_manual_webhook_request_vectors() {
+    use crate::management::openapi::requests::vectors;
+    vectors::<Create>(
+        "POST",
+        "/api/v1/platform/alerts/webhooks",
+        json!({"label":"Contract", "url":"https://receiver.example.test/ingest", "current_secret_ref":"env:HOOK_CURRENT"}),
+    );
+    vectors::<Patch>(
+        "PATCH",
+        "/api/v1/platform/alerts/webhooks/{id}",
+        json!({"label":"Renamed", "enabled":true, "current_secret_ref":"env:HOOK_CURRENT", "previous_secret_ref":"env:HOOK_PREVIOUS", "previous_secret_until":chrono::Utc::now()+chrono::Duration::hours(1)}),
+    );
+}
+
 #[derive(sqlx::FromRow)]
 struct Saved {
     label: String,
