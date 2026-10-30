@@ -2,7 +2,7 @@
 use super::*;
 
 pub(in crate::management::openapi) fn ceiling(personal: bool) -> Value {
-    json!({"id":uuid::Uuid::nil(),"rule":null,"builtin":false,"kind":"admission_ceiling","state":"firing","severity":"warning","level":1,"summary":"An API key is near its admission ceiling","details":{"scope":"key","personal":personal,"workspace_name":if personal { Value::Null } else { json!("Team") },"workspace_kind":if personal { "personal" } else { "team" },"window_minutes":5,"admissions":60000,"admissions_per_second":"200.0","by_rate":true,"by_lock_wait":false,"threshold_requests_per_second":200,"lock_wait_p95_at_least_ms":null,"threshold_lock_wait_ms":250},"workspace":null,"connection":null,"fired_at":"2026-10-28T00:00:00Z","resolved_at":null,"resolution":null,"email":null,"cleared_email":null,"read":false})
+    json!({"id":uuid::Uuid::nil(),"rule":null,"builtin":false,"kind":"admission_ceiling","state":"firing","severity":"warning","level":1,"summary":"An API key is near its admission ceiling","details":{"scope":"key","personal":personal,"workspace_name":if personal { Value::Null } else { json!("Team") },"workspace_kind":if personal { "personal" } else { "team" },"window_minutes":5,"admissions":60000,"admissions_per_second":"200.0","by_rate":true,"by_lock_wait":false,"threshold_requests_per_second":200,"lock_wait_p95_at_least_ms":null,"threshold_lock_wait_ms":250},"workspace":null,"connection":null,"fired_at":"2026-10-28T00:00:00Z","resolved_at":null,"resolution":null,"email":{"status":"pending","recipients":0,"sent":0,"failed":0,"error":null,"attempt_count":0,"retrying":false,"next_attempt_at":null,"waiting":0,"exhausted":0,"suppression_reason":null},"cleared_email":null,"read":false})
 }
 
 #[test]
