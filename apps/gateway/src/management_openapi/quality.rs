@@ -18,6 +18,15 @@ pub(super) const ARBITRARY_JSON: &[(&str, &str)] = &[
         "/components/schemas/get_api_v1_me_exportResponse/properties/audit/properties/items/items/properties/metadata",
         "Stored audit_events.metadata is exported verbatim as JSON; its vocabulary depends on the audited action.",
     ),
+    // Slice 6: audit rows are stored jsonb objects, not deserialized DTOs.
+    (
+        "/components/schemas/S6WorkspaceAudit/properties/metadata",
+        "Stored audit_events.metadata object. audit() keeps only typed safe keys (flags, counts, closed vocabulary values) for new rows; older rows and database-trigger rows carry action-specific keys.",
+    ),
+    (
+        "/components/schemas/S6PlatformAudit/properties/metadata",
+        "Stored audit_events.metadata object. audit() keeps only typed safe keys (flags, counts, closed vocabulary values) for new rows; older rows and database-trigger rows carry action-specific keys.",
+    ),
 ];
 
 /// Decimal RATE fields that legitimately carry fractions, so the integer

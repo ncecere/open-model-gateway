@@ -15,8 +15,29 @@ pub(crate) const IDENTITY_SELF_SERVICE_AREAS: &[&str] = &[
     "me",
     "access-request-targets",
 ];
-pub(crate) const AREA_GROUPS: &[(&str, &[&str])] =
-    &[("IDENTITY_SELF_SERVICE_AREAS", IDENTITY_SELF_SERVICE_AREAS)];
+pub(crate) const SLICE6_AREAS: &[&str] = &[
+    "platform/admin-tokens",
+    "platform/audit",
+    "platform/batches",
+    "platform/key-safety",
+    "platform/legal-holds",
+    "platform/logs",
+    "workspaces/{ws}/audit",
+    "workspaces/{ws}/batches",
+    "workspaces/{ws}/executions",
+    "workspaces/{ws}/files",
+    "workspaces/{ws}/generations",
+    "workspaces/{ws}/key-issuance",
+    "workspaces/{ws}/key-safety",
+    "workspaces/{ws}/keys",
+    "workspaces/{ws}/logs",
+    "workspaces/{ws}/requests",
+    "workspaces/{ws}/service-accounts",
+];
+pub(crate) const AREA_GROUPS: &[(&str, &[&str])] = &[
+    ("IDENTITY_SELF_SERVICE_AREAS", IDENTITY_SELF_SERVICE_AREAS),
+    ("SLICE6_AREAS", SLICE6_AREAS),
+];
 
 /// Whether an area's schemas are complete and gated by an executed fixture group.
 pub(crate) fn completed(area: &str) -> bool {
@@ -231,7 +252,17 @@ pub(crate) fn validate(
         return Ok(());
     }
     let (media, schema) = media_schema(response, headers)?;
-    ensure!(!bytes.is_empty(), "documented representation is empty");
+    // An opaque stored file can legitimately have zero bytes. Only an
+    // explicit binary minLength=0 admits that response; it still earns no
+    // positive representation credit (see positive()). JSON stays nonempty.
+    let representation = resolved(document, schema)?;
+    let empty_binary = representation["type"] == "string"
+        && representation["format"] == "binary"
+        && representation["minLength"] == 0;
+    ensure!(
+        !bytes.is_empty() || empty_binary,
+        "documented representation is empty"
+    );
     if media == "application/json" || media.ends_with("+json") {
         let body: Value = serde_json::from_slice(bytes)
             .map_err(|e| anyhow::anyhow!("response is not JSON ({:?})", e.classify()))?;
@@ -551,6 +582,46 @@ fn json_media(headers: &HeaderMap) -> bool {
         .is_some_and(|media| media == "application/json" || media.ends_with("+json"))
 }
 
+/// Reviewed excuse, on a multipart or binary `requestBody`, from JSON-derived boundary vectors.
+pub(crate) const NO_BOUNDARY_VECTORS: &str = "x-omg-no-boundary-vectors";
+
+/// A media type no JSON-derived vector can encode: a multipart form or a binary
+/// payload. Parameters (`; boundary=...`) are ignored; `application/json` in any
+/// spelling (`; charset=utf-8`, `+json`, case) and text never qualify.
+fn non_json_media(media: &str) -> bool {
+    let base = media
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    base.starts_with("multipart/")
+        || base == "application/octet-stream"
+        || ["image/", "audio/", "video/"]
+            .iter()
+            .any(|prefix| base.starts_with(prefix))
+}
+
+/// A reason that explains something: at least 40 characters and five words of
+/// three or more letters, none of them a placeholder.
+fn substantive_reason(reason: &str) -> bool {
+    let reason = reason.trim();
+    let words: Vec<String> = reason
+        .split_whitespace()
+        .map(|w| {
+            w.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_ascii_lowercase()
+        })
+        .filter(|w| w.chars().count() >= 3)
+        .collect();
+    let distinct: BTreeSet<&String> = words.iter().collect();
+    reason.chars().count() >= 40
+        && distinct.len() >= 5
+        && !words
+            .iter()
+            .any(|w| matches!(w.as_str(), "todo" | "tbd" | "fixme" | "placeholder"))
+}
+
 /// What real handlers were seen to do. Positive observations earn operation,
 /// query-parameter, array-population and union-branch coverage; executed HTTP
 /// boundary vectors are recorded per operation exactly like positives.
@@ -605,10 +676,31 @@ impl PositiveFixtures {
                     "{key}: documented query parameters have no executed HTTP boundary vectors (call http_vectors::query_vectors)"
                 ));
             }
-            if op.get("requestBody").is_some() && !has("body") {
-                failures.push(format!(
-                    "{key}: the request body has no executed HTTP boundary vectors (call http_vectors::body_vectors_http)"
-                ));
+            if let Some(declared) = op.get("requestBody") {
+                // JSON-derived vectors cannot decide a body made only of
+                // multipart forms or binary payloads: a reviewed, substantive
+                // reason on that body excuses them. Any other body (JSON in
+                // any spelling, text, an empty list) owes its vectors, also
+                // when it is a `$ref` to a shared request body.
+                let body = resolved(document, declared)?;
+                let excusable = body["content"].as_object().is_some_and(|content| {
+                    !content.is_empty() && content.keys().all(|media| non_json_media(media))
+                });
+                let excuse = declared
+                    .get(NO_BOUNDARY_VECTORS)
+                    .or(body.get(NO_BOUNDARY_VECTORS));
+                if let Some(reason) = excuse
+                    && (!excusable || !reason.as_str().is_some_and(substantive_reason))
+                {
+                    failures.push(format!(
+                        "{key}: {NO_BOUNDARY_VECTORS} needs a substantive reason (at least 40 characters of real words) and is valid only when every request media type is multipart or binary"
+                    ));
+                }
+                if !has("body") && (!excusable || excuse.is_none()) {
+                    failures.push(format!(
+                        "{key}: the request body has no executed HTTP boundary vectors (call http_vectors::body_vectors_http)"
+                    ));
+                }
             }
             // Every declared request location must have been carried by some
             // valid body or seed of the operation (or be reviewed-exempt).
@@ -915,7 +1007,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(count, 22);
+        assert_eq!(count, 65);
     }
     #[test]
     fn management_openapi_response_rejects_incomplete_completed_slot() {
@@ -977,6 +1069,19 @@ mod tests {
         ] {
             assert!(validate(&document(), "GET", "/api/v1/me", status, &headers(), body).is_err());
         }
+    }
+    #[test]
+    fn management_openapi_slice6_empty_binary_is_valid_but_not_positive() {
+        let mut d = document();
+        let response = json!({"description":"Opaque file","content":{"application/octet-stream":{"schema":{"type":"string","format":"binary","minLength":0}}}});
+        d["paths"]["/api/v1/me"]["get"]["responses"]["200"] = response.clone();
+        let mut h = HeaderMap::new();
+        h.insert("content-type", "application/octet-stream".parse().unwrap());
+        validate(&d, "GET", "/api/v1/me", StatusCode::OK, &h, b"").unwrap();
+        assert!(!positive(&response, StatusCode::OK, &h, b""));
+        d["paths"]["/api/v1/me"]["get"]["responses"]["200"]["content"]["application/octet-stream"]
+            ["schema"]["minLength"] = json!(1);
+        assert!(validate(&d, "GET", "/api/v1/me", StatusCode::OK, &h, b"").is_err());
     }
     #[test]
     fn management_openapi_response_rejects_envelope_code_mismatch() {
