@@ -31,6 +31,8 @@ pub mod history;
 pub mod http;
 pub mod identity;
 pub mod inference;
+#[cfg(test)]
+pub(crate) mod inference_openapi;
 pub mod jobs;
 pub mod leases;
 pub mod legal_holds;

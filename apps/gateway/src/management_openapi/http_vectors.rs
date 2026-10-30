@@ -28,6 +28,10 @@ use std::collections::BTreeSet;
 pub(crate) struct Probe {
     pub(crate) captured: Captured,
     accepted: Option<bool>,
+    /// Statuses beyond 400/422 that this contract uses to refuse INPUT (the
+    /// inference contract refuses unsupported capabilities with 501 and an
+    /// oversized body with 413). Empty for the management contract.
+    refusals: &'static [u16],
 }
 impl From<Captured> for Probe {
     /// The verdict is derived from the status (see the module comment).
@@ -35,6 +39,7 @@ impl From<Captured> for Probe {
         Self {
             captured,
             accepted: None,
+            refusals: &[],
         }
     }
 }
@@ -47,6 +52,16 @@ impl Probe {
         Self {
             captured,
             accepted: Some(accepted),
+            refusals: &[],
+        }
+    }
+    /// A status-derived verdict for a contract that also refuses input with the
+    /// given extra statuses (never a status that can mean something else).
+    pub(crate) fn refusing(captured: Captured, refusals: &'static [u16]) -> Self {
+        Self {
+            captured,
+            accepted: None,
+            refusals,
         }
     }
     /// The status must always be one an input verdict can rest on, even when the
@@ -54,6 +69,7 @@ impl Probe {
     fn verdict(&self) -> Result<bool> {
         let by_status = match self.captured.status.as_u16() {
             400 | 422 => false,
+            other if self.refusals.contains(&other) => false,
             200..=399 | 404 | 409 => true,
             other => bail!("unexpected status {other}: not an input verdict"),
         };
@@ -1395,7 +1411,7 @@ pub(super) async fn run_query<C>(
 }
 
 /// [`run_query`] with fixture-supplied boundary `candidates` (see [`query_plan`]).
-pub(super) async fn run_query_with<C>(
+pub(crate) async fn run_query_with<C>(
     document: &Value,
     method: &str,
     template: &str,
@@ -2217,9 +2233,9 @@ pub(super) fn body_plan(
 
 /// One executed body vector run: the exchanges and the declared request
 /// locations (schema paths) its valid body and seeded bases carried.
-pub(super) struct BodyRun {
-    pub(super) exchanges: Vec<Captured>,
-    pub(super) reached: BTreeSet<String>,
+pub(crate) struct BodyRun {
+    pub(crate) exchanges: Vec<Captured>,
+    pub(crate) reached: BTreeSet<String>,
 }
 
 pub(super) async fn run_body(
@@ -2237,7 +2253,7 @@ pub(super) async fn run_body(
     )
 }
 
-pub(super) async fn run_body_with(
+pub(crate) async fn run_body_with(
     document: &Value,
     method: &str,
     template: &str,

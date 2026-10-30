@@ -12,7 +12,7 @@ use crate::route_policy::{Access, ROUTES, TokenPolicy};
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Fragment {
+pub(crate) struct Fragment {
     pub access: String,
     pub token_policy: String,
     pub scope: Option<String>,
@@ -22,7 +22,7 @@ pub(super) struct Fragment {
 
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Fragments {
+pub(crate) struct Fragments {
     #[serde(default, deserialize_with = "unique_map")]
     pub operations: BTreeMap<String, Fragment>,
     #[serde(default, deserialize_with = "unique_map")]
@@ -59,7 +59,7 @@ where
     deserializer.deserialize_map(Unique(std::marker::PhantomData))
 }
 
-pub(super) fn root() -> PathBuf {
+pub(crate) fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 pub(super) fn artifact_path() -> PathBuf {
@@ -68,7 +68,7 @@ pub(super) fn artifact_path() -> PathBuf {
 pub(super) fn load_fragments() -> Result<Fragments> {
     load_fragments_from(&root().join("docs/openapi/management"))
 }
-pub(super) fn load_fragments_from(directory: &Path) -> Result<Fragments> {
+pub(crate) fn load_fragments_from(directory: &Path) -> Result<Fragments> {
     let mut paths = std::fs::read_dir(directory)?
         .map(|entry| entry.map(|e| e.path()))
         .collect::<std::io::Result<Vec<_>>>()?;
@@ -524,7 +524,7 @@ fn error_schema() -> Result<Value> {
         }),
     )
 }
-pub(super) fn operation_count(document: &Value) -> usize {
+pub(crate) fn operation_count(document: &Value) -> usize {
     document["paths"]
         .as_object()
         .unwrap()
@@ -532,7 +532,7 @@ pub(super) fn operation_count(document: &Value) -> usize {
         .map(|v| v.as_object().unwrap().len())
         .sum()
 }
-pub(super) fn placeholder_count(value: &Value) -> usize {
+pub(crate) fn placeholder_count(value: &Value) -> usize {
     match value {
         Value::Object(map) => {
             usize::from(
@@ -544,7 +544,7 @@ pub(super) fn placeholder_count(value: &Value) -> usize {
         _ => 0,
     }
 }
-pub(super) fn encode(document: &Value) -> Vec<u8> {
+pub(crate) fn encode(document: &Value) -> Vec<u8> {
     // Explicit canonical insertion order remains deterministic even if another crate
     // enables serde_json/preserve_order through feature unification.
     fn canonical(value: &Value) -> Value {
