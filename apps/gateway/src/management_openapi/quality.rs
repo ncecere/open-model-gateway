@@ -662,7 +662,13 @@ fn schema(
     // Money wire values: integer micro-USD strings constrained by a pattern
     // that rejects leading zeros and `-0` (request and response alike).
     for (name, child) in node["properties"].as_object().into_iter().flatten() {
-        if money_name(name) && !decimal_rate(name) {
+        // A fixed non-numeric literal (e.g. the `unavailable` status marker
+        // `not_in_rollups`) carries no amount, so it needs no money pattern.
+        // Anything that could be a number (digits, signs) is still an amount.
+        let marker = child["const"]
+            .as_str()
+            .is_some_and(|c| !c.is_empty() && !c.bytes().all(|b| b.is_ascii_digit() || b == b'-'));
+        if money_name(name) && !decimal_rate(name) && !marker {
             ensure!(
                 money(document, child, 0)? != Money::Other,
                 "money property `{name}` at {location} must be a string constrained by an integer micro-USD pattern (^(0|[1-9][0-9]*)$ or ^(0|-?[1-9][0-9]*)$), or a nullable form of one"

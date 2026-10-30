@@ -267,6 +267,29 @@ fn closed(properties: Value) -> Value {
     json!({"type":"object","required":required,"additionalProperties":false,"properties":properties})
 }
 
+// A `*_microusd` property fixed to a non-numeric literal is a status marker, not
+// an amount; every literal that could be a number is still an amount.
+#[test]
+fn management_openapi_coverage_microusd_markers_are_non_numeric_literals_only() {
+    for marker in ["not_in_rollups", "unavailable", "-n/a-"] {
+        check(closed(json!({"cost_microusd":{"const":marker}})))
+            .unwrap_or_else(|e| panic!("rejected marker {marker}: {e:#}"));
+    }
+    for number in ["", "0", "7", "-1", "-", "007"] {
+        assert!(
+            check(closed(json!({"cost_microusd":{"const":number}}))).is_err(),
+            "accepted numeric-looking const {number:?} as a marker"
+        );
+    }
+    // Only a string literal: an integer or an enum of markers is not exempt.
+    for bad in [json!({"const":7}), json!({"enum":["not_in_rollups"]})] {
+        assert!(
+            check(closed(json!({"cost_microusd":bad}))).is_err(),
+            "accepted {bad}"
+        );
+    }
+}
+
 #[test]
 fn management_openapi_coverage_annotation_reasons_are_validated() {
     let array = |reason: Value| {
