@@ -2374,6 +2374,26 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         json!({"issuer":VECTOR_ISSUER,"group_value":"vector-group","target_kind":"platform","platform_role":"user","workspace_id":null,"workspace_role":null,"enabled":true,"delete":false})
     );
 
+    // The workspace side of the PATCH and preview rule (target_kind workspace), so the
+    // dependent field constraints of that branch run too. Last: it leaves the
+    // mapping a workspace mapping, which the platform-shaped preview above
+    // must not see.
+    body!(
+        "PATCH /platform/oidc/group-mappings/{id} (workspace)",
+        "PATCH",
+        "/api/v1/platform/oidc/group-mappings/{id}",
+        &admin,
+        format!("/api/v1/platform/oidc/group-mappings/{vector_mapping}"),
+        json!({"issuer":VECTOR_ISSUER,"group_value":"vector-group","target_kind":"workspace","platform_role":null,"workspace_id":vector_ws,"workspace_role":"member","enabled":true})
+    );
+    body!(
+        "POST /platform/oidc/group-mappings/{id}/preview (workspace)",
+        "POST",
+        "/api/v1/platform/oidc/group-mappings/{id}/preview",
+        &admin,
+        format!("/api/v1/platform/oidc/group-mappings/{vector_mapping}/preview"),
+        json!({"issuer":VECTOR_ISSUER,"group_value":"vector-group","target_kind":"workspace","platform_role":null,"workspace_id":vector_ws,"workspace_role":"member","enabled":true,"delete":false})
+    );
     // The positional wire form (serde's struct-as-array representation) of every
     // DTO the handler deserializes, each with its own valid body: the arm of the
     // contract that the object-form runs above do not reach.
@@ -2699,44 +2719,44 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             (
                 "leading whitespace",
                 " https://issuer.example.test",
-                true,
-                true,
+                false,
+                false,
             ),
             (
                 "trailing whitespace",
                 "https://issuer.example.test ",
-                true,
-                true,
+                false,
+                false,
             ),
             (
                 "tab inside the host",
                 "https://iss\tuer.example.test",
                 false,
-                true,
+                false,
             ),
             (
                 "space in the path",
                 "https://issuer.example.test/a b",
-                true,
-                true,
+                false,
+                false,
             ),
             (
                 "C0 control character in the path",
                 "https://issuer.example.test/a\u{1}b",
-                true,
-                true,
+                false,
+                false,
             ),
             (
                 "C1 control character in the path",
                 "https://issuer.example.test/a\u{85}b",
-                true,
-                true,
+                false,
+                false,
             ),
             (
                 "no-break space in the path",
                 "https://issuer.example.test/a\u{a0}b",
-                true,
-                true,
+                false,
+                false,
             ),
             (
                 "empty user info",
