@@ -89,7 +89,8 @@
             "schema": {
               "type": "string",
               "maxLength": 200,
-              "description": "Case-insensitive substring filter on the catalog name, at most 200 characters (chars().count() > 200 is refused with 400). Unlike the other list searches this handler neither trims the value nor treats a blank one as no filter: an empty value matches every catalog (strpos of the empty string), a whitespace-only value matches only names that contain that whitespace."
+              "description": "Case-insensitive substring filter on the catalog name, at most 200 characters (chars().count() > 200 is refused with 400). Unlike the other list searches this handler neither trims the value nor treats a blank one as no filter: an empty value matches every catalog (strpos of the empty string), a whitespace-only value matches only names that contain that whitespace. Any control character is refused with 400 (#404); the value is not trimmed.",
+              "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*$"
             }
           }
         ]
@@ -848,7 +849,8 @@
             "schema": {
               "type": "string",
               "maxLength": 200,
-              "description": "Case-insensitive substring filter, at most 200 characters (search(): chars().count() > 200 is refused; surrounding whitespace is trimmed after the check, a blank value filters nothing)."
+              "description": "Case-insensitive substring filter, at most 200 characters (search(): chars().count() > 200 is refused; surrounding whitespace is trimmed after the check, a blank value filters nothing). A control character inside the trimmed query is refused with 400 (#404); surrounding whitespace, including a newline or tab, is trimmed first.",
+              "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*[^\\u0000-\\u001F\\u007F-\\u009F]*[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
             }
           },
           {
@@ -1761,7 +1763,8 @@
             "schema": {
               "type": "string",
               "maxLength": 200,
-              "description": "Case-insensitive substring filter, at most 200 characters (search(): chars().count() > 200 is refused; surrounding whitespace is trimmed after the check, a blank value filters nothing)."
+              "description": "Case-insensitive substring filter, at most 200 characters (search(): chars().count() > 200 is refused; surrounding whitespace is trimmed after the check, a blank value filters nothing). A control character inside the trimmed query is refused with 400 (#404); surrounding whitespace, including a newline or tab, is trimmed first.",
+              "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*[^\\u0000-\\u001F\\u007F-\\u009F]*[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
             }
           },
           {
@@ -2186,7 +2189,8 @@
             "schema": {
               "type": "string",
               "maxLength": 200,
-              "description": "Case-insensitive substring filter, at most 200 characters (search(): chars().count() > 200 is refused; surrounding whitespace is trimmed after the check, a blank value filters nothing)."
+              "description": "Case-insensitive substring filter, at most 200 characters (search(): chars().count() > 200 is refused; surrounding whitespace is trimmed after the check, a blank value filters nothing). A control character inside the trimmed query is refused with 400 (#404); surrounding whitespace, including a newline or tab, is trimmed first.",
+              "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*[^\\u0000-\\u001F\\u007F-\\u009F]*[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
             }
           },
           {
@@ -3548,7 +3552,8 @@
             "schema": {
               "type": "string",
               "maxLength": 200,
-              "description": "Case-insensitive substring filter on the public or display name, at most 200 characters (chars().count() > 200 is refused with 400). Unlike the other list searches this handler neither trims the value nor treats a blank one as no filter: an empty value matches every model (strpos of the empty string), a whitespace-only value matches only names that contain that whitespace."
+              "description": "Case-insensitive substring filter on the public or display name, at most 200 characters (chars().count() > 200 is refused with 400). Unlike the other list searches this handler neither trims the value nor treats a blank one as no filter: an empty value matches every model (strpos of the empty string), a whitespace-only value matches only names that contain that whitespace. Any control character is refused with 400 (#404); the value is not trimmed.",
+              "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*$"
             }
           }
         ]
@@ -3884,7 +3889,8 @@
             "schema": {
               "type": "string",
               "maxLength": 200,
-              "description": "Case-insensitive substring filter, at most 200 characters (search(): chars().count() > 200 is refused; surrounding whitespace is trimmed after the check, a blank value filters nothing)."
+              "description": "Case-insensitive substring filter, at most 200 characters (search(): chars().count() > 200 is refused; surrounding whitespace is trimmed after the check, a blank value filters nothing). A control character inside the trimmed query is refused with 400 (#404); surrounding whitespace, including a newline or tab, is trimmed first.",
+              "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*[^\\u0000-\\u001F\\u007F-\\u009F]*[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
             }
           },
           {
@@ -4012,7 +4018,8 @@
             "schema": {
               "type": "string",
               "maxLength": 200,
-              "description": "Case-insensitive substring filter on the public or display name, at most 200 characters (chars().count() > 200 is refused with 400). Unlike the other list searches this handler neither trims the value nor treats a blank one as no filter: an empty value matches every model (strpos of the empty string), a whitespace-only value matches only names that contain that whitespace."
+              "description": "Case-insensitive substring filter on the public or display name, at most 200 characters (chars().count() > 200 is refused with 400). Unlike the other list searches this handler neither trims the value nor treats a blank one as no filter: an empty value matches every model (strpos of the empty string), a whitespace-only value matches only names that contain that whitespace. Any control character is refused with 400 (#404); the value is not trimmed.",
+              "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*$"
             }
           }
         ]
