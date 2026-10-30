@@ -1118,3 +1118,57 @@ fn management_openapi_coverage_byte_limit_placement_is_refused_in_branches_and_c
         "Probe":closed(json!({"code":{"$ref":"#/components/schemas/Limited"}}))}},"paths":{}}))
     .unwrap();
 }
+
+// ----- round 3: arrays are tracked by schema location, not only by data location ----
+
+#[test]
+fn management_openapi_coverage_arrays_are_keyed_by_schema_pointer_too() {
+    // Two `anyOf` arms declare an array at the SAME data location (`/list`): a
+    // non-empty observation of one must not credit the other.
+    let arm = |item: Value| {
+        json!({"type":"object","required":["list"],"additionalProperties":false,
+            "properties":{"list":{"type":"array","items":item}}})
+    };
+    let document = doc(
+        op(
+            json!({"anyOf":[arm(json!({"type":"string"})),arm(json!({"type":"integer"}))]}),
+            json!([]),
+        ),
+        json!({}),
+    );
+    // `{"list":[]}` matches both arms; `["x"]` populates only the first arm's array.
+    let gap = message(run(
+        &document,
+        &[json!({"list":[]}), json!({"list":["x"]})],
+        &[],
+    ));
+    assert!(
+        gap.contains("array `/list` (/response/200/anyOf/1/properties/list)")
+            && !gap.contains("anyOf/0"),
+        "{gap}"
+    );
+    // Populating the second arm's array as well closes the gap.
+    run(
+        &document,
+        &[
+            json!({"list":[]}),
+            json!({"list":["x"]}),
+            json!({"list":[1]}),
+        ],
+        &[],
+    )
+    .unwrap();
+    // `items`, `prefixItems` and typed map values are separate schema locations
+    // even though they share a wildcard data location.
+    let document = doc(
+        op(
+            json!({"type":"array","prefixItems":[{"type":"array","items":{"type":"string"}}],
+                "items":{"type":"array","items":{"type":"string"}}}),
+            json!([]),
+        ),
+        json!({}),
+    );
+    let gap = message(run(&document, &[json!([["a"], []])], &[]));
+    assert!(gap.contains("/response/200/items"), "{gap}");
+    run(&document, &[json!([["a"], ["b"]])], &[]).unwrap();
+}

@@ -42,8 +42,10 @@ pub(super) const UNOBSERVED_PARAMETER: &str = "x-omg-unobserved-parameter";
 #[derive(Default)]
 struct OpObserved {
     queries: BTreeSet<String>,
-    /// Array data pattern -> seen non-empty.
-    arrays: BTreeMap<String, bool>,
+    /// (array data pattern, schema pointer of the array) -> seen non-empty.
+    /// The schema pointer keeps `items`, `prefixItems`, map values and union-arm
+    /// arrays that share a data pattern apart.
+    arrays: BTreeMap<(String, String), bool>,
     /// (data pattern, schema pointer of the union, branch index).
     branches: BTreeSet<(String, String, usize)>,
 }
@@ -177,8 +179,9 @@ fn unobservable_queries(document: &Value, operation: &Value) -> Result<BTreeSet<
 
 #[derive(Default)]
 struct Expected {
-    /// Array data pattern -> every declaring node carries a may-be-empty reason.
-    arrays: BTreeMap<String, bool>,
+    /// (array data pattern, schema pointer) -> the declaring node carries a
+    /// may-be-empty reason.
+    arrays: BTreeMap<(String, String), bool>,
     /// (data pattern, union schema pointer) -> branch -> (description, exempt).
     branches: BTreeMap<(String, String), BTreeMap<usize, (String, bool)>>,
 }
@@ -202,7 +205,7 @@ fn expect(
     if is_array_schema(node) {
         let exempt = reason(node, MAY_BE_EMPTY).is_some();
         out.arrays
-            .entry(data.to_owned())
+            .entry((data.to_owned(), sptr.to_owned()))
             .and_modify(|all| *all &= exempt)
             .or_insert(exempt);
     }
@@ -363,7 +366,10 @@ fn observe_node(
     if let Some(array) = instance.as_array()
         && is_array_schema(node)
     {
-        *seen.arrays.entry(data.to_owned()).or_insert(false) |= !array.is_empty();
+        *seen
+            .arrays
+            .entry((data.to_owned(), sptr.to_owned()))
+            .or_insert(false) |= !array.is_empty();
     }
     if nullable(node) {
         seen.branches.insert((
@@ -478,8 +484,10 @@ fn observe_node(
         }
     }
     if let Some(array) = instance.as_array() {
+        // `items` governs only the elements AFTER the positional prefix.
+        let prefix = node["prefixItems"].as_array().map_or(0, Vec::len);
         if let Some(items) = node.get("items").filter(|v| v.is_object()) {
-            for value in array {
+            for value in array.iter().skip(prefix) {
                 observe_node(
                     document,
                     items,
@@ -583,16 +591,17 @@ impl Observed {
                 &mut Vec::new(),
             )?;
         }
-        for (pattern, exempt) in &expected.arrays {
-            if *exempt && seen.arrays.get(pattern) == Some(&true) {
+        for (key, exempt) in &expected.arrays {
+            let (pattern, schema) = key;
+            if *exempt && seen.arrays.get(key) == Some(&true) {
                 gaps.push(format!(
-                    "array `{}` carries {MAY_BE_EMPTY} but was non-empty in a positive response: the exemption is stale, remove it",
+                    "array `{}` ({schema}) carries {MAY_BE_EMPTY} but was non-empty in a positive response: the exemption is stale, remove it",
                     show(pattern)
                 ));
             }
-            if !exempt && seen.arrays.get(pattern) != Some(&true) {
+            if !exempt && seen.arrays.get(key) != Some(&true) {
                 gaps.push(format!(
-                    "array `{}` was never non-empty in a positive response (populate it, or annotate the array with {MAY_BE_EMPTY})",
+                    "array `{}` ({schema}) was never non-empty in a positive response (populate it, or annotate the array with {MAY_BE_EMPTY})",
                     show(pattern)
                 ));
             }
