@@ -72,11 +72,27 @@ fn sample(document: &Value, schema: &Value) -> Value {
                     super::validation::compile_schema(&json!({"type":"string","pattern":pattern}))
                         .is_ok_and(|v| v.is_valid(&json!(candidate)))
                 };
-                ["0", "1", "0.00", "1.00"]
-                    .into_iter()
-                    .find(|candidate| accepts(candidate))
-                    .unwrap_or("0")
-                    .into()
+                // Also the pattern's literal prefix (`^Personal · ` gives
+                // `Personal · fixture`), for named-row patterns.
+                let prefix: String = pattern
+                    .as_str()
+                    .and_then(|p| p.strip_prefix('^'))
+                    .map(|p| {
+                        p.chars()
+                            .take_while(|c| !"\\.[](){}*+?|$^".contains(*c))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                [
+                    "0".to_owned(),
+                    "1".to_owned(),
+                    "0.00".to_owned(),
+                    "1.00".to_owned(),
+                    format!("{prefix}fixture"),
+                ]
+                .into_iter()
+                .find(|candidate| accepts(candidate))
+                .unwrap_or_else(|| "0".to_owned())
             }
             _ => "fixture".into(),
         }),

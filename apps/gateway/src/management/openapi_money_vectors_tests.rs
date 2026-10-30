@@ -780,7 +780,7 @@ impl Vx<'_> {
                 "attested":true,"evidence_reference":format!("finance:binding-{run}-{n}"),"model_mappings":models(2 * n as usize)})
         };
         let mapping = json!({"account_id":format!("vector-account-{run}"),"supersedes":null,"evidence_reference":"finance:mapping",
-            "bindings":[binding(0, false), seq(&binding(1, false), BINDING), seq(&binding(2, true), BINDING)]});
+            "bindings":[binding(0, false), seq(&binding(1, false), BINDING), seq(&binding(2, true), BINDING), binding(3, true)]});
         if positional {
             seq(&mapping, MAPPING)
         } else {
@@ -957,7 +957,10 @@ fn upload_valid(root: bool, request: bool, run: usize) -> Value {
     let upload = json!({"account_id":format!("vector-account-{run}"),"evidence_reference":"finance:vector-export",
         "exported_at":instant40(first + chrono::TimeDelta::days(6)),"supersedes":null,
         "request":if request { seq(&parameters, PARAMETERS) } else { parameters },
-        "pages":[page(0, false, false), page(1, true, false), page(2, true, true)]});
+        // Only the last page has has_more:false, so its wire form alternates
+        // between runs: odd runs send it as an object (its `then` arm), even
+        // runs positionally (the const-false tuple).
+        "pages":[page(0, false, false), page(1, true, false), page(2, run % 2 == 0, true)]});
     if root { seq(&upload, UPLOAD) } else { upload }
 }
 
