@@ -6,7 +6,7 @@
 //! static label and the status, never a path, id, header or body.
 use super::*;
 use futures::FutureExt;
-use openapi::http_vectors::{Probe, body_vectors_http, query_vectors_fixed};
+use openapi::http_vectors::{Probe, body_vectors_extended, body_vectors_seeded, query_vectors_extended};
 use openapi::responses::{Captured, PositiveFixtures, capture_http};
 use sha2::{Digest, Sha256};
 #[path = "openapi_slice6_seed_tests.rs"]
@@ -366,15 +366,71 @@ impl Wire {
         serde_json::from_slice(&r.bytes).unwrap_or(Value::Null)
     }
 }
+/// Boundary candidates for the query patterns whose length the harness cannot
+/// derive (lists, cursors, trimmed text): each pair straddles the boundary within
+/// one edit and the schema computes every verdict. Only parameters the read
+/// carries are supplied.
+fn query_candidates(template: &str, base: &[(&str, &str)]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    if template.ends_with("/batches") {
+        return out; // an enumerated status needs none
+    }
+    for (name, value) in base {
+        let mut cut = value.chars();
+        cut.next();
+        match *name {
+            // The valid value, and the same with its first character cut off.
+            "status" | "finish_reason" | "cursor" => {
+                out.push(((*name).to_owned(), (*value).to_owned()));
+                out.push(((*name).to_owned(), cut.as_str().to_owned()));
+            }
+            "q" if template.ends_with("/keys") => {
+                out.push(("q".into(), "a".repeat(200)));
+                out.push(("q".into(), "a".repeat(201)));
+            }
+            // 4 to 36 hex digits or dashes after trimming.
+            "q" => {
+                for text in ["abcd", "abc", &"a".repeat(36), &"a".repeat(37)] {
+                    out.push(("q".into(), text.to_owned()));
+                }
+            }
+            // Twenty actions of up to 64 characters.
+            "exclude_actions" => {
+                out.push((
+                    "exclude_actions".into(),
+                    vec!["a"; 20].join(","),
+                ));
+                out.push(("exclude_actions".into(), vec!["a"; 21].join(",")));
+                out.push(("exclude_actions".into(), "a".repeat(64)));
+                out.push(("exclude_actions".into(), "a".repeat(65)));
+            }
+            _ => {}
+        }
+    }
+    out
+}
 /// Query boundary vectors of one read, sent as `b` to `path`.
 async fn query_ops(w: &mut Wire, b: &Browser, template: &str, path: &str, base: &[(&str, &str)]) {
     let (client, root) = (w.client.clone(), w.base.clone());
-    let failed = std::panic::AssertUnwindSafe(query_vectors_fixed(
+    let candidates = query_candidates(template, base);
+    let candidates: Vec<(&str, &str)> = candidates
+        .iter()
+        .map(|(n, v)| (n.as_str(), v.as_str()))
+        .collect();
+    let base: Vec<(String, String)> = base
+        .iter()
+        .map(|(n, v)| ((*n).to_owned(), (*v).to_owned()))
+        .collect();
+    let failed = std::panic::AssertUnwindSafe(query_vectors_extended(
         &mut w.observed,
         "GET",
         template,
-        base,
-        async |query: String| raw(&client, &root, b, "GET", &format!("{path}?{query}"), None).await,
+        &[],
+        &candidates,
+        async || ((), base.clone()),
+        async |_: &(), query: String| {
+            Probe::from(raw(&client, &root, b, "GET", &format!("{path}?{query}"), None).await)
+        },
     ))
     .catch_unwind()
     .await
@@ -383,28 +439,54 @@ async fn query_ops(w: &mut Wire, b: &Browser, template: &str, path: &str, base: 
         w.failed.push(format!("GET {template}"));
     }
 }
-/// Body boundary vectors of one JSON write.
-async fn body_ops(
+/// Network candidates one edit apart: a /32 prefix is accepted, /33 is not.
+fn ip_candidates(pointer: &'static str) -> Vec<(&'static str, Value)> {
+    vec![
+        (pointer, json!("127.0.0.1/32")),
+        (pointer, json!("127.0.0.1/33")),
+    ]
+}
+/// One valid request body of a write, with the seeds and boundary candidates
+/// that name locations of this body (each wire form and union arm is its own).
+struct Body {
+    valid: Value,
+    seeds: Vec<(&'static str, Value)>,
+    candidates: Vec<(&'static str, Value)>,
+}
+fn plain(valid: Value) -> Body {
+    Body {
+        valid,
+        seeds: Vec::new(),
+        candidates: Vec::new(),
+    }
+}
+/// Body boundary vectors of one JSON write: one run per valid body (one per
+/// wire form and per union arm).
+async fn body_ops_with(
     w: &mut Wire,
     b: &Browser,
     method: &str,
     template: &str,
     path: &str,
-    valid: Value,
+    bodies: Vec<Body>,
 ) {
     let (client, root) = (w.client.clone(), w.base.clone());
-    let failed = std::panic::AssertUnwindSafe(body_vectors_http(
-        &mut w.observed,
-        method,
-        template,
-        valid,
-        async |body: Value| probe(raw(&client, &root, b, method, path, Some(body)).await),
-    ))
-    .catch_unwind()
-    .await
-    .is_err();
-    if failed {
-        w.failed.push(format!("{method} {template}"));
+    for (n, body) in bodies.into_iter().enumerate() {
+        let failed = std::panic::AssertUnwindSafe(body_vectors_extended(
+            &mut w.observed,
+            method,
+            template,
+            body.valid,
+            &body.seeds,
+            &body.candidates,
+            async |body: Value| probe(raw(&client, &root, b, method, path, Some(body)).await),
+        ))
+        .catch_unwind()
+        .await
+        .is_err();
+        if failed {
+            w.failed.push(format!("{method} {template} (body {n})"));
+        }
     }
 }
 
@@ -2300,14 +2382,78 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
     .await;
 
     // ... and of every JSON write, each on fresh state in the project workspace.
-    let valid_key = json!({"name":"contract","expires_in_days":30,"service_account_id":null,"model_ids":[m],"requests_per_minute":100,"tokens_per_minute":200,"concurrent_requests":5,"concurrent_jobs":2,"budgets":[{"period":"month","amount_microusd":"5000000"}]});
-    body_ops(
+    // One run per wire form (object and positional) and per union arm the
+    // fixture can carry; budget lists carry one element per arm (object and
+    // positional) and one per period, so the at-limit list is itself valid.
+    // A budget list carries ONE entry: the handler refuses a repeated period,
+    // which the schema cannot express, so a longer list would make the enum
+    // vector of the first entry repeat its neighbour's period.
+    let budget_object = || json!([{"period":"month","amount_microusd":"5000000"}]);
+    let budget_tuple = || json!([["month", "5000000"]]);
+    let keyed_account = id(&w
+        .setup(
+            &owner,
+            "service account for key vectors",
+            "POST",
+            &format!("{project}/service-accounts"),
+            Some(json!({"name":"keyed account"})),
+        )
+        .await);
+    let key_fields = |name: &str, account: Value, models: Value, limits: Value, budgets: Value| {
+        json!({"name":name,"expires_in_days":30,"service_account_id":account,"model_ids":models,"requests_per_minute":limits[0],"tokens_per_minute":limits[1],"concurrent_requests":limits[2],"concurrent_jobs":limits[3],"budgets":budgets})
+    };
+    let to_positional = |object: &Value, fields: &[&str]| {
+        Value::Array(fields.iter().map(|f| object[*f].clone()).collect())
+    };
+    const KEY_FIELDS: [&str; 9] = [
+        "name",
+        "expires_in_days",
+        "service_account_id",
+        "model_ids",
+        "requests_per_minute",
+        "tokens_per_minute",
+        "concurrent_requests",
+        "concurrent_jobs",
+        "budgets",
+    ];
+    let key_a = key_fields(
+        "contract",
+        json!(null),
+        json!([m]),
+        json!([100, 200, 5, 2]),
+        budget_object(),
+    );
+    let key_a_tuple = key_fields(
+        "contract",
+        json!(null),
+        json!([m]),
+        json!([100, 200, 5, 2]),
+        budget_tuple(),
+    );
+    let key_b = key_fields(
+        "contract-b",
+        json!(keyed_account),
+        json!(null),
+        json!([null, null, null, null]),
+        json!(null),
+    );
+    let key_positional = to_positional(&key_a, &KEY_FIELDS);
+    let key_positional_tuple = to_positional(&key_a_tuple, &KEY_FIELDS);
+    let key_positional_nulls = to_positional(&key_b, &KEY_FIELDS);
+    body_ops_with(
         &mut w,
         &owner,
         "POST",
         "/api/v1/workspaces/{ws}/keys",
         &format!("{project}/keys"),
-        valid_key,
+        vec![
+            plain(key_a),
+            plain(key_a_tuple),
+            plain(key_b),
+            plain(key_positional),
+            plain(key_positional_tuple),
+            plain(key_positional_nulls),
+        ],
     )
     .await;
     let (client, root) = (w.client.clone(), w.base.clone());
@@ -2325,33 +2471,51 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
         id(&serde_json::from_slice::<Value>(&k.bytes).unwrap())
     };
     let vector_key = fresh_key().await;
-    body_ops(
+    body_ops_with(
         &mut w,
         &owner,
         "PATCH",
         "/api/v1/workspaces/{ws}/keys/{key}",
         &format!("{project}/keys/{vector_key}"),
-        json!({"disabled":true}),
+        vec![plain(json!({"disabled":true})), plain(json!([true]))],
     )
     .await;
-    body_ops(
+    body_ops_with(
         &mut w,
         &owner,
         "POST",
         "/api/v1/workspaces/{ws}/keys/{key}/rotate",
         &format!("{project}/keys/{vector_key}/rotate"),
-        json!({"expires_in_days":30}),
+        vec![plain(json!({"expires_in_days":30})), plain(json!([30]))],
     )
     .await;
     // The policy write is stored-cap monotone: every request needs its own key.
-    let valid_policy = json!({"requests_per_minute":100,"tokens_per_minute":30,"concurrent_requests":2,"concurrent_jobs":1,"storage_bytes":null,"key_issuances_per_holder":null,"key_issuances_per_workspace":null,"budgets":[{"period":"month","amount_microusd":"5000000"}]});
+    let policy_budgets = json!({"requests_per_minute":100,"tokens_per_minute":30,"concurrent_requests":2,"concurrent_jobs":1,"storage_bytes":null,"key_issuances_per_holder":null,"key_issuances_per_workspace":null,"budgets":budget_object()});
+    let policy_budgets_tuple = json!({"requests_per_minute":100,"tokens_per_minute":30,"concurrent_requests":2,"concurrent_jobs":1,"storage_bytes":null,"key_issuances_per_holder":null,"key_issuances_per_workspace":null,"budgets":budget_tuple()});
+    let policy_single = json!({"requests_per_minute":100,"tokens_per_minute":30,"concurrent_requests":2,"concurrent_jobs":1,"storage_bytes":null,"key_issuances_per_holder":null,"key_issuances_per_workspace":null,"monthly_budget_microusd":"5000000","budget_period":"month"});
+    let policy_positional = json!([100, 30, 2, 1, null, null, null, "5000000", "month"]);
+    // Every nullable limit and the single budget cleared, in both wire forms.
+    let policy_nulls = json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"concurrent_jobs":null,"storage_bytes":null,"key_issuances_per_holder":null,"key_issuances_per_workspace":null,"monthly_budget_microusd":null});
+    let policy_positional_nulls = json!([null, null, null, null, null, null, null, null]);
+    // The all-null positional body stops before the period: a seed carries it.
+    for (n, (valid_policy, seeds)) in [
+        (policy_budgets, vec![]),
+        (policy_budgets_tuple, vec![]),
+        (policy_single, vec![]),
+        (policy_positional, vec![]),
+        (policy_nulls, vec![]),
+        (policy_positional_nulls, vec![("/8", json!("month"))]),
+    ]
+    .into_iter()
+    .enumerate()
     {
         let (client, root) = (w.client.clone(), w.base.clone());
-        let failed = std::panic::AssertUnwindSafe(body_vectors_http(
+        let failed = std::panic::AssertUnwindSafe(body_vectors_seeded(
             &mut w.observed,
             "PUT",
             "/api/v1/workspaces/{ws}/keys/{key}/policy",
             valid_policy,
+            &seeds,
             async |body: Value| {
                 let fresh = fresh_key().await;
                 probe(
@@ -2371,16 +2535,16 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
         .await
         .is_err();
         if failed {
-            w.failed.push("PUT policy".to_owned());
+            w.failed.push(format!("PUT policy (body {n})"));
         }
     }
-    body_ops(
+    body_ops_with(
         &mut w,
         &owner,
         "POST",
         "/api/v1/workspaces/{ws}/service-accounts",
         &format!("{project}/service-accounts"),
-        json!({"name":"contract"}),
+        vec![plain(json!({"name":"contract"})), plain(json!(["contract"]))],
     )
     .await;
     let project_account = id(&w
@@ -2391,25 +2555,52 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
             Some(json!({"name":"vector account"})),
         )
         .await);
-    body_ops(
+    body_ops_with(
         &mut w,
         &owner,
         "PATCH",
         "/api/v1/workspaces/{ws}/service-accounts/{id}",
         &format!("{project}/service-accounts/{project_account}"),
-        json!({"disabled":false}),
+        vec![plain(json!({"disabled":false})), plain(json!([false]))],
     )
     .await;
-    body_ops(
+    let hold_user = f.member.user_id;
+    body_ops_with(
         &mut w,
         &admin,
         "POST",
         "/api/v1/platform/legal-holds",
         "/api/v1/platform/legal-holds",
-        json!({"user_id":null,"workspace_id":f.project,"reference":"CONTRACT-V"}),
+        vec![
+            plain(json!({"user_id":null,"workspace_id":f.project,"reference":"CONTRACT-V"})),
+            plain(json!({"user_id":hold_user,"workspace_id":null,"reference":"CONTRACT-V"})),
+            plain(json!([hold_user, null, "CONTRACT-V"])),
+            plain(json!([null, f.project, "CONTRACT-V"])),
+        ],
     )
     .await;
-    body_ops(&mut w, &admin, "POST", "/api/v1/platform/admin-tokens", "/api/v1/platform/admin-tokens", json!({"name":"contract","scopes":["platform:read"],"expires_in_days":30,"ip_allowlist":["127.0.0.1/32"]})).await;
+    body_ops_with(
+        &mut w,
+        &admin,
+        "POST",
+        "/api/v1/platform/admin-tokens",
+        "/api/v1/platform/admin-tokens",
+        vec![
+            Body {
+                valid: json!({"name":"contract","scopes":["platform:read"],"expires_in_days":30,"ip_allowlist":["127.0.0.1/32"]}),
+                seeds: Vec::new(),
+                candidates: ip_candidates("/ip_allowlist/0"),
+            },
+            plain(json!({"name":"contract","scopes":["platform:read"],"expires_in_days":30,"ip_allowlist":null})),
+            Body {
+                valid: json!(["contract", ["platform:read"], 30, ["127.0.0.1/32"]]),
+                seeds: Vec::new(),
+                candidates: ip_candidates("/3/0"),
+            },
+            plain(json!(["contract", ["platform:read"], 30, null])),
+        ],
+    )
+    .await;
 
     // Actual issuance refusal, with no minted credential and a bounded wait.
     w.json(&owner, "GET", &format!("{ws}/key-issuance"), None)
@@ -2644,10 +2835,8 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
             );
         }
     }
-    // `\s` is ECMA-262 whitespace in the contract and `str::trim` is Unicode
-    // White_Space in the handler; they differ on exactly two characters. U+0085
-    // is trimmed by the handler only (the contract is stricter); U+FEFF is
-    // whitespace for the contract only (the contract is looser).
+    // The contract spells `str::trim`'s Unicode White_Space explicitly (not the
+    // ECMA-262 `\s`, which differs on U+0085 and U+FEFF), so both verdicts agree.
     for (label, seconds, handled) in [
         ("seconds next line", "\u{85}3600\u{85}", true),
         ("seconds byte order mark", "\u{feff}3600", false),
@@ -2665,11 +2854,7 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
             &json!({"purpose":"user_data","expires_after[anchor]":"created_at","expires_after[seconds]":seconds,"file":"x"}),
         )
         .is_ok();
-        if handled {
-            stricter_verdict(label, (schema_accepts, true));
-        } else {
-            same_verdict(label, schema_accepts, false, false);
-        }
+        same_verdict(label, schema_accepts, handled, true);
     }
     // The schema cannot see file content: a batch file that is not JSONL and a
     // vision file that is not an image are accepted by the contract and refused

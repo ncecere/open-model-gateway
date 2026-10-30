@@ -11016,7 +11016,6 @@
                   {
                     "items": {
                       "description": "An IPv4 or IPv6 address, or addr/prefix network with a prefix of at least 1 (egress::parse_network, admin_tokens canonical_allowlist): octets 0 to 255 without leading zeros, prefix at most 32 (IPv4) or 128 (IPv6). The schema does not express that no host bits are set (10.0.0.1/8 answers 400), that IPv4-mapped IPv6 networks are refused (write them as IPv4; every spelling of ::ffff:a.b.c.d would need its own alternative), or that a duplicate after canonicalization answers 400 (1.2.3.4 and 1.2.3.4/32 are different strings, so uniqueItems accepts both). The prefix is parsed as a u8, so a plus sign and any number of leading zeros are accepted and the string has no length bound. The schema is stricter than the handler for IPv6 with an embedded dotted-quad tail: ::1.2.3.4 is accepted (stored as ::102:304/128) but the pattern refuses it. Entries are stored in canonical addr/len form.",
-                      "minLength": 2,
                       "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(\\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}(/\\+?0*([1-9]|[12][0-9]|3[0-2]))?|(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:(:[0-9a-fA-F]{1,4}){1,6}|:((:[0-9a-fA-F]{1,4}){1,7}|:))(/\\+?0*([1-9]|[1-9][0-9]|1[01][0-9]|12[0-8]))?)$",
                       "type": "string"
                     },
@@ -11038,6 +11037,7 @@
                 "type": "string"
               },
               "scopes": {
+                "description": "One to five distinct scopes: the enum has five members, so uniqueItems already bounds the list at five.",
                 "items": {
                   "enum": [
                     "platform:read",
@@ -11047,7 +11047,6 @@
                     "settings:write"
                   ]
                 },
-                "maxItems": 5,
                 "minItems": 1,
                 "type": "array",
                 "uniqueItems": true
@@ -11073,6 +11072,7 @@
                 "type": "string"
               },
               {
+                "description": "One to five distinct scopes: the enum has five members, so uniqueItems already bounds the list at five.",
                 "items": {
                   "enum": [
                     "platform:read",
@@ -11082,7 +11082,6 @@
                     "settings:write"
                   ]
                 },
-                "maxItems": 5,
                 "minItems": 1,
                 "type": "array",
                 "uniqueItems": true
@@ -11097,7 +11096,6 @@
                   {
                     "items": {
                       "description": "An IPv4 or IPv6 address, or addr/prefix network with a prefix of at least 1 (egress::parse_network, admin_tokens canonical_allowlist): octets 0 to 255 without leading zeros, prefix at most 32 (IPv4) or 128 (IPv6). The schema does not express that no host bits are set (10.0.0.1/8 answers 400), that IPv4-mapped IPv6 networks are refused (write them as IPv4; every spelling of ::ffff:a.b.c.d would need its own alternative), or that a duplicate after canonicalization answers 400 (1.2.3.4 and 1.2.3.4/32 are different strings, so uniqueItems accepts both). The prefix is parsed as a u8, so a plus sign and any number of leading zeros are accepted and the string has no length bound. The schema is stricter than the handler for IPv6 with an embedded dotted-quad tail: ::1.2.3.4 is accepted (stored as ::102:304/128) but the pattern refuses it. Entries are stored in canonical addr/len form.",
-                      "minLength": 2,
                       "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(\\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}(/\\+?0*([1-9]|[12][0-9]|3[0-2]))?|(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:(:[0-9a-fA-F]{1,4}){1,6}|:((:[0-9a-fA-F]{1,4}){1,7}|:))(/\\+?0*([1-9]|[1-9][0-9]|1[01][0-9]|12[0-8]))?)$",
                       "type": "string"
                     },
@@ -11503,9 +11501,9 @@
             "description": "Only created_at is accepted; any other anchor answers 400."
           },
           "expires_after[seconds]": {
-            "description": "Integer seconds, 3600 through 2592000 (1 hour to 30 days); supply with expires_after[anchor]. The handler trims surrounding whitespace before parsing (upload.rs Fields::validate: s.trim().parse::<i64>()), so surrounding Unicode whitespace (for example a no-break space), a leading plus and leading zeros are accepted; the field is at most 64 bytes (FormReader::text), which maxLength can only approximate in characters. The pattern's \\s equals Rust's trim except U+FEFF (ECMA-262 whitespace, not trimmed by Rust) and U+0085 (trimmed by Rust, not ECMA \\s); so a value padded with U+0085 is refused by the contract although the handler accepts it, and one padded with U+FEFF is accepted by the contract although the handler refuses it.",
+            "description": "Integer seconds, 3600 through 2592000 (1 hour to 30 days); supply with expires_after[anchor]. The handler trims surrounding whitespace before parsing (upload.rs Fields::validate: s.trim().parse::<i64>()), so surrounding Unicode whitespace (for example a no-break space or U+0085; the pattern spells str::trim's White_Space set explicitly, not as the ECMA-262 \\s), a leading plus and leading zeros are accepted; the field is at most 64 bytes (FormReader::text), which maxLength can only approximate in characters.",
             "maxLength": 64,
-            "pattern": "^\\s*\\+?0*(3[6-9][0-9]{2}|[4-9][0-9]{3}|[1-9][0-9]{4,5}|1[0-9]{6}|2[0-4][0-9]{5}|25[0-8][0-9]{4}|259[01][0-9]{3}|2592000)\\s*$",
+            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*\\+?0*(3[6-9][0-9]{2}|[4-9][0-9]{3}|[1-9][0-9]{4,5}|1[0-9]{6}|2[0-4][0-9]{5}|25[0-8][0-9]{4}|259[01][0-9]{3}|2592000)[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
             "type": "string"
           },
           "file": {
@@ -11549,11 +11547,10 @@
               "budgets": {
                 "anyOf": [
                   {
-                    "description": "At most one entry per period: a repeated period answers 400 even with different amounts (parse_budgets, policies.rs:490-496), which uniqueItems on whole entries cannot express.",
+                    "description": "At most one entry per period, so at most four: a repeated period answers 400 even with different amounts (parse_budgets, policies.rs:490-496). Neither that rule nor the implied maxItems of 4 is expressible: uniqueItems compares whole entries, and a fifth entry necessarily repeats a period.",
                     "items": {
                       "$ref": "#/components/schemas/S6BudgetInput"
                     },
-                    "maxItems": 4,
                     "type": "array",
                     "uniqueItems": true
                   },
@@ -11609,8 +11606,9 @@
                 "description": "At most 120 UTF-8 BYTES, at least one non-whitespace character, no control characters (management valid_name: s.len() <= 120). maxLength counts characters, so it is necessary but not sufficient: a name of fewer than 120 characters is still refused when its multibyte characters exceed 120 bytes.",
                 "maxLength": 120,
                 "minLength": 1,
-                "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\s\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-                "type": "string"
+                "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
+                "type": "string",
+                "x-omg-max-bytes": 120
               },
               "requests_per_minute": {
                 "anyOf": [
@@ -11655,8 +11653,9 @@
                 "description": "At most 120 UTF-8 BYTES, at least one non-whitespace character, no control characters (management valid_name: s.len() <= 120). maxLength counts characters, so it is necessary but not sufficient: a name of fewer than 120 characters is still refused when its multibyte characters exceed 120 bytes.",
                 "maxLength": 120,
                 "minLength": 1,
-                "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\s\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-                "type": "string"
+                "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
+                "type": "string",
+                "x-omg-max-bytes": 120
               },
               {
                 "maximum": 365,
@@ -11731,11 +11730,10 @@
               {
                 "anyOf": [
                   {
-                    "description": "At most one entry per period: a repeated period answers 400 even with different amounts (parse_budgets, policies.rs:490-496), which uniqueItems on whole entries cannot express.",
+                    "description": "At most one entry per period, so at most four: a repeated period answers 400 even with different amounts (parse_budgets, policies.rs:490-496). Neither that rule nor the implied maxItems of 4 is expressible: uniqueItems compares whole entries, and a fifth entry necessarily repeats a period.",
                     "items": {
                       "$ref": "#/components/schemas/S6BudgetInput"
                     },
-                    "maxItems": 4,
                     "type": "array",
                     "uniqueItems": true
                   },
@@ -11819,8 +11817,9 @@
                 "description": "At most 120 UTF-8 BYTES, at least one non-whitespace character, no control characters (management valid_name: s.len() <= 120). maxLength counts characters, so it is necessary but not sufficient: a name of fewer than 120 characters is still refused when its multibyte characters exceed 120 bytes.",
                 "maxLength": 120,
                 "minLength": 1,
-                "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\s\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-                "type": "string"
+                "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
+                "type": "string",
+                "x-omg-max-bytes": 120
               }
             },
             "required": [
@@ -11837,8 +11836,9 @@
                 "description": "At most 120 UTF-8 BYTES, at least one non-whitespace character, no control characters (management valid_name: s.len() <= 120). maxLength counts characters, so it is necessary but not sufficient: a name of fewer than 120 characters is still refused when its multibyte characters exceed 120 bytes.",
                 "maxLength": 120,
                 "minLength": 1,
-                "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\s\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-                "type": "string"
+                "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
+                "type": "string",
+                "x-omg-max-bytes": 120
               }
             ],
             "type": "array"
@@ -12033,11 +12033,10 @@
                 ]
               },
               "budgets": {
-                "description": "At most one entry per period: a repeated period answers 400 even with different amounts (parse_budgets, policies.rs:490-496), which uniqueItems on whole entries cannot express.",
+                "description": "At most one entry per period, so at most four: a repeated period answers 400 even with different amounts (parse_budgets, policies.rs:490-496). Neither that rule nor the implied maxItems of 4 is expressible: uniqueItems compares whole entries, and a fifth entry necessarily repeats a period.",
                 "items": {
                   "$ref": "#/components/schemas/S6BudgetInput"
                 },
-                "maxItems": 4,
                 "type": "array",
                 "uniqueItems": true
               },
@@ -12120,9 +12119,10 @@
             "type": "object"
           },
           {
+            "description": "Serde's positional form of the deprecated single budget: the monthly_budget_microusd item (index 7) is always supplied, so the handler (Policy::limits, policies.rs:284-302) refuses a positional array that also carries budgets (index 9) or omits the single budget (fewer than 8 items) with 400; the positional form therefore has no budgets item.",
             "items": false,
-            "maxItems": 10,
-            "minItems": 3,
+            "maxItems": 9,
+            "minItems": 8,
             "prefixItems": [
               {
                 "anyOf": [
@@ -12201,15 +12201,6 @@
                   "month",
                   "lifetime"
                 ]
-              },
-              {
-                "description": "At most one entry per period: a repeated period answers 400 even with different amounts (parse_budgets, policies.rs:490-496), which uniqueItems on whole entries cannot express.",
-                "items": {
-                  "$ref": "#/components/schemas/S6BudgetInput"
-                },
-                "maxItems": 4,
-                "type": "array",
-                "uniqueItems": true
               }
             ],
             "type": "array"
@@ -17638,6 +17629,7 @@
             "required": false,
             "schema": {
               "format": "date",
+              "maxLength": 10,
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
@@ -17649,6 +17641,7 @@
             "required": false,
             "schema": {
               "format": "date",
+              "maxLength": 10,
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
@@ -17662,7 +17655,8 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
-              "type": "string"
+              "type": "string",
+              "x-omg-max-bytes": 200
             }
           },
           {
@@ -17690,7 +17684,7 @@
             "name": "q",
             "required": false,
             "schema": {
-              "pattern": "^\\s*([0-9a-fA-F-]{4,36})?\\s*$",
+              "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*([0-9a-fA-F-]{4,36})?[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
               "type": "string"
             }
           },
@@ -17721,7 +17715,7 @@
             "schema": {
               "maxLength": 128,
               "minLength": 1,
-              "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]([^\\u0000-\\u001F\\u007F-\\u009F]*[^\\s\\u0000-\\u001F\\u007F-\\u009F])?$",
+              "pattern": "^[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F]([^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F])?$",
               "type": "string"
             }
           },
@@ -17857,6 +17851,7 @@
             "required": false,
             "schema": {
               "format": "date",
+              "maxLength": 10,
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
@@ -17868,6 +17863,7 @@
             "required": false,
             "schema": {
               "format": "date",
+              "maxLength": 10,
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
@@ -17881,7 +17877,8 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
-              "type": "string"
+              "type": "string",
+              "x-omg-max-bytes": 200
             }
           },
           {
@@ -17909,7 +17906,7 @@
             "name": "q",
             "required": false,
             "schema": {
-              "pattern": "^\\s*([0-9a-fA-F-]{4,36})?\\s*$",
+              "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*([0-9a-fA-F-]{4,36})?[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
               "type": "string"
             }
           },
@@ -17940,7 +17937,7 @@
             "schema": {
               "maxLength": 128,
               "minLength": 1,
-              "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]([^\\u0000-\\u001F\\u007F-\\u009F]*[^\\s\\u0000-\\u001F\\u007F-\\u009F])?$",
+              "pattern": "^[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F]([^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F])?$",
               "type": "string"
             }
           },
@@ -18054,6 +18051,7 @@
             "required": false,
             "schema": {
               "format": "date",
+              "maxLength": 10,
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
@@ -18065,6 +18063,7 @@
             "required": false,
             "schema": {
               "format": "date",
+              "maxLength": 10,
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
@@ -18078,7 +18077,8 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
-              "type": "string"
+              "type": "string",
+              "x-omg-max-bytes": 200
             }
           },
           {
@@ -18106,7 +18106,7 @@
             "name": "q",
             "required": false,
             "schema": {
-              "pattern": "^\\s*([0-9a-fA-F-]{4,36})?\\s*$",
+              "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*([0-9a-fA-F-]{4,36})?[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
               "type": "string"
             }
           },
@@ -18137,7 +18137,7 @@
             "schema": {
               "maxLength": 128,
               "minLength": 1,
-              "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]([^\\u0000-\\u001F\\u007F-\\u009F]*[^\\s\\u0000-\\u001F\\u007F-\\u009F])?$",
+              "pattern": "^[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F]([^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F])?$",
               "type": "string"
             }
           },
@@ -18281,6 +18281,7 @@
             "required": false,
             "schema": {
               "format": "date",
+              "maxLength": 10,
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
@@ -18292,6 +18293,7 @@
             "required": false,
             "schema": {
               "format": "date",
+              "maxLength": 10,
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
@@ -18305,7 +18307,8 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
-              "type": "string"
+              "type": "string",
+              "x-omg-max-bytes": 200
             }
           },
           {
@@ -18333,7 +18336,7 @@
             "name": "q",
             "required": false,
             "schema": {
-              "pattern": "^\\s*([0-9a-fA-F-]{4,36})?\\s*$",
+              "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*([0-9a-fA-F-]{4,36})?[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
               "type": "string"
             }
           },
@@ -18364,7 +18367,7 @@
             "schema": {
               "maxLength": 128,
               "minLength": 1,
-              "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]([^\\u0000-\\u001F\\u007F-\\u009F]*[^\\s\\u0000-\\u001F\\u007F-\\u009F])?$",
+              "pattern": "^[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F]([^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F])?$",
               "type": "string"
             }
           },
@@ -18488,6 +18491,7 @@
             "required": false,
             "schema": {
               "format": "date",
+              "maxLength": 10,
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
@@ -18499,6 +18503,7 @@
             "required": false,
             "schema": {
               "format": "date",
+              "maxLength": 10,
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
@@ -18512,7 +18517,8 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
-              "type": "string"
+              "type": "string",
+              "x-omg-max-bytes": 200
             }
           },
           {
@@ -18540,7 +18546,7 @@
             "name": "q",
             "required": false,
             "schema": {
-              "pattern": "^\\s*([0-9a-fA-F-]{4,36})?\\s*$",
+              "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*([0-9a-fA-F-]{4,36})?[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
               "type": "string"
             }
           },
@@ -18571,7 +18577,7 @@
             "schema": {
               "maxLength": 128,
               "minLength": 1,
-              "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]([^\\u0000-\\u001F\\u007F-\\u009F]*[^\\s\\u0000-\\u001F\\u007F-\\u009F])?$",
+              "pattern": "^[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F]([^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F])?$",
               "type": "string"
             }
           },
@@ -18725,6 +18731,7 @@
             "required": false,
             "schema": {
               "format": "date",
+              "maxLength": 10,
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
@@ -18736,6 +18743,7 @@
             "required": false,
             "schema": {
               "format": "date",
+              "maxLength": 10,
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
@@ -18749,7 +18757,8 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
-              "type": "string"
+              "type": "string",
+              "x-omg-max-bytes": 200
             }
           },
           {
@@ -18777,7 +18786,7 @@
             "name": "q",
             "required": false,
             "schema": {
-              "pattern": "^\\s*([0-9a-fA-F-]{4,36})?\\s*$",
+              "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*([0-9a-fA-F-]{4,36})?[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
               "type": "string"
             }
           },
@@ -25446,6 +25455,7 @@
             "name": "after",
             "required": false,
             "schema": {
+              "maxLength": 37,
               "pattern": "^file-[0-9a-f]{32}$",
               "type": "string"
             }
@@ -25848,6 +25858,7 @@
             "required": false,
             "schema": {
               "format": "date",
+              "maxLength": 10,
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
@@ -25859,6 +25870,7 @@
             "required": false,
             "schema": {
               "format": "date",
+              "maxLength": 10,
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
@@ -25872,7 +25884,8 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
-              "type": "string"
+              "type": "string",
+              "x-omg-max-bytes": 200
             }
           },
           {
@@ -25900,7 +25913,7 @@
             "name": "q",
             "required": false,
             "schema": {
-              "pattern": "^\\s*([0-9a-fA-F-]{4,36})?\\s*$",
+              "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*([0-9a-fA-F-]{4,36})?[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
               "type": "string"
             }
           },
@@ -25931,7 +25944,7 @@
             "schema": {
               "maxLength": 128,
               "minLength": 1,
-              "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]([^\\u0000-\\u001F\\u007F-\\u009F]*[^\\s\\u0000-\\u001F\\u007F-\\u009F])?$",
+              "pattern": "^[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F]([^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F])?$",
               "type": "string"
             }
           },
@@ -26514,12 +26527,12 @@
             }
           },
           {
-            "description": "Case-insensitive key name search: optional surrounding Unicode whitespace (the handler trims with str::trim), then at most 200 non-control characters (KeyListQuery::bounds, keys.rs:85-90: the trimmed value is counted in characters and refused if any is a control character); a blank value means no filter. There is no maxLength because it would count the padding. The pattern's \\s equals Rust's trim except U+FEFF (ECMA-262 whitespace, not trimmed by Rust) and U+0085 (trimmed by Rust, not ECMA \\s), so a U+0085 pad is refused by the contract although the handler trims it, and U+FEFF is padding for the contract but a counted character for the handler, and an engine without the Unicode flag counts a character above U+FFFF as two units in the 200 bound.",
+            "description": "Case-insensitive key name search: optional surrounding Unicode whitespace (the handler trims with str::trim; the pattern spells its White_Space set explicitly, not as the ECMA-262 \\s, which differs on U+0085 and U+FEFF), then at most 200 non-control characters (KeyListQuery::bounds, keys.rs:85-90: the trimmed value is counted in characters and refused if any is a control character); a blank value means no filter. There is no maxLength because it would count the padding. An engine without the Unicode flag counts a character above U+FFFF as two units in the 200 bound.",
             "in": "query",
             "name": "q",
             "required": false,
             "schema": {
-              "pattern": "^\\s*[^\\u0000-\\u001F\\u007F-\\u009F]{0,200}\\s*$",
+              "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*[^\\u0000-\\u001F\\u007F-\\u009F]{0,200}[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
               "type": "string"
             }
           }
@@ -27575,6 +27588,7 @@
             "required": false,
             "schema": {
               "format": "date",
+              "maxLength": 10,
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
@@ -27586,6 +27600,7 @@
             "required": false,
             "schema": {
               "format": "date",
+              "maxLength": 10,
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
@@ -27599,7 +27614,8 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
-              "type": "string"
+              "type": "string",
+              "x-omg-max-bytes": 200
             }
           },
           {
@@ -27627,7 +27643,7 @@
             "name": "q",
             "required": false,
             "schema": {
-              "pattern": "^\\s*([0-9a-fA-F-]{4,36})?\\s*$",
+              "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*([0-9a-fA-F-]{4,36})?[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
               "type": "string"
             }
           },
@@ -27658,7 +27674,7 @@
             "schema": {
               "maxLength": 128,
               "minLength": 1,
-              "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]([^\\u0000-\\u001F\\u007F-\\u009F]*[^\\s\\u0000-\\u001F\\u007F-\\u009F])?$",
+              "pattern": "^[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F]([^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F])?$",
               "type": "string"
             }
           },
@@ -28895,6 +28911,7 @@
             "required": false,
             "schema": {
               "format": "date",
+              "maxLength": 10,
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
@@ -28906,6 +28923,7 @@
             "required": false,
             "schema": {
               "format": "date",
+              "maxLength": 10,
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
@@ -28919,7 +28937,8 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
-              "type": "string"
+              "type": "string",
+              "x-omg-max-bytes": 200
             }
           },
           {
@@ -28947,7 +28966,7 @@
             "name": "q",
             "required": false,
             "schema": {
-              "pattern": "^\\s*([0-9a-fA-F-]{4,36})?\\s*$",
+              "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*([0-9a-fA-F-]{4,36})?[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
               "type": "string"
             }
           },
@@ -28978,7 +28997,7 @@
             "schema": {
               "maxLength": 128,
               "minLength": 1,
-              "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]([^\\u0000-\\u001F\\u007F-\\u009F]*[^\\s\\u0000-\\u001F\\u007F-\\u009F])?$",
+              "pattern": "^[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F]([^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F])?$",
               "type": "string"
             }
           },
@@ -29120,6 +29139,7 @@
             "required": false,
             "schema": {
               "format": "date",
+              "maxLength": 10,
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
@@ -29131,6 +29151,7 @@
             "required": false,
             "schema": {
               "format": "date",
+              "maxLength": 10,
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
               "type": "string"
             }
@@ -29144,7 +29165,8 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
-              "type": "string"
+              "type": "string",
+              "x-omg-max-bytes": 200
             }
           },
           {
@@ -29172,7 +29194,7 @@
             "name": "q",
             "required": false,
             "schema": {
-              "pattern": "^\\s*([0-9a-fA-F-]{4,36})?\\s*$",
+              "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*([0-9a-fA-F-]{4,36})?[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
               "type": "string"
             }
           },
@@ -29203,7 +29225,7 @@
             "schema": {
               "maxLength": 128,
               "minLength": 1,
-              "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]([^\\u0000-\\u001F\\u007F-\\u009F]*[^\\s\\u0000-\\u001F\\u007F-\\u009F])?$",
+              "pattern": "^[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F]([^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F])?$",
               "type": "string"
             }
           },
