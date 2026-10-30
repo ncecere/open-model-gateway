@@ -908,9 +908,11 @@ pub(super) fn mapping_valid(b: &MappingInput) -> bool {
             && u.query().is_none()
             && u.fragment().is_none()
     }) && b.issuer.len() <= 2048
-        // The URL parser strips or percent-encodes control characters, but the raw
-        // issuer is what is stored and matched: a NUL would reach PostgreSQL (503).
-        && !b.issuer.chars().any(char::is_control)
+        // The URL parser strips or percent-encodes control characters and
+        // whitespace, but the raw issuer is what is stored and matched against the
+        // IdP's `iss`: a NUL would reach PostgreSQL (503), and anything the parser
+        // strips could never match. Same rule as the settings URLs (settings.rs).
+        && !b.issuer.chars().any(|c| c.is_control() || c.is_whitespace())
         && !b.group_value.is_empty()
         && b.group_value.len() <= 512
         && !b.group_value.chars().any(char::is_control)
