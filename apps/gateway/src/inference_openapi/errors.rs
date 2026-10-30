@@ -359,6 +359,57 @@ pub(super) fn components() -> Result<Value> {
 
 // ----------------------------------------------------------- drift checks ----
 
+/// Envelope components every operation of a path may reference.
+fn allowed_envelopes(path: &str) -> &'static [&'static str] {
+    if path == "/v1/messages" {
+        &["AnthropicErrorEnvelope"]
+    } else if path.starts_with("/v1/videos") || path.starts_with("/v1/batches") {
+        &["JobErrorEnvelope", "OpenAiErrorEnvelope"]
+    } else if path.starts_with("/v1/files") {
+        &["FileErrorEnvelope", "OpenAiErrorEnvelope"]
+    } else {
+        &["OpenAiErrorEnvelope"]
+    }
+}
+const ENVELOPES: &[&str] = &[
+    "OpenAiErrorEnvelope",
+    "AnthropicErrorEnvelope",
+    "JobErrorEnvelope",
+    "FileErrorEnvelope",
+];
+
+fn references(
+    document: &Value,
+    node: &Value,
+    out: &mut BTreeSet<String>,
+    seen: &mut BTreeSet<String>,
+) {
+    match node {
+        Value::Object(map) => {
+            if let Some(reference) = map.get("$ref").and_then(Value::as_str) {
+                if let Some(name) = reference.strip_prefix("#/components/schemas/") {
+                    out.insert(name.to_owned());
+                } else if seen.insert(reference.to_owned())
+                    && let Some(target) = reference
+                        .strip_prefix('#')
+                        .and_then(|pointer| document.pointer(pointer))
+                {
+                    references(document, target, out, seen);
+                }
+            }
+            for child in map.values() {
+                references(document, child, out, seen);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                references(document, child, out, seen);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Generated components must be byte-for-byte what source dictates.
 pub(super) fn verify_components(document: &Value) -> Result<()> {
     let generated = components()?;
@@ -376,6 +427,19 @@ pub(super) fn verify_components(document: &Value) -> Result<()> {
             document["components"][kind] == generated[kind],
             "shared {kind} drift"
         );
+    }
+    for (path, item) in document["paths"].as_object().context("paths missing")? {
+        let allowed = allowed_envelopes(path);
+        for (method, operation) in item.as_object().context("path item")? {
+            let mut used = BTreeSet::new();
+            references(document, &operation["responses"], &mut used, &mut BTreeSet::new());
+            for name in used.iter().filter(|n| ENVELOPES.contains(&n.as_str())) {
+                ensure!(
+                    allowed.contains(&name.as_str()),
+                    "{method} {path} uses {name}, the envelope of another protocol"
+                );
+            }
+        }
     }
     Ok(())
 }
