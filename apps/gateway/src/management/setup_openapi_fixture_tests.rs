@@ -2027,9 +2027,8 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             json!({"credential_ref":"aws:role:arn:aws:iam:::role/r","aws_external_id":null,"aws_session_name":null}),
             BOTH_REFUSE,
         ),
-        // The decisive length pairs the generated vectors cannot build (padding
-        // breaks a structured region or ARN): x-omg-unsendable-boundary points here.
-        // valid_region: at most 32 characters.
+        // Structured length boundaries, built by hand so each still matches its
+        // pattern. valid_region: at most 32 characters.
         (
             "a 32-character region",
             json!({"region":format!("us-{}-1", "a".repeat(27))}),
