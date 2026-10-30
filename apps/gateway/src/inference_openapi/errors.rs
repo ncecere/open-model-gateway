@@ -410,12 +410,18 @@ fn references(
     }
 }
 
-/// Generated components must be byte-for-byte what source dictates.
+/// Generated components must be byte-for-byte what source dictates, the
+/// management `ErrorEnvelope` must not appear, and each operation may use only
+/// the envelope family of its protocol.
 pub(super) fn verify_components(document: &Value) -> Result<()> {
     let generated = components()?;
     let schemas = document["components"]["schemas"]
         .as_object()
         .context("schemas missing")?;
+    ensure!(
+        !schemas.contains_key("ErrorEnvelope"),
+        "the management ErrorEnvelope must not be reused by the inference contract"
+    );
     for (name, schema) in generated["schemas"].as_object().unwrap() {
         ensure!(
             schemas.get(name) == Some(schema),
@@ -428,11 +434,22 @@ pub(super) fn verify_components(document: &Value) -> Result<()> {
             "shared {kind} drift"
         );
     }
+    let mut every = BTreeSet::new();
+    references(document, document, &mut every, &mut BTreeSet::new());
+    ensure!(
+        !every.contains("ErrorEnvelope"),
+        "a reference to the management ErrorEnvelope"
+    );
     for (path, item) in document["paths"].as_object().context("paths missing")? {
         let allowed = allowed_envelopes(path);
         for (method, operation) in item.as_object().context("path item")? {
             let mut used = BTreeSet::new();
-            references(document, &operation["responses"], &mut used, &mut BTreeSet::new());
+            references(
+                document,
+                &operation["responses"],
+                &mut used,
+                &mut BTreeSet::new(),
+            );
             for name in used.iter().filter(|n| ENVELOPES.contains(&n.as_str())) {
                 ensure!(
                     allowed.contains(&name.as_str()),
