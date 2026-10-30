@@ -2348,3 +2348,164 @@ pub(crate) async fn body_vectors_extended(
     fixtures.record_vectors(method, template, "body");
     fixtures.record_reach(method, template, &run.reached);
 }
+
+// ---------------------------------------------------------------------------
+// Raw (non-JSON) body vectors: uploads
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug)]
+pub(super) struct BinaryCase {
+    pub(super) kind: &'static str,
+    pub(super) media: String,
+    pub(super) bytes: Vec<u8>,
+    pub(super) accept: bool,
+}
+
+/// The schema's verdict on a raw body of declared `media`: the documented length
+/// bounds and, where the schema asks for it, the real image inspection (the same
+/// rule responses.rs applies to binary representations).
+pub(crate) fn binary_accepts(schema: &Value, media: &str, bytes: &[u8]) -> bool {
+    bytes.len() as u64 >= schema["minLength"].as_u64().unwrap_or(0)
+        && schema["maxLength"]
+            .as_u64()
+            .is_none_or(|max| bytes.len() as u64 <= max)
+        && (schema["x-omg-validate-image"] != true
+            || crate::management::branding::inspect(Some(media), bytes).is_ok())
+}
+
+/// Every raw-body vector of an operation, derived from the binary schema of
+/// `media` and a VALID body: empty, one byte over `maxLength`, truncated, with a
+/// trailing byte and the same bytes under every other documented media type, plus
+/// caller-supplied `extra` bodies whose verdict the schema also decides.
+pub(super) fn binary_cases(
+    operation: &Value,
+    media: &str,
+    valid_body: &[u8],
+    extra: &[(&'static str, Vec<u8>)],
+) -> Result<Vec<BinaryCase>> {
+    let content = operation["requestBody"]["content"]
+        .as_object()
+        .context("the operation documents no request body")?;
+    let schema = content
+        .get(media)
+        .and_then(|c| c.get("schema"))
+        .context("the operation documents no body for that media type")?;
+    ensure!(
+        schema["type"] == "string" && schema["format"] == "binary",
+        "the request body of that media type is not a binary schema"
+    );
+    ensure!(
+        binary_accepts(schema, media, valid_body),
+        "the valid raw body must satisfy its schema"
+    );
+    let mut out = Vec::new();
+    let mut push = |kind: &'static str, media: &str, bytes: Vec<u8>| {
+        let accept = binary_accepts(schema, media, &bytes);
+        out.push(BinaryCase {
+            kind,
+            media: media.to_owned(),
+            bytes,
+            accept,
+        });
+    };
+    push("empty", media, Vec::new());
+    if let Some(max) = schema["maxLength"].as_u64()
+        && max < 64 * 1024 * 1024
+    {
+        let mut over = valid_body.to_vec();
+        over.resize(max as usize + 1, 0);
+        push("maxLength+1", media, over);
+    }
+    if valid_body.len() > 1 {
+        push(
+            "truncated",
+            media,
+            valid_body[..valid_body.len() / 2].to_vec(),
+        );
+    }
+    let mut trailing = valid_body.to_vec();
+    trailing.push(0);
+    push("trailing byte", media, trailing);
+    for other in content.keys().filter(|other| other.as_str() != media) {
+        push("other media type", other, valid_body.to_vec());
+    }
+    for (kind, bytes) in extra {
+        push(kind, media, bytes.clone());
+    }
+    Ok(out)
+}
+
+pub(super) async fn run_binary(
+    document: &Value,
+    method: &str,
+    template: &str,
+    media: &str,
+    valid_body: Vec<u8>,
+    extra: &[(&'static str, Vec<u8>)],
+    send: &impl AsyncFn(String, Vec<u8>) -> Probe,
+) -> Result<Vec<Captured>> {
+    let operation = responses::operation(document, method, template)?;
+    let cases = binary_cases(operation, media, &valid_body, extra)?;
+    let mut plan = vec![("valid", media.to_owned(), valid_body, true)];
+    plan.extend(
+        cases
+            .into_iter()
+            .map(|case| (case.kind, case.media, case.bytes, case.accept)),
+    );
+    let mut exchanges = Vec::new();
+    let mut accepted_seen = false;
+    for (kind, declared, bytes, expected) in plan {
+        let probe = send(declared, bytes).await;
+        same_operation(&probe.captured, method, template)?;
+        let handler = probe
+            .verdict()
+            .with_context(|| format!("{method} {template}: {kind} raw body vector"))?;
+        if handler != expected {
+            return Err(mismatch(
+                method,
+                template,
+                kind,
+                "(raw body)",
+                expected,
+                &probe,
+                handler,
+            ));
+        }
+        accepted_seen |= handler;
+        exchanges.push(probe.captured);
+    }
+    ensure!(
+        accepted_seen,
+        "no raw body vector was accepted by the handler"
+    );
+    Ok(exchanges)
+}
+
+/// Raw body boundary vectors for an upload operation over real HTTP. `send` gets
+/// the declared media type and the bytes; a handler whose refusals are not a plain
+/// 400/422 (415, 413 ...) answers with [`Probe::decided`].
+pub(crate) async fn binary_body_vectors_http(
+    fixtures: &mut PositiveFixtures,
+    method: &str,
+    template: &str,
+    media: &str,
+    valid: Vec<u8>,
+    extra: Vec<(&'static str, Vec<u8>)>,
+    send: impl AsyncFn(String, Vec<u8>) -> Probe,
+) {
+    let exchanges = run_binary(
+        responses::artifact(),
+        method,
+        template,
+        media,
+        valid,
+        &extra,
+        &send,
+    )
+    .await
+    .unwrap_or_else(|e| responses::refuse(e));
+    for exchange in &exchanges {
+        fixtures.observe(exchange);
+    }
+    fixtures.record_vectors(method, template, "body");
+}
