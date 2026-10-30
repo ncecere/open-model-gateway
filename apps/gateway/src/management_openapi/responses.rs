@@ -630,6 +630,9 @@ pub(crate) struct PositiveFixtures {
     operations: BTreeSet<String>,
     coverage: super::coverage::Observed,
     vectors: std::collections::BTreeMap<String, BTreeSet<&'static str>>,
+    /// Declared request locations (schema paths) each operation's body vector
+    /// runs carried, by `METHOD template`; see `request_reach`.
+    reach: std::collections::BTreeMap<String, BTreeSet<String>>,
 }
 impl PositiveFixtures {
     /// Record that every HTTP boundary vector of `kind` (`query` or `body`)
@@ -639,6 +642,19 @@ impl PositiveFixtures {
             .entry(format!("{method} {template}"))
             .or_default()
             .insert(kind);
+    }
+    /// The declared request locations one body vector run carried (its valid body
+    /// and seeded bases); runs of one operation accumulate.
+    pub(super) fn record_reach(
+        &mut self,
+        method: &str,
+        template: &str,
+        reached: &BTreeSet<String>,
+    ) {
+        self.reach
+            .entry(format!("{method} {template}"))
+            .or_default()
+            .extend(reached.iter().cloned());
     }
     /// Coverage and vector gaps for the given `METHOD template` operations.
     pub(super) fn check_contract_coverage(
@@ -683,6 +699,27 @@ impl PositiveFixtures {
                 if !has("body") && (!excusable || excuse.is_none()) {
                     failures.push(format!(
                         "{key}: the request body has no executed HTTP boundary vectors (call http_vectors::body_vectors_http)"
+                    ));
+                }
+            }
+            // Every declared request location must have been carried by some
+            // valid body or seed of the operation (or be reviewed-exempt).
+            if has("body")
+                && let Some(schema) = op["requestBody"]["content"]["application/json"].get("schema")
+            {
+                let reached = self.reach.get(key).cloned().unwrap_or_default();
+                for (location, kind) in super::request_reach::unreached(document, schema, &reached)?
+                {
+                    failures.push(format!(
+                        "{key}: declared request location `{location}` ({kind}) was never walked by a vector run: {}, or annotate it with {}",
+                        super::request_reach::how_to_reach(&location, kind),
+                        super::request_reach::UNPROBED
+                    ));
+                }
+                for location in super::request_reach::stale(document, schema, &reached)? {
+                    failures.push(format!(
+                        "{key}: request location `{location}` carries {} but a vector run reached it: the exemption is stale, remove it",
+                        super::request_reach::UNPROBED
                     ));
                 }
             }

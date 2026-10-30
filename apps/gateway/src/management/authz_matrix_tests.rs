@@ -12,6 +12,8 @@ mod admin_token_tests;
 mod isolated;
 #[path = "key_issuance_contention_tests.rs"]
 mod key_issuance_contention_tests;
+#[path = "personal_platform_visibility_tests.rs"]
+mod personal_platform_visibility_tests;
 #[path = "provider_cost_auth_tests.rs"]
 mod provider_cost_auth_tests;
 #[path = "authz_matrix_fixtures.rs"]

@@ -185,7 +185,7 @@ fn assert_clean(label: &str, error: &anyhow::Error) {
         for canary in [CANARY_SECRET, CANARY_ID, CANARY_EMAIL] {
             assert!(
                 !rendering.contains(canary),
-                "{label}: failure message leaked a captured value: {rendering}"
+                "{label}: a failure message leaked a captured value"
             );
         }
     }
@@ -348,14 +348,11 @@ async fn management_openapi_review_capture_panics_never_echo_captured_values() {
         .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_owned()))
         .expect("string panic payload");
     for canary in [CANARY_SECRET, CANARY_ID, CANARY_EMAIL] {
-        assert!(
-            !message.contains(canary),
-            "panic leaked a captured value: {message}"
-        );
+        assert!(!message.contains(canary), "a panic leaked a captured value");
     }
     assert!(
         message.contains("/api/v1/me/access-requests/{id}"),
-        "{message}"
+        "the panic does not name the operation template"
     );
 }
 
