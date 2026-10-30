@@ -226,8 +226,24 @@ async fn management_openapi_slice5_fixtures(pool: PgPool) {
     let mut f = fixture(&pool).await;
     f.s = f.s.with_alert_webhooks(
         crate::config::AlertWebhookPolicy::parse(
-            &["https://receiver.example.test/ingest".into()],
-            vec!["HOOK_CURRENT".into(), "HOOK_PREVIOUS".into()],
+            // The approved destination and the variants the pattern vectors send
+            // (the URL with one more path character): the schema accepts each of
+            // them, and the policy is an allow-list of exact destinations.
+            &[
+                "https://receiver.example.test/ingest".into(),
+                "https://receiver.example.test/ingest!".into(),
+                "https://receiver.example.test/ingest\u{e9}".into(),
+                "https://receiver.example.test/ingest\u{2713}".into(),
+                "https://receiver.example.test/ingest\u{1F600}".into(),
+            ],
+            // The 128-character names the length vectors send: the valid reference
+            // padded to the pattern's limit with its own letter `H`.
+            vec![
+                "HOOK_CURRENT".into(),
+                "HOOK_PREVIOUS".into(),
+                format!("HOOK_CURRENT{}", "H".repeat(116)),
+                format!("HOOK_PREVIOUS{}", "H".repeat(115)),
+            ],
             crate::config::Environment::Production,
         )
         .unwrap(),

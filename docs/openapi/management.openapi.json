@@ -2355,7 +2355,7 @@
             "description": "Stored JSON incident payload, not a serde DTO; its fields depend on the kind. Every event variant binds it to the closed Settings*Details schema of that kind, so an identity can never be added silently. Monetary fields remain integer micro-USD strings.",
             "patternProperties": {
               "(^|_)microusd$": {
-                "$ref": "#/components/schemas/IdentityNullableDecimal"
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
               }
             },
             "type": "object"
@@ -3197,6 +3197,7 @@
             "anyOf": [
               {
                 "description": "Allowlisted environment reference, never the SMTP password value.",
+                "maxLength": 132,
                 "pattern": "^env:[A-Z_][A-Z_0-9]{0,127}$",
                 "type": "string"
               },
@@ -3289,6 +3290,7 @@
             "anyOf": [
               {
                 "description": "Allowlisted environment reference, never the SMTP password value.",
+                "maxLength": 132,
                 "pattern": "^env:[A-Z_][A-Z_0-9]{0,127}$",
                 "type": "string"
               },
@@ -3364,7 +3366,7 @@
             "if": {
               "properties": {
                 "tls": {
-                  "pattern": "^\\s*none\\s*$"
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*none[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
                 }
               },
               "required": [
@@ -3374,13 +3376,13 @@
             "properties": {
               "from_address": {
                 "description": "A mailbox address: at most 320 BYTES after trimming (directory.rs email_valid) and parseable as a mailbox (lettre Address; the local part at most 64 characters). The schema checks the shape only.",
-                "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               "from_name": {
                 "anyOf": [
                   {
-                    "pattern": "^\\s*[^\\p{Cc}]{0,120}\\s*$",
+                    "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f]{0,120}[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                     "type": "string"
                   },
                   {
@@ -3390,11 +3392,11 @@
               },
               "host": {
                 "description": "A DNS name or IP literal. Known divergences, pinned in the fixture tests: the handler (email.rs valid_host) refuses a host longer than 253 bytes and a string with a colon that is not an IP address (for example `1:2`), both of which this pattern accepts; and it strips any run of surrounding brackets before parsing an address (trim_matches), so with tls none it accepts the loopback spellings `[[::1]]`, `[::1` and `::1]`, which this pattern refuses (one balanced pair only).",
-                "pattern": "^\\s*(\\[[0-9A-Fa-f:.]+\\]|[0-9A-Fa-f:.]+|[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(\\[[0-9A-Fa-f:.]+\\]|[0-9A-Fa-f:.]+|[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               "password_ref": {
-                "pattern": "^\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": [
                   "string",
                   "null"
@@ -3408,11 +3410,11 @@
               },
               "tls": {
                 "description": "starttls, implicit or none; the handler trims surrounding whitespace (text()) before matching, so ` none ` is accepted. Responses always carry the bare value.",
-                "pattern": "^\\s*(starttls|implicit|none)\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(starttls|implicit|none)[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               "username": {
-                "pattern": "^\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": [
                   "string",
                   "null"
@@ -3428,7 +3430,7 @@
             "then": {
               "properties": {
                 "host": {
-                  "pattern": "^\\s*((?i:localhost)|(127(\\.(0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])){3}|((0{1,4}:){7}0{0,3}1|::(0{1,4}:){0,6}0{0,3}1|(0{1,4}:){0}0{1,4}::(0{1,4}:){0,5}0{0,3}1|(0{1,4}:){1}0{1,4}::(0{1,4}:){0,4}0{0,3}1|(0{1,4}:){2}0{1,4}::(0{1,4}:){0,3}0{0,3}1|(0{1,4}:){3}0{1,4}::(0{1,4}:){0,2}0{0,3}1|(0{1,4}:){4}0{1,4}::(0{1,4}:){0,1}0{0,3}1|(0{1,4}:){5}0{1,4}::(0{1,4}:){0,0}0{0,3}1))|\\[(127(\\.(0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])){3}|((0{1,4}:){7}0{0,3}1|::(0{1,4}:){0,6}0{0,3}1|(0{1,4}:){0}0{1,4}::(0{1,4}:){0,5}0{0,3}1|(0{1,4}:){1}0{1,4}::(0{1,4}:){0,4}0{0,3}1|(0{1,4}:){2}0{1,4}::(0{1,4}:){0,3}0{0,3}1|(0{1,4}:){3}0{1,4}::(0{1,4}:){0,2}0{0,3}1|(0{1,4}:){4}0{1,4}::(0{1,4}:){0,1}0{0,3}1|(0{1,4}:){5}0{1,4}::(0{1,4}:){0,0}0{0,3}1))\\])\\s*$",
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*((?i:localhost)|(127(\\.(0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])){3}|((0{1,4}:){7}0{0,3}1|::(0{1,4}:){0,6}0{0,3}1|(0{1,4}:){0}0{1,4}::(0{1,4}:){0,5}0{0,3}1|(0{1,4}:){1}0{1,4}::(0{1,4}:){0,4}0{0,3}1|(0{1,4}:){2}0{1,4}::(0{1,4}:){0,3}0{0,3}1|(0{1,4}:){3}0{1,4}::(0{1,4}:){0,2}0{0,3}1|(0{1,4}:){4}0{1,4}::(0{1,4}:){0,1}0{0,3}1|(0{1,4}:){5}0{1,4}::(0{1,4}:){0,0}0{0,3}1))|\\[(127(\\.(0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])){3}|((0{1,4}:){7}0{0,3}1|::(0{1,4}:){0,6}0{0,3}1|(0{1,4}:){0}0{1,4}::(0{1,4}:){0,5}0{0,3}1|(0{1,4}:){1}0{1,4}::(0{1,4}:){0,4}0{0,3}1|(0{1,4}:){2}0{1,4}::(0{1,4}:){0,3}0{0,3}1|(0{1,4}:){3}0{1,4}::(0{1,4}:){0,2}0{0,3}1|(0{1,4}:){4}0{1,4}::(0{1,4}:){0,1}0{0,3}1|(0{1,4}:){5}0{1,4}::(0{1,4}:){0,0}0{0,3}1))\\])[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                   "type": "string"
                 }
               }
@@ -3441,7 +3443,7 @@
             "if": {
               "properties": {
                 "tls": {
-                  "pattern": "^\\s*none\\s*$"
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*none[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
                 }
               },
               "required": [
@@ -3451,13 +3453,13 @@
             "properties": {
               "from_address": {
                 "description": "A mailbox address: at most 320 BYTES after trimming (directory.rs email_valid) and parseable as a mailbox (lettre Address; the local part at most 64 characters). The schema checks the shape only.",
-                "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               "from_name": {
                 "anyOf": [
                   {
-                    "pattern": "^\\s*[^\\p{Cc}]{0,120}\\s*$",
+                    "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f]{0,120}[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                     "type": "string"
                   },
                   {
@@ -3467,12 +3469,12 @@
               },
               "host": {
                 "description": "A DNS name or IP literal. Known divergences, pinned in the fixture tests: the handler (email.rs valid_host) refuses a host longer than 253 bytes and a string with a colon that is not an IP address (for example `1:2`), both of which this pattern accepts; and it strips any run of surrounding brackets before parsing an address (trim_matches), so with tls none it accepts the loopback spellings `[[::1]]`, `[::1` and `::1]`, which this pattern refuses (one balanced pair only).",
-                "pattern": "^\\s*(\\[[0-9A-Fa-f:.]+\\]|[0-9A-Fa-f:.]+|[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(\\[[0-9A-Fa-f:.]+\\]|[0-9A-Fa-f:.]+|[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               "password_ref": {
                 "description": "An allowlisted environment reference (the server allowlist decides, 400 otherwise); never a password value.",
-                "pattern": "^\\s*env:[A-Z_][A-Z_0-9]{0,127}\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*env:[A-Z_][A-Z_0-9]{0,127}[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               "port": {
@@ -3483,12 +3485,12 @@
               },
               "tls": {
                 "description": "starttls, implicit or none; the handler trims surrounding whitespace (text()) before matching, so ` none ` is accepted. Responses always carry the bare value.",
-                "pattern": "^\\s*(starttls|implicit|none)\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(starttls|implicit|none)[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               "username": {
                 "description": "Trimmed, at most 256 BYTES (handler: u.len() > 256), no control characters; the pattern counts characters, so a multibyte username within 255 characters can still be refused.",
-                "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,254}[^\\p{Cc}\\s])?\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,254}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               }
             },
@@ -3503,7 +3505,7 @@
             "then": {
               "properties": {
                 "host": {
-                  "pattern": "^\\s*((?i:localhost)|(127(\\.(0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])){3}|((0{1,4}:){7}0{0,3}1|::(0{1,4}:){0,6}0{0,3}1|(0{1,4}:){0}0{1,4}::(0{1,4}:){0,5}0{0,3}1|(0{1,4}:){1}0{1,4}::(0{1,4}:){0,4}0{0,3}1|(0{1,4}:){2}0{1,4}::(0{1,4}:){0,3}0{0,3}1|(0{1,4}:){3}0{1,4}::(0{1,4}:){0,2}0{0,3}1|(0{1,4}:){4}0{1,4}::(0{1,4}:){0,1}0{0,3}1|(0{1,4}:){5}0{1,4}::(0{1,4}:){0,0}0{0,3}1))|\\[(127(\\.(0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])){3}|((0{1,4}:){7}0{0,3}1|::(0{1,4}:){0,6}0{0,3}1|(0{1,4}:){0}0{1,4}::(0{1,4}:){0,5}0{0,3}1|(0{1,4}:){1}0{1,4}::(0{1,4}:){0,4}0{0,3}1|(0{1,4}:){2}0{1,4}::(0{1,4}:){0,3}0{0,3}1|(0{1,4}:){3}0{1,4}::(0{1,4}:){0,2}0{0,3}1|(0{1,4}:){4}0{1,4}::(0{1,4}:){0,1}0{0,3}1|(0{1,4}:){5}0{1,4}::(0{1,4}:){0,0}0{0,3}1))\\])\\s*$",
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*((?i:localhost)|(127(\\.(0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])){3}|((0{1,4}:){7}0{0,3}1|::(0{1,4}:){0,6}0{0,3}1|(0{1,4}:){0}0{1,4}::(0{1,4}:){0,5}0{0,3}1|(0{1,4}:){1}0{1,4}::(0{1,4}:){0,4}0{0,3}1|(0{1,4}:){2}0{1,4}::(0{1,4}:){0,3}0{0,3}1|(0{1,4}:){3}0{1,4}::(0{1,4}:){0,2}0{0,3}1|(0{1,4}:){4}0{1,4}::(0{1,4}:){0,1}0{0,3}1|(0{1,4}:){5}0{1,4}::(0{1,4}:){0,0}0{0,3}1))|\\[(127(\\.(0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])){3}|((0{1,4}:){7}0{0,3}1|::(0{1,4}:){0,6}0{0,3}1|(0{1,4}:){0}0{1,4}::(0{1,4}:){0,5}0{0,3}1|(0{1,4}:){1}0{1,4}::(0{1,4}:){0,4}0{0,3}1|(0{1,4}:){2}0{1,4}::(0{1,4}:){0,3}0{0,3}1|(0{1,4}:){3}0{1,4}::(0{1,4}:){0,2}0{0,3}1|(0{1,4}:){4}0{1,4}::(0{1,4}:){0,1}0{0,3}1|(0{1,4}:){5}0{1,4}::(0{1,4}:){0,0}0{0,3}1))\\])[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                   "type": "string"
                 }
               }
@@ -3515,28 +3517,28 @@
             "description": "Turns delivery off: every field null, absent or blank.",
             "properties": {
               "from_address": {
-                "pattern": "^\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": [
                   "string",
                   "null"
                 ]
               },
               "from_name": {
-                "pattern": "^\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": [
                   "string",
                   "null"
                 ]
               },
               "host": {
-                "pattern": "^\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": [
                   "string",
                   "null"
                 ]
               },
               "password_ref": {
-                "pattern": "^\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": [
                   "string",
                   "null"
@@ -3546,14 +3548,14 @@
                 "type": "null"
               },
               "tls": {
-                "pattern": "^\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": [
                   "string",
                   "null"
                 ]
               },
               "username": {
-                "pattern": "^\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": [
                   "string",
                   "null"
@@ -3564,39 +3566,221 @@
             "type": "object"
           },
           {
+            "description": "The same relay settings in serde's positional form (every position present): A relay without credentials: host, port 1-65535, tls and a sender address; plaintext (`none`) only to a loopback host. Plaintext (`none`) is accepted only for the handler's loopback rule (email.rs is_loopback_host): `localhost` in any case, or an IP literal (optionally bracketed) that parses as 127.0.0.0/8 or as IPv6 ::1 in any spelling (`0::1`, `0:0:0:0:0:0:0:1`); the IPv4-tail spelling `::0.0.0.1` is also accepted by the handler and is not modelled.",
+            "if": {
+              "prefixItems": [
+                {
+                  "type": [
+                    "string",
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "type": [
+                    "string",
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*none[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "type": "string"
+                }
+              ]
+            },
             "items": false,
             "maxItems": 7,
             "minItems": 7,
             "prefixItems": [
               {
-                "$ref": "#/components/schemas/IdentityNullableString"
+                "description": "A DNS name or IP literal. Known divergences, pinned in the fixture tests: the handler (email.rs valid_host) refuses a host longer than 253 bytes and a string with a colon that is not an IP address (for example `1:2`), both of which this pattern accepts; and it strips any run of surrounding brackets before parsing an address (trim_matches), so with tls none it accepts the loopback spellings `[[::1]]`, `[::1` and `::1]`, which this pattern refuses (one balanced pair only).",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(\\[[0-9A-Fa-f:.]+\\]|[0-9A-Fa-f:.]+|[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "description": "An integer 1-65535. The handler deserializes an i32, so a float spelling such as 25.0 is refused (400), although a JSON Schema validator treats 25.0 as the integer 25.",
+                "maximum": 65535,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "description": "starttls, implicit or none; the handler trims surrounding whitespace (text()) before matching, so ` none ` is accepted. Responses always carry the bare value.",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(starttls|implicit|none)[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              {
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              {
+                "description": "A mailbox address: at most 320 BYTES after trimming (directory.rs email_valid) and parseable as a mailbox (lettre Address; the local part at most 64 characters). The schema checks the shape only.",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": "string"
               },
               {
                 "anyOf": [
                   {
-                    "maximum": 2147483647,
-                    "minimum": -2147483648,
-                    "type": "integer"
+                    "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f]{0,120}[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                    "type": "string"
                   },
                   {
                     "type": "null"
                   }
                 ]
+              }
+            ],
+            "then": {
+              "prefixItems": [
+                {
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*((?i:localhost)|(127(\\.(0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])){3}|((0{1,4}:){7}0{0,3}1|::(0{1,4}:){0,6}0{0,3}1|(0{1,4}:){0}0{1,4}::(0{1,4}:){0,5}0{0,3}1|(0{1,4}:){1}0{1,4}::(0{1,4}:){0,4}0{0,3}1|(0{1,4}:){2}0{1,4}::(0{1,4}:){0,3}0{0,3}1|(0{1,4}:){3}0{1,4}::(0{1,4}:){0,2}0{0,3}1|(0{1,4}:){4}0{1,4}::(0{1,4}:){0,1}0{0,3}1|(0{1,4}:){5}0{1,4}::(0{1,4}:){0,0}0{0,3}1))|\\[(127(\\.(0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])){3}|((0{1,4}:){7}0{0,3}1|::(0{1,4}:){0,6}0{0,3}1|(0{1,4}:){0}0{1,4}::(0{1,4}:){0,5}0{0,3}1|(0{1,4}:){1}0{1,4}::(0{1,4}:){0,4}0{0,3}1|(0{1,4}:){2}0{1,4}::(0{1,4}:){0,3}0{0,3}1|(0{1,4}:){3}0{1,4}::(0{1,4}:){0,2}0{0,3}1|(0{1,4}:){4}0{1,4}::(0{1,4}:){0,1}0{0,3}1|(0{1,4}:){5}0{1,4}::(0{1,4}:){0,0}0{0,3}1))\\])[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "type": "string"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          {
+            "description": "The same relay settings in serde's positional form (every position present): A relay with credentials: username and an allowlisted env: password reference together. Plaintext (`none`) is accepted only for the handler's loopback rule (email.rs is_loopback_host): `localhost` in any case, or an IP literal (optionally bracketed) that parses as 127.0.0.0/8 or as IPv6 ::1 in any spelling (`0::1`, `0:0:0:0:0:0:0:1`); the IPv4-tail spelling `::0.0.0.1` is also accepted by the handler and is not modelled.",
+            "if": {
+              "prefixItems": [
+                {
+                  "type": [
+                    "string",
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "type": [
+                    "string",
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*none[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "type": "string"
+                }
+              ]
+            },
+            "items": false,
+            "maxItems": 7,
+            "minItems": 7,
+            "prefixItems": [
+              {
+                "description": "A DNS name or IP literal. Known divergences, pinned in the fixture tests: the handler (email.rs valid_host) refuses a host longer than 253 bytes and a string with a colon that is not an IP address (for example `1:2`), both of which this pattern accepts; and it strips any run of surrounding brackets before parsing an address (trim_matches), so with tls none it accepts the loopback spellings `[[::1]]`, `[::1` and `::1]`, which this pattern refuses (one balanced pair only).",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(\\[[0-9A-Fa-f:.]+\\]|[0-9A-Fa-f:.]+|[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": "string"
               },
               {
-                "$ref": "#/components/schemas/IdentityNullableString"
+                "description": "An integer 1-65535. The handler deserializes an i32, so a float spelling such as 25.0 is refused (400), although a JSON Schema validator treats 25.0 as the integer 25.",
+                "maximum": 65535,
+                "minimum": 1,
+                "type": "integer"
               },
               {
-                "$ref": "#/components/schemas/IdentityNullableString"
+                "description": "starttls, implicit or none; the handler trims surrounding whitespace (text()) before matching, so ` none ` is accepted. Responses always carry the bare value.",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(starttls|implicit|none)[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": "string"
               },
               {
-                "$ref": "#/components/schemas/IdentityNullableString"
+                "description": "Trimmed, at most 256 BYTES (handler: u.len() > 256), no control characters; the pattern counts characters, so a multibyte username within 255 characters can still be refused.",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,254}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": "string"
               },
               {
-                "$ref": "#/components/schemas/IdentityNullableString"
+                "description": "An allowlisted environment reference (the server allowlist decides, 400 otherwise); never a password value.",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*env:[A-Z_][A-Z_0-9]{0,127}[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": "string"
               },
               {
-                "$ref": "#/components/schemas/IdentityNullableString"
+                "description": "A mailbox address: at most 320 BYTES after trimming (directory.rs email_valid) and parseable as a mailbox (lettre Address; the local part at most 64 characters). The schema checks the shape only.",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "anyOf": [
+                  {
+                    "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f]{0,120}[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            ],
+            "then": {
+              "prefixItems": [
+                {
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*((?i:localhost)|(127(\\.(0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])){3}|((0{1,4}:){7}0{0,3}1|::(0{1,4}:){0,6}0{0,3}1|(0{1,4}:){0}0{1,4}::(0{1,4}:){0,5}0{0,3}1|(0{1,4}:){1}0{1,4}::(0{1,4}:){0,4}0{0,3}1|(0{1,4}:){2}0{1,4}::(0{1,4}:){0,3}0{0,3}1|(0{1,4}:){3}0{1,4}::(0{1,4}:){0,2}0{0,3}1|(0{1,4}:){4}0{1,4}::(0{1,4}:){0,1}0{0,3}1|(0{1,4}:){5}0{1,4}::(0{1,4}:){0,0}0{0,3}1))|\\[(127(\\.(0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])){3}|((0{1,4}:){7}0{0,3}1|::(0{1,4}:){0,6}0{0,3}1|(0{1,4}:){0}0{1,4}::(0{1,4}:){0,5}0{0,3}1|(0{1,4}:){1}0{1,4}::(0{1,4}:){0,4}0{0,3}1|(0{1,4}:){2}0{1,4}::(0{1,4}:){0,3}0{0,3}1|(0{1,4}:){3}0{1,4}::(0{1,4}:){0,2}0{0,3}1|(0{1,4}:){4}0{1,4}::(0{1,4}:){0,1}0{0,3}1|(0{1,4}:){5}0{1,4}::(0{1,4}:){0,0}0{0,3}1))\\])[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "type": "string"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          {
+            "description": "The same relay settings in serde's positional form (every position present): Turns delivery off: every field null, absent or blank.",
+            "items": false,
+            "maxItems": 7,
+            "minItems": 7,
+            "prefixItems": [
+              {
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              {
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              {
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              {
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              {
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             ],
             "type": "array"
@@ -3869,101 +4053,6 @@
           "logo_upload"
         ],
         "type": "object"
-      },
-      "SettingsGeneralInput": {
-        "description": "Closed serde struct object or positional array [display_name, support_url, logo_url, human_key_max_lifetime_days]. Carries the handler's value rules.",
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "display_name": {
-                "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
-                "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
-                "type": "string"
-              },
-              "human_key_max_lifetime_days": {
-                "maximum": 365,
-                "minimum": 1,
-                "type": "integer"
-              },
-              "logo_url": {
-                "anyOf": [
-                  {
-                    "description": "Blank means none; otherwise an absolute https URL without credentials or fragment. The handler limits the trimmed value to 2048 BYTES (settings.rs https_url: value.len()); maxLength counts characters, so a multibyte URL within 2048 characters can still be refused. The handler trims before applying the cap (text() then value.len()), so a 2048-byte URL padded with surrounding whitespace is accepted, while maxLength counts the padding and this schema refuses it.",
-                    "maxLength": 2048,
-                    "pattern": "^\\s*([Hh][Tt][Tt][Pp][Ss]://[^/@?#\\s]+([/?][^#\\s]*)?)?\\s*$",
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "support_url": {
-                "anyOf": [
-                  {
-                    "description": "Blank means none; otherwise an absolute https URL without credentials or fragment. The handler limits the trimmed value to 2048 BYTES (settings.rs https_url: value.len()); maxLength counts characters, so a multibyte URL within 2048 characters can still be refused. The handler trims before applying the cap (text() then value.len()), so a 2048-byte URL padded with surrounding whitespace is accepted, while maxLength counts the padding and this schema refuses it.",
-                    "maxLength": 2048,
-                    "pattern": "^\\s*([Hh][Tt][Tt][Pp][Ss]://[^/@?#\\s]+([/?][^#\\s]*)?)?\\s*$",
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "display_name",
-              "human_key_max_lifetime_days"
-            ],
-            "type": "object"
-          },
-          {
-            "items": false,
-            "maxItems": 4,
-            "minItems": 4,
-            "prefixItems": [
-              {
-                "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
-                "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
-                "type": "string"
-              },
-              {
-                "anyOf": [
-                  {
-                    "description": "Blank means none; otherwise an absolute https URL without credentials or fragment. The handler limits the trimmed value to 2048 BYTES (settings.rs https_url: value.len()); maxLength counts characters, so a multibyte URL within 2048 characters can still be refused. The handler trims before applying the cap (text() then value.len()), so a 2048-byte URL padded with surrounding whitespace is accepted, while maxLength counts the padding and this schema refuses it.",
-                    "maxLength": 2048,
-                    "pattern": "^\\s*([Hh][Tt][Tt][Pp][Ss]://[^/@?#\\s]+([/?][^#\\s]*)?)?\\s*$",
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "anyOf": [
-                  {
-                    "description": "Blank means none; otherwise an absolute https URL without credentials or fragment. The handler limits the trimmed value to 2048 BYTES (settings.rs https_url: value.len()); maxLength counts characters, so a multibyte URL within 2048 characters can still be refused. The handler trims before applying the cap (text() then value.len()), so a 2048-byte URL padded with surrounding whitespace is accepted, while maxLength counts the padding and this schema refuses it.",
-                    "maxLength": 2048,
-                    "pattern": "^\\s*([Hh][Tt][Tt][Pp][Ss]://[^/@?#\\s]+([/?][^#\\s]*)?)?\\s*$",
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "maximum": 365,
-                "minimum": 1,
-                "type": "integer"
-              }
-            ],
-            "type": "array"
-          }
-        ]
       },
       "SettingsGeneralLogoCleared": {
         "additionalProperties": false,
@@ -5264,13 +5353,13 @@
               },
               "name": {
                 "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
-                "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               "notify_emails": {
                 "default": [],
                 "items": {
-                  "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$",
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                   "type": "string"
                 },
                 "maxItems": 10,
@@ -5351,13 +5440,13 @@
               },
               "name": {
                 "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
-                "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               "notify_emails": {
                 "default": [],
                 "items": {
-                  "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$",
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                   "type": "string"
                 },
                 "maxItems": 10,
@@ -5380,6 +5469,7 @@
                     "$ref": "#/components/schemas/IdentityUnsignedDecimal"
                   },
                   {
+                    "maxLength": 19,
                     "pattern": "^([1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6]|9223372036854775807)$"
                   }
                 ],
@@ -5448,6 +5538,7 @@
                     "$ref": "#/components/schemas/IdentityUnsignedDecimal"
                   },
                   {
+                    "maxLength": 15,
                     "pattern": "^[1-9][0-9]{0,14}$"
                   }
                 ],
@@ -5455,13 +5546,13 @@
               },
               "name": {
                 "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
-                "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               "notify_emails": {
                 "default": [],
                 "items": {
-                  "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$",
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                   "type": "string"
                 },
                 "maxItems": 10,
@@ -5542,13 +5633,13 @@
               },
               "name": {
                 "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
-                "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               "notify_emails": {
                 "default": [],
                 "items": {
-                  "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$",
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                   "type": "string"
                 },
                 "maxItems": 10,
@@ -5639,13 +5730,13 @@
               },
               "name": {
                 "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
-                "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               "notify_emails": {
                 "default": [],
                 "items": {
-                  "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$",
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                   "type": "string"
                 },
                 "maxItems": 10,
@@ -5725,13 +5816,13 @@
               },
               "name": {
                 "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
-                "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               "notify_emails": {
                 "default": [],
                 "items": {
-                  "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$",
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                   "type": "string"
                 },
                 "maxItems": 10,
@@ -5808,13 +5899,13 @@
               },
               "name": {
                 "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
-                "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               "notify_emails": {
                 "default": [],
                 "items": {
-                  "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$",
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                   "type": "string"
                 },
                 "maxItems": 10,
@@ -5887,13 +5978,13 @@
               },
               "name": {
                 "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
-                "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               "notify_emails": {
                 "default": [],
                 "items": {
-                  "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$",
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                   "type": "string"
                 },
                 "maxItems": 10,
@@ -5987,15 +6078,12 @@
               },
               "name": {
                 "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
-                "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               "notify_emails": {
                 "default": [],
-                "items": {
-                  "type": "string"
-                },
-                "maxItems": 0,
+                "items": false,
                 "type": "array"
               },
               "notify_platform_admins": {
@@ -6078,15 +6166,12 @@
               },
               "name": {
                 "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
-                "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               "notify_emails": {
                 "default": [],
-                "items": {
-                  "type": "string"
-                },
-                "maxItems": 0,
+                "items": false,
                 "type": "array"
               },
               "notify_platform_admins": {
@@ -6127,104 +6212,410 @@
             "type": "object"
           },
           {
+            "description": "The same rule in serde's positional form: Budget thresholds over one or more budget layers (percentages 1-100; at most five distinct values; the installation layer does not exist).",
             "items": false,
             "maxItems": 19,
             "minItems": 16,
             "prefixItems": [
               {
+                "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               {
-                "type": "string"
+                "const": "budget_threshold"
               },
               {
                 "default": true,
                 "type": "boolean"
               },
               {
-                "anyOf": [
+                "items": {
+                  "enum": [
+                    "type",
+                    "override",
+                    "local",
+                    "key"
+                  ]
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "items": {
+                  "maximum": 100,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "const": false,
+                "default": false
+              },
+              {
+                "default": false,
+                "type": "boolean"
+              },
+              {
+                "default": [],
+                "items": {
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "type": "array"
+              }
+            ],
+            "type": "array"
+          },
+          {
+            "description": "The same rule in serde's positional form: Installation spend against a reference amount per period.",
+            "items": false,
+            "maxItems": 19,
+            "minItems": 16,
+            "prefixItems": [
+              {
+                "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "const": "spend_threshold"
+              },
+              {
+                "default": true,
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "items": {
+                  "maximum": 100,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/IdentityPeriod"
+              },
+              {
+                "allOf": [
                   {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
+                    "$ref": "#/components/schemas/IdentityUnsignedDecimal"
                   },
                   {
-                    "type": "null"
+                    "maxLength": 19,
+                    "pattern": "^([1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6]|9223372036854775807)$"
                   }
-                ]
+                ],
+                "description": "Positive integer micro-USD string that fits a signed 64-bit integer (the handler also tolerates leading zeros; clients should send the canonical form)."
               },
               {
-                "anyOf": [
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "const": false,
+                "default": false
+              },
+              {
+                "default": false,
+                "type": "boolean"
+              },
+              {
+                "default": [],
+                "items": {
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "type": "array"
+              }
+            ],
+            "type": "array"
+          },
+          {
+            "description": "The same rule in serde's positional form: Spend spike factor (110-100000 percent) over a spend floor.",
+            "items": false,
+            "maxItems": 19,
+            "minItems": 16,
+            "prefixItems": [
+              {
+                "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "const": "spend_spike"
+              },
+              {
+                "default": true,
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "maximum": 100000,
+                "minimum": 110,
+                "type": "integer"
+              },
+              {
+                "allOf": [
                   {
-                    "items": {
-                      "maximum": 2147483647,
-                      "minimum": -2147483648,
-                      "type": "integer"
-                    },
-                    "type": "array"
+                    "$ref": "#/components/schemas/IdentityUnsignedDecimal"
                   },
                   {
-                    "type": "null"
+                    "maxLength": 15,
+                    "pattern": "^[1-9][0-9]{0,14}$"
                   }
-                ]
+                ],
+                "description": "Positive integer micro-USD string of at most 15 digits (the handler also tolerates leading zeros; clients should send the canonical form)."
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "const": false,
+                "default": false
+              },
+              {
+                "default": false,
+                "type": "boolean"
+              },
+              {
+                "default": [],
+                "items": {
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "type": "array"
+              }
+            ],
+            "type": "array"
+          },
+          {
+            "description": "The same rule in serde's positional form: Error rate over a window.",
+            "items": false,
+            "maxItems": 19,
+            "minItems": 16,
+            "prefixItems": [
+              {
+                "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "const": "error_rate"
+              },
+              {
+                "default": true,
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "maximum": 1440,
+                "minimum": 5,
+                "type": "integer"
+              },
+              {
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "maximum": 100000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "const": false,
+                "default": false
+              },
+              {
+                "default": false,
+                "type": "boolean"
+              },
+              {
+                "default": [],
+                "items": {
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "type": "array"
+              }
+            ],
+            "type": "array"
+          },
+          {
+            "description": "The same rule in serde's positional form: Provider connection failing by error rate, optionally with a consecutive-failure streak.",
+            "items": false,
+            "maxItems": 19,
+            "minItems": 16,
+            "prefixItems": [
+              {
+                "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "const": "provider_failing"
+              },
+              {
+                "default": true,
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "maximum": 1440,
+                "minimum": 5,
+                "type": "integer"
+              },
+              {
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "maximum": 100000,
+                "minimum": 1,
+                "type": "integer"
               },
               {
                 "anyOf": [
                   {
-                    "maximum": 2147483647,
-                    "minimum": -2147483648,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "$ref": "#/components/schemas/IdentityNullableDecimal"
-              },
-              {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": -2147483648,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": -2147483648,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": -2147483648,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": -2147483648,
+                    "maximum": 100,
+                    "minimum": 1,
                     "type": "integer"
                   },
                   {
@@ -6236,38 +6627,20 @@
                 "$ref": "#/components/schemas/IdentityNullableUuid"
               },
               {
-                "$ref": "#/components/schemas/IdentityNullableString"
+                "type": "null"
               },
               {
-                "$ref": "#/components/schemas/IdentityNullableDecimal"
+                "type": "null"
               },
               {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": -2147483648,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "type": "null"
               },
               {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": -2147483648,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "type": "null"
               },
               {
-                "default": false,
-                "type": "boolean"
+                "const": false,
+                "default": false
               },
               {
                 "default": false,
@@ -6276,8 +6649,424 @@
               {
                 "default": [],
                 "items": {
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                   "type": "string"
                 },
+                "maxItems": 10,
+                "type": "array"
+              }
+            ],
+            "type": "array"
+          },
+          {
+            "description": "The same rule in serde's positional form: Provider connection failing by consecutive-failure streak only (no error-rate threshold).",
+            "items": false,
+            "maxItems": 19,
+            "minItems": 16,
+            "prefixItems": [
+              {
+                "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "const": "provider_failing"
+              },
+              {
+                "default": true,
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "maximum": 1440,
+                "minimum": 5,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "$ref": "#/components/schemas/IdentityNullableUuid"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "const": false,
+                "default": false
+              },
+              {
+                "default": false,
+                "type": "boolean"
+              },
+              {
+                "default": [],
+                "items": {
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "type": "array"
+              }
+            ],
+            "type": "array"
+          },
+          {
+            "description": "The same rule in serde's positional form: A batch failed or expired; no parameters.",
+            "items": false,
+            "maxItems": 19,
+            "minItems": 16,
+            "prefixItems": [
+              {
+                "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "const": "batch_failed"
+              },
+              {
+                "default": true,
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "const": false,
+                "default": false
+              },
+              {
+                "default": false,
+                "type": "boolean"
+              },
+              {
+                "default": [],
+                "items": {
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "type": "array"
+              }
+            ],
+            "type": "array"
+          },
+          {
+            "description": "The same rule in serde's positional form: A batch made no progress for the window.",
+            "items": false,
+            "maxItems": 19,
+            "minItems": 16,
+            "prefixItems": [
+              {
+                "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "const": "batch_stalled"
+              },
+              {
+                "default": true,
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "maximum": 1440,
+                "minimum": 5,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "const": false,
+                "default": false
+              },
+              {
+                "default": false,
+                "type": "boolean"
+              },
+              {
+                "default": [],
+                "items": {
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "type": "array"
+              }
+            ],
+            "type": "array"
+          },
+          {
+            "description": "The same rule in serde's positional form: Admission rate ceiling, optionally with a lock-wait threshold; notification goes to Platform Admins only (no email addresses).",
+            "items": false,
+            "maxItems": 19,
+            "minItems": 16,
+            "prefixItems": [
+              {
+                "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "const": "admission_ceiling"
+              },
+              {
+                "default": true,
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "maximum": 10,
+                "minimum": 5,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "maximum": 100000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "anyOf": [
+                  {
+                    "enum": [
+                      10,
+                      25,
+                      50,
+                      100,
+                      250,
+                      500,
+                      1000,
+                      2500
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "const": false,
+                "default": false
+              },
+              {
+                "default": false,
+                "type": "boolean"
+              },
+              {
+                "default": [],
+                "items": false,
+                "type": "array"
+              }
+            ],
+            "type": "array"
+          },
+          {
+            "description": "The same rule in serde's positional form: Admission lock-wait ceiling only; notification goes to Platform Admins only (no email addresses).",
+            "items": false,
+            "maxItems": 19,
+            "minItems": 16,
+            "prefixItems": [
+              {
+                "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "const": "admission_ceiling"
+              },
+              {
+                "default": true,
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "maximum": 10,
+                "minimum": 5,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "enum": [
+                  10,
+                  25,
+                  50,
+                  100,
+                  250,
+                  500,
+                  1000,
+                  2500
+                ]
+              },
+              {
+                "const": false,
+                "default": false
+              },
+              {
+                "default": false,
+                "type": "boolean"
+              },
+              {
+                "default": [],
+                "items": false,
                 "type": "array"
               }
             ],
@@ -7535,17 +8324,18 @@
             "properties": {
               "current_secret_ref": {
                 "description": "An allowlisted env:NAME reference (the server allowlist decides, 400 otherwise); never a secret value.",
+                "maxLength": 132,
                 "pattern": "^env:[A-Z_][A-Z_0-9]{0,127}$",
                 "type": "string"
               },
               "label": {
                 "description": "Trimmed, 1 to 120 characters, no control characters.",
-                "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               "url": {
                 "description": "Must equal an operator-approved destination exactly (the server allowlist decides, 400 otherwise); https, or loopback http in development.",
-                "pattern": "^(https://[^/@?#\\s]+|http://(localhost|127(\\.[0-9]{1,3}){3}|\\[::1\\])(:[0-9]{1,5})?)(/[^?#\\s]*)?$",
+                "pattern": "^(https://[^/@?#\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+|http://(localhost|127(\\.[0-9]{1,3}){3}|\\[::1\\])(:[0-9]{1,5})?)(/[^?#\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]*)?$",
                 "type": "string"
               }
             },
@@ -7563,16 +8353,17 @@
             "prefixItems": [
               {
                 "description": "Trimmed, 1 to 120 characters, no control characters.",
-                "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               {
                 "description": "Must equal an operator-approved destination exactly (the server allowlist decides, 400 otherwise); https, or loopback http in development.",
-                "pattern": "^(https://[^/@?#\\s]+|http://(localhost|127(\\.[0-9]{1,3}){3}|\\[::1\\])(:[0-9]{1,5})?)(/[^?#\\s]*)?$",
+                "pattern": "^(https://[^/@?#\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+|http://(localhost|127(\\.[0-9]{1,3}){3}|\\[::1\\])(:[0-9]{1,5})?)(/[^?#\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]*)?$",
                 "type": "string"
               },
               {
                 "description": "An allowlisted env:NAME reference (the server allowlist decides, 400 otherwise); never a secret value.",
+                "maxLength": 132,
                 "pattern": "^env:[A-Z_][A-Z_0-9]{0,127}$",
                 "type": "string"
               }
@@ -7589,6 +8380,7 @@
             "$ref": "#/components/schemas/IdentityTime"
           },
           "current_secret_ref": {
+            "maxLength": 132,
             "pattern": "^env:[A-Z_][A-Z_0-9]{0,127}$",
             "type": "string"
           },
@@ -7631,7 +8423,7 @@
             "description": "Canonical approved destination: https, or http only for a loopback host in a development environment (config.rs AlertWebhookPolicy::canonical); never userinfo, query or fragment.",
             "maxLength": 2048,
             "minLength": 1,
-            "pattern": "^(https://[^/@?#\\s]+|http://(localhost|127(\\.[0-9]{1,3}){3}|\\[::1\\])(:[0-9]{1,5})?)(/[^?#\\s]*)?$",
+            "pattern": "^(https://[^/@?#\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+|http://(localhost|127(\\.[0-9]{1,3}){3}|\\[::1\\])(:[0-9]{1,5})?)(/[^?#\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]*)?$",
             "type": "string"
           },
           "waiting": {
@@ -7821,6 +8613,7 @@
             "properties": {
               "current_secret_ref": {
                 "description": "An allowlisted env:NAME reference (the server allowlist decides, 400 otherwise); never a secret value.",
+                "maxLength": 132,
                 "pattern": "^env:[A-Z_][A-Z_0-9]{0,127}$",
                 "type": "string"
               },
@@ -7829,13 +8622,14 @@
               },
               "label": {
                 "description": "Trimmed, 1 to 120 characters, no control characters.",
-                "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               "previous_secret_ref": {
                 "anyOf": [
                   {
                     "description": "An allowlisted env:NAME reference (the server allowlist decides, 400 otherwise); never a secret value.",
+                    "maxLength": 132,
                     "pattern": "^env:[A-Z_][A-Z_0-9]{0,127}$",
                     "type": "string"
                   },
@@ -7852,13 +8646,147 @@
             "type": "object"
           },
           {
+            "allOf": [
+              {
+                "if": {
+                  "minItems": 5,
+                  "prefixItems": [
+                    {
+                      "type": [
+                        "string",
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    {
+                      "type": [
+                        "string",
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    {
+                      "type": [
+                        "string",
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "then": {
+                  "prefixItems": [
+                    {
+                      "type": [
+                        "string",
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    {
+                      "type": [
+                        "string",
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    {
+                      "type": [
+                        "string",
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    {
+                      "type": [
+                        "string",
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "minItems": 5,
+                  "prefixItems": [
+                    {
+                      "type": [
+                        "string",
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    {
+                      "type": [
+                        "string",
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    {
+                      "type": [
+                        "string",
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    {
+                      "type": [
+                        "string",
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "then": {
+                  "prefixItems": [
+                    {
+                      "type": [
+                        "string",
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    {
+                      "type": [
+                        "string",
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    {
+                      "type": [
+                        "string",
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            ],
             "items": false,
             "maxItems": 5,
             "minItems": 0,
             "prefixItems": [
               {
                 "description": "Trimmed, 1 to 120 characters, no control characters.",
-                "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               {
@@ -7866,6 +8794,7 @@
               },
               {
                 "description": "An allowlisted env:NAME reference (the server allowlist decides, 400 otherwise); never a secret value.",
+                "maxLength": 132,
                 "pattern": "^env:[A-Z_][A-Z_0-9]{0,127}$",
                 "type": "string"
               },
@@ -7873,6 +8802,7 @@
                 "anyOf": [
                   {
                     "description": "An allowlisted env:NAME reference (the server allowlist decides, 400 otherwise); never a secret value.",
+                    "maxLength": 132,
                     "pattern": "^env:[A-Z_][A-Z_0-9]{0,127}$",
                     "type": "string"
                   },
@@ -7896,6 +8826,7 @@
             "$ref": "#/components/schemas/IdentityTime"
           },
           "current_secret_ref": {
+            "maxLength": 132,
             "pattern": "^env:[A-Z_][A-Z_0-9]{0,127}$",
             "type": "string"
           },
@@ -7937,6 +8868,7 @@
           "previous_secret_ref": {
             "anyOf": [
               {
+                "maxLength": 132,
                 "pattern": "^env:[A-Z_][A-Z_0-9]{0,127}$",
                 "type": "string"
               },
@@ -7958,7 +8890,7 @@
             "description": "Canonical approved destination: https, or http only for a loopback host in a development environment (config.rs AlertWebhookPolicy::canonical); never userinfo, query or fragment.",
             "maxLength": 2048,
             "minLength": 1,
-            "pattern": "^(https://[^/@?#\\s]+|http://(localhost|127(\\.[0-9]{1,3}){3}|\\[::1\\])(:[0-9]{1,5})?)(/[^?#\\s]*)?$",
+            "pattern": "^(https://[^/@?#\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+|http://(localhost|127(\\.[0-9]{1,3}){3}|\\[::1\\])(:[0-9]{1,5})?)(/[^?#\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]*)?$",
             "type": "string"
           },
           "waiting": {
@@ -8272,7 +9204,7 @@
             "description": "Stored JSON incident payload, not a serde DTO; its fields depend on the kind. Every event variant binds it to the closed Settings*Details schema of that kind, so an identity can never be added silently. Monetary fields remain integer micro-USD strings.",
             "patternProperties": {
               "(^|_)microusd$": {
-                "$ref": "#/components/schemas/IdentityNullableDecimal"
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
               }
             },
             "type": "object"
@@ -9038,13 +9970,13 @@
               },
               "name": {
                 "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
-                "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               "notify_emails": {
                 "default": [],
                 "items": {
-                  "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$",
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                   "type": "string"
                 },
                 "maxItems": 10,
@@ -9126,6 +10058,7 @@
                     "$ref": "#/components/schemas/IdentityUnsignedDecimal"
                   },
                   {
+                    "maxLength": 15,
                     "pattern": "^[1-9][0-9]{0,14}$"
                   }
                 ],
@@ -9133,13 +10066,13 @@
               },
               "name": {
                 "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
-                "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               "notify_emails": {
                 "default": [],
                 "items": {
-                  "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$",
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                   "type": "string"
                 },
                 "maxItems": 10,
@@ -9220,13 +10153,13 @@
               },
               "name": {
                 "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
-                "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               "notify_emails": {
                 "default": [],
                 "items": {
-                  "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$",
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                   "type": "string"
                 },
                 "maxItems": 10,
@@ -9304,13 +10237,13 @@
               },
               "name": {
                 "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
-                "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               "notify_emails": {
                 "default": [],
                 "items": {
-                  "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$",
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                   "type": "string"
                 },
                 "maxItems": 10,
@@ -9383,13 +10316,13 @@
               },
               "name": {
                 "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
-                "pattern": "^\\s*[^\\p{Cc}\\s]([^\\p{Cc}]{0,118}[^\\p{Cc}\\s])?\\s*$",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               "notify_emails": {
                 "default": [],
                 "items": {
-                  "pattern": "^\\s*[^@\\s]+@[^@\\s]+\\s*$",
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                   "type": "string"
                 },
                 "maxItems": 10,
@@ -9432,143 +10365,76 @@
             "type": "object"
           },
           {
+            "description": "The same rule in serde's positional form: Budget thresholds over one or more budget layers (percentages 1-100; at most five distinct values; the installation layer does not exist).",
             "items": false,
             "maxItems": 19,
             "minItems": 16,
             "prefixItems": [
               {
+                "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                 "type": "string"
               },
               {
-                "type": "string"
+                "const": "budget_threshold"
               },
               {
                 "default": true,
                 "type": "boolean"
               },
               {
-                "anyOf": [
-                  {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "items": {
+                  "enum": [
+                    "type",
+                    "override",
+                    "local",
+                    "key"
+                  ]
+                },
+                "minItems": 1,
+                "type": "array"
               },
               {
-                "anyOf": [
-                  {
-                    "items": {
-                      "maximum": 2147483647,
-                      "minimum": -2147483648,
-                      "type": "integer"
-                    },
-                    "type": "array"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "items": {
+                  "maximum": 100,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "minItems": 1,
+                "type": "array"
               },
               {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": -2147483648,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "type": "null"
               },
               {
-                "$ref": "#/components/schemas/IdentityNullableDecimal"
+                "type": "null"
               },
               {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": -2147483648,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "type": "null"
               },
               {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": -2147483648,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "type": "null"
               },
               {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": -2147483648,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "type": "null"
               },
               {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": -2147483648,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "type": "null"
               },
               {
-                "$ref": "#/components/schemas/IdentityNullableUuid"
+                "type": "null"
               },
               {
-                "$ref": "#/components/schemas/IdentityNullableString"
+                "type": "null"
               },
               {
-                "$ref": "#/components/schemas/IdentityNullableDecimal"
+                "type": "null"
               },
               {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": -2147483648,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "type": "null"
               },
               {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": -2147483648,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "type": "null"
               },
               {
                 "default": false,
@@ -9581,8 +10447,337 @@
               {
                 "default": [],
                 "items": {
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                   "type": "string"
                 },
+                "maxItems": 10,
+                "type": "array"
+              }
+            ],
+            "type": "array"
+          },
+          {
+            "description": "The same rule in serde's positional form: Spend spike factor (110-100000 percent) over a spend floor.",
+            "items": false,
+            "maxItems": 19,
+            "minItems": 16,
+            "prefixItems": [
+              {
+                "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "const": "spend_spike"
+              },
+              {
+                "default": true,
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "maximum": 100000,
+                "minimum": 110,
+                "type": "integer"
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                  },
+                  {
+                    "maxLength": 15,
+                    "pattern": "^[1-9][0-9]{0,14}$"
+                  }
+                ],
+                "description": "Positive integer micro-USD string of at most 15 digits (the handler also tolerates leading zeros; clients should send the canonical form)."
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "default": false,
+                "type": "boolean"
+              },
+              {
+                "default": false,
+                "type": "boolean"
+              },
+              {
+                "default": [],
+                "items": {
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "type": "array"
+              }
+            ],
+            "type": "array"
+          },
+          {
+            "description": "The same rule in serde's positional form: Error rate over a window.",
+            "items": false,
+            "maxItems": 19,
+            "minItems": 16,
+            "prefixItems": [
+              {
+                "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "const": "error_rate"
+              },
+              {
+                "default": true,
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "maximum": 1440,
+                "minimum": 5,
+                "type": "integer"
+              },
+              {
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "maximum": 100000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "default": false,
+                "type": "boolean"
+              },
+              {
+                "default": false,
+                "type": "boolean"
+              },
+              {
+                "default": [],
+                "items": {
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "type": "array"
+              }
+            ],
+            "type": "array"
+          },
+          {
+            "description": "The same rule in serde's positional form: A batch failed or expired; no parameters.",
+            "items": false,
+            "maxItems": 19,
+            "minItems": 16,
+            "prefixItems": [
+              {
+                "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "const": "batch_failed"
+              },
+              {
+                "default": true,
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "default": false,
+                "type": "boolean"
+              },
+              {
+                "default": false,
+                "type": "boolean"
+              },
+              {
+                "default": [],
+                "items": {
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "type": "array"
+              }
+            ],
+            "type": "array"
+          },
+          {
+            "description": "The same rule in serde's positional form: A batch made no progress for the window.",
+            "items": false,
+            "maxItems": 19,
+            "minItems": 16,
+            "prefixItems": [
+              {
+                "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "const": "batch_stalled"
+              },
+              {
+                "default": true,
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "maximum": 1440,
+                "minimum": 5,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "default": false,
+                "type": "boolean"
+              },
+              {
+                "default": false,
+                "type": "boolean"
+              },
+              {
+                "default": [],
+                "items": {
+                  "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "type": "string"
+                },
+                "maxItems": 10,
                 "type": "array"
               }
             ],
@@ -9684,7 +10879,8 @@
               "data": {
                 "items": false,
                 "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "x-omg-may-be-empty": "A personal workspace has no configurable rules (alerts.rs lists none and returns its fixed built-in budget alert in `builtin`), so this array is empty by definition in every response."
               },
               "writable": {
                 "const": false
@@ -12538,7 +13734,91 @@
         "$ref": "#/components/schemas/SettingsEmailSaved"
       },
       "put_api_v1_platform_settings_generalRequest": {
-        "$ref": "#/components/schemas/SettingsGeneralInput"
+        "description": "Closed serde struct object or positional array [display_name, support_url, logo_url, human_key_max_lifetime_days]. Carries the handler's value rules.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "display_name": {
+                "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": "string"
+              },
+              "human_key_max_lifetime_days": {
+                "maximum": 365,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "logo_url": {
+                "description": "Blank means none; otherwise an absolute https URL without credentials or fragment. The handler limits the trimmed value to 2048 BYTES (settings.rs https_url: value.len()); maxLength counts characters, so a multibyte URL within 2048 characters can still be refused. The handler trims before applying the cap (text() then value.len()), so a 2048-byte URL padded with surrounding whitespace is accepted, while maxLength counts the padding and this schema refuses it. The pattern models the host as dot-separated labels of at most 63 characters, because the handler parses the URL with IDNA and refuses a longer label; it does not model the rest of that conversion, so a non-ASCII label of up to 63 characters can still be refused.",
+                "maxLength": 2048,
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*([Hh][Tt][Tt][Pp][Ss]://[^./@?#\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]{1,63}(\\.[^./@?#\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]{1,63})*([/?][^#\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]*)?)?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-omg-max-bytes": 2048,
+                "x-omg-unsendable-boundary": "The handler parses the URL (reqwest::Url, IDNA) after the 2048-byte cap and refuses an over-long non-ASCII host label, so no multibyte value of exactly the limit (or of maxLength characters) is a URL the handler accepts, and the harness cannot build a meaningful multibyte pair; the ASCII byte boundary (a path padded to exactly 2048 and 2049 bytes) is sent and agreed by both sides."
+              },
+              "support_url": {
+                "description": "Blank means none; otherwise an absolute https URL without credentials or fragment. The handler limits the trimmed value to 2048 BYTES (settings.rs https_url: value.len()); maxLength counts characters, so a multibyte URL within 2048 characters can still be refused. The handler trims before applying the cap (text() then value.len()), so a 2048-byte URL padded with surrounding whitespace is accepted, while maxLength counts the padding and this schema refuses it. The pattern models the host as dot-separated labels of at most 63 characters, because the handler parses the URL with IDNA and refuses a longer label; it does not model the rest of that conversion, so a non-ASCII label of up to 63 characters can still be refused.",
+                "maxLength": 2048,
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*([Hh][Tt][Tt][Pp][Ss]://[^./@?#\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]{1,63}(\\.[^./@?#\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]{1,63})*([/?][^#\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]*)?)?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-omg-max-bytes": 2048,
+                "x-omg-unsendable-boundary": "The handler parses the URL (reqwest::Url, IDNA) after the 2048-byte cap and refuses an over-long non-ASCII host label, so no multibyte value of exactly the limit (or of maxLength characters) is a URL the handler accepts, and the harness cannot build a meaningful multibyte pair; the ASCII byte boundary (a path padded to exactly 2048 and 2049 bytes) is sent and agreed by both sides."
+              }
+            },
+            "required": [
+              "display_name",
+              "human_key_max_lifetime_days"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 4,
+            "minItems": 4,
+            "prefixItems": [
+              {
+                "description": "Trimmed, no control characters, and at most 120 BYTES in the handler (mod.rs valid_name: s.len()); the pattern counts characters, so a multibyte name of 120 characters or fewer can still be refused.",
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]([^\\u0000-\\u001f\\u007f-\\u009f]{0,118}[^\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000])?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "description": "Blank means none; otherwise an absolute https URL without credentials or fragment. The handler limits the trimmed value to 2048 BYTES (settings.rs https_url: value.len()); maxLength counts characters, so a multibyte URL within 2048 characters can still be refused. The handler trims before applying the cap (text() then value.len()), so a 2048-byte URL padded with surrounding whitespace is accepted, while maxLength counts the padding and this schema refuses it. The pattern models the host as dot-separated labels of at most 63 characters, because the handler parses the URL with IDNA and refuses a longer label; it does not model the rest of that conversion, so a non-ASCII label of up to 63 characters can still be refused.",
+                "maxLength": 2048,
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*([Hh][Tt][Tt][Pp][Ss]://[^./@?#\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]{1,63}(\\.[^./@?#\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]{1,63})*([/?][^#\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]*)?)?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-omg-max-bytes": 2048,
+                "x-omg-unsendable-boundary": "The handler parses the URL (reqwest::Url, IDNA) after the 2048-byte cap and refuses an over-long non-ASCII host label, so no multibyte value of exactly the limit (or of maxLength characters) is a URL the handler accepts, and the harness cannot build a meaningful multibyte pair; the ASCII byte boundary (a path padded to exactly 2048 and 2049 bytes) is sent and agreed by both sides."
+              },
+              {
+                "description": "Blank means none; otherwise an absolute https URL without credentials or fragment. The handler limits the trimmed value to 2048 BYTES (settings.rs https_url: value.len()); maxLength counts characters, so a multibyte URL within 2048 characters can still be refused. The handler trims before applying the cap (text() then value.len()), so a 2048-byte URL padded with surrounding whitespace is accepted, while maxLength counts the padding and this schema refuses it. The pattern models the host as dot-separated labels of at most 63 characters, because the handler parses the URL with IDNA and refuses a longer label; it does not model the rest of that conversion, so a non-ASCII label of up to 63 characters can still be refused.",
+                "maxLength": 2048,
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*([Hh][Tt][Tt][Pp][Ss]://[^./@?#\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]{1,63}(\\.[^./@?#\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]{1,63})*([/?][^#\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]*)?)?[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "x-omg-max-bytes": 2048,
+                "x-omg-unsendable-boundary": "The handler parses the URL (reqwest::Url, IDNA) after the 2048-byte cap and refuses an over-long non-ASCII host label, so no multibyte value of exactly the limit (or of maxLength characters) is a URL the handler accepts, and the harness cannot build a meaningful multibyte pair; the ASCII byte boundary (a path padded to exactly 2048 and 2049 bytes) is sent and agreed by both sides."
+              },
+              {
+                "maximum": 365,
+                "minimum": 1,
+                "type": "integer"
+              }
+            ],
+            "type": "array"
+          }
+        ]
       },
       "put_api_v1_platform_settings_generalResponse": {
         "$ref": "#/components/schemas/SettingsGeneral"

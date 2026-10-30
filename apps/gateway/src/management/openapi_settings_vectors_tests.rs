@@ -5,12 +5,153 @@
 //! rule, a created destination, a rate-limited test) are fresh per vector set.
 use super::*;
 use openapi::http_vectors::{
-    Probe, binary_accepts, binary_body_vectors_http, body_vectors_http, query_vectors_fixed,
+    Probe, binary_accepts, binary_body_vectors_http, body_vectors_extended, body_vectors_http,
+    query_vectors_fixed,
 };
 
 const WORKSPACES: &str = "/api/v1/workspaces";
 const HOOK_URL: &str = "https://receiver.example.test/ingest";
 const WEBHOOKS: &str = "/api/v1/platform/alerts/webhooks";
+
+/// Boundary candidates `(pointer, value)` for the string patterns whose length the
+/// schema cannot state (an unbounded whitespace pad around a trimmed value, an
+/// alternation). Each pair straddles the boundary: a value the schema accepts and one
+/// it refuses, one character apart. Only the pointers a valid body carries as a string
+/// are used.
+fn carried(valid: &Value, all: Vec<(String, Value)>) -> Vec<(String, Value)> {
+    all.into_iter()
+        .filter(|(pointer, _)| valid.pointer(pointer).is_some_and(Value::is_string))
+        .collect()
+}
+/// A name of exactly `n` characters (120 bytes is the handler's limit for ASCII).
+fn chars(n: usize) -> Value {
+    json!("a".repeat(n))
+}
+fn names(pointer: &'static str) -> Vec<(&'static str, Value)> {
+    vec![(pointer, chars(120)), (pointer, chars(121))]
+}
+fn emails(pointer: &'static str) -> Vec<(&'static str, Value)> {
+    vec![(pointer, json!("a@b.c")), (pointer, json!("a@b.c@"))]
+}
+/// Relay candidates: each pair is one edit apart and straddles the handler's rule.
+fn email_candidates() -> Vec<(&'static str, Value)> {
+    let mut all = vec![
+        ("/host", json!("127.0.0.1")),
+        ("/host", json!("127.0.0.1/")),
+        ("/tls", json!("none")),
+        ("/tls", json!("nonee")),
+        ("/username", json!("u".repeat(256))),
+        ("/username", json!("u".repeat(257))),
+        ("/password_ref", json!("env:CONTRACT_SMTP_PASSWORD")),
+        ("/password_ref", json!("env:CONTRACT_SMTP_PASSWORD!")),
+    ];
+    all.extend(emails("/from_address"));
+    all.extend(names("/from_name"));
+    all
+}
+/// Destination candidates, object and positional form: the label limit, and the one
+/// approved URL against the same URL with a query (which the pattern refuses).
+fn webhook_candidates() -> Vec<(&'static str, Value)> {
+    let mut all = Vec::new();
+    for (label, url) in [("/label", "/url"), ("/0", "/1")] {
+        all.extend(names(label));
+        all.push((url, json!(HOOK_URL)));
+        all.push((url, json!(format!("{HOOK_URL}?"))));
+    }
+    all
+}
+/// The fields of a rule body in the handler's declaration order (serde's positional form).
+const RULE_FIELDS: [&str; 19] = [
+    "name",
+    "kind",
+    "enabled",
+    "budget_layers",
+    "thresholds",
+    "spike_factor_percent",
+    "min_spend_microusd",
+    "window_minutes",
+    "error_rate_percent",
+    "min_requests",
+    "consecutive_failures",
+    "provider_connection_id",
+    "spend_period",
+    "spend_amount_microusd",
+    "ceiling_requests_per_second",
+    "ceiling_lock_wait_ms",
+    "notify_workspace_admins",
+    "notify_platform_admins",
+    "notify_emails",
+];
+/// Rule candidates: the name limit and the notification address.
+fn rule_candidates() -> Vec<(&'static str, Value)> {
+    let mut all = names("/name");
+    all.extend(emails("/notify_emails/0"));
+    all
+}
+/// The candidates of a body, for the operation's own `body_vectors_extended` run.
+async fn extended(
+    observed: &mut PositiveFixtures,
+    method: &str,
+    template: &str,
+    valid: Value,
+    candidates: Vec<(&'static str, Value)>,
+    send: impl AsyncFn(Value) -> Probe,
+) {
+    let owned = candidates
+        .into_iter()
+        .map(|(pointer, value)| (pointer.to_owned(), value))
+        .collect();
+    walked(observed, method, template, valid, owned, send).await;
+}
+async fn walked(
+    observed: &mut PositiveFixtures,
+    method: &str,
+    template: &str,
+    valid: Value,
+    candidates: Vec<(String, Value)>,
+    send: impl AsyncFn(Value) -> Probe,
+) {
+    let candidates = carried(&valid, candidates);
+    let borrowed: Vec<(&str, Value)> = candidates
+        .iter()
+        .map(|(pointer, value)| (pointer.as_str(), value.clone()))
+        .collect();
+    body_vectors_extended(observed, method, template, valid, &[], &borrowed, send).await;
+}
+/// The same candidates addressed in serde's positional form: `/field/rest` becomes
+/// `/<index of field>/rest`.
+fn indexed(fields: &[&str], candidates: &[(&'static str, Value)]) -> Vec<(String, Value)> {
+    candidates
+        .iter()
+        .filter_map(|(pointer, value)| {
+            let rest = pointer.strip_prefix('/')?;
+            let (head, tail) = rest.split_once('/').unwrap_or((rest, ""));
+            let index = fields.iter().position(|field| *field == head)?;
+            let at = if tail.is_empty() {
+                format!("/{index}")
+            } else {
+                format!("/{index}/{tail}")
+            };
+            Some((at, value.clone()))
+        })
+        .collect()
+}
+/// A valid object body in both wire forms: the object itself and serde's positional
+/// array of its fields in declaration order.
+async fn both(
+    observed: &mut PositiveFixtures,
+    method: &str,
+    template: &str,
+    valid: Value,
+    fields: &[&str],
+    candidates: Vec<(&'static str, Value)>,
+    send: impl AsyncFn(Value) -> Probe,
+) {
+    let array = json!(fields.iter().map(|f| valid[*f].clone()).collect::<Vec<_>>());
+    let positional = indexed(fields, &candidates);
+    extended(observed, method, template, valid, candidates, &send).await;
+    walked(observed, method, template, array, positional, &send).await;
+}
 
 async fn fresh_admin(pool: &PgPool, name: &str) -> Browser {
     let principal = user(pool, name, "admin").await;
@@ -60,29 +201,65 @@ pub(super) async fn settings(
 ) {
     let admin = fresh_admin(pool, "vector-settings").await;
     let general = format!("{SETTINGS}/general");
-    body_vectors_http(
+    both(
         observed,
         "PUT",
         &general,
         json!({"display_name":"Contract Gateway","support_url":"https://support.example.test","logo_url":"https://cdn.example.test/logo.png","human_key_max_lifetime_days":30}),
+        &["display_name","support_url","logo_url","human_key_max_lifetime_days"],
+        names("/display_name"),
         async |body| json(g, &admin, "PUT", &general, body).await,
     )
     .await;
     let privacy = format!("{SETTINGS}/privacy");
-    body_vectors_http(
+    both(
         observed,
         "PUT",
         &privacy,
         json!({"openrouter_data_collection":"deny","request_log_retention_days":90}),
+        &["openrouter_data_collection", "request_log_retention_days"],
+        Vec::new(),
+        async |body| json(g, &admin, "PUT", &privacy, body).await,
+    )
+    .await;
+    // Retention left unset: the other alternative of the nullable field.
+    both(
+        observed,
+        "PUT",
+        &privacy,
+        json!({"openrouter_data_collection":"allow","request_log_retention_days":null}),
+        &["openrouter_data_collection", "request_log_retention_days"],
+        Vec::new(),
         async |body| json(g, &admin, "PUT", &privacy, body).await,
     )
     .await;
     let storage = format!("{SETTINGS}/storage");
-    body_vectors_http(
+    both(
         observed,
         "PUT",
         &storage,
         json!({"batch":{"enabled":true,"retention_days":30},"video":{"enabled":false,"retention_days":30},"user_files":{"enabled":false,"retention_days":30},"export":{"retention_days":7}}),
+        &["batch", "video", "user_files", "export"],
+        Vec::new(),
+        async |body| json(g, &admin, "PUT", &storage, body).await,
+    )
+    .await;
+    // The nested groups in serde's positional form inside an object, and all positional.
+    walked(
+        observed,
+        "PUT",
+        &storage,
+        json!({"batch":[true, 30],"video":[false, 30],"user_files":[false, 30],"export":[7]}),
+        Vec::new(),
+        async |body| json(g, &admin, "PUT", &storage, body).await,
+    )
+    .await;
+    walked(
+        observed,
+        "PUT",
+        &storage,
+        json!([[true, 30], [false, 30], [false, 30], [7]]),
+        Vec::new(),
         async |body| json(g, &admin, "PUT", &storage, body).await,
     )
     .await;
@@ -91,10 +268,27 @@ pub(super) async fn settings(
         json!({"host":"127.0.0.1","port":mail_port,"tls":"none","username":"smtp-user","password_ref":"env:CONTRACT_SMTP_PASSWORD","from_address":"gateway@example.test","from_name":"Contract Gateway"}),
         json!({"host":"127.0.0.1","port":mail_port,"tls":"none","username":null,"password_ref":null,"from_address":"gateway@example.test","from_name":null}),
         json!({"host":null,"port":null,"tls":null,"username":null,"password_ref":null,"from_address":null,"from_name":null}),
+        // The same two relay shapes with the other sender-name alternative.
+        json!({"host":"127.0.0.1","port":mail_port,"tls":"none","username":null,"password_ref":null,"from_address":"gateway@example.test","from_name":"Contract Gateway"}),
+        json!({"host":"127.0.0.1","port":mail_port,"tls":"none","username":"smtp-user","password_ref":"env:CONTRACT_SMTP_PASSWORD","from_address":"gateway@example.test","from_name":null}),
     ] {
-        body_vectors_http(observed, "PUT", &email, valid, async |body| {
-            json(g, &admin, "PUT", &email, body).await
-        })
+        both(
+            observed,
+            "PUT",
+            &email,
+            valid,
+            &[
+                "host",
+                "port",
+                "tls",
+                "username",
+                "password_ref",
+                "from_address",
+                "from_name",
+            ],
+            email_candidates(),
+            async |body| json(g, &admin, "PUT", &email, body).await,
+        )
         .await;
     }
 }
@@ -173,9 +367,14 @@ pub(super) async fn webhooks(g: &Gateway, pool: &PgPool, observed: &mut Positive
         json!({"label":"Vector receiver","url":HOOK_URL,"current_secret_ref":"env:HOOK_CURRENT"}),
         json!(["Vector array", HOOK_URL, "env:HOOK_CURRENT"]),
     ] {
-        body_vectors_http(observed, "POST", WEBHOOKS, valid, async |body| {
-            json(g, &admin, "POST", WEBHOOKS, body).await
-        })
+        extended(
+            observed,
+            "POST",
+            WEBHOOKS,
+            valid,
+            webhook_candidates(),
+            async |body| json(g, &admin, "POST", WEBHOOKS, body).await,
+        )
         .await;
         forget_webhooks(g, pool, &admin, &keep).await;
     }
@@ -196,20 +395,34 @@ pub(super) async fn webhooks(g: &Gateway, pool: &PgPool, observed: &mut Positive
     let valid = json!({"label":"Renamed","enabled":true,"current_secret_ref":"env:HOOK_CURRENT","previous_secret_ref":"env:HOOK_PREVIOUS","previous_secret_until":until});
     let rotating = g.send(&admin, "PATCH", &path, valid.clone()).await;
     assert!(rotating.status.is_success());
-    body_vectors_http(
-        observed,
-        "PATCH",
-        "/api/v1/platform/alerts/webhooks/{id}",
-        valid,
-        async |body| json(g, &admin, "PATCH", &path, body).await,
-    )
-    .await;
+    let ended = json!({"label":"Renamed","enabled":true,"current_secret_ref":"env:HOOK_CURRENT","previous_secret_ref":null,"previous_secret_until":null});
+    // The rotating destination, then the same destination with the rotation ended
+    // (both fields null): the other alternative of each rotation field.
+    for valid in [valid, ended] {
+        both(
+            observed,
+            "PATCH",
+            "/api/v1/platform/alerts/webhooks/{id}",
+            valid,
+            &[
+                "label",
+                "enabled",
+                "current_secret_ref",
+                "previous_secret_ref",
+                "previous_secret_until",
+            ],
+            names("/label"),
+            async |body| json(g, &admin, "PATCH", &path, body).await,
+        )
+        .await;
+    }
     forget_webhooks(g, pool, &admin, &keep).await;
 }
 
 /// Every explicit field of a rule body (nulls for the ones foreign to its kind), so
 /// the vectors also prove that a foreign field is refused.
 fn full(mut body: Value) -> Value {
+    let object = body.as_object_mut().unwrap();
     for field in [
         "budget_layers",
         "thresholds",
@@ -225,12 +438,34 @@ fn full(mut body: Value) -> Value {
         "ceiling_requests_per_second",
         "ceiling_lock_wait_ms",
     ] {
-        body.as_object_mut()
-            .unwrap()
-            .entry(field)
-            .or_insert(Value::Null);
+        object.entry(field).or_insert(Value::Null);
     }
+    // The defaulted fields, explicit, so each is walked: an admission ceiling
+    // notifies Platform Admins only and lists no addresses.
+    let ceiling = object["kind"] == "admission_ceiling";
+    object.entry("enabled").or_insert(json!(true));
+    object
+        .entry("notify_workspace_admins")
+        .or_insert(json!(false));
+    object
+        .entry("notify_platform_admins")
+        .or_insert(json!(false));
+    object.entry("notify_emails").or_insert(if ceiling {
+        json!([])
+    } else {
+        json!(["ops@example.test"])
+    });
     body
+}
+
+/// Every installation rule shape the fixtures create, plus the two the optional
+/// alternatives need: a provider rule with BOTH an error-rate threshold and a streak,
+/// and an admission ceiling with BOTH a rate and a lock-wait threshold.
+fn platform_bodies(connection: Uuid) -> Vec<Value> {
+    let mut bodies = alerts_states::platform_rules(connection);
+    bodies.push(json!({"name":"Kinds provider both","kind":"provider_failing","window_minutes":20,"error_rate_percent":15,"min_requests":10,"consecutive_failures":3}));
+    bodies.push(json!({"name":"Kinds ceiling both","kind":"admission_ceiling","window_minutes":5,"ceiling_requests_per_second":150,"ceiling_lock_wait_ms":50,"notify_platform_admins":true}));
+    bodies
 }
 
 /// Rule create and update, one valid body per rule kind and shape, in both scopes.
@@ -253,7 +488,7 @@ pub(super) async fn rules(
             "/api/v1/platform/alerts/rules",
             "/api/v1/platform/alerts/rules/{id}",
             admin,
-            alerts_states::platform_rules(connection),
+            platform_bodies(connection),
         ),
         (
             format!("{WORKSPACES}/{team}/alerts/rules"),
@@ -266,17 +501,29 @@ pub(super) async fn rules(
     for (prefix, post, put, actor, bodies) in &scopes {
         for body in bodies {
             let valid = full(body.clone());
-            body_vectors_http(observed, "POST", post, valid.clone(), async |request| {
-                json(g, actor, "POST", prefix, request).await
-            })
+            both(
+                observed,
+                "POST",
+                post,
+                valid.clone(),
+                &RULE_FIELDS,
+                rule_candidates(),
+                async |request| json(g, actor, "POST", prefix, request).await,
+            )
             .await;
             forget_rules(pool, since).await;
             let created = g.send(actor, "POST", prefix, body.clone()).await;
             assert!(created.status.is_success());
             let path = format!("{prefix}/{}", id_of(&created));
-            body_vectors_http(observed, "PUT", put, valid, async |request| {
-                json(g, actor, "PUT", &path, request).await
-            })
+            both(
+                observed,
+                "PUT",
+                put,
+                valid,
+                &RULE_FIELDS,
+                rule_candidates(),
+                async |request| json(g, actor, "PUT", &path, request).await,
+            )
             .await;
             forget_rules(pool, since).await;
         }
