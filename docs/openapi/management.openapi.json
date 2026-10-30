@@ -2329,9 +2329,35 @@
           },
           "details": {
             "$comment": "EVENT_JSON returns alert_events.details verbatim as stored producer-specific JSON; monetary refinements apply on this shared base, and every concrete event variant refines it with the closed schema of its kind (Settings*Details).",
-            "description": "Stored JSON incident payload, not a serde DTO; its fields depend on the kind. Every event variant binds it to the closed Settings*Details schema of that kind, so an identity can never be added silently. Monetary fields remain integer micro-USD strings.",
+            "description": "Stored JSON incident payload, not a serde DTO; its fields depend on the kind. Every event variant binds it to the closed Settings*Details schema of that kind, so an identity can never be added silently. Every *_microusd value is an integer micro-USD string, never null. Each alerts.rs producer field is typed individually: pending_microusd is sum(held - held_unknown) read from budget_totals with no sign guard (migration 0015 has no >= 0 check), so drifted accounting can make it negative and it is signed; used_microusd (an incident needs used to reach a positive threshold of a positive reference), budget_microusd, spend_amount_microusd and min_spend_microusd (validated positive amounts), and current_microusd, baseline_total_microusd and baseline_hourly_microusd (settled ledger sums, CHECK(actual_microusd >= 0)) are unsigned. Any other *_microusd value must still be an integer string (signed form).",
             "patternProperties": {
               "(^|_)microusd$": {
+                "$ref": "#/components/schemas/IdentitySignedDecimal"
+              }
+            },
+            "properties": {
+              "baseline_hourly_microusd": {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              "baseline_total_microusd": {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              "budget_microusd": {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              "current_microusd": {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              "min_spend_microusd": {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              "pending_microusd": {
+                "$ref": "#/components/schemas/IdentitySignedDecimal"
+              },
+              "spend_amount_microusd": {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              "used_microusd": {
                 "$ref": "#/components/schemas/IdentityUnsignedDecimal"
               }
             },
@@ -7679,7 +7705,7 @@
         "description": "alerts.rs spend_conditions: installation-wide spend against the rule's reference amount for its period. The window is null exactly for the lifetime period.",
         "properties": {
           "pending_microusd": {
-            "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+            "$ref": "#/components/schemas/IdentitySignedDecimal"
           },
           "period": {
             "$ref": "#/components/schemas/IdentityPeriod"
@@ -9194,9 +9220,35 @@
           },
           "details": {
             "$comment": "Workspace history rows return alert_events.details verbatim as stored producer-specific JSON; monetary refinements apply on this shared base, and every concrete workspace event variant refines it with the closed schema of its kind (Settings*Details).",
-            "description": "Stored JSON incident payload, not a serde DTO; its fields depend on the kind. Every event variant binds it to the closed Settings*Details schema of that kind, so an identity can never be added silently. Monetary fields remain integer micro-USD strings.",
+            "description": "Stored JSON incident payload, not a serde DTO; its fields depend on the kind. Every event variant binds it to the closed Settings*Details schema of that kind, so an identity can never be added silently. Every *_microusd value is an integer micro-USD string, never null. Each alerts.rs producer field is typed individually: pending_microusd is sum(held - held_unknown) read from budget_totals with no sign guard (migration 0015 has no >= 0 check), so drifted accounting can make it negative and it is signed; used_microusd (an incident needs used to reach a positive threshold of a positive reference), budget_microusd, spend_amount_microusd and min_spend_microusd (validated positive amounts), and current_microusd, baseline_total_microusd and baseline_hourly_microusd (settled ledger sums, CHECK(actual_microusd >= 0)) are unsigned. Any other *_microusd value must still be an integer string (signed form).",
             "patternProperties": {
               "(^|_)microusd$": {
+                "$ref": "#/components/schemas/IdentitySignedDecimal"
+              }
+            },
+            "properties": {
+              "baseline_hourly_microusd": {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              "baseline_total_microusd": {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              "budget_microusd": {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              "current_microusd": {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              "min_spend_microusd": {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              "pending_microusd": {
+                "$ref": "#/components/schemas/IdentitySignedDecimal"
+              },
+              "spend_amount_microusd": {
+                "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+              },
+              "used_microusd": {
                 "$ref": "#/components/schemas/IdentityUnsignedDecimal"
               }
             },
