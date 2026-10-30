@@ -58,6 +58,8 @@ mod key_tests;
 mod legal_holds_tests;
 #[path = "list_search_control_tests.rs"]
 mod list_search_control_tests;
+#[path = "mapping_issuer_control_tests.rs"]
+mod mapping_issuer_control_tests;
 #[path = "me_models_tests.rs"]
 mod me_models_tests;
 #[path = "members/tests.rs"]
