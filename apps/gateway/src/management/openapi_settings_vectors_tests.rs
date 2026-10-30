@@ -925,6 +925,67 @@ pub(super) async fn pinned(g: &Gateway, pool: &PgPool, mail_port: u16) {
             (true, false),
         ),
     ]);
+    // The URL is parsed by `reqwest::Url` (url 2.5.8 host.rs, idna with
+    // `DnsLength::Ignore`), which accepts an ASCII host label of 64 or more
+    // characters; the schema's pattern caps a label at 63, so it refuses it.
+    // Pinned as a documented divergence, for both URL fields.
+    let long_label = format!("https://{}.example.test", "a".repeat(64));
+    // Non-ASCII in the PATH (`https://support.example.test/` is 29 bytes). The
+    // handler stores the NORMALISED URL (`url.to_string()`, each two-byte character
+    // percent-encoded to six), and the column CHECK limits that form to 2048
+    // characters: a value within the 2048-byte cap whose stored form is longer
+    // passes the input checks and is refused by the store with 409 (not pinnable
+    // here: 409 is undocumented for this operation). So the byte cap is pinned one
+    // byte over (1009 two-byte characters and `aa`: 2049 bytes, refused by the
+    // handler's byte cap, accepted by the schema, which counts characters), and
+    // the accepted side at the largest stored form: 336 two-byte characters and
+    // `aaa` store as exactly 2048 characters.
+    let multibyte_path = |count: usize, tail: &str| {
+        format!(
+            "https://support.example.test/{}{tail}",
+            "\u{e9}".repeat(count)
+        )
+    };
+    assert_eq!(multibyte_path(1009, "aa").len(), 2049);
+    assert_eq!(
+        reqwest::Url::parse(&multibyte_path(336, "aaa"))
+            .unwrap()
+            .as_str()
+            .len(),
+        2048
+    );
+    rows.extend([
+        (
+            "support URL with a 64-character host label",
+            with("support_url", json!(long_label.clone())),
+            (true, false),
+        ),
+        (
+            "logo URL with a 64-character host label",
+            with("logo_url", json!(long_label)),
+            (true, false),
+        ),
+        (
+            "support URL with non-ASCII in the path stored as 2048 characters",
+            with("support_url", json!(multibyte_path(336, "aaa"))),
+            (true, true),
+        ),
+        (
+            "support URL of 2049 bytes with non-ASCII in the path",
+            with("support_url", json!(multibyte_path(1009, "aa"))),
+            (false, true),
+        ),
+        (
+            "logo URL with non-ASCII in the path stored as 2048 characters",
+            with("logo_url", json!(multibyte_path(336, "aaa"))),
+            (true, true),
+        ),
+        (
+            "logo URL of 2049 bytes with non-ASCII in the path",
+            with("logo_url", json!(multibyte_path(1009, "aa"))),
+            (false, true),
+        ),
+    ]);
     for (label, body, verdicts) in rows {
         pin(
             g,
@@ -1049,6 +1110,13 @@ pub(super) async fn pinned(g: &Gateway, pool: &PgPool, mail_port: u16) {
             edit(&relay, "from_address", json!(long_address)),
             (false, true),
         ),
+        // An IP-literal domain: `email_valid` and lettre's `check_domain_ascii`
+        // accept `[127.0.0.1]`, while the domain class excludes `[`, `]` and `:`.
+        (
+            "sender address with an IP-literal domain",
+            edit(&relay, "from_address", json!("a@[127.0.0.1]")),
+            (true, false),
+        ),
     ];
     for (label, body, verdicts) in rows {
         pin(
@@ -1084,6 +1152,12 @@ pub(super) async fn pinned(g: &Gateway, pool: &PgPool, mail_port: u16) {
             "five thresholds with repeats",
             edit(&rule, "thresholds", json!([10, 10, 20, 30, 40, 50, 50])),
             (true, true),
+        ),
+        // The same IP-literal domain as the sender address above.
+        (
+            "notify address with an IP-literal domain",
+            edit(&rule, "notify_emails", json!(["a@[127.0.0.1]"])),
+            (true, false),
         ),
     ];
     let since: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
