@@ -42,8 +42,30 @@ fn sample(document: &Value, schema: &Value) -> Value {
                 .as_str()
                 .is_some_and(|p| p.contains("branding/logo")) =>
                 "/api/v1/branding/logo?v=000000000000".into(),
+            _ if schema["pattern"]
+                .as_str()
+                .is_some_and(|p| p.starts_with("^batch_")) =>
+                format!("batch_{}", "0".repeat(32)),
+            _ if schema["pattern"]
+                .as_str()
+                .is_some_and(|p| p.starts_with("^file-")) =>
+                format!("file-{}", "0".repeat(32)),
+            _ if schema["pattern"].as_str() == Some("^[0-9a-f]{32}$") => "0".repeat(32),
             _ if schema["pattern"].as_str() == Some("^[0-9a-f]{64}$") => "0".repeat(64),
-            _ if schema.get("pattern").is_some() => "0".into(),
+            // The first plain candidate the pattern accepts (a counter, a
+            // positive integer or a two-decimal rate).
+            _ if schema.get("pattern").is_some() => {
+                let pattern = schema["pattern"].clone();
+                let accepts = |candidate: &str| {
+                    super::validation::compile_schema(&json!({"type":"string","pattern":pattern}))
+                        .is_ok_and(|v| v.is_valid(&json!(candidate)))
+                };
+                ["0", "1", "0.00", "1.00"]
+                    .into_iter()
+                    .find(|candidate| accepts(candidate))
+                    .unwrap_or("0")
+                    .into()
+            }
             _ => "fixture".into(),
         }),
         _ => json!({}), // conjunctive refinement or the reviewed stored JSON field
@@ -240,8 +262,14 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
             let method = method.to_ascii_uppercase();
             operations += 1;
             let mut h = HeaderMap::new();
+            let success = if op["responses"].get("201").is_some() {
+                "201"
+            } else {
+                "200"
+            };
+            let success_status = StatusCode::from_bytes(success.as_bytes()).unwrap();
             if let Some(schema) =
-                op["responses"]["200"]["content"]["application/json"].get("schema")
+                op["responses"][success]["content"]["application/json"].get("schema")
             {
                 json_operations += 1;
                 h.insert("content-type", "application/json".parse().unwrap());
@@ -267,7 +295,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                     &document,
                     &method,
                     path,
-                    StatusCode::OK,
+                    success_status,
                     &h,
                     &encode(&valid),
                 )
@@ -276,8 +304,10 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                 loop {
                     if let Some(reference) = body_schema["$ref"].as_str() {
                         body_schema = document.pointer(&reference[1..]).unwrap();
-                    } else if let Some(branches) = body_schema["oneOf"].as_array() {
-                        body_schema = &branches[0];
+                    } else if let Some(branch) =
+                        body_schema["oneOf"].as_array().and_then(|a| a.first())
+                    {
+                        body_schema = branch;
                     } else {
                         break;
                     }
@@ -299,7 +329,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                             &document,
                             &method,
                             path,
-                            StatusCode::OK,
+                            success_status,
                             &h,
                             &encode(&corrupt)
                         )
@@ -319,7 +349,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                             &document,
                             &method,
                             path,
-                            StatusCode::OK,
+                            success_status,
                             &h,
                             &encode(&corrupt)
                         )
@@ -327,6 +357,66 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                         "accepted {label}: {method} {path}"
                     );
                 }
+            } else if op["responses"]["200"]["content"]
+                .get("application/octet-stream")
+                .is_some()
+            {
+                // Downloads are deliberately opaque, including files that happen
+                // to contain JSON. Assert media/header controls, never invent a
+                // restriction on the user's file contents.
+                for (name, value) in [
+                    ("content-type", "application/octet-stream"),
+                    ("content-length", "7"),
+                    ("content-disposition", "attachment; filename=\"file\""),
+                    ("x-content-type-options", "nosniff"),
+                    ("cache-control", "no-store"),
+                ] {
+                    h.insert(
+                        axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                        value.parse().unwrap(),
+                    );
+                }
+                validate(&document, &method, path, StatusCode::OK, &h, b"opaque!").unwrap();
+                for name in [
+                    "content-length",
+                    "content-disposition",
+                    "x-content-type-options",
+                ] {
+                    let mut absent = h.clone();
+                    absent.remove(name);
+                    assert!(
+                        validate(
+                            &document,
+                            &method,
+                            path,
+                            StatusCode::OK,
+                            &absent,
+                            b"opaque!"
+                        )
+                        .is_err()
+                    );
+                    let mut wrong = h.clone();
+                    wrong.insert(
+                        axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                        "false".parse().unwrap(),
+                    );
+                    assert!(
+                        validate(&document, &method, path, StatusCode::OK, &wrong, b"opaque!")
+                            .is_err()
+                    );
+                }
+                h.insert("content-type", "application/json".parse().unwrap());
+                assert!(
+                    validate(
+                        &document,
+                        &method,
+                        path,
+                        StatusCode::OK,
+                        &h,
+                        b"{\"plaintext_inference_token\":\"must-not-leak\"}"
+                    )
+                    .is_err()
+                );
             } else {
                 // These operations have no JSON representation: remove a
                 // required wire header, corrupt its type/format, and inject
@@ -468,7 +558,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
             }
         }
     }
-    assert_eq!((operations, json_operations), (76, 72));
+    assert_eq!((operations, json_operations), (119, 114));
 }
 
 #[test]
@@ -483,4 +573,28 @@ fn management_openapi_review_only_immutable_artifact_validators_are_cached() {
     assert!(!std::sync::Arc::ptr_eq(&a, &fresh));
     assert!(fresh.is_valid(&json!("mutated")));
     assert!(!a.is_valid(&json!("mutated")));
+}
+
+/// The sampler's positive control is only as good as its candidates: the
+/// patterns the completed responses use are satisfied by a sampled value, and a
+/// pattern no candidate satisfies falls back to "0" and fails the control, so
+/// an unsatisfiable sample is never mistaken for a valid one.
+#[test]
+fn management_openapi_sampler_control_for_pattern_strings() {
+    let document = json!({});
+    for pattern in ["^[1-9][0-9]*$", "^(0|[1-9][0-9]*)\\.[0-9]{2}$"] {
+        let schema = json!({"type":"string","pattern":pattern});
+        let sampled = sample(&document, &schema);
+        assert!(
+            validate_value(&document, &schema, &sampled).is_ok(),
+            "the sample for pattern {pattern} is not accepted by it"
+        );
+    }
+    let schema = json!({"type":"string","pattern":"^[a-z]+$"});
+    let sampled = sample(&document, &schema);
+    assert_eq!(sampled, json!("0"), "the fallback sample changed");
+    assert!(
+        validate_value(&document, &schema, &sampled).is_err(),
+        "an unsatisfiable pattern passed the positive control"
+    );
 }

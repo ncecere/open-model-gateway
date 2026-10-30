@@ -54,6 +54,61 @@ pub(crate) const SEMANTIC_REFINEMENTS: &[(&str, &str, &str, &[&str])] = &[
         "exactly one of all=true or a non-empty ids array of at most 200",
         &["/ids", "/all"],
     ),
+    (
+        "POST",
+        "/api/v1/platform/legal-holds",
+        "exactly one of user_id or workspace_id is a UUID; the reference is a short code of at most 64 characters",
+        &["/user_id", "/workspace_id", "/reference"],
+    ),
+    (
+        "POST",
+        "/api/v1/platform/admin-tokens",
+        "name 1 to 120 characters, one to five distinct known scopes, 1 to 90 days, an allowlist of 1 to 32 distinct networks",
+        &["/name", "/scopes", "/expires_in_days", "/ip_allowlist"],
+    ),
+    (
+        "POST",
+        "/api/v1/workspaces/{ws}/keys",
+        "name, 1 to 365 days, positive rate limits within 32 bits, at most four distinct budget periods with positive amounts",
+        &[
+            "/name",
+            "/expires_in_days",
+            "/requests_per_minute",
+            "/tokens_per_minute",
+            "/concurrent_requests",
+            "/concurrent_jobs",
+            "/budgets",
+        ],
+    ),
+    (
+        "PUT",
+        "/api/v1/workspaces/{ws}/keys/{key}/policy",
+        "positive 32-bit limits; no storage or issuance quota on a key; either budgets or the deprecated single budget",
+        &[
+            "/requests_per_minute",
+            "/tokens_per_minute",
+            "/concurrent_requests",
+            "/concurrent_jobs",
+            "/storage_bytes",
+            "/key_issuances_per_holder",
+            "/key_issuances_per_workspace",
+            "/monthly_budget_microusd",
+            "/budget_period",
+            "/budgets",
+        ],
+    ),
+    (
+        "POST",
+        "/api/v1/workspaces/{ws}/keys/{key}/rotate",
+        "expires_in_days is 1 to 365",
+        &["/expires_in_days"],
+    ),
+    (
+        "POST",
+        "/api/v1/workspaces/{ws}/service-accounts",
+        "the name is 1 to 120 bytes of printable text that is not all whitespace",
+        &["/name"],
+    ),
 ];
 
 /// May the contract's verdict differ from serde's? Equal always passes; a

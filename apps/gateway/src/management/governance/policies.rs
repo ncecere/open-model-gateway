@@ -185,6 +185,58 @@ fn management_openapi_slice2_policy_request_vectors() {
         // The nested budget item is walked by the HTTP body vectors of this operation.
     }
 }
+#[cfg(test)]
+#[test]
+fn management_openapi_slice6_key_policy_request_vectors() {
+    // `monthly_budget_microusd` is a pattern-constrained money string; the generic
+    // serde probe sends the arbitrary string "wrong", which this DTO deserializes
+    // (the handler rejects it later with 400) but the schema, by design, refuses.
+    // It is therefore probed explicitly below: omitted, null, and canonical.
+    let valid = json!({"requests_per_minute":null,"tokens_per_minute":30,"concurrent_requests":2,"concurrent_jobs":null,"storage_bytes":null,"key_issuances_per_holder":null,"key_issuances_per_workspace":null,"budgets":[{"period":"month","amount_microusd":"9007199254740993"}]});
+    super::super::openapi::requests::vectors::<Policy>(
+        "PUT",
+        "/api/v1/workspaces/{ws}/keys/{key}/policy",
+        valid.clone(),
+    );
+    let document = super::super::openapi::responses::artifact();
+    let schema = &document["paths"]["/api/v1/workspaces/{ws}/keys/{key}/policy"]["put"]["requestBody"]
+        ["content"]["application/json"]["schema"];
+    for (label, monthly, expected_present) in [
+        ("omitted", None, None),
+        ("explicit null", Some(json!(null)), Some(None)),
+        (
+            "canonical amount",
+            Some(json!("5")),
+            Some(Some("5".to_owned())),
+        ),
+    ] {
+        let mut body = valid.clone();
+        body.as_object_mut().unwrap().remove("budgets");
+        if let Some(monthly) = monthly {
+            body["monthly_budget_microusd"] = monthly;
+        }
+        let parsed = serde_json::from_value::<Policy>(body.clone()).unwrap();
+        assert_eq!(parsed.monthly_budget_microusd, expected_present, "{label}");
+        let accepted =
+            super::super::openapi::responses::validate_value(document, schema, &body).is_ok();
+        // Neither `budgets` nor `monthly_budget_microusd` is 400 in `Policy::limits`
+        // (`_ => invalid()`): a reviewed refinement stricter than serde.
+        assert_eq!(
+            accepted,
+            expected_present.is_some(),
+            "{label} monthly_budget_microusd"
+        );
+    }
+    for bad in ["05", "-1", "1.5", "wrong", ""] {
+        let mut body = valid.clone();
+        body.as_object_mut().unwrap().remove("budgets");
+        body["monthly_budget_microusd"] = json!(bad);
+        assert!(
+            super::super::openapi::responses::validate_value(document, schema, &body).is_err(),
+            "schema accepts a non-canonical money string"
+        );
+    }
+}
 
 fn present<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
 where
