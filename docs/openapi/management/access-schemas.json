@@ -2989,7 +2989,7 @@
               "items": {
                 "$ref": "#/components/schemas/IdentityUuid"
               },
-              "description": "At most 200 distinct catalog ids (duplicates collapse)."
+              "description": "At most 200 catalog ids, counted before duplicates are removed (ids_valid: len() > 200 is refused, then sort and dedup)."
             }
           },
           "required": [
@@ -3010,7 +3010,7 @@
               "items": {
                 "$ref": "#/components/schemas/IdentityUuid"
               },
-              "description": "At most 200 distinct catalog ids (duplicates collapse)."
+              "description": "At most 200 catalog ids, counted before duplicates are removed (ids_valid: len() > 200 is refused, then sort and dedup)."
             }
           ],
           "minItems": 2,
@@ -3523,7 +3523,7 @@
               "items": {
                 "$ref": "#/components/schemas/IdentityUuid"
               },
-              "description": "At most 200 distinct catalog ids (duplicates collapse)."
+              "description": "At most 200 catalog ids, counted before duplicates are removed (ids_valid: len() > 200 is refused, then sort and dedup)."
             }
           },
           "required": [
@@ -3540,7 +3540,7 @@
               "items": {
                 "$ref": "#/components/schemas/IdentityUuid"
               },
-              "description": "At most 200 distinct catalog ids (duplicates collapse)."
+              "description": "At most 200 catalog ids, counted before duplicates are removed (ids_valid: len() > 200 is refused, then sort and dedup)."
             }
           ],
           "minItems": 1,
@@ -4091,7 +4091,7 @@
           "items": false
         }
       ],
-      "description": "A complete mapping (create, and the preview of a not-yet-saved mapping): target_kind platform requires platform_role and no workspace fields; target_kind workspace requires workspace_id and workspace_role (admin or member) and no platform_role (directory.rs mapping_valid, the oidc_group_mappings CHECK). The positional array form does not repeat the cross-field rule. The preview handler refuses a null or missing required value exactly like create."
+      "description": "A complete mapping (create, and the preview of a not-yet-saved mapping): target_kind platform requires platform_role and no workspace fields; target_kind workspace requires workspace_id and workspace_role (admin or member) and no platform_role (directory.rs mapping_valid, the oidc_group_mappings CHECK). The positional array form carries the same cross-field rule as a platform tuple and a workspace tuple, split by target_kind at position 2. The preview handler refuses a null or missing required value exactly like create."
     },
     "post_api_v1_platform_oidc_group_mappingsResponse": {
       "$ref": "#/components/schemas/AccessIdentifier"
@@ -4268,7 +4268,7 @@
           "items": false
         }
       ],
-      "description": "A complete mapping (create, and the preview of a not-yet-saved mapping): target_kind platform requires platform_role and no workspace fields; target_kind workspace requires workspace_id and workspace_role (admin or member) and no platform_role (directory.rs mapping_valid, the oidc_group_mappings CHECK). The positional array form does not repeat the cross-field rule. The preview handler refuses a null or missing required value exactly like create."
+      "description": "A complete mapping (create, and the preview of a not-yet-saved mapping): target_kind platform requires platform_role and no workspace fields; target_kind workspace requires workspace_id and workspace_role (admin or member) and no platform_role (directory.rs mapping_valid, the oidc_group_mappings CHECK). The positional array form carries the same cross-field rule as a platform tuple and a workspace tuple, split by target_kind at position 2. The preview handler refuses a null or missing required value exactly like create."
     },
     "post_api_v1_platform_oidc_group_mappings_previewResponse": {
       "$ref": "#/components/schemas/AccessMappingPreview"
