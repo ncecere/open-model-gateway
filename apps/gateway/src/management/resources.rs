@@ -681,7 +681,13 @@ pub(super) fn search(q: Option<&str>) -> Result<Option<&str>, ApiError> {
     if q.is_some_and(|s| s.chars().count() > 200) {
         return Err(invalid());
     }
-    Ok(q.map(str::trim).filter(|s| !s.is_empty()))
+    let q = q.map(str::trim).filter(|s| !s.is_empty());
+    // Control characters (NUL above all) never reach PostgreSQL; surrounding
+    // whitespace is trimmed first, so a blank query still means "no filter".
+    if q.is_some_and(|s| s.chars().any(char::is_control)) {
+        return Err(invalid());
+    }
+    Ok(q)
 }
 async fn collection(s: &Store, u: &impl Actor, p: CatalogQuery, query: &str) -> ApiResult {
     let mut tx = catalog_tx(s, u, false).await?;

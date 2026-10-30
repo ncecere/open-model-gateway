@@ -2,7 +2,7 @@
 
 Reports answer “what configured-rate activity can I see for this UTC period?” They are live estimates, not provider invoices, complete billing guarantees or frozen financial statements. Unknown charges and conservative holds are separate from settled cost.
 
-For the separate browser-session API that imports Anthropic Cost Report JSON and freezes aggregate comparisons, see [provider-reported cost reconciliation](provider-cost-reconciliation.md). It does not rewrite these estimates or establish a verified invoice.
+For the separate **Admin → Usage & costs → Provider reconciliation** dashboard and browser-session API, see [provider-reported cost reconciliation](provider-cost-reconciliation.md). Platform Admins upload Anthropic Cost Report JSON, attest mappings and freeze aggregate comparisons; Admins and Auditors read the frozen results. This Anthropic-only, USD-only workflow does not rewrite these estimates, change holds or establish a verified invoice. OpenAI Costs export support is follow-up #393.
 
 ## Scheduled reports
 
@@ -24,7 +24,7 @@ Payloads expire after **90 elapsed UTC days**; an authorized page shows the expi
 
 Browser-session endpoints:
 
-- `/api/v1/platform/cost-report`: Platform Admin/Auditor totals across the installation, including personal financial totals. No foreign personal keys/request rows; platform service-account breakdown is empty.
+- `/api/v1/platform/cost-report`: Platform Admin/Auditor totals across the installation, including personal financial totals. A personal workspace's `workspaces` row carries its id and `Personal · <owner>` name; no foreign personal keys/request rows; platform service-account breakdown is empty.
 - `/api/v1/workspaces/{ws}/cost-report`: owner-private personal scope; shared administrators see whole workspace, ordinary members their own human-key activity.
 - `/api/v1/workspaces/{ws}/costs` and `/usage-export`: authorized workspace request details only, not a platform-wide detail/export API.
 

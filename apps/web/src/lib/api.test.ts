@@ -30,6 +30,26 @@ describe("management API", () => {
     expect(fetch.mock.calls[0][1].headers).not.toHaveProperty("Origin");
     expect(fetch.mock.calls[0][1].headers).not.toHaveProperty("Authorization");
   });
+  it("sends a raw JSON Blob byte-for-byte, including whitespace and duplicate keys", async () => {
+    cookie();
+    const fetch = vi.fn().mockResolvedValue(Response.json({ id: "import" })); vi.stubGlobal("fetch", fetch);
+    const rawJson = new Blob([' {"amount":"1", "amount":"2"}\r\n'], { type: "application/json" });
+    await api(`${API}/platform/provider-cost-imports`, { method: "POST", rawJson });
+    expect(fetch.mock.calls[0][1]).toMatchObject({ body: rawJson, credentials: "same-origin", redirect: "error", cache: "no-store", headers: { "X-CSRF-Token": "csrf-value", "Content-Type": "application/json" } });
+    expect(fetch.mock.calls[0][1].body).toBe(rawJson);
+  });
+  it("refuses ambiguous raw and serialized bodies before fetching", async () => {
+    cookie(); const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
+    // Runtime callers can bypass the TypeScript discriminated union.
+    // @ts-expect-error mutually exclusive evidence transports
+    await expect(api(`${API}/platform/provider-cost-imports`, { method: "POST", rawJson: new Blob(["{}"]), body: {} })).rejects.toThrow("Choose one request body");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("blocks raw upload without CSRF", async () => {
+    cookie(""); const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
+    await expect(api(`${API}/platform/provider-cost-imports`, { method: "POST", rawJson: new Blob(["{}"]) })).rejects.toMatchObject({ status: 403 });
+    expect(fetch).not.toHaveBeenCalled();
+  });
   it("blocks mutation without CSRF before sending the request", async () => {
     cookie("");
     const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
