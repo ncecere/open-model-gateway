@@ -11,7 +11,7 @@ async fn alert_generation_history_fired_and_cleared_preserves_privacy(pool: PgPo
     let (status, r) = call(&f.s, &f.owner, "POST", &ws_rules(f.team), json!({"name":"Generation","kind":"budget_threshold","budget_layers":["local"],"thresholds":[100],"notify_workspace_admins":true})).await;
     assert_eq!(status, StatusCode::OK, "{r}");
     let rule = Uuid::parse_str(r["id"].as_str().unwrap()).unwrap();
-    sqlx::query("WITH events AS (INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary) SELECT gen_random_uuid(),$1,'budget_threshold',i::text,100,'critical',$2,'Generation' FROM generate_series(1,101) i RETURNING id) INSERT INTO alert_deliveries(id,event_id,transition) SELECT gen_random_uuid(),id,'fired' FROM events")
+    sqlx::query("WITH events AS (INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary,details) SELECT gen_random_uuid(),$1,'budget_threshold',i::text,100,'critical',$2,'Generation',jsonb_build_object('layer','local','period','month','threshold_percent',100,'used_percent','100','used_microusd','100','budget_microusd','100','unknown_cost_requests',0,'window_start','2026-10-01T00:00:00Z','window_end','2026-11-01T00:00:00Z') FROM generate_series(1,101) i RETURNING id) INSERT INTO alert_deliveries(id,event_id,transition) SELECT gen_random_uuid(),id,'fired' FROM events")
         .bind(rule).bind(f.team).execute(&pool).await.unwrap();
     let event: Uuid =
         sqlx::query_scalar("SELECT event_id FROM alert_deliveries WHERE status='suppressed'")
@@ -841,8 +841,17 @@ async fn admission_ceiling_rules_and_scope_names_are_for_platform_admins(pool: P
     );
     // An incident naming a team: Platform Admins see the workspace, Auditors do not.
     // Producer-shaped details (alerts.rs ceiling producer): the contract closes them.
+    let ceiling_event = Uuid::new_v4();
     sqlx::query("INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary,details) VALUES($1,$2,'admission_ceiling',$3,1,'warning',$4,'A workspace is near its admission ceiling',jsonb_build_object('scope','workspace','personal',false,'workspace_name','Team','workspace_kind','team','window_minutes',5,'admissions',1000,'admissions_per_second','3.3','by_rate',true,'by_lock_wait',false,'threshold_requests_per_second',3,'lock_wait_p95_at_least_ms',NULL::integer,'threshold_lock_wait_ms',NULL::integer))")
-        .bind(Uuid::new_v4()).bind(rule).bind(format!("workspace:{}", f.team)).bind(f.team).execute(&pool).await.unwrap();
+        .bind(ceiling_event).bind(rule).bind(format!("workspace:{}", f.team)).bind(f.team).execute(&pool).await.unwrap();
+    // Every incident has the fired email its producer inserts with it.
+    sqlx::query(
+        "INSERT INTO alert_deliveries(id,event_id,transition) VALUES(gen_random_uuid(),$1,'fired')",
+    )
+    .bind(ceiling_event)
+    .execute(&pool)
+    .await
+    .unwrap();
     let events = |user: &BrowserPrincipal| {
         let user = user.clone();
         let s = f.s.clone();

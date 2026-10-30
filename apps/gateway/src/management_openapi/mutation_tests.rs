@@ -44,6 +44,15 @@ fn sample(document: &Value, schema: &Value) -> Value {
                 "/api/v1/branding/logo?v=000000000000".into(),
             _ if schema["pattern"]
                 .as_str()
+                .is_some_and(|p| p.starts_with("^env:")) =>
+                "env:REFERENCE".into(),
+            // The reviewed alert-webhook destination pattern (https, or loopback http).
+            _ if schema["pattern"]
+                .as_str()
+                .is_some_and(|p| p.starts_with("^(https://")) =>
+                "https://receiver.example.test/ingest".into(),
+            _ if schema["pattern"]
+                .as_str()
                 .is_some_and(|p| p.starts_with("^batch_")) =>
                 format!("batch_{}", "0".repeat(32)),
             _ if schema["pattern"]
@@ -264,10 +273,13 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
             let mut h = HeaderMap::new();
             let success = if op["responses"].get("201").is_some() {
                 "201"
-            } else {
+            } else if op["responses"].get("200").is_some() {
                 "200"
+            } else {
+                "410"
             };
             let success_status = StatusCode::from_bytes(success.as_bytes()).unwrap();
+            let status = success_status;
             if let Some(schema) =
                 op["responses"][success]["content"]["application/json"].get("schema")
             {
@@ -289,7 +301,10 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                     );
                     h.insert("x-omg-export-sha256", "a".repeat(64).parse().unwrap());
                 }
-                let valid = sample(&document, schema);
+                let mut valid = sample(&document, schema);
+                if valid["error"].is_object() {
+                    valid["error"]["code"] = json!(status.as_str());
+                }
                 let encode = |v: &Value| serde_json::to_vec(v).unwrap();
                 validate(
                     &document,
@@ -558,7 +573,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
             }
         }
     }
-    assert_eq!((operations, json_operations), (119, 114));
+    assert_eq!((operations, json_operations), (156, 151));
 }
 
 #[test]
