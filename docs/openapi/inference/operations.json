@@ -203,48 +203,6 @@
           }
         }
       }
-    },
-    "GET /v1/models": {
-      "access": "InferenceKey",
-      "token_policy": "Denied",
-      "scope": null,
-      "operation": {}
-    },
-    "POST /v1/embeddings": {
-      "access": "InferenceKey",
-      "token_policy": "Denied",
-      "scope": null,
-      "operation": {}
-    },
-    "POST /v1/rerank": {
-      "access": "InferenceKey",
-      "token_policy": "Denied",
-      "scope": null,
-      "operation": {}
-    },
-    "POST /v1/images/generations": {
-      "access": "InferenceKey",
-      "token_policy": "Denied",
-      "scope": null,
-      "operation": {}
-    },
-    "POST /v1/systemone": {
-      "access": "InferenceKey",
-      "token_policy": "Denied",
-      "scope": null,
-      "operation": {}
-    },
-    "POST /v1/realtime/client_secrets": {
-      "access": "InferenceKey",
-      "token_policy": "Denied",
-      "scope": null,
-      "operation": {}
-    },
-    "POST /v1/realtime/calls": {
-      "access": "InferenceKey",
-      "token_policy": "Denied",
-      "scope": null,
-      "operation": {}
     }
   },
   "schemas": {}

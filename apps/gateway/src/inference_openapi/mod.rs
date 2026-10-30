@@ -8,6 +8,7 @@ mod errors_tests;
 mod generator;
 mod responses;
 mod wiring_tests;
+mod workload_tests;
 
 /// Reviewed open-JSON locations of the inference contract, in the format and
 /// with the semantics of `management_openapi::quality::ARBITRARY_JSON`: the
@@ -145,7 +146,7 @@ mod tests {
             "review route additions and update this baseline"
         );
         assert_eq!(
-            placeholders, 54,
+            placeholders, 40,
             "review schema completion and update this progress baseline"
         );
     }

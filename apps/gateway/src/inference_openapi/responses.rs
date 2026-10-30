@@ -461,3 +461,9 @@ fn finish(fixtures: &PositiveFixtures, document: &Value, areas: &[&str]) -> Resu
     );
     fixtures.check_contract_coverage(document, &expected)
 }
+
+/// The embedding vectors of a response are in the representation the REQUEST
+/// asked for (not yet enforced).
+pub(super) fn embedding_encoding_matches(_request: &Value, _response: &Value) -> Result<()> {
+    Ok(())
+}

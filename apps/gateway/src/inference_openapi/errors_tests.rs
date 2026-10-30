@@ -163,6 +163,45 @@ fn inference_openapi_never_reuses_the_management_error_envelope() {
 }
 
 #[test]
+fn inference_openapi_documents_every_status_the_renderers_produce() {
+    use crate::inference::error::InferenceError as E;
+    let doc = generated();
+    for (path, validation_status) in [
+        ("/v1/embeddings", 400),
+        ("/v1/rerank", 400),
+        ("/v1/images/generations", 400),
+        ("/v1/systemone", 422),
+    ] {
+        let documented: BTreeSet<u16> = doc["paths"][path]["post"]["responses"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .filter_map(|status| status.parse().ok())
+            .collect();
+        let mut produced = BTreeSet::new();
+        for error in e::all() {
+            let (mut status, _) = batch_line_error(false, error);
+            if path != "/v1/embeddings" {
+                // `workload_error`: unsupported is 400, validation is per route.
+                match error {
+                    E::Unsupported => status = 400,
+                    E::InvalidRequest => status = validation_status,
+                    _ => {}
+                }
+            }
+            produced.insert(status);
+        }
+        // 413 is the body cap, not an InferenceError; 200 the success.
+        let mut expected = produced.clone();
+        expected.extend([200, 413]);
+        assert_eq!(
+            documented, expected,
+            "{path}: statuses differ from the renderers"
+        );
+    }
+}
+
+#[test]
 fn inference_openapi_transport_error_literals_are_still_in_source() {
     for (kind, code, file) in e::OPENAI_TRANSPORT {
         let source =
@@ -235,6 +274,43 @@ async fn send(request: Request<Body>) -> (StatusCode, axum::http::HeaderMap, Vec
     let (parts, body) = response.into_parts();
     let bytes = to_bytes(body, 8 * 1024 * 1024).await.unwrap().to_vec();
     (parts.status, parts.headers, bytes)
+}
+
+/// Real transport refusals of the real router, validated against the document.
+#[tokio::test]
+async fn inference_openapi_real_transport_errors_match_their_envelopes() {
+    let doc = generated();
+    // OpenAI shape: no credential.
+    let (status, headers, bytes) = send(
+        Request::builder()
+            .uri("/v1/models")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(headers["www-authenticate"], "Bearer");
+    r::validate(&doc, "GET", "/v1/models", status, &headers, &bytes).unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["error"]["code"], "authentication_error");
+    // Anthropic shape: no credential on /v1/messages; no machine code.
+    let (status, headers, bytes) = send(
+        Request::builder()
+            .method("POST")
+            .uri("/v1/messages")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    validate_documented(&doc, "POST", "/v1/messages", status, &headers, &bytes).unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        (body["type"].as_str(), body["error"].get("code")),
+        (Some("error"), None)
+    );
+    // The same refusal must not validate as an OpenAI error on that path.
+    assert!(validate_value(&doc, &schema("OpenAiErrorEnvelope"), &body).is_err());
 }
 
 /// The documented exception of /v1/messages: the outer layer answers an

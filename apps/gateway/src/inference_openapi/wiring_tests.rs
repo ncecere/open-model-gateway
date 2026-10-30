@@ -310,6 +310,48 @@ async fn inference_openapi_security_matches_the_real_credential_parsers() {
 }
 
 #[test]
+fn inference_openapi_completed_areas_have_no_incomplete_references() {
+    use super::responses::{AREA_GROUPS, area, completed, require_complete};
+    let doc = generated();
+    let mut count = 0;
+    for (path, item) in doc["paths"].as_object().unwrap() {
+        let is_completed = completed(area(path));
+        for (method, op) in item.as_object().unwrap() {
+            if is_completed {
+                require_complete(&doc, op).unwrap_or_else(|e| panic!("{method} {path}: {e:#}"));
+                assert!(
+                    op["responses"].get("default").is_none(),
+                    "a completed operation needs exact statuses"
+                );
+                count += 1;
+            } else {
+                // An incomplete operation must say so rather than look finished.
+                assert!(
+                    op["x-omg-request-schema"].is_object() && require_complete(&doc, op).is_err(),
+                    "{method} {path} is neither completed nor an honest placeholder"
+                );
+            }
+        }
+    }
+    assert_eq!(count, 7);
+    // Groups are disjoint and every area names real operations.
+    let mut seen = BTreeSet::new();
+    for (_, group) in AREA_GROUPS {
+        for area_name in *group {
+            assert!(seen.insert(*area_name), "area {area_name} owned twice");
+            assert!(
+                doc["paths"]
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .any(|path| area(path) == *area_name),
+                "area {area_name} has no operations"
+            );
+        }
+    }
+}
+
+#[test]
 fn inference_openapi_areas_are_fine_grained() {
     use super::responses::area;
     for (template, want) in [
