@@ -102,7 +102,7 @@
             "from_address": {
               "type": "string",
               "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
-              "description": "A mailbox address: at most 320 BYTES after trimming (directory.rs email_valid) and parseable as a mailbox (lettre Address; the local part at most 64 characters). The schema checks the shape only."
+              "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
             },
             "from_name": {
               "anyOf": [
@@ -175,7 +175,7 @@
             "from_address": {
               "type": "string",
               "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
-              "description": "A mailbox address: at most 320 BYTES after trimming (directory.rs email_valid) and parseable as a mailbox (lettre Address; the local part at most 64 characters). The schema checks the shape only."
+              "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
             },
             "from_name": {
               "anyOf": [
@@ -307,7 +307,7 @@
             {
               "type": "string",
               "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
-              "description": "A mailbox address: at most 320 BYTES after trimming (directory.rs email_valid) and parseable as a mailbox (lettre Address; the local part at most 64 characters). The schema checks the shape only."
+              "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
             },
             {
               "anyOf": [
@@ -388,7 +388,7 @@
             {
               "type": "string",
               "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
-              "description": "A mailbox address: at most 320 BYTES after trimming (directory.rs email_valid) and parseable as a mailbox (lettre Address; the local part at most 64 characters). The schema checks the shape only."
+              "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
             },
             {
               "anyOf": [
@@ -5115,7 +5115,8 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
               },
               "maxItems": 10,
               "default": []
@@ -5211,7 +5212,8 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
               },
               "maxItems": 10,
               "default": []
@@ -5304,7 +5306,8 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
               },
               "maxItems": 10,
               "default": []
@@ -5391,7 +5394,8 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
               },
               "maxItems": 10,
               "default": []
@@ -5488,7 +5492,8 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
               },
               "maxItems": 10,
               "default": []
@@ -5574,7 +5579,8 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
               },
               "maxItems": 10,
               "default": []
@@ -5655,7 +5661,8 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
               },
               "maxItems": 10,
               "default": []
@@ -5736,7 +5743,8 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
               },
               "maxItems": 10,
               "default": []
@@ -6016,7 +6024,8 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
               },
               "maxItems": 10,
               "default": []
@@ -6108,7 +6117,8 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
               },
               "maxItems": 10,
               "default": []
@@ -6196,7 +6206,8 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
               },
               "maxItems": 10,
               "default": []
@@ -6279,7 +6290,8 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
               },
               "maxItems": 10,
               "default": []
@@ -6371,7 +6383,8 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
               },
               "maxItems": 10,
               "default": []
@@ -6452,7 +6465,8 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
               },
               "maxItems": 10,
               "default": []
@@ -6529,7 +6543,8 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
               },
               "maxItems": 10,
               "default": []
@@ -6608,7 +6623,8 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
               },
               "maxItems": 10,
               "default": []
@@ -6882,7 +6898,8 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
               },
               "maxItems": 10,
               "default": []
@@ -6974,7 +6991,8 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
               },
               "maxItems": 10,
               "default": []
@@ -7061,7 +7079,8 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
               },
               "maxItems": 10,
               "default": []
@@ -7143,7 +7162,8 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
               },
               "maxItems": 10,
               "default": []
@@ -7224,7 +7244,8 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
               },
               "maxItems": 10,
               "default": []
@@ -7319,7 +7340,8 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
               },
               "maxItems": 10,
               "default": []
@@ -7407,7 +7429,8 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
               },
               "maxItems": 10,
               "default": []
@@ -7490,7 +7513,8 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
               },
               "maxItems": 10,
               "default": []
@@ -7567,7 +7591,8 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
               },
               "maxItems": 10,
               "default": []
@@ -7646,7 +7671,8 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$"
+                "pattern": "^[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f]+@[^@\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u002c\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u009f]+[\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                "description": "A mailbox address as the handler trims and checks it: at most 320 BYTES (directory.rs email_valid), exactly one `@`, no whitespace or control character, and a lettre `Address` parse (the local part at most 64 characters). The pattern models only the character classes (no whitespace or control character anywhere, no ASCII punctuation in the domain); lettre's finer local-part and domain grammar (consecutive dots, labels over 63 characters, the 64-character local part, the 320-byte total) is not modelled, and the handler refuses what it forbids."
               },
               "maxItems": 10,
               "default": []
