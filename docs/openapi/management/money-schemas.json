@@ -1363,14 +1363,16 @@
               "minLength": 1,
               "maxLength": 120,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
+              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs.",
+              "x-omg-max-bytes": 120
             },
             "code": {
               "type": "string",
               "minLength": 1,
               "maxLength": 120,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
+              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs.",
+              "x-omg-max-bytes": 120
             }
           },
           "required": [
@@ -1387,14 +1389,16 @@
               "minLength": 1,
               "maxLength": 120,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
+              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs.",
+              "x-omg-max-bytes": 120
             },
             {
               "type": "string",
               "minLength": 1,
               "maxLength": 120,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
+              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs.",
+              "x-omg-max-bytes": 120
             }
           ],
           "items": false,
@@ -3603,12 +3607,14 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 64,
-              "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400."
+              "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. The handler measures the zone in UTF-8 BYTES (validate(): timezone.len() > 64), stated as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 64
             },
             "delivery_time": {
               "type": "string",
               "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
-              "description": "Local delivery time HH:MM, 24 hour."
+              "description": "Local delivery time HH:MM, 24 hour.",
+              "maxLength": 5
             },
             "state": {
               "type": "string",
@@ -3662,12 +3668,14 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 64,
-              "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400."
+              "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. The handler measures the zone in UTF-8 BYTES (validate(): timezone.len() > 64), stated as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 64
             },
             {
               "type": "string",
               "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
-              "description": "Local delivery time HH:MM, 24 hour."
+              "description": "Local delivery time HH:MM, 24 hour.",
+              "maxLength": 5
             },
             {
               "type": "string",
@@ -3721,12 +3729,14 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 64,
-              "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400."
+              "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. The handler measures the zone in UTF-8 BYTES (validate(): timezone.len() > 64), stated as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 64
             },
             "delivery_time": {
               "type": "string",
               "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
-              "description": "Local delivery time HH:MM, 24 hour."
+              "description": "Local delivery time HH:MM, 24 hour.",
+              "maxLength": 5
             },
             "state": {
               "type": "string",
@@ -3763,12 +3773,14 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 64,
-              "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400."
+              "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. The handler measures the zone in UTF-8 BYTES (validate(): timezone.len() > 64), stated as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 64
             },
             {
               "type": "string",
               "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
-              "description": "Local delivery time HH:MM, 24 hour."
+              "description": "Local delivery time HH:MM, 24 hour.",
+              "maxLength": 5
             },
             {
               "type": "string",
@@ -4037,7 +4049,6 @@
                 ]
               },
               "minItems": 2,
-              "maxItems": 2,
               "uniqueItems": true
             },
             "limit": {
@@ -4083,7 +4094,6 @@
                 ]
               },
               "minItems": 2,
-              "maxItems": 2,
               "uniqueItems": true
             },
             {
@@ -4224,130 +4234,103 @@
               "const": "USD"
             },
             "workspace_id": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 4096
             },
             "description": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 4096
             },
             "model": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 4096
             },
             "service_tier": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 4096
             },
             "context_window": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 4096
             },
             "cost_type": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 4096
             },
             "token_type": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 4096
             },
             "inference_geo": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 4096
             },
             "speed": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 4096
             }
           },
           "required": [
@@ -4369,130 +4352,103 @@
               "const": "USD"
             },
             {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 4096
             },
             {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 4096
             },
             {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 4096
             },
             {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 4096
             },
             {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 4096
             },
             {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 4096
             },
             {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 4096
             },
             {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 4096
             },
             {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 4096
             }
           ],
           "items": false,
@@ -4577,18 +4533,15 @@
               "type": "boolean"
             },
             "next_page": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 4096
             }
           },
           "required": [
@@ -4621,7 +4574,7 @@
                 "minLength": 1,
                 "maxLength": 4096,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
+                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405)."
               }
             }
           },
@@ -4668,7 +4621,8 @@
               "minLength": 1,
               "maxLength": 4096,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
+              "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 4096
             }
           ],
           "items": false,
@@ -4687,14 +4641,16 @@
               "minLength": 1,
               "maxLength": 200,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
+              "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 200
             },
             "evidence_reference": {
               "type": "string",
               "minLength": 1,
               "maxLength": 256,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
+              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 256
             },
             "exported_at": {
               "type": "string",
@@ -4742,14 +4698,16 @@
               "minLength": 1,
               "maxLength": 200,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
+              "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 200
             },
             {
               "type": "string",
               "minLength": 1,
               "maxLength": 256,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
+              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 256
             },
             {
               "type": "string",
@@ -4796,14 +4754,16 @@
               "minLength": 1,
               "maxLength": 512,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 512 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
+              "description": "UTF-8 bytes: the handler rejects values longer than 512 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 512
             },
             "upstream_model": {
               "type": "string",
               "minLength": 1,
               "maxLength": 512,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 512 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
+              "description": "UTF-8 bytes: the handler rejects values longer than 512 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 512
             }
           },
           "required": [
@@ -4820,14 +4780,16 @@
               "minLength": 1,
               "maxLength": 512,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 512 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
+              "description": "UTF-8 bytes: the handler rejects values longer than 512 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 512
             },
             {
               "type": "string",
               "minLength": 1,
               "maxLength": 512,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 512 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
+              "description": "UTF-8 bytes: the handler rejects values longer than 512 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 512
             }
           ],
           "items": false,
@@ -4842,18 +4804,15 @@
           "type": "object",
           "properties": {
             "provider_workspace_id": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 4096
             },
             "connection_id": {
               "type": "string",
@@ -4904,7 +4863,8 @@
               "minLength": 1,
               "maxLength": 256,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
+              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 256
             },
             "model_mappings": {
               "type": "array",
@@ -4956,18 +4916,15 @@
           "type": "array",
           "prefixItems": [
             {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 4096
             },
             {
               "type": "string",
@@ -5018,7 +4975,8 @@
               "minLength": 1,
               "maxLength": 256,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
+              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 256
             },
             {
               "type": "array",
@@ -5036,18 +4994,15 @@
           "type": "array",
           "prefixItems": [
             {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 4096,
-                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                  "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 4096
             },
             {
               "type": "string",
@@ -5091,7 +5046,8 @@
               "minLength": 1,
               "maxLength": 256,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
+              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 256
             },
             {
               "type": "array",
@@ -5212,7 +5168,8 @@
               "minLength": 1,
               "maxLength": 200,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
+              "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 200
             },
             "supersedes": {
               "anyOf": [
@@ -5230,7 +5187,8 @@
               "minLength": 1,
               "maxLength": 256,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
+              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 256
             },
             "bindings": {
               "type": "array",
@@ -5255,7 +5213,8 @@
               "minLength": 1,
               "maxLength": 200,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
+              "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 200
             },
             {
               "anyOf": [
@@ -5273,7 +5232,8 @@
               "minLength": 1,
               "maxLength": 256,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
+              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 256
             },
             {
               "type": "array",
@@ -6286,14 +6246,16 @@
               "minLength": 1,
               "maxLength": 120,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
+              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs.",
+              "x-omg-max-bytes": 120
             },
             "code": {
               "type": "string",
               "minLength": 1,
               "maxLength": 120,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
+              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs.",
+              "x-omg-max-bytes": 120
             }
           },
           "required": [
@@ -6310,14 +6272,16 @@
               "minLength": 1,
               "maxLength": 120,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
+              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs.",
+              "x-omg-max-bytes": 120
             },
             {
               "type": "string",
               "minLength": 1,
               "maxLength": 120,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
+              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs.",
+              "x-omg-max-bytes": 120
             }
           ],
           "items": false,
@@ -6347,14 +6311,16 @@
               "minLength": 1,
               "maxLength": 120,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
+              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs.",
+              "x-omg-max-bytes": 120
             },
             "code": {
               "type": "string",
               "minLength": 1,
               "maxLength": 120,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
+              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs.",
+              "x-omg-max-bytes": 120
             }
           },
           "required": [
@@ -6371,14 +6337,16 @@
               "minLength": 1,
               "maxLength": 120,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
+              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs.",
+              "x-omg-max-bytes": 120
             },
             {
               "type": "string",
               "minLength": 1,
               "maxLength": 120,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs."
+              "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). The blank check uses \\s (ECMA-262 white space); the handler's trim() uses Unicode White_Space, so U+FEFF differs.",
+              "x-omg-max-bytes": 120
             }
           ],
           "items": false,
@@ -6426,12 +6394,14 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 64,
-              "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400."
+              "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. The handler measures the zone in UTF-8 BYTES (validate(): timezone.len() > 64), stated as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 64
             },
             "delivery_time": {
               "type": "string",
               "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
-              "description": "Local delivery time HH:MM, 24 hour."
+              "description": "Local delivery time HH:MM, 24 hour.",
+              "maxLength": 5
             },
             "state": {
               "type": "string",
@@ -6485,12 +6455,14 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 64,
-              "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400."
+              "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. The handler measures the zone in UTF-8 BYTES (validate(): timezone.len() > 64), stated as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 64
             },
             {
               "type": "string",
               "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
-              "description": "Local delivery time HH:MM, 24 hour."
+              "description": "Local delivery time HH:MM, 24 hour.",
+              "maxLength": 5
             },
             {
               "type": "string",
@@ -6564,12 +6536,14 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 64,
-              "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400."
+              "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. The handler measures the zone in UTF-8 BYTES (validate(): timezone.len() > 64), stated as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 64
             },
             "delivery_time": {
               "type": "string",
               "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
-              "description": "Local delivery time HH:MM, 24 hour."
+              "description": "Local delivery time HH:MM, 24 hour.",
+              "maxLength": 5
             },
             "state": {
               "type": "string",
@@ -6634,12 +6608,14 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 64,
-              "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400."
+              "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. The handler measures the zone in UTF-8 BYTES (validate(): timezone.len() > 64), stated as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 64
             },
             {
               "type": "string",
               "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
-              "description": "Local delivery time HH:MM, 24 hour."
+              "description": "Local delivery time HH:MM, 24 hour.",
+              "maxLength": 5
             },
             {
               "type": "string",
@@ -6715,14 +6691,16 @@
               "minLength": 1,
               "maxLength": 200,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
+              "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 200
             },
             "evidence_reference": {
               "type": "string",
               "minLength": 1,
               "maxLength": 256,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
+              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 256
             },
             "exported_at": {
               "type": "string",
@@ -6770,14 +6748,16 @@
               "minLength": 1,
               "maxLength": 200,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
+              "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 200
             },
             {
               "type": "string",
               "minLength": 1,
               "maxLength": 256,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
+              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 256
             },
             {
               "type": "string",
@@ -6879,7 +6859,8 @@
               "minLength": 1,
               "maxLength": 200,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
+              "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 200
             },
             "supersedes": {
               "anyOf": [
@@ -6897,7 +6878,8 @@
               "minLength": 1,
               "maxLength": 256,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
+              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 256
             },
             "bindings": {
               "type": "array",
@@ -6922,7 +6904,8 @@
               "minLength": 1,
               "maxLength": 200,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
+              "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 200
             },
             {
               "anyOf": [
@@ -6940,7 +6923,8 @@
               "minLength": 1,
               "maxLength": 256,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema's maxLength counts characters, so a multibyte value can pass the schema and still be refused with 400 (see #405)."
+              "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 256
             },
             {
               "type": "array",
@@ -7331,12 +7315,14 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 64,
-              "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400."
+              "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. The handler measures the zone in UTF-8 BYTES (validate(): timezone.len() > 64), stated as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 64
             },
             "delivery_time": {
               "type": "string",
               "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
-              "description": "Local delivery time HH:MM, 24 hour."
+              "description": "Local delivery time HH:MM, 24 hour.",
+              "maxLength": 5
             },
             "state": {
               "type": "string",
@@ -7390,12 +7376,14 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 64,
-              "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400."
+              "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. The handler measures the zone in UTF-8 BYTES (validate(): timezone.len() > 64), stated as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 64
             },
             {
               "type": "string",
               "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
-              "description": "Local delivery time HH:MM, 24 hour."
+              "description": "Local delivery time HH:MM, 24 hour.",
+              "maxLength": 5
             },
             {
               "type": "string",
@@ -7469,12 +7457,14 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 64,
-              "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400."
+              "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. The handler measures the zone in UTF-8 BYTES (validate(): timezone.len() > 64), stated as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 64
             },
             "delivery_time": {
               "type": "string",
               "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
-              "description": "Local delivery time HH:MM, 24 hour."
+              "description": "Local delivery time HH:MM, 24 hour.",
+              "maxLength": 5
             },
             "state": {
               "type": "string",
@@ -7539,12 +7529,14 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 64,
-              "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400."
+              "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. The handler measures the zone in UTF-8 BYTES (validate(): timezone.len() > 64), stated as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+              "x-omg-max-bytes": 64
             },
             {
               "type": "string",
               "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
-              "description": "Local delivery time HH:MM, 24 hour."
+              "description": "Local delivery time HH:MM, 24 hour.",
+              "maxLength": 5
             },
             {
               "type": "string",
@@ -10879,7 +10871,8 @@
         },
         "delivery_time": {
           "type": "string",
-          "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+          "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+          "maxLength": 5
         },
         "state": {
           "type": "string",
@@ -11021,7 +11014,8 @@
         },
         "delivery_time": {
           "type": "string",
-          "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+          "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+          "maxLength": 5
         },
         "state": {
           "type": "string",
@@ -11150,7 +11144,8 @@
         },
         "delivery_time": {
           "type": "string",
-          "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+          "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+          "maxLength": 5
         },
         "state": {
           "type": "string",
@@ -11334,7 +11329,8 @@
         },
         "delivery_time": {
           "type": "string",
-          "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+          "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+          "maxLength": 5
         },
         "state": {
           "type": "string",
@@ -11468,7 +11464,8 @@
         },
         "delivery_time": {
           "type": "string",
-          "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+          "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+          "maxLength": 5
         },
         "state": {
           "type": "string",
@@ -11589,7 +11586,8 @@
         },
         "delivery_time": {
           "type": "string",
-          "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+          "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+          "maxLength": 5
         },
         "state": {
           "type": "string",

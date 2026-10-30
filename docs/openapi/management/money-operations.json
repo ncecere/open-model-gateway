@@ -2339,11 +2339,10 @@
             "required": false,
             "schema": {
               "type": "string",
-              "minLength": 1,
-              "maxLength": 57,
-              "pattern": "^(0|-?[1-9][0-9]{0,18})_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+              "maxLength": 56,
+              "pattern": "^(0|[1-9][0-9]{0,18}|-[1-9][0-9]{0,17})_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
             },
-            "description": "Position emitted as next_cursor: <signed microseconds>_<uuid>, exactly as emitted (no padding, no leading zeros). Timestamps outside PostgreSQL's timestamptz range (microseconds below -210866803200000000, i.e. before 4713 BC) are refused with 400 (pg_timestamptz_representable in src/management/governance/holds.rs). So are 19-digit values outside the representable range, such as 9999999999999999999 (cursor_parts in src/management/logs.rs: the microseconds must parse as an i64 and convert with from_timestamp_micros). The pattern cannot express either limit."
+            "description": "Position emitted as next_cursor: <microseconds>_<uuid> (up to 19 digits, or a sign and up to 18 digits: no negative value of 19 digits is within timestamptz's range), exactly as emitted (no padding, no leading zeros). Timestamps outside PostgreSQL's timestamptz range (microseconds below -210866803200000000, i.e. before 4713 BC) are refused with 400 (pg_timestamptz_representable in src/management/governance/holds.rs). So are 19-digit values outside the representable range, such as 9999999999999999999 (cursor_parts in src/management/logs.rs: the microseconds must parse as an i64 and convert with from_timestamp_micros). The pattern cannot express either limit."
           }
         ]
       },
@@ -3643,11 +3642,10 @@
             "required": false,
             "schema": {
               "type": "string",
-              "minLength": 1,
-              "maxLength": 57,
-              "pattern": "^(0|-?[1-9][0-9]{0,18})_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+              "maxLength": 56,
+              "pattern": "^(0|[1-9][0-9]{0,18}|-[1-9][0-9]{0,17})_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
             },
-            "description": "Position emitted as next_cursor: <signed microseconds>_<uuid>, exactly as emitted (no padding, no leading zeros). Timestamps outside PostgreSQL's timestamptz range (microseconds below -210866803200000000, i.e. before 4713 BC) are refused with 400 (pg_timestamptz_representable in src/management/governance/holds.rs). So are 19-digit values outside the representable range, such as 9999999999999999999 (cursor_parts in src/management/logs.rs: the microseconds must parse as an i64 and convert with from_timestamp_micros). The pattern cannot express either limit."
+            "description": "Position emitted as next_cursor: <microseconds>_<uuid> (up to 19 digits, or a sign and up to 18 digits: no negative value of 19 digits is within timestamptz's range), exactly as emitted (no padding, no leading zeros). Timestamps outside PostgreSQL's timestamptz range (microseconds below -210866803200000000, i.e. before 4713 BC) are refused with 400 (pg_timestamptz_representable in src/management/governance/holds.rs). So are 19-digit values outside the representable range, such as 9999999999999999999 (cursor_parts in src/management/logs.rs: the microseconds must parse as an i64 and convert with from_timestamp_micros). The pattern cannot express either limit."
           }
         ]
       },
