@@ -239,8 +239,14 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
             let method = method.to_ascii_uppercase();
             operations += 1;
             let mut h = HeaderMap::new();
+            let success = if op["responses"].get("201").is_some() {
+                "201"
+            } else {
+                "200"
+            };
+            let success_status = StatusCode::from_bytes(success.as_bytes()).unwrap();
             if let Some(schema) =
-                op["responses"]["200"]["content"]["application/json"].get("schema")
+                op["responses"][success]["content"]["application/json"].get("schema")
             {
                 json_operations += 1;
                 h.insert("content-type", "application/json".parse().unwrap());
@@ -262,7 +268,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                     &document,
                     &method,
                     path,
-                    StatusCode::OK,
+                    success_status,
                     &h,
                     &encode(&valid),
                 )
@@ -288,7 +294,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                             &document,
                             &method,
                             path,
-                            StatusCode::OK,
+                            success_status,
                             &h,
                             &encode(&corrupt)
                         )
@@ -308,7 +314,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                             &document,
                             &method,
                             path,
-                            StatusCode::OK,
+                            success_status,
                             &h,
                             &encode(&corrupt)
                         )
@@ -457,7 +463,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
             }
         }
     }
-    assert_eq!((operations, json_operations), (22, 18));
+    assert_eq!((operations, json_operations), (70, 66));
 }
 
 #[test]
