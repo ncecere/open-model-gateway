@@ -1060,89 +1060,6 @@
         ],
         "type": "object"
       },
-      "AccessCatalogIds": {
-        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies.",
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "catalog_ids": {
-                "description": "At most 200 distinct catalog ids (duplicates collapse).",
-                "items": {
-                  "$ref": "#/components/schemas/IdentityUuid"
-                },
-                "maxItems": 200,
-                "type": "array"
-              }
-            },
-            "required": [
-              "catalog_ids"
-            ],
-            "type": "object"
-          },
-          {
-            "items": false,
-            "maxItems": 1,
-            "minItems": 1,
-            "prefixItems": [
-              {
-                "description": "At most 200 distinct catalog ids (duplicates collapse).",
-                "items": {
-                  "$ref": "#/components/schemas/IdentityUuid"
-                },
-                "maxItems": 200,
-                "type": "array"
-              }
-            ],
-            "type": "array"
-          }
-        ]
-      },
-      "AccessCatalogOverride": {
-        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies.",
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "catalog_ids": {
-                "description": "At most 200 distinct catalog ids (duplicates collapse).",
-                "items": {
-                  "$ref": "#/components/schemas/IdentityUuid"
-                },
-                "maxItems": 200,
-                "type": "array"
-              },
-              "mode": {
-                "const": "replace"
-              }
-            },
-            "required": [
-              "mode",
-              "catalog_ids"
-            ],
-            "type": "object"
-          },
-          {
-            "items": false,
-            "maxItems": 2,
-            "minItems": 2,
-            "prefixItems": [
-              {
-                "const": "replace"
-              },
-              {
-                "description": "At most 200 distinct catalog ids (duplicates collapse).",
-                "items": {
-                  "$ref": "#/components/schemas/IdentityUuid"
-                },
-                "maxItems": 200,
-                "type": "array"
-              }
-            ],
-            "type": "array"
-          }
-        ]
-      },
       "AccessCostCenter": {
         "additionalProperties": false,
         "properties": {
@@ -1223,62 +1140,6 @@
           "membership_grant_id"
         ],
         "type": "object"
-      },
-      "AccessDirectModel": {
-        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies.",
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "model_id": {
-                "$ref": "#/components/schemas/IdentityUuid"
-              }
-            },
-            "required": [
-              "model_id"
-            ],
-            "type": "object"
-          },
-          {
-            "items": false,
-            "maxItems": 1,
-            "minItems": 1,
-            "prefixItems": [
-              {
-                "$ref": "#/components/schemas/IdentityUuid"
-              }
-            ],
-            "type": "array"
-          }
-        ]
-      },
-      "AccessDiscoverable": {
-        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies.",
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "discoverable": {
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "discoverable"
-            ],
-            "type": "object"
-          },
-          {
-            "items": false,
-            "maxItems": 1,
-            "minItems": 1,
-            "prefixItems": [
-              {
-                "type": "boolean"
-              }
-            ],
-            "type": "array"
-          }
-        ]
       },
       "AccessEligibleRequest": {
         "allOf": [
@@ -1495,53 +1356,6 @@
         ],
         "type": "object"
       },
-      "AccessInviteInput": {
-        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies.",
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "email": {
-                "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 UTF-8 bytes of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 grows from 2 to 3 bytes). The schema's maxLength counts characters of the value as sent, untrimmed: it refuses a padded value the handler accepts and accepts a multibyte or lower-case-expanding value the handler refuses.",
-                "maxLength": 320,
-                "pattern": "^\\s*[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+\\s*$",
-                "type": "string"
-              },
-              "role": {
-                "enum": [
-                  "admin",
-                  "member"
-                ]
-              }
-            },
-            "required": [
-              "email",
-              "role"
-            ],
-            "type": "object"
-          },
-          {
-            "items": false,
-            "maxItems": 2,
-            "minItems": 2,
-            "prefixItems": [
-              {
-                "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 UTF-8 bytes of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 grows from 2 to 3 bytes). The schema's maxLength counts characters of the value as sent, untrimmed: it refuses a padded value the handler accepts and accepts a multibyte or lower-case-expanding value the handler refuses.",
-                "maxLength": 320,
-                "pattern": "^\\s*[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+\\s*$",
-                "type": "string"
-              },
-              {
-                "enum": [
-                  "admin",
-                  "member"
-                ]
-              }
-            ],
-            "type": "array"
-          }
-        ]
-      },
       "AccessLimits": {
         "additionalProperties": false,
         "properties": {
@@ -1666,120 +1480,6 @@
             "$ref": "#/components/schemas/AccessWorkspaceMapping"
           }
         ]
-      },
-      "AccessMappingExistingPreview": {
-        "additionalProperties": false,
-        "allOf": [
-          {
-            "if": {
-              "properties": {
-                "target_kind": {
-                  "const": "platform"
-                }
-              },
-              "required": [
-                "target_kind"
-              ]
-            },
-            "then": {
-              "properties": {
-                "platform_role": {
-                  "$ref": "#/components/schemas/IdentityRole"
-                },
-                "workspace_id": {
-                  "type": "null"
-                },
-                "workspace_role": {
-                  "type": "null"
-                }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "target_kind": {
-                  "const": "workspace"
-                }
-              },
-              "required": [
-                "target_kind"
-              ]
-            },
-            "then": {
-              "properties": {
-                "platform_role": {
-                  "type": "null"
-                },
-                "workspace_id": {
-                  "$ref": "#/components/schemas/IdentityUuid"
-                },
-                "workspace_role": {
-                  "enum": [
-                    "admin",
-                    "member"
-                  ]
-                }
-              }
-            }
-          }
-        ],
-        "description": "The PATCH merge body plus an optional delete flag (a boolean). The handler previews a DELETE when delete is true OR when no mapping field is present (group_mapping_preview.rs: is_delete = delete || patch.is_empty()), so {} and {\"delete\":false} both preview a delete, while {\"delete\":false,\"enabled\":true} previews the merge. With delete:true every other mapping field is ignored and its value is not validated ({\"delete\":true,\"enabled\":\"x\"} succeeds), although an unknown key is still refused with 422; the schema keeps typing those fields (a wildcard value is not expressible), so it refuses such a body that the handler accepts. Cross-field rule, as far as the body decides it: when target_kind is present, platform requires a platform_role and null workspace_id and workspace_role, and workspace requires a workspace_id and workspace_role (admin or member) and a null platform_role, each for the fields the body names (directory.rs mapping_valid on the merged row). Without target_kind the stored row's kind decides, which the schema cannot see: a body that names only a workspace field for a platform mapping is accepted by the schema and refused by the handler. When target_kind is present, fields the body omits are still filled from the stored row: switching a platform mapping to workspace without also sending platform_role:null keeps the stored platform_role, so the schema accepts that body and the handler refuses it.",
-        "properties": {
-          "delete": {
-            "type": "boolean"
-          },
-          "enabled": {
-            "type": "boolean"
-          },
-          "group_value": {
-            "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The schema's maxLength counts characters, so a multibyte value of at most 512 characters can exceed the handler's limit.",
-            "maxLength": 512,
-            "minLength": 1,
-            "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-            "type": "string"
-          },
-          "issuer": {
-            "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; the schema's maxLength counts characters, so a multibyte value of at most 2048 characters can exceed the handler's limit). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development).",
-            "maxLength": 2048,
-            "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
-            "type": "string"
-          },
-          "platform_role": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/IdentityRole"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "target_kind": {
-            "enum": [
-              "platform",
-              "workspace"
-            ]
-          },
-          "workspace_id": {
-            "$ref": "#/components/schemas/IdentityNullableUuid"
-          },
-          "workspace_role": {
-            "anyOf": [
-              {
-                "enum": [
-                  "admin",
-                  "member"
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [],
-        "type": "object"
       },
       "AccessMappingExistingResult": {
         "additionalProperties": false,
@@ -2176,264 +1876,6 @@
         ],
         "type": "object"
       },
-      "AccessMappingInput": {
-        "description": "A complete mapping (create, and the preview of a not-yet-saved mapping): target_kind platform requires platform_role and no workspace fields; target_kind workspace requires workspace_id and workspace_role (admin or member) and no platform_role (directory.rs mapping_valid, the oidc_group_mappings CHECK). The positional array form does not repeat the cross-field rule. The preview handler refuses a null or missing required value exactly like create.",
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "enabled": {
-                "type": "boolean"
-              },
-              "group_value": {
-                "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The schema's maxLength counts characters, so a multibyte value of at most 512 characters can exceed the handler's limit.",
-                "maxLength": 512,
-                "minLength": 1,
-                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string"
-              },
-              "issuer": {
-                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; the schema's maxLength counts characters, so a multibyte value of at most 2048 characters can exceed the handler's limit). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development).",
-                "maxLength": 2048,
-                "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
-                "type": "string"
-              },
-              "platform_role": {
-                "$ref": "#/components/schemas/IdentityRole"
-              },
-              "target_kind": {
-                "const": "platform"
-              },
-              "workspace_id": {
-                "type": "null"
-              },
-              "workspace_role": {
-                "type": "null"
-              }
-            },
-            "required": [
-              "issuer",
-              "group_value",
-              "target_kind",
-              "platform_role",
-              "enabled"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "enabled": {
-                "type": "boolean"
-              },
-              "group_value": {
-                "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The schema's maxLength counts characters, so a multibyte value of at most 512 characters can exceed the handler's limit.",
-                "maxLength": 512,
-                "minLength": 1,
-                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string"
-              },
-              "issuer": {
-                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; the schema's maxLength counts characters, so a multibyte value of at most 2048 characters can exceed the handler's limit). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development).",
-                "maxLength": 2048,
-                "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
-                "type": "string"
-              },
-              "platform_role": {
-                "type": "null"
-              },
-              "target_kind": {
-                "const": "workspace"
-              },
-              "workspace_id": {
-                "$ref": "#/components/schemas/IdentityUuid"
-              },
-              "workspace_role": {
-                "enum": [
-                  "admin",
-                  "member"
-                ]
-              }
-            },
-            "required": [
-              "issuer",
-              "group_value",
-              "target_kind",
-              "workspace_id",
-              "workspace_role",
-              "enabled"
-            ],
-            "type": "object"
-          },
-          {
-            "items": false,
-            "maxItems": 7,
-            "minItems": 7,
-            "prefixItems": [
-              {
-                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; the schema's maxLength counts characters, so a multibyte value of at most 2048 characters can exceed the handler's limit). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development).",
-                "maxLength": 2048,
-                "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
-                "type": "string"
-              },
-              {
-                "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The schema's maxLength counts characters, so a multibyte value of at most 512 characters can exceed the handler's limit.",
-                "maxLength": 512,
-                "minLength": 1,
-                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string"
-              },
-              {
-                "enum": [
-                  "platform",
-                  "workspace"
-                ]
-              },
-              {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/IdentityRole"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "$ref": "#/components/schemas/IdentityNullableUuid"
-              },
-              {
-                "anyOf": [
-                  {
-                    "enum": [
-                      "admin",
-                      "member"
-                    ]
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "type": "boolean"
-              }
-            ],
-            "type": "array"
-          }
-        ]
-      },
-      "AccessMappingPatch": {
-        "additionalProperties": false,
-        "allOf": [
-          {
-            "if": {
-              "properties": {
-                "target_kind": {
-                  "const": "platform"
-                }
-              },
-              "required": [
-                "target_kind"
-              ]
-            },
-            "then": {
-              "properties": {
-                "platform_role": {
-                  "$ref": "#/components/schemas/IdentityRole"
-                },
-                "workspace_id": {
-                  "type": "null"
-                },
-                "workspace_role": {
-                  "type": "null"
-                }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "target_kind": {
-                  "const": "workspace"
-                }
-              },
-              "required": [
-                "target_kind"
-              ]
-            },
-            "then": {
-              "properties": {
-                "platform_role": {
-                  "type": "null"
-                },
-                "workspace_id": {
-                  "$ref": "#/components/schemas/IdentityUuid"
-                },
-                "workspace_role": {
-                  "enum": [
-                    "admin",
-                    "member"
-                  ]
-                }
-              }
-            }
-          }
-        ],
-        "description": "Fields merged onto the stored mapping (an omitted field keeps its value, an explicit null clears platform_role, workspace_id or workspace_role) and then validated as a complete mapping. Cross-field rule, as far as the body decides it: when target_kind is present, platform requires a platform_role and null workspace_id and workspace_role, and workspace requires a workspace_id and workspace_role (admin or member) and a null platform_role, each for the fields the body names (directory.rs mapping_valid on the merged row). Without target_kind the stored row's kind decides, which the schema cannot see: a body that names only a workspace field for a platform mapping is accepted by the schema and refused by the handler. When target_kind is present, fields the body omits are still filled from the stored row: switching a platform mapping to workspace without also sending platform_role:null keeps the stored platform_role, so the schema accepts that body and the handler refuses it.",
-        "properties": {
-          "enabled": {
-            "type": "boolean"
-          },
-          "group_value": {
-            "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The schema's maxLength counts characters, so a multibyte value of at most 512 characters can exceed the handler's limit.",
-            "maxLength": 512,
-            "minLength": 1,
-            "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-            "type": "string"
-          },
-          "issuer": {
-            "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; the schema's maxLength counts characters, so a multibyte value of at most 2048 characters can exceed the handler's limit). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development).",
-            "maxLength": 2048,
-            "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
-            "type": "string"
-          },
-          "platform_role": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/IdentityRole"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "target_kind": {
-            "enum": [
-              "platform",
-              "workspace"
-            ]
-          },
-          "workspace_id": {
-            "$ref": "#/components/schemas/IdentityNullableUuid"
-          },
-          "workspace_role": {
-            "anyOf": [
-              {
-                "enum": [
-                  "admin",
-                  "member"
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [],
-        "type": "object"
-      },
       "AccessMappingPreview": {
         "additionalProperties": false,
         "properties": {
@@ -2620,9 +2062,6 @@
         ],
         "type": "object"
       },
-      "AccessMappingPreviewInput": {
-        "$ref": "#/components/schemas/AccessMappingInput"
-      },
       "AccessMember": {
         "additionalProperties": false,
         "properties": {
@@ -2678,144 +2117,6 @@
         ],
         "type": "object"
       },
-      "AccessMemberInput": {
-        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies.",
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "role": {
-                "enum": [
-                  "owner",
-                  "admin",
-                  "member"
-                ]
-              },
-              "user_id": {
-                "$ref": "#/components/schemas/IdentityUuid"
-              }
-            },
-            "required": [
-              "user_id",
-              "role"
-            ],
-            "type": "object"
-          },
-          {
-            "items": false,
-            "maxItems": 2,
-            "minItems": 2,
-            "prefixItems": [
-              {
-                "$ref": "#/components/schemas/IdentityUuid"
-              },
-              {
-                "enum": [
-                  "owner",
-                  "admin",
-                  "member"
-                ]
-              }
-            ],
-            "type": "array"
-          }
-        ]
-      },
-      "AccessNewUser": {
-        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies.",
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "email": {
-                "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 UTF-8 bytes of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 grows from 2 to 3 bytes). The schema's maxLength counts characters of the value as sent, untrimmed: it refuses a padded value the handler accepts and accepts a multibyte or lower-case-expanding value the handler refuses.",
-                "maxLength": 320,
-                "pattern": "^\\s*[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+\\s*$",
-                "type": "string"
-              },
-              "platform_role": {
-                "$ref": "#/components/schemas/IdentityRole"
-              }
-            },
-            "required": [
-              "email",
-              "platform_role"
-            ],
-            "type": "object"
-          },
-          {
-            "items": false,
-            "maxItems": 2,
-            "minItems": 2,
-            "prefixItems": [
-              {
-                "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 UTF-8 bytes of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 grows from 2 to 3 bytes). The schema's maxLength counts characters of the value as sent, untrimmed: it refuses a padded value the handler accepts and accepts a multibyte or lower-case-expanding value the handler refuses.",
-                "maxLength": 320,
-                "pattern": "^\\s*[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+\\s*$",
-                "type": "string"
-              },
-              {
-                "$ref": "#/components/schemas/IdentityRole"
-              }
-            ],
-            "type": "array"
-          }
-        ]
-      },
-      "AccessNewWorkspace": {
-        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies.",
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "kind": {
-                "enum": [
-                  "team",
-                  "project"
-                ]
-              },
-              "name": {
-                "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 UTF-8 bytes of the value as sent (the handler counts bytes, without trimming). The schema's maxLength counts characters, so a multibyte name of at most 120 characters can exceed the handler's limit.",
-                "maxLength": 120,
-                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                "type": "string"
-              },
-              "owner_user_id": {
-                "$ref": "#/components/schemas/IdentityUuid"
-              }
-            },
-            "required": [
-              "name",
-              "kind",
-              "owner_user_id"
-            ],
-            "type": "object"
-          },
-          {
-            "items": false,
-            "maxItems": 3,
-            "minItems": 3,
-            "prefixItems": [
-              {
-                "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 UTF-8 bytes of the value as sent (the handler counts bytes, without trimming). The schema's maxLength counts characters, so a multibyte name of at most 120 characters can exceed the handler's limit.",
-                "maxLength": 120,
-                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                "type": "string"
-              },
-              {
-                "enum": [
-                  "team",
-                  "project"
-                ]
-              },
-              {
-                "$ref": "#/components/schemas/IdentityUuid"
-              }
-            ],
-            "type": "array"
-          }
-        ]
-      },
       "AccessOk": {
         "additionalProperties": false,
         "properties": {
@@ -2827,66 +2128,6 @@
           "ok"
         ],
         "type": "object"
-      },
-      "AccessOwnWorkspaceUpdate": {
-        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies.",
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "name": {
-                "anyOf": [
-                  {
-                    "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 UTF-8 bytes of the value as sent (the handler counts bytes, without trimming). The schema's maxLength counts characters, so a multibyte name of at most 120 characters can exceed the handler's limit.",
-                    "maxLength": 120,
-                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "object_visibility": {
-                "enum": [
-                  "member",
-                  "workspace",
-                  null
-                ]
-              }
-            },
-            "required": [],
-            "type": "object"
-          },
-          {
-            "items": false,
-            "maxItems": 2,
-            "minItems": 2,
-            "prefixItems": [
-              {
-                "anyOf": [
-                  {
-                    "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 UTF-8 bytes of the value as sent (the handler counts bytes, without trimming). The schema's maxLength counts characters, so a multibyte name of at most 120 characters can exceed the handler's limit.",
-                    "maxLength": 120,
-                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "enum": [
-                  "member",
-                  "workspace",
-                  null
-                ]
-              }
-            ],
-            "type": "array"
-          }
-        ]
       },
       "AccessPersonalContext": {
         "additionalProperties": false,
@@ -3357,395 +2598,6 @@
         ],
         "type": "object"
       },
-      "AccessPolicyInput": {
-        "description": "Rates are required-nullable (null clears) for requests_per_minute, tokens_per_minute and concurrent_requests and optional-nullable for the other four; every number is positive within the stated bound. EXACTLY ONE of budgets (the stacked form) or monthly_budget_microusd with an optional budget_period (the deprecated single-budget form) must be present: both, or neither, or budget_period with budgets, are refused. Money is a canonical positive integer micro-USD string. The positional array form can only express the monthly form (the stacked budgets field would be the tenth element, which makes both present): 8 or 9 elements ending at monthly_budget_microusd or budget_period.",
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "description": "Stacked form: budgets is required, and monthly_budget_microusd and budget_period are refused as unknown fields (policies.rs:369-370: budgets without the deprecated fields).",
-            "properties": {
-              "budgets": {
-                "description": "Full replacement set of stacked budgets, at most one per period (day, week, month, lifetime). A repeated period is refused with 400 even when the amounts differ (policies.rs:569-581 parse_budgets); JSON Schema can only state that with contains/maxContains, which request schemas may not use, so the contract does not express it (it is pinned by a handler probe).",
-                "items": {
-                  "description": "Closed serde object or positional struct array in declared field order.",
-                  "oneOf": [
-                    {
-                      "additionalProperties": false,
-                      "properties": {
-                        "amount_microusd": {
-                          "allOf": [
-                            {
-                              "$ref": "#/components/schemas/IdentityUnsignedDecimal"
-                            },
-                            {
-                              "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-7])$"
-                            }
-                          ],
-                          "description": "Exact positive integer micro-USD amount: canonical decimal digits (no leading zeros), at least 1 and at most 9223372036854775807 (the handler parses an i64: governance.rs money(positive=true)). The handler also tolerates leading zeros (\"007\" is read as 7), which the contract does not document and the schema refuses."
-                        },
-                        "period": {
-                          "$ref": "#/components/schemas/IdentityPeriod"
-                        }
-                      },
-                      "required": [
-                        "period",
-                        "amount_microusd"
-                      ],
-                      "type": "object"
-                    },
-                    {
-                      "items": false,
-                      "maxItems": 2,
-                      "minItems": 2,
-                      "prefixItems": [
-                        {
-                          "$ref": "#/components/schemas/IdentityPeriod"
-                        },
-                        {
-                          "allOf": [
-                            {
-                              "$ref": "#/components/schemas/IdentityUnsignedDecimal"
-                            },
-                            {
-                              "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-7])$"
-                            }
-                          ],
-                          "description": "Exact positive integer micro-USD amount: canonical decimal digits (no leading zeros), at least 1 and at most 9223372036854775807 (the handler parses an i64: governance.rs money(positive=true)). The handler also tolerates leading zeros (\"007\" is read as 7), which the contract does not document and the schema refuses."
-                        }
-                      ],
-                      "type": "array"
-                    }
-                  ]
-                },
-                "maxItems": 4,
-                "type": "array"
-              },
-              "concurrent_jobs": {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "concurrent_requests": {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "key_issuances_per_holder": {
-                "anyOf": [
-                  {
-                    "maximum": 10000,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "key_issuances_per_workspace": {
-                "anyOf": [
-                  {
-                    "maximum": 10000,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "requests_per_minute": {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "storage_bytes": {
-                "anyOf": [
-                  {
-                    "maximum": 1125899906842624,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "tokens_per_minute": {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "requests_per_minute",
-              "tokens_per_minute",
-              "concurrent_requests",
-              "budgets"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "description": "Deprecated single-budget form: monthly_budget_microusd is required (null clears), budget_period is optional and never null, and budgets is refused as an unknown field (policies.rs:371-387).",
-            "properties": {
-              "budget_period": {
-                "$ref": "#/components/schemas/IdentityPeriod"
-              },
-              "concurrent_jobs": {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "concurrent_requests": {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "key_issuances_per_holder": {
-                "anyOf": [
-                  {
-                    "maximum": 10000,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "key_issuances_per_workspace": {
-                "anyOf": [
-                  {
-                    "maximum": 10000,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "monthly_budget_microusd": {
-                "anyOf": [
-                  {
-                    "allOf": [
-                      {
-                        "$ref": "#/components/schemas/IdentityUnsignedDecimal"
-                      },
-                      {
-                        "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-7])$"
-                      }
-                    ],
-                    "description": "Exact positive integer micro-USD amount: canonical decimal digits (no leading zeros), at least 1 and at most 9223372036854775807 (the handler parses an i64: governance.rs money(positive=true)). The handler also tolerates leading zeros (\"007\" is read as 7), which the contract does not document and the schema refuses."
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "requests_per_minute": {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "storage_bytes": {
-                "anyOf": [
-                  {
-                    "maximum": 1125899906842624,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "tokens_per_minute": {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "requests_per_minute",
-              "tokens_per_minute",
-              "concurrent_requests",
-              "monthly_budget_microusd"
-            ],
-            "type": "object"
-          },
-          {
-            "items": false,
-            "maxItems": 9,
-            "minItems": 8,
-            "prefixItems": [
-              {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "anyOf": [
-                  {
-                    "maximum": 1125899906842624,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "anyOf": [
-                  {
-                    "maximum": 10000,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "anyOf": [
-                  {
-                    "maximum": 10000,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "anyOf": [
-                  {
-                    "allOf": [
-                      {
-                        "$ref": "#/components/schemas/IdentityUnsignedDecimal"
-                      },
-                      {
-                        "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-7])$"
-                      }
-                    ],
-                    "description": "Exact positive integer micro-USD amount: canonical decimal digits (no leading zeros), at least 1 and at most 9223372036854775807 (the handler parses an i64: governance.rs money(positive=true)). The handler also tolerates leading zeros (\"007\" is read as 7), which the contract does not document and the schema refuses."
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "$ref": "#/components/schemas/IdentityPeriod"
-              }
-            ],
-            "type": "array"
-          }
-        ]
-      },
       "AccessQueueItem": {
         "oneOf": [
           {
@@ -3804,34 +2656,6 @@
           "revoked_at"
         ],
         "type": "object"
-      },
-      "AccessRoleInput": {
-        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies.",
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "role": {
-                "$ref": "#/components/schemas/IdentityRole"
-              }
-            },
-            "required": [
-              "role"
-            ],
-            "type": "object"
-          },
-          {
-            "items": false,
-            "maxItems": 1,
-            "minItems": 1,
-            "prefixItems": [
-              {
-                "$ref": "#/components/schemas/IdentityRole"
-              }
-            ],
-            "type": "array"
-          }
-        ]
       },
       "AccessSessionId": {
         "description": "Client session label (X-Session-Id): 1-128 characters, no control characters, no leading or trailing whitespace (inference::client::valid_session_id).",
@@ -4207,92 +3031,6 @@
           "shared_memberships"
         ],
         "type": "object"
-      },
-      "AccessUserUpdate": {
-        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies.",
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "disabled": {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "email": {
-                "anyOf": [
-                  {
-                    "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 UTF-8 bytes of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 grows from 2 to 3 bytes). The schema's maxLength counts characters of the value as sent, untrimmed: it refuses a padded value the handler accepts and accepts a multibyte or lower-case-expanding value the handler refuses.",
-                    "maxLength": 320,
-                    "pattern": "^\\s*[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+\\s*$",
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "oidc_link_allowed": {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
-            "required": [],
-            "type": "object"
-          },
-          {
-            "items": false,
-            "maxItems": 3,
-            "minItems": 3,
-            "prefixItems": [
-              {
-                "anyOf": [
-                  {
-                    "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 UTF-8 bytes of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 grows from 2 to 3 bytes). The schema's maxLength counts characters of the value as sent, untrimmed: it refuses a padded value the handler accepts and accepts a multibyte or lower-case-expanding value the handler refuses.",
-                    "maxLength": 320,
-                    "pattern": "^\\s*[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+\\s*$",
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            ],
-            "type": "array"
-          }
-        ]
       },
       "AccessWorkspaceAccess": {
         "additionalProperties": false,
@@ -4980,78 +3718,6 @@
           "workspace_kind"
         ],
         "type": "object"
-      },
-      "AccessWorkspaceUpdate": {
-        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies.",
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "cost_center_id": {
-                "$ref": "#/components/schemas/IdentityNullableUuid"
-              },
-              "disabled": {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "name": {
-                "anyOf": [
-                  {
-                    "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 UTF-8 bytes of the value as sent (the handler counts bytes, without trimming). The schema's maxLength counts characters, so a multibyte name of at most 120 characters can exceed the handler's limit.",
-                    "maxLength": 120,
-                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
-            "required": [],
-            "type": "object"
-          },
-          {
-            "items": false,
-            "maxItems": 3,
-            "minItems": 2,
-            "prefixItems": [
-              {
-                "anyOf": [
-                  {
-                    "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 UTF-8 bytes of the value as sent (the handler counts bytes, without trimming). The schema's maxLength counts characters, so a multibyte name of at most 120 characters can exceed the handler's limit.",
-                    "maxLength": 120,
-                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              {
-                "$ref": "#/components/schemas/IdentityNullableUuid"
-              }
-            ],
-            "type": "array"
-          }
-        ]
       },
       "ErrorEnvelope": {
         "additionalProperties": false,
@@ -8786,7 +7452,115 @@
         "x-omg-schema-status": "incomplete"
       },
       "patch_api_v1_platform_oidc_group_mappings_by_idRequest": {
-        "$ref": "#/components/schemas/AccessMappingPatch"
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "target_kind": {
+                  "const": "platform"
+                }
+              },
+              "required": [
+                "target_kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "platform_role": {
+                  "$ref": "#/components/schemas/IdentityRole"
+                },
+                "workspace_id": {
+                  "type": "null"
+                },
+                "workspace_role": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "target_kind": {
+                  "const": "workspace"
+                }
+              },
+              "required": [
+                "target_kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "platform_role": {
+                  "type": "null"
+                },
+                "workspace_id": {
+                  "$ref": "#/components/schemas/IdentityUuid"
+                },
+                "workspace_role": {
+                  "enum": [
+                    "admin",
+                    "member"
+                  ]
+                }
+              }
+            }
+          }
+        ],
+        "description": "Fields merged onto the stored mapping (an omitted field keeps its value, an explicit null clears platform_role, workspace_id or workspace_role) and then validated as a complete mapping. Cross-field rule, as far as the body decides it: when target_kind is present, platform requires a platform_role and null workspace_id and workspace_role, and workspace requires a workspace_id and workspace_role (admin or member) and a null platform_role, each for the fields the body names (directory.rs mapping_valid on the merged row). Without target_kind the stored row's kind decides, which the schema cannot see: a body that names only a workspace field for a platform mapping is accepted by the schema and refused by the handler. When target_kind is present, fields the body omits are still filled from the stored row: switching a platform mapping to workspace without also sending platform_role:null keeps the stored platform_role, so the schema accepts that body and the handler refuses it.",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "group_value": {
+            "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The schema's maxLength counts characters, so a multibyte value of at most 512 characters can exceed the handler's limit.",
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+            "type": "string"
+          },
+          "issuer": {
+            "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; the schema's maxLength counts characters, so a multibyte value of at most 2048 characters can exceed the handler's limit). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development).",
+            "maxLength": 2048,
+            "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+            "type": "string"
+          },
+          "platform_role": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IdentityRole"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target_kind": {
+            "enum": [
+              "platform",
+              "workspace"
+            ]
+          },
+          "workspace_id": {
+            "$ref": "#/components/schemas/IdentityNullableUuid"
+          },
+          "workspace_role": {
+            "anyOf": [
+              {
+                "enum": [
+                  "admin",
+                  "member"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
       },
       "patch_api_v1_platform_oidc_group_mappings_by_idResponse": {
         "$ref": "#/components/schemas/AccessOk"
@@ -8808,19 +7582,228 @@
         "x-omg-schema-status": "incomplete"
       },
       "patch_api_v1_platform_users_by_userRequest": {
-        "$ref": "#/components/schemas/AccessUserUpdate"
+        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "disabled": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "email": {
+                "anyOf": [
+                  {
+                    "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 UTF-8 bytes of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 grows from 2 to 3 bytes). The schema's maxLength counts characters of the value as sent, untrimmed: it refuses a padded value the handler accepts and accepts a multibyte or lower-case-expanding value the handler refuses.",
+                    "maxLength": 320,
+                    "pattern": "^\\s*[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+\\s*$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "oidc_link_allowed": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "anyOf": [
+                  {
+                    "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 UTF-8 bytes of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 grows from 2 to 3 bytes). The schema's maxLength counts characters of the value as sent, untrimmed: it refuses a padded value the handler accepts and accepts a multibyte or lower-case-expanding value the handler refuses.",
+                    "maxLength": 320,
+                    "pattern": "^\\s*[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+\\s*$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            ],
+            "type": "array"
+          }
+        ]
       },
       "patch_api_v1_platform_users_by_userResponse": {
         "$ref": "#/components/schemas/AccessOk"
       },
       "patch_api_v1_platform_workspaces_by_wsRequest": {
-        "$ref": "#/components/schemas/AccessWorkspaceUpdate"
+        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "cost_center_id": {
+                "$ref": "#/components/schemas/IdentityNullableUuid"
+              },
+              "disabled": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "name": {
+                "anyOf": [
+                  {
+                    "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 UTF-8 bytes of the value as sent (the handler counts bytes, without trimming). The schema's maxLength counts characters, so a multibyte name of at most 120 characters can exceed the handler's limit.",
+                    "maxLength": 120,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 3,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "anyOf": [
+                  {
+                    "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 UTF-8 bytes of the value as sent (the handler counts bytes, without trimming). The schema's maxLength counts characters, so a multibyte name of at most 120 characters can exceed the handler's limit.",
+                    "maxLength": 120,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "$ref": "#/components/schemas/IdentityNullableUuid"
+              }
+            ],
+            "type": "array"
+          }
+        ]
       },
       "patch_api_v1_platform_workspaces_by_wsResponse": {
         "$ref": "#/components/schemas/AccessOk"
       },
       "patch_api_v1_workspaces_by_wsRequest": {
-        "$ref": "#/components/schemas/AccessOwnWorkspaceUpdate"
+        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "anyOf": [
+                  {
+                    "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 UTF-8 bytes of the value as sent (the handler counts bytes, without trimming). The schema's maxLength counts characters, so a multibyte name of at most 120 characters can exceed the handler's limit.",
+                    "maxLength": 120,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "object_visibility": {
+                "enum": [
+                  "member",
+                  "workspace",
+                  null
+                ]
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "anyOf": [
+                  {
+                    "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 UTF-8 bytes of the value as sent (the handler counts bytes, without trimming). The schema's maxLength counts characters, so a multibyte name of at most 120 characters can exceed the handler's limit.",
+                    "maxLength": 120,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "enum": [
+                  "member",
+                  "workspace",
+                  null
+                ]
+              }
+            ],
+            "type": "array"
+          }
+        ]
       },
       "patch_api_v1_workspaces_by_wsResponse": {
         "$ref": "#/components/schemas/AccessOk"
@@ -9190,19 +8173,418 @@
         "x-omg-schema-status": "incomplete"
       },
       "post_api_v1_platform_oidc_group_mappingsRequest": {
-        "$ref": "#/components/schemas/AccessMappingInput"
+        "description": "A complete mapping (create, and the preview of a not-yet-saved mapping): target_kind platform requires platform_role and no workspace fields; target_kind workspace requires workspace_id and workspace_role (admin or member) and no platform_role (directory.rs mapping_valid, the oidc_group_mappings CHECK). The positional array form does not repeat the cross-field rule. The preview handler refuses a null or missing required value exactly like create.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "group_value": {
+                "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The schema's maxLength counts characters, so a multibyte value of at most 512 characters can exceed the handler's limit.",
+                "maxLength": 512,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                "type": "string"
+              },
+              "issuer": {
+                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; the schema's maxLength counts characters, so a multibyte value of at most 2048 characters can exceed the handler's limit). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development).",
+                "maxLength": 2048,
+                "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+                "type": "string"
+              },
+              "platform_role": {
+                "$ref": "#/components/schemas/IdentityRole"
+              },
+              "target_kind": {
+                "const": "platform"
+              },
+              "workspace_id": {
+                "type": "null"
+              },
+              "workspace_role": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "issuer",
+              "group_value",
+              "target_kind",
+              "platform_role",
+              "enabled"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "group_value": {
+                "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The schema's maxLength counts characters, so a multibyte value of at most 512 characters can exceed the handler's limit.",
+                "maxLength": 512,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                "type": "string"
+              },
+              "issuer": {
+                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; the schema's maxLength counts characters, so a multibyte value of at most 2048 characters can exceed the handler's limit). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development).",
+                "maxLength": 2048,
+                "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+                "type": "string"
+              },
+              "platform_role": {
+                "type": "null"
+              },
+              "target_kind": {
+                "const": "workspace"
+              },
+              "workspace_id": {
+                "$ref": "#/components/schemas/IdentityUuid"
+              },
+              "workspace_role": {
+                "enum": [
+                  "admin",
+                  "member"
+                ]
+              }
+            },
+            "required": [
+              "issuer",
+              "group_value",
+              "target_kind",
+              "workspace_id",
+              "workspace_role",
+              "enabled"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 7,
+            "minItems": 7,
+            "prefixItems": [
+              {
+                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; the schema's maxLength counts characters, so a multibyte value of at most 2048 characters can exceed the handler's limit). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development).",
+                "maxLength": 2048,
+                "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+                "type": "string"
+              },
+              {
+                "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The schema's maxLength counts characters, so a multibyte value of at most 512 characters can exceed the handler's limit.",
+                "maxLength": 512,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                "type": "string"
+              },
+              {
+                "enum": [
+                  "platform",
+                  "workspace"
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/IdentityRole"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "$ref": "#/components/schemas/IdentityNullableUuid"
+              },
+              {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "admin",
+                      "member"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "type": "boolean"
+              }
+            ],
+            "type": "array"
+          }
+        ]
       },
       "post_api_v1_platform_oidc_group_mappingsResponse": {
         "$ref": "#/components/schemas/AccessIdentifier"
       },
       "post_api_v1_platform_oidc_group_mappings_by_id_previewRequest": {
-        "$ref": "#/components/schemas/AccessMappingExistingPreview"
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "target_kind": {
+                  "const": "platform"
+                }
+              },
+              "required": [
+                "target_kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "platform_role": {
+                  "$ref": "#/components/schemas/IdentityRole"
+                },
+                "workspace_id": {
+                  "type": "null"
+                },
+                "workspace_role": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "target_kind": {
+                  "const": "workspace"
+                }
+              },
+              "required": [
+                "target_kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "platform_role": {
+                  "type": "null"
+                },
+                "workspace_id": {
+                  "$ref": "#/components/schemas/IdentityUuid"
+                },
+                "workspace_role": {
+                  "enum": [
+                    "admin",
+                    "member"
+                  ]
+                }
+              }
+            }
+          }
+        ],
+        "description": "The PATCH merge body plus an optional delete flag (a boolean). The handler previews a DELETE when delete is true OR when no mapping field is present (group_mapping_preview.rs: is_delete = delete || patch.is_empty()), so {} and {\"delete\":false} both preview a delete, while {\"delete\":false,\"enabled\":true} previews the merge. With delete:true every other mapping field is ignored and its value is not validated ({\"delete\":true,\"enabled\":\"x\"} succeeds), although an unknown key is still refused with 422; the schema keeps typing those fields (a wildcard value is not expressible), so it refuses such a body that the handler accepts. Cross-field rule, as far as the body decides it: when target_kind is present, platform requires a platform_role and null workspace_id and workspace_role, and workspace requires a workspace_id and workspace_role (admin or member) and a null platform_role, each for the fields the body names (directory.rs mapping_valid on the merged row). Without target_kind the stored row's kind decides, which the schema cannot see: a body that names only a workspace field for a platform mapping is accepted by the schema and refused by the handler. When target_kind is present, fields the body omits are still filled from the stored row: switching a platform mapping to workspace without also sending platform_role:null keeps the stored platform_role, so the schema accepts that body and the handler refuses it.",
+        "properties": {
+          "delete": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "group_value": {
+            "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The schema's maxLength counts characters, so a multibyte value of at most 512 characters can exceed the handler's limit.",
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+            "type": "string"
+          },
+          "issuer": {
+            "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; the schema's maxLength counts characters, so a multibyte value of at most 2048 characters can exceed the handler's limit). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development).",
+            "maxLength": 2048,
+            "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+            "type": "string"
+          },
+          "platform_role": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IdentityRole"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target_kind": {
+            "enum": [
+              "platform",
+              "workspace"
+            ]
+          },
+          "workspace_id": {
+            "$ref": "#/components/schemas/IdentityNullableUuid"
+          },
+          "workspace_role": {
+            "anyOf": [
+              {
+                "enum": [
+                  "admin",
+                  "member"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
       },
       "post_api_v1_platform_oidc_group_mappings_by_id_previewResponse": {
         "$ref": "#/components/schemas/AccessMappingExistingResult"
       },
       "post_api_v1_platform_oidc_group_mappings_previewRequest": {
-        "$ref": "#/components/schemas/AccessMappingPreviewInput"
+        "description": "A complete mapping (create, and the preview of a not-yet-saved mapping): target_kind platform requires platform_role and no workspace fields; target_kind workspace requires workspace_id and workspace_role (admin or member) and no platform_role (directory.rs mapping_valid, the oidc_group_mappings CHECK). The positional array form does not repeat the cross-field rule. The preview handler refuses a null or missing required value exactly like create.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "group_value": {
+                "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The schema's maxLength counts characters, so a multibyte value of at most 512 characters can exceed the handler's limit.",
+                "maxLength": 512,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                "type": "string"
+              },
+              "issuer": {
+                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; the schema's maxLength counts characters, so a multibyte value of at most 2048 characters can exceed the handler's limit). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development).",
+                "maxLength": 2048,
+                "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+                "type": "string"
+              },
+              "platform_role": {
+                "$ref": "#/components/schemas/IdentityRole"
+              },
+              "target_kind": {
+                "const": "platform"
+              },
+              "workspace_id": {
+                "type": "null"
+              },
+              "workspace_role": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "issuer",
+              "group_value",
+              "target_kind",
+              "platform_role",
+              "enabled"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "group_value": {
+                "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The schema's maxLength counts characters, so a multibyte value of at most 512 characters can exceed the handler's limit.",
+                "maxLength": 512,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                "type": "string"
+              },
+              "issuer": {
+                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; the schema's maxLength counts characters, so a multibyte value of at most 2048 characters can exceed the handler's limit). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development).",
+                "maxLength": 2048,
+                "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+                "type": "string"
+              },
+              "platform_role": {
+                "type": "null"
+              },
+              "target_kind": {
+                "const": "workspace"
+              },
+              "workspace_id": {
+                "$ref": "#/components/schemas/IdentityUuid"
+              },
+              "workspace_role": {
+                "enum": [
+                  "admin",
+                  "member"
+                ]
+              }
+            },
+            "required": [
+              "issuer",
+              "group_value",
+              "target_kind",
+              "workspace_id",
+              "workspace_role",
+              "enabled"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 7,
+            "minItems": 7,
+            "prefixItems": [
+              {
+                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; the schema's maxLength counts characters, so a multibyte value of at most 2048 characters can exceed the handler's limit). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the parser trims leading and trailing whitespace, strips tab, CR and LF anywhere and also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) spaces, other control characters (C0 and C1) and a no-break space in the path are accepted by the parser (they are percent-encoded) and refused by the schema; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development).",
+                "maxLength": 2048,
+                "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[^\\s/?#@:\\[\\]%<>^|\\\\\\u0000-\\u001f\\u007f-\\u009f]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^\\s?#\\u0000-\\u001f\\u007f-\\u009f]*)?$",
+                "type": "string"
+              },
+              {
+                "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The schema's maxLength counts characters, so a multibyte value of at most 512 characters can exceed the handler's limit.",
+                "maxLength": 512,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+                "type": "string"
+              },
+              {
+                "enum": [
+                  "platform",
+                  "workspace"
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/IdentityRole"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "$ref": "#/components/schemas/IdentityNullableUuid"
+              },
+              {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "admin",
+                      "member"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "type": "boolean"
+              }
+            ],
+            "type": "array"
+          }
+        ]
       },
       "post_api_v1_platform_oidc_group_mappings_previewResponse": {
         "$ref": "#/components/schemas/AccessMappingPreview"
@@ -9272,7 +8654,45 @@
         "x-omg-schema-status": "incomplete"
       },
       "post_api_v1_platform_usersRequest": {
-        "$ref": "#/components/schemas/AccessNewUser"
+        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "email": {
+                "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 UTF-8 bytes of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 grows from 2 to 3 bytes). The schema's maxLength counts characters of the value as sent, untrimmed: it refuses a padded value the handler accepts and accepts a multibyte or lower-case-expanding value the handler refuses.",
+                "maxLength": 320,
+                "pattern": "^\\s*[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+\\s*$",
+                "type": "string"
+              },
+              "platform_role": {
+                "$ref": "#/components/schemas/IdentityRole"
+              }
+            },
+            "required": [
+              "email",
+              "platform_role"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 UTF-8 bytes of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 grows from 2 to 3 bytes). The schema's maxLength counts characters of the value as sent, untrimmed: it refuses a padded value the handler accepts and accepts a multibyte or lower-case-expanding value the handler refuses.",
+                "maxLength": 320,
+                "pattern": "^\\s*[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+\\s*$",
+                "type": "string"
+              },
+              {
+                "$ref": "#/components/schemas/IdentityRole"
+              }
+            ],
+            "type": "array"
+          }
+        ]
       },
       "post_api_v1_platform_usersResponse": {
         "$ref": "#/components/schemas/AccessIdentifier"
@@ -9282,7 +8702,32 @@
         "$ref": "#/components/schemas/AccessOk"
       },
       "post_api_v1_platform_users_by_user_rolesRequest": {
-        "$ref": "#/components/schemas/AccessRoleInput"
+        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "role": {
+                "$ref": "#/components/schemas/IdentityRole"
+              }
+            },
+            "required": [
+              "role"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "$ref": "#/components/schemas/IdentityRole"
+              }
+            ],
+            "type": "array"
+          }
+        ]
       },
       "post_api_v1_platform_users_by_user_rolesResponse": {
         "$ref": "#/components/schemas/AccessOk"
@@ -9292,19 +8737,135 @@
         "$ref": "#/components/schemas/IdentityRevoked"
       },
       "post_api_v1_platform_workspacesRequest": {
-        "$ref": "#/components/schemas/AccessNewWorkspace"
+        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "team",
+                  "project"
+                ]
+              },
+              "name": {
+                "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 UTF-8 bytes of the value as sent (the handler counts bytes, without trimming). The schema's maxLength counts characters, so a multibyte name of at most 120 characters can exceed the handler's limit.",
+                "maxLength": 120,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+                "type": "string"
+              },
+              "owner_user_id": {
+                "$ref": "#/components/schemas/IdentityUuid"
+              }
+            },
+            "required": [
+              "name",
+              "kind",
+              "owner_user_id"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 UTF-8 bytes of the value as sent (the handler counts bytes, without trimming). The schema's maxLength counts characters, so a multibyte name of at most 120 characters can exceed the handler's limit.",
+                "maxLength": 120,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
+                "type": "string"
+              },
+              {
+                "enum": [
+                  "team",
+                  "project"
+                ]
+              },
+              {
+                "$ref": "#/components/schemas/IdentityUuid"
+              }
+            ],
+            "type": "array"
+          }
+        ]
       },
       "post_api_v1_platform_workspacesResponse": {
         "$ref": "#/components/schemas/AccessIdentifier"
       },
       "post_api_v1_platform_workspaces_by_ws_membersRequest": {
-        "$ref": "#/components/schemas/AccessMemberInput"
+        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "role": {
+                "enum": [
+                  "owner",
+                  "admin",
+                  "member"
+                ]
+              },
+              "user_id": {
+                "$ref": "#/components/schemas/IdentityUuid"
+              }
+            },
+            "required": [
+              "user_id",
+              "role"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "$ref": "#/components/schemas/IdentityUuid"
+              },
+              {
+                "enum": [
+                  "owner",
+                  "admin",
+                  "member"
+                ]
+              }
+            ],
+            "type": "array"
+          }
+        ]
       },
       "post_api_v1_platform_workspaces_by_ws_membersResponse": {
         "$ref": "#/components/schemas/AccessOk"
       },
       "post_api_v1_platform_workspaces_by_ws_modelsRequest": {
-        "$ref": "#/components/schemas/AccessDirectModel"
+        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "model_id": {
+                "$ref": "#/components/schemas/IdentityUuid"
+              }
+            },
+            "required": [
+              "model_id"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "$ref": "#/components/schemas/IdentityUuid"
+              }
+            ],
+            "type": "array"
+          }
+        ]
       },
       "post_api_v1_platform_workspaces_by_ws_modelsResponse": {
         "$ref": "#/components/schemas/AccessOk"
@@ -9350,7 +8911,51 @@
         "x-omg-schema-status": "incomplete"
       },
       "post_api_v1_workspaces_by_ws_invitationsRequest": {
-        "$ref": "#/components/schemas/AccessInviteInput"
+        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "email": {
+                "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 UTF-8 bytes of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 grows from 2 to 3 bytes). The schema's maxLength counts characters of the value as sent, untrimmed: it refuses a padded value the handler accepts and accepts a multibyte or lower-case-expanding value the handler refuses.",
+                "maxLength": 320,
+                "pattern": "^\\s*[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+\\s*$",
+                "type": "string"
+              },
+              "role": {
+                "enum": [
+                  "admin",
+                  "member"
+                ]
+              }
+            },
+            "required": [
+              "email",
+              "role"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 UTF-8 bytes of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 grows from 2 to 3 bytes). The schema's maxLength counts characters of the value as sent, untrimmed: it refuses a padded value the handler accepts and accepts a multibyte or lower-case-expanding value the handler refuses.",
+                "maxLength": 320,
+                "pattern": "^\\s*[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\s@\\u0000-\\u001f\\u007f-\\u009f]+\\s*$",
+                "type": "string"
+              },
+              {
+                "enum": [
+                  "admin",
+                  "member"
+                ]
+              }
+            ],
+            "type": "array"
+          }
+        ]
       },
       "post_api_v1_workspaces_by_ws_invitationsResponse": {
         "$ref": "#/components/schemas/AccessInvitationCreated"
@@ -9372,7 +8977,47 @@
         "x-omg-schema-status": "incomplete"
       },
       "post_api_v1_workspaces_by_ws_membersRequest": {
-        "$ref": "#/components/schemas/AccessMemberInput"
+        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "role": {
+                "enum": [
+                  "owner",
+                  "admin",
+                  "member"
+                ]
+              },
+              "user_id": {
+                "$ref": "#/components/schemas/IdentityUuid"
+              }
+            },
+            "required": [
+              "user_id",
+              "role"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "$ref": "#/components/schemas/IdentityUuid"
+              },
+              {
+                "enum": [
+                  "owner",
+                  "admin",
+                  "member"
+                ]
+              }
+            ],
+            "type": "array"
+          }
+        ]
       },
       "post_api_v1_workspaces_by_ws_membersResponse": {
         "$ref": "#/components/schemas/AccessOk"
@@ -9506,31 +9151,741 @@
         "x-omg-schema-status": "incomplete"
       },
       "put_api_v1_platform_workspace_types_by_kind_catalogsRequest": {
-        "$ref": "#/components/schemas/AccessCatalogIds"
+        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "catalog_ids": {
+                "description": "At most 200 distinct catalog ids (duplicates collapse).",
+                "items": {
+                  "$ref": "#/components/schemas/IdentityUuid"
+                },
+                "maxItems": 200,
+                "type": "array"
+              }
+            },
+            "required": [
+              "catalog_ids"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "description": "At most 200 distinct catalog ids (duplicates collapse).",
+                "items": {
+                  "$ref": "#/components/schemas/IdentityUuid"
+                },
+                "maxItems": 200,
+                "type": "array"
+              }
+            ],
+            "type": "array"
+          }
+        ]
       },
       "put_api_v1_platform_workspace_types_by_kind_catalogsResponse": {
         "$ref": "#/components/schemas/AccessOk"
       },
       "put_api_v1_platform_workspace_types_by_kind_policyRequest": {
-        "$ref": "#/components/schemas/AccessPolicyInput"
+        "description": "Rates are required-nullable (null clears) for requests_per_minute, tokens_per_minute and concurrent_requests and optional-nullable for the other four; every number is positive within the stated bound. EXACTLY ONE of budgets (the stacked form) or monthly_budget_microusd with an optional budget_period (the deprecated single-budget form) must be present: both, or neither, or budget_period with budgets, are refused. Money is a canonical positive integer micro-USD string. The positional array form can only express the monthly form (the stacked budgets field would be the tenth element, which makes both present): 8 or 9 elements ending at monthly_budget_microusd or budget_period.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "dependentRequired": {
+              "budget_period": [
+                "monthly_budget_microusd"
+              ]
+            },
+            "oneOf": [
+              {
+                "required": [
+                  "budgets"
+                ]
+              },
+              {
+                "required": [
+                  "monthly_budget_microusd"
+                ]
+              }
+            ],
+            "properties": {
+              "budget_period": {
+                "$ref": "#/components/schemas/IdentityPeriod"
+              },
+              "budgets": {
+                "description": "Full replacement set of stacked budgets, at most one per period (day, week, month, lifetime). A repeated period is refused with 400 even when the amounts differ (policies.rs:569-581 parse_budgets); JSON Schema can only state that with contains/maxContains, which request schemas may not use, so the contract does not express it (it is pinned by a handler probe).",
+                "items": {
+                  "description": "Closed serde object or positional struct array in declared field order.",
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "amount_microusd": {
+                          "allOf": [
+                            {
+                              "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                            },
+                            {
+                              "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-7])$"
+                            }
+                          ],
+                          "description": "Exact positive integer micro-USD amount: canonical decimal digits (no leading zeros), at least 1 and at most 9223372036854775807 (the handler parses an i64: governance.rs money(positive=true)). The handler also tolerates leading zeros (\"007\" is read as 7), which the contract does not document and the schema refuses."
+                        },
+                        "period": {
+                          "$ref": "#/components/schemas/IdentityPeriod"
+                        }
+                      },
+                      "required": [
+                        "period",
+                        "amount_microusd"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "items": false,
+                      "maxItems": 2,
+                      "minItems": 2,
+                      "prefixItems": [
+                        {
+                          "$ref": "#/components/schemas/IdentityPeriod"
+                        },
+                        {
+                          "allOf": [
+                            {
+                              "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                            },
+                            {
+                              "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-7])$"
+                            }
+                          ],
+                          "description": "Exact positive integer micro-USD amount: canonical decimal digits (no leading zeros), at least 1 and at most 9223372036854775807 (the handler parses an i64: governance.rs money(positive=true)). The handler also tolerates leading zeros (\"007\" is read as 7), which the contract does not document and the schema refuses."
+                        }
+                      ],
+                      "type": "array"
+                    }
+                  ]
+                },
+                "maxItems": 4,
+                "type": "array"
+              },
+              "concurrent_jobs": {
+                "anyOf": [
+                  {
+                    "maximum": 2147483647,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "concurrent_requests": {
+                "anyOf": [
+                  {
+                    "maximum": 2147483647,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "key_issuances_per_holder": {
+                "anyOf": [
+                  {
+                    "maximum": 10000,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "key_issuances_per_workspace": {
+                "anyOf": [
+                  {
+                    "maximum": 10000,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "monthly_budget_microusd": {
+                "anyOf": [
+                  {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                      },
+                      {
+                        "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-7])$"
+                      }
+                    ],
+                    "description": "Exact positive integer micro-USD amount: canonical decimal digits (no leading zeros), at least 1 and at most 9223372036854775807 (the handler parses an i64: governance.rs money(positive=true)). The handler also tolerates leading zeros (\"007\" is read as 7), which the contract does not document and the schema refuses."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "requests_per_minute": {
+                "anyOf": [
+                  {
+                    "maximum": 2147483647,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "storage_bytes": {
+                "anyOf": [
+                  {
+                    "maximum": 1125899906842624,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "tokens_per_minute": {
+                "anyOf": [
+                  {
+                    "maximum": 2147483647,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "requests_per_minute",
+              "tokens_per_minute",
+              "concurrent_requests"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 9,
+            "minItems": 8,
+            "prefixItems": [
+              {
+                "anyOf": [
+                  {
+                    "maximum": 2147483647,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "maximum": 2147483647,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "maximum": 2147483647,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "maximum": 2147483647,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "maximum": 1125899906842624,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "maximum": 10000,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "maximum": 10000,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                      },
+                      {
+                        "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-7])$"
+                      }
+                    ],
+                    "description": "Exact positive integer micro-USD amount: canonical decimal digits (no leading zeros), at least 1 and at most 9223372036854775807 (the handler parses an i64: governance.rs money(positive=true)). The handler also tolerates leading zeros (\"007\" is read as 7), which the contract does not document and the schema refuses."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "$ref": "#/components/schemas/IdentityPeriod"
+              }
+            ],
+            "type": "array"
+          }
+        ]
       },
       "put_api_v1_platform_workspace_types_by_kind_policyResponse": {
         "$ref": "#/components/schemas/AccessOk"
       },
       "put_api_v1_platform_workspaces_by_ws_catalogsRequest": {
-        "$ref": "#/components/schemas/AccessCatalogOverride"
+        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "catalog_ids": {
+                "description": "At most 200 distinct catalog ids (duplicates collapse).",
+                "items": {
+                  "$ref": "#/components/schemas/IdentityUuid"
+                },
+                "maxItems": 200,
+                "type": "array"
+              },
+              "mode": {
+                "const": "replace"
+              }
+            },
+            "required": [
+              "mode",
+              "catalog_ids"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "const": "replace"
+              },
+              {
+                "description": "At most 200 distinct catalog ids (duplicates collapse).",
+                "items": {
+                  "$ref": "#/components/schemas/IdentityUuid"
+                },
+                "maxItems": 200,
+                "type": "array"
+              }
+            ],
+            "type": "array"
+          }
+        ]
       },
       "put_api_v1_platform_workspaces_by_ws_catalogsResponse": {
         "$ref": "#/components/schemas/AccessOk"
       },
       "put_api_v1_platform_workspaces_by_ws_discoverableRequest": {
-        "$ref": "#/components/schemas/AccessDiscoverable"
+        "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation additionally applies.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "discoverable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "discoverable"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "type": "boolean"
+              }
+            ],
+            "type": "array"
+          }
+        ]
       },
       "put_api_v1_platform_workspaces_by_ws_discoverableResponse": {
         "$ref": "#/components/schemas/AccessOk"
       },
       "put_api_v1_platform_workspaces_by_ws_policyRequest": {
-        "$ref": "#/components/schemas/AccessPolicyInput"
+        "description": "Rates are required-nullable (null clears) for requests_per_minute, tokens_per_minute and concurrent_requests and optional-nullable for the other four; every number is positive within the stated bound. EXACTLY ONE of budgets (the stacked form) or monthly_budget_microusd with an optional budget_period (the deprecated single-budget form) must be present: both, or neither, or budget_period with budgets, are refused. Money is a canonical positive integer micro-USD string. The positional array form can only express the monthly form (the stacked budgets field would be the tenth element, which makes both present): 8 or 9 elements ending at monthly_budget_microusd or budget_period.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "dependentRequired": {
+              "budget_period": [
+                "monthly_budget_microusd"
+              ]
+            },
+            "oneOf": [
+              {
+                "required": [
+                  "budgets"
+                ]
+              },
+              {
+                "required": [
+                  "monthly_budget_microusd"
+                ]
+              }
+            ],
+            "properties": {
+              "budget_period": {
+                "$ref": "#/components/schemas/IdentityPeriod"
+              },
+              "budgets": {
+                "description": "Full replacement set of stacked budgets, at most one per period (day, week, month, lifetime). A repeated period is refused with 400 even when the amounts differ (policies.rs:569-581 parse_budgets); JSON Schema can only state that with contains/maxContains, which request schemas may not use, so the contract does not express it (it is pinned by a handler probe).",
+                "items": {
+                  "description": "Closed serde object or positional struct array in declared field order.",
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "amount_microusd": {
+                          "allOf": [
+                            {
+                              "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                            },
+                            {
+                              "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-7])$"
+                            }
+                          ],
+                          "description": "Exact positive integer micro-USD amount: canonical decimal digits (no leading zeros), at least 1 and at most 9223372036854775807 (the handler parses an i64: governance.rs money(positive=true)). The handler also tolerates leading zeros (\"007\" is read as 7), which the contract does not document and the schema refuses."
+                        },
+                        "period": {
+                          "$ref": "#/components/schemas/IdentityPeriod"
+                        }
+                      },
+                      "required": [
+                        "period",
+                        "amount_microusd"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "items": false,
+                      "maxItems": 2,
+                      "minItems": 2,
+                      "prefixItems": [
+                        {
+                          "$ref": "#/components/schemas/IdentityPeriod"
+                        },
+                        {
+                          "allOf": [
+                            {
+                              "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                            },
+                            {
+                              "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-7])$"
+                            }
+                          ],
+                          "description": "Exact positive integer micro-USD amount: canonical decimal digits (no leading zeros), at least 1 and at most 9223372036854775807 (the handler parses an i64: governance.rs money(positive=true)). The handler also tolerates leading zeros (\"007\" is read as 7), which the contract does not document and the schema refuses."
+                        }
+                      ],
+                      "type": "array"
+                    }
+                  ]
+                },
+                "maxItems": 4,
+                "type": "array"
+              },
+              "concurrent_jobs": {
+                "anyOf": [
+                  {
+                    "maximum": 2147483647,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "concurrent_requests": {
+                "anyOf": [
+                  {
+                    "maximum": 2147483647,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "key_issuances_per_holder": {
+                "anyOf": [
+                  {
+                    "maximum": 10000,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "key_issuances_per_workspace": {
+                "anyOf": [
+                  {
+                    "maximum": 10000,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "monthly_budget_microusd": {
+                "anyOf": [
+                  {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                      },
+                      {
+                        "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-7])$"
+                      }
+                    ],
+                    "description": "Exact positive integer micro-USD amount: canonical decimal digits (no leading zeros), at least 1 and at most 9223372036854775807 (the handler parses an i64: governance.rs money(positive=true)). The handler also tolerates leading zeros (\"007\" is read as 7), which the contract does not document and the schema refuses."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "requests_per_minute": {
+                "anyOf": [
+                  {
+                    "maximum": 2147483647,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "storage_bytes": {
+                "anyOf": [
+                  {
+                    "maximum": 1125899906842624,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "tokens_per_minute": {
+                "anyOf": [
+                  {
+                    "maximum": 2147483647,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "requests_per_minute",
+              "tokens_per_minute",
+              "concurrent_requests"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 9,
+            "minItems": 8,
+            "prefixItems": [
+              {
+                "anyOf": [
+                  {
+                    "maximum": 2147483647,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "maximum": 2147483647,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "maximum": 2147483647,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "maximum": 2147483647,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "maximum": 1125899906842624,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "maximum": 10000,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "maximum": 10000,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/IdentityUnsignedDecimal"
+                      },
+                      {
+                        "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-7])$"
+                      }
+                    ],
+                    "description": "Exact positive integer micro-USD amount: canonical decimal digits (no leading zeros), at least 1 and at most 9223372036854775807 (the handler parses an i64: governance.rs money(positive=true)). The handler also tolerates leading zeros (\"007\" is read as 7), which the contract does not document and the schema refuses."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "$ref": "#/components/schemas/IdentityPeriod"
+              }
+            ],
+            "type": "array"
+          }
+        ]
       },
       "put_api_v1_platform_workspaces_by_ws_policyResponse": {
         "$ref": "#/components/schemas/AccessOk"
