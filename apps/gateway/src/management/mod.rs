@@ -25,6 +25,9 @@ mod models_ux;
 #[cfg(test)]
 #[path = "../management_openapi/mod.rs"]
 pub(crate) mod openapi;
+#[cfg(test)]
+#[path = "openapi_semantic_tests.rs"]
+pub(crate) mod openapi_semantic;
 mod provider_costs;
 mod requests;
 pub(crate) mod resources;

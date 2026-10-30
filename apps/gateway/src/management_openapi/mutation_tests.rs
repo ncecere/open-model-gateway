@@ -60,6 +60,7 @@ fn sample(document: &Value, schema: &Value) -> Value {
                 .is_some_and(|p| p.starts_with("^file-")) =>
                 format!("file-{}", "0".repeat(32)),
             _ if schema["pattern"].as_str() == Some("^[0-9a-f]{32}$") => "0".repeat(32),
+            _ if schema["pattern"].as_str() == Some("^[0-9a-f]{64}$") => "0".repeat(64),
             // The first plain candidate the pattern accepts (a counter, a
             // positive integer or a two-decimal rate).
             _ if schema.get("pattern").is_some() => {
@@ -290,9 +291,13 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                     h.insert("cache-control", "no-store".parse().unwrap());
                     h.insert(
                         "content-disposition",
-                        "attachment; filename=\"omg-export-2026-10-28-2026-10-28.json\""
-                            .parse()
-                            .unwrap(),
+                        if path.starts_with("/api/v1/platform/users/") {
+                            "attachment; filename=\"omg-user-00000000-0000-0000-0000-000000000000.json\""
+                        } else {
+                            "attachment; filename=\"omg-export-2026-10-28-2026-10-28.json\""
+                        }
+                        .parse()
+                        .unwrap(),
                     );
                     h.insert("x-omg-export-sha256", "a".repeat(64).parse().unwrap());
                 }
@@ -568,7 +573,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
             }
         }
     }
-    assert_eq!((operations, json_operations), (102, 97));
+    assert_eq!((operations, json_operations), (156, 151));
 }
 
 #[test]

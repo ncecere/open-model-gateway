@@ -18,6 +18,11 @@ pub(super) const ARBITRARY_JSON: &[(&str, &str)] = &[
         "/components/schemas/get_api_v1_me_exportResponse/properties/audit/properties/items/items/properties/metadata",
         "Stored audit_events.metadata is exported verbatim as JSON; its vocabulary depends on the audited action.",
     ),
+    // The platform subject export (slice 2) is the same stored audit value.
+    (
+        "/components/schemas/AccessPlatformExport/properties/audit/properties/items/items/properties/metadata",
+        "Stored audit_events.metadata is exported verbatim as JSON; its vocabulary depends on the audited action.",
+    ),
     (
         "/components/schemas/SettingsWorkspaceAlertEvent/properties/details",
         "Workspace history rows return alert_events.details verbatim as stored producer-specific JSON; monetary refinements apply on this shared base, and every concrete workspace event variant refines it with the closed schema of its kind (Settings*Details).",
