@@ -2510,7 +2510,7 @@ fn upload_app(max: usize) -> Router {
             if (1..=max).contains(&body.len()) {
                 StatusCode::OK
             } else {
-                StatusCode::BAD_REQUEST
+                StatusCode::PAYLOAD_TOO_LARGE
             }
         }),
     )
@@ -2557,4 +2557,42 @@ async fn management_openapi_http_vectors_binary_disagreement_fails_without_value
         "{text}"
     );
     assert!(!text.contains("[7, 7"), "{text}");
+}
+#[tokio::test]
+async fn management_openapi_http_vectors_binary_only_size_and_media_statuses_are_refusals() {
+    // 413 and 415 are input verdicts for a raw body; a throttle or an
+    // authorization refusal is not, and fails the run instead of counting.
+    for status in [
+        StatusCode::TOO_MANY_REQUESTS,
+        StatusCode::FORBIDDEN,
+        StatusCode::INTERNAL_SERVER_ERROR,
+    ] {
+        let app = Router::new().route(
+            TEMPLATE,
+            axum::routing::put(move |body: axum::body::Bytes| async move {
+                if (1..=16).contains(&body.len()) {
+                    StatusCode::OK
+                } else {
+                    status
+                }
+            }),
+        );
+        let text = message(run_uploads(&app, &upload_document()).await);
+        assert!(
+            text.contains(&format!("unexpected status {}", status.as_u16())),
+            "{text}"
+        );
+    }
+    // 415 for a body that is not the declared media type is a refusal too.
+    let app = Router::new().route(
+        TEMPLATE,
+        axum::routing::put(|body: axum::body::Bytes| async move {
+            if (1..=16).contains(&body.len()) {
+                StatusCode::OK
+            } else {
+                StatusCode::UNSUPPORTED_MEDIA_TYPE
+            }
+        }),
+    );
+    run_uploads(&app, &upload_document()).await.unwrap();
 }

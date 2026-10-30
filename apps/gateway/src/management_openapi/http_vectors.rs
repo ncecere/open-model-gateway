@@ -59,6 +59,16 @@ impl Probe {
         };
         Ok(self.accepted.unwrap_or(by_status))
     }
+    /// The verdict on a RAW upload body. Besides 400/422, an upload handler refuses
+    /// input with 413 (a body over the documented size) and 415 (a body that is not
+    /// the declared media type, or is empty): for a raw body these two ARE input
+    /// verdicts. Every other status (401/403/429/5xx) still fails the run.
+    fn upload_verdict(&self) -> Result<bool> {
+        if matches!(self.captured.status.as_u16(), 413 | 415) {
+            return Ok(self.accepted.unwrap_or(false));
+        }
+        self.verdict()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2458,7 +2468,7 @@ pub(super) async fn run_binary(
         let probe = send(declared, bytes).await;
         same_operation(&probe.captured, method, template)?;
         let handler = probe
-            .verdict()
+            .upload_verdict()
             .with_context(|| format!("{method} {template}: {kind} raw body vector"))?;
         if handler != expected {
             return Err(mismatch(
@@ -2482,9 +2492,10 @@ pub(super) async fn run_binary(
 }
 
 /// Raw body boundary vectors for an upload operation over real HTTP. `send` gets
-/// the declared media type and the bytes. Like every vector, a refusal must be a
-/// 400/422 from the handler (413/415 are never an input verdict); [`Probe::decided`]
-/// is only for a status that cannot tell input refusal from domain refusal.
+/// the declared media type and the bytes. A refusal is a 400/422, or for a raw
+/// body a 413 (over the documented size) or 415 (not the declared media type);
+/// any other status fails the run, and [`Probe::decided`] still overrides the
+/// reading of a status in the expected set.
 pub(crate) async fn binary_body_vectors_http(
     fixtures: &mut PositiveFixtures,
     method: &str,
