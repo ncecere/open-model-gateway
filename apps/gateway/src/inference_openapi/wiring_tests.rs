@@ -277,17 +277,17 @@ async fn inference_openapi_security_matches_the_real_credential_parsers() {
             let refused = StatusCode::UNAUTHORIZED;
             let case = |accepted: bool| if accepted { reached } else { refused };
             assert_eq!(
-                send(&[bearer.clone()]).await,
+                send(std::slice::from_ref(&bearer)).await,
                 reached,
                 "{method} {path} bearer"
             );
             assert_eq!(
-                send(&[api_key.clone()]).await,
+                send(std::slice::from_ref(&api_key)).await,
                 case(accepts("anthropicApiKey")),
                 "{method} {path} x-api-key"
             );
             assert_eq!(
-                send(&[subprotocol.clone()]).await,
+                send(std::slice::from_ref(&subprotocol)).await,
                 case(accepts("realtimeSubprotocol")),
                 "{method} {path} subprotocol"
             );
