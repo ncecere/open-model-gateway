@@ -1,5 +1,5 @@
-//! #427: an OIDC group-mapping issuer containing a control character is
-//! refused with 400 before it can reach PostgreSQL (which rejects NUL with
+//! #427: an OIDC group-mapping issuer containing a control character or
+//! whitespace is refused with 400 before it can reach PostgreSQL (which rejects NUL with
 //! SQLSTATE 22021, surfaced as 503). The URL parser strips leading/trailing C0
 //! controls and percent-encodes them in the path, so URL validation alone let
 //! them through while the raw issuer was stored.
@@ -33,6 +33,11 @@ async fn mapping_issuer_refuses_control_characters(pool: PgPool) {
         format!("{ISSUER}/a\u{85}b"),
         format!("{ISSUER}/a\u{7f}b"),
         format!("{ISSUER}\t/"),
+        format!(" {ISSUER}/"),
+        format!("{ISSUER}/ "),
+        format!("{ISSUER}/a b"),
+        format!("{ISSUER}/a\u{a0}b"),
+        format!("{ISSUER}/a\u{2028}b"),
     ];
     // Collect every case so one run reports all of them (labels only, never values).
     let mut wrong = Vec::new();
