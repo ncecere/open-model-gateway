@@ -366,3 +366,53 @@ fn inference_openapi_areas_are_fine_grained() {
         assert_eq!(area(template), want, "{template}");
     }
 }
+
+/// A registered group is finished by an executed `#[sqlx::test]` fixture that
+/// calls `finish(<GROUP>)` directly: helper-only calls and comments do not count.
+#[test]
+fn inference_openapi_area_groups_are_bound_to_executed_fixtures() {
+    use syn::visit::Visit;
+    struct Finish {
+        in_sqlx_test: bool,
+        finished: BTreeSet<String>,
+    }
+    impl<'ast> Visit<'ast> for Finish {
+        fn visit_item_fn(&mut self, function: &'ast syn::ItemFn) {
+            let outer = self.in_sqlx_test;
+            self.in_sqlx_test = function.attrs.iter().any(|attr| {
+                attr.path()
+                    .segments
+                    .iter()
+                    .map(|s| s.ident.to_string())
+                    .collect::<Vec<_>>()
+                    == ["sqlx", "test"]
+            });
+            syn::visit::visit_item_fn(self, function);
+            self.in_sqlx_test = outer;
+        }
+        fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+            if self.in_sqlx_test
+                && call.method == "finish"
+                && let Some(syn::Expr::Path(path)) = call.args.first()
+                && let Some(last) = path.path.segments.last()
+            {
+                self.finished.insert(last.ident.to_string());
+            }
+            syn::visit::visit_expr_method_call(self, call);
+        }
+    }
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/inference_openapi/fixtures_tests.rs");
+    let source = syn::parse_file(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let mut visitor = Finish {
+        in_sqlx_test: false,
+        finished: BTreeSet::new(),
+    };
+    visitor.visit_file(&source);
+    for (name, _) in super::responses::AREA_GROUPS {
+        assert!(
+            visitor.finished.contains(*name),
+            "{name} is registered but no #[sqlx::test] calls finish({name})"
+        );
+    }
+}

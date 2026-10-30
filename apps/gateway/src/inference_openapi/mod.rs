@@ -10,6 +10,9 @@ mod responses;
 mod wiring_tests;
 mod workload_tests;
 
+#[cfg(all(test, feature = "integration-tests"))]
+mod fixtures_tests;
+
 /// Reviewed open-JSON locations of the inference contract, in the format and
 /// with the semantics of `management_openapi::quality::ARBITRARY_JSON`: the
 /// exact pointer plus the exact `$comment` justification. Everything here is
