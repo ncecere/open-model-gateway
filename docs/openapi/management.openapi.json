@@ -4992,113 +4992,21 @@
         "oneOf": [
           {
             "additionalProperties": false,
-            "description": "The stacked budget set form: budgets present, monthly_budget_microusd and budget_period absent.",
-            "properties": {
-              "budgets": {
-                "description": "A full replacement set: at most one budget per period. The handler refuses two entries for the same period even when their amounts differ (parse_budgets); uniqueItems can only forbid identical entries, so that case is described, not expressed.",
-                "items": {
-                  "$ref": "#/components/schemas/SetupBudgetInput"
+            "oneOf": [
+              {
+                "properties": {
+                  "budget_period": false
                 },
-                "maxItems": 4,
-                "type": "array",
-                "uniqueItems": true
-              },
-              "concurrent_jobs": {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
+                "required": [
+                  "budgets"
                 ]
               },
-              "concurrent_requests": {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "key_issuances_per_holder": {
-                "anyOf": [
-                  {
-                    "maximum": 10000,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "key_issuances_per_workspace": {
-                "anyOf": [
-                  {
-                    "maximum": 10000,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "requests_per_minute": {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "storage_bytes": {
-                "anyOf": [
-                  {
-                    "maximum": 1125899906842624,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "tokens_per_minute": {
-                "anyOf": [
-                  {
-                    "maximum": 2147483647,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  {
-                    "type": "null"
-                  }
+              {
+                "required": [
+                  "monthly_budget_microusd"
                 ]
               }
-            },
-            "required": [
-              "requests_per_minute",
-              "tokens_per_minute",
-              "concurrent_requests",
-              "budgets"
             ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "description": "The deprecated single budget form: monthly_budget_microusd present (null clears), optionally with budget_period, and no budgets.",
             "properties": {
               "budget_period": {
                 "enum": [
@@ -5107,6 +5015,15 @@
                   "month",
                   "lifetime"
                 ]
+              },
+              "budgets": {
+                "description": "A full replacement set: at most one budget per period. The handler refuses two entries for the same period even when their amounts differ (parse_budgets); uniqueItems can only forbid identical entries, so that case is described, not expressed.",
+                "items": {
+                  "$ref": "#/components/schemas/SetupBudgetInput"
+                },
+                "maxItems": 4,
+                "type": "array",
+                "uniqueItems": true
               },
               "concurrent_jobs": {
                 "anyOf": [
@@ -5218,8 +5135,7 @@
             "required": [
               "requests_per_minute",
               "tokens_per_minute",
-              "concurrent_requests",
-              "monthly_budget_microusd"
+              "concurrent_requests"
             ],
             "type": "object"
           },
@@ -5341,6 +5257,16 @@
                   "month",
                   "lifetime"
                 ]
+              },
+              {
+                "description": "A full replacement set: at most one budget per period. The handler refuses two entries for the same period even when their amounts differ (parse_budgets); uniqueItems can only forbid identical entries, so that case is described, not expressed.",
+                "items": {
+                  "$ref": "#/components/schemas/SetupBudgetInput"
+                },
+                "maxItems": 4,
+                "type": "array",
+                "uniqueItems": true,
+                "x-omg-unprobed-location": "No positional array can be a valid request here: index 9 (budgets) always arrives beside monthly_budget_microusd at index 7 (both budget forms), which the handler refuses with 400 (policies.rs `(Some(list), None)` needs monthly absent), so maxItems 9 refuses it and no valid body can carry the item."
               }
             ],
             "type": "array"
