@@ -2482,8 +2482,9 @@ pub(super) async fn run_binary(
 }
 
 /// Raw body boundary vectors for an upload operation over real HTTP. `send` gets
-/// the declared media type and the bytes; a handler whose refusals are not a plain
-/// 400/422 (415, 413 ...) answers with [`Probe::decided`].
+/// the declared media type and the bytes. Like every vector, a refusal must be a
+/// 400/422 from the handler (413/415 are never an input verdict); [`Probe::decided`]
+/// is only for a status that cannot tell input refusal from domain refusal.
 pub(crate) async fn binary_body_vectors_http(
     fixtures: &mut PositiveFixtures,
     method: &str,

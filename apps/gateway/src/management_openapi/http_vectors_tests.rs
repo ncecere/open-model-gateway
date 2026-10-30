@@ -2510,7 +2510,7 @@ fn upload_app(max: usize) -> Router {
             if (1..=max).contains(&body.len()) {
                 StatusCode::OK
             } else {
-                StatusCode::PAYLOAD_TOO_LARGE
+                StatusCode::BAD_REQUEST
             }
         }),
     )
@@ -2530,10 +2530,7 @@ async fn run_uploads(app: &Router, document: &Value) -> anyhow::Result<Vec<Captu
                 .header(header::CONTENT_TYPE, media)
                 .body(Body::from(bytes))
                 .unwrap();
-            let captured = exchange(app, "PUT", request).await;
-            // 413 is an input refusal here, not a harness failure: decide it explicitly.
-            let accepted = captured.status.is_success();
-            Probe::decided(captured, accepted)
+            Probe::from(exchange(app, "PUT", request).await)
         },
     )
     .await
