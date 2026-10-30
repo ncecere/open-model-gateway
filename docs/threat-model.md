@@ -51,8 +51,8 @@ The invariants in [AGENTS.md](../AGENTS.md) are the security properties this mod
 | Inference key holder | Call `/v1/*` for the key's workspace |
 | Workspace member | Dashboard session; own keys and activity in a shared workspace |
 | Workspace admin (owner or admin) | Members, service accounts, tighten-only limits and model selection in a shared workspace; workspace-wide activity |
-| Platform Auditor | Read Admin pages and platform totals; no writes; no personal details |
-| Platform Admin | Configure connections, models, prices, catalogs, mappings, settings, and platform limits; no personal details |
+| Platform Auditor | Read Admin pages and platform totals; no writes; sees a personal workspace's identity, totals and platform-managed configuration, never its keys or request details |
+| Platform Admin | Configure connections, models, prices, catalogs, mappings, settings, and platform limits; sees a personal workspace's identity, totals and platform-managed configuration, never its keys or request details |
 | Compromised replica or DB credential | Everything the runtime role can do, plus every secret in that replica's environment |
 | Malicious upstream provider | Return any status, headers, body, stream or usage |
 | Operator | Host, environment, CLI with schema-owner credentials, backups, deployment |
@@ -132,9 +132,9 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 - Follow-up: Review: #61 (including the RLS assessment listed in the roadmap).
 
 **TEN-2. Platform staff read a personal workspace's keys or request details.** I · Asset: personal privacy · Attacker: Platform Auditor, Platform Admin.
-- Mitigation: `management/resources.rs` `access_inner` denies a personal workspace to anyone but its owner, whatever the platform role. Platform reports aggregate personal usage into totals. The key-safety platform view returns personal keys as counts only.
+- Mitigation: `management/resources.rs` `access_inner` denies a personal workspace to anyone but its owner, whatever the platform role. The one defined exception (#400): Platform Admins and Auditors may see a personal workspace's identity (id; the cost report and usage also show an owner label), its usage, cost and storage totals and its platform-managed configuration (workspace policy and limits, catalog overrides on `/platform/workspaces/{ws}/policy` and `/catalogs`), never its keys, request or execution details, prompts or responses, sessions, file contents or owner-made choices. Provider-cost reconciliation keeps a stricter identity-free personal subset. The key-safety platform view returns personal keys as counts only.
 - Tests: `management/tests.rs` `personal_details_are_owner_only_even_platform_admin_and_auditor`; `apps/gateway/tests/enterprise_privacy.rs` `platform_admin_and_auditor_get_personal_totals_without_private_keys_or_details`; `management/logs_tests.rs` `platform_logs_show_shared_workspaces_only_never_personal`; `management/snapshot_tests.rs` `snapshot_reads_keep_personal_activity_owner_private`; `management/key_safety_tests.rs` `key_safety_members_see_own_keys_and_personal_keys_stay_private`.
-- Residual: anyone with database access sees everything. Totals by workspace still show how much a person uses, by design.
+- Residual: anyone with database access sees everything. Totals by workspace show how much a named person uses, by design (#400).
 - Follow-up: none. The subject export (#74) is self-service; the admin export holds only what admins see.
 
 **TEN-3. A personal workspace is shared.** E · Asset: personal privacy · Attacker: workspace member, Platform Admin.

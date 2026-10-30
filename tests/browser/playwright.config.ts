@@ -35,6 +35,8 @@ export default defineConfig({
     { name: "scheduled-reports", testMatch: /scheduled-reports\.spec\.ts/, dependencies: ["journey"] },
     { name: "holds", testMatch: /holds\.spec\.ts/, dependencies: ["journey"] },
     { name: "provider-reconciliation", testMatch: /provider-reconciliation\.spec\.ts/, dependencies: ["journey"] },
+    // Standalone real-stack acceptance; seeds its own scopes through management APIs.
+    { name: "provider-cost-upload", testMatch: /provider-cost-upload\.spec\.ts/ },
     { name: "access-refresh", testMatch: /access-refresh\.spec\.ts/ },
     { name: "access-requests", testMatch: /access-requests\.spec\.ts/, dependencies: ["journey"] },
     { name: "accessibility", testMatch: /accessibility\.spec\.ts/, dependencies: ["journey"] },

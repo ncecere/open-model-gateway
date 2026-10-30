@@ -75,7 +75,9 @@ async fn workspaces(
     }
     .bounds()?;
     if p.kind.as_deref().is_some_and(|k| !shared(k))
-        || p.q.as_ref().is_some_and(|q| q.chars().count() > 200)
+        || p.q
+            .as_ref()
+            .is_some_and(|q| q.chars().count() > 200 || q.chars().any(char::is_control))
         || p.status
             .as_deref()
             .is_some_and(|v| !matches!(v, "active" | "disabled"))
@@ -353,7 +355,9 @@ async fn users(
         offset: p.offset,
     }
     .bounds()?;
-    if p.q.as_ref().is_some_and(|q| q.chars().count() > 200)
+    if p.q
+        .as_ref()
+        .is_some_and(|q| q.chars().count() > 200 || q.chars().any(char::is_control))
         || p.role
             .as_deref()
             .is_some_and(|r| r != "none" && r != "any" && !platform_role_valid(r))

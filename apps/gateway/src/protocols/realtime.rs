@@ -769,10 +769,13 @@ impl Bucket {
 }
 
 /// The client sent a message or frame above the configured cap.
+/// Axum erases its browser parser's error type; use that exact pinned crate,
+/// never the independently upgraded upstream transport's `tungstenite` re-export.
+/// The loopback regression exercises Axum itself to detect any pin mismatch.
 fn too_large(error: &axum::Error) -> bool {
     std::error::Error::source(error)
-        .and_then(|e| e.downcast_ref::<tokio_tungstenite::tungstenite::Error>())
-        .is_some_and(|e| matches!(e, tokio_tungstenite::tungstenite::Error::Capacity(_)))
+        .and_then(|e| e.downcast_ref::<browser_tungstenite::Error>())
+        .is_some_and(|e| matches!(e, browser_tungstenite::Error::Capacity(_)))
 }
 async fn send_client(
     client: &mut futures_util::stream::SplitSink<WebSocket, Message>,

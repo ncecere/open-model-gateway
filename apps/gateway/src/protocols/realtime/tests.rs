@@ -340,5 +340,84 @@ fn realtime_limits_are_bounded() {
     }
 }
 
+/// Exercise Axum's *actual* error producer, not `axum::Error::new` around
+/// the upstream transport's type: those are different crates after an upgrade.
+/// No database, gateway credentials or external upstream is needed.
+#[tokio::test]
+async fn axum_browser_message_and_frame_limits_keep_their_error_identity() {
+    use tokio_tungstenite::tungstenite::{
+        Message as ClientMessage,
+        protocol::frame::{Frame, coding::Data, coding::OpCode},
+    };
+
+    let fragment = |len, opcode, last| {
+        ClientMessage::Frame(Frame::message(vec![b'x'; len], OpCode::Data(opcode), last))
+    };
+    for (messages, oversized) in [
+        // A single frame exceeds both caps (text and binary).
+        (vec![ClientMessage::Text("x".repeat(1025).into())], true),
+        (vec![ClientMessage::Binary(vec![0; 1025].into())], true),
+        // Each frame fits, but the assembled message exceeds the message cap.
+        (
+            vec![
+                fragment(600, Data::Text, false),
+                fragment(600, Data::Continue, true),
+            ],
+            true,
+        ),
+        // A protocol violation must not be mistaken for a size refusal.
+        (vec![fragment(1, Data::Continue, true)], false),
+    ] {
+        let (errors, mut received) = tokio::sync::mpsc::channel(1);
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::get(move |upgrade: WebSocketUpgrade| {
+                let errors = errors.clone();
+                async move {
+                    upgrade
+                        .max_message_size(1024)
+                        .max_frame_size(1024)
+                        .on_upgrade(move |mut socket| async move {
+                            while let Some(message) = socket.recv().await {
+                                if let Err(error) = message {
+                                    errors.send(error).await.unwrap();
+                                    break;
+                                }
+                            }
+                        })
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let (mut client, _) = tokio_tungstenite::connect_async(format!("ws://{address}/"))
+            .await
+            .unwrap();
+        for message in messages {
+            client.send(message).await.unwrap();
+        }
+        let error = timeout(Duration::from_secs(30), received.recv())
+            .await
+            .expect("Axum must reject the browser message")
+            .expect("Axum must return an error");
+        server.abort();
+        assert_eq!(too_large(&error), oversized, "{error:?}");
+    }
+}
+
+#[test]
+fn upstream_errors_are_not_browser_size_refusals() {
+    use tokio_tungstenite::tungstenite::{Error, error::CapacityError};
+    let upstream = axum::Error::new(Error::Capacity(CapacityError::MessageTooLong {
+        size: 1025,
+        max_size: 1024,
+    }));
+    assert!(!too_large(&upstream));
+    // Neither arbitrary IO errors nor attacker-controlled error text suffice.
+    let io = axum::Error::new(std::io::Error::other("Capacity(MessageTooLong)"));
+    assert!(!too_large(&io));
+}
+
 #[cfg(feature = "integration-tests")]
 mod contract;

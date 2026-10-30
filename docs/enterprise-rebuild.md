@@ -31,7 +31,7 @@ Enterprise installation
 
 Teams and Projects have equivalent capabilities and are siblings. A Project can include people from different Teams; it does not belong to a Team. Project access must not be inferred simply from Team membership. Teams and Projects can be created only by Platform Admins. An entitled user's personal workspace is created automatically on their first successful platform sign-in.
 
-Personal workspaces remain owner-private for keys and request details. Platform Admins can see personal-workspace usage and cost totals. Platform Auditors receive the platform-wide read-only reporting access described below. Within shared workspaces, ordinary members see only their own usage and costs; workspace administrators see workspace-wide usage and costs. No default prompt or response-body logging is introduced.
+Personal workspaces remain owner-private for keys, request and execution details, prompts and responses, sessions, file contents and the owner's own choices, with one defined exception (#400): Platform Admins and Auditors may see a personal workspace's identity (id; reports and usage also an owner label) with its usage, cost and storage totals and its platform-managed configuration (workspace policy and limits, catalog overrides). Provider-cost reconciliation keeps a stricter identity-free personal subset. Auditors have read-only access; Admins also write the platform-managed configuration. Within shared workspaces, ordinary members see only their own usage and costs; workspace administrators see workspace-wide usage and costs. No default prompt or response-body logging is introduced.
 
 ### Shared Grounded UI and interaction patterns
 
@@ -49,7 +49,7 @@ Platform roles:
 
 - **Platform User:** ordinary platform access and an automatic personal workspace; shared-workspace access still requires membership.
 - **Platform Auditor:** Platform User access plus platform-wide read-only configuration, usage/cost and audit access. This does not grant another user's private keys or request details.
-- **Platform Admin:** Platform User access plus installation administration, user/workspace administration, catalogs, infrastructure, policies and cost-center assignments. Personal usage/cost totals are available without private key or request-detail access.
+- **Platform Admin:** Platform User access plus installation administration, user/workspace administration, catalogs, infrastructure, policies and cost-center assignments. Personal workspace identity, usage/cost/storage totals and platform-managed configuration are available without private key or request-detail access.
 
 Platform Admin and Auditor include Platform User entitlement; a separate User grant is not required. Generic OIDC remains provider-neutral, with configurable group claims and explicit mappings to platform roles and Team/Project memberships and roles. Authentication alone must never infer a platform role.
 
@@ -135,7 +135,7 @@ Acceptance: exact arithmetic, missing/zero distinctions, TTL allocation ambiguit
 
 Platform and workspace cost reports with date ranges, trends, comparisons, workspace/model/provider/optional cost-center breakdowns, bounded CSV and accounting-health indicators.
 
-Acceptance: authorization before aggregation/dimension discovery; ordinary members see own activity; admins/auditors see authorized personal totals without private details; immutable cost-center attribution; exact amount/count strings; explicit unknown coverage and overlapping health indicators; UTC periods and strict filters; bounded pagination/exports and cancellation. Live reports are not frozen financial statements or provider invoices. Measure report/admission contention rather than equating output limits with bounded scans.
+Acceptance: authorization before aggregation/dimension discovery; ordinary members see own activity; admins/auditors see authorized personal totals with the workspace identity (#400) but without private details; immutable cost-center attribution; exact amount/count strings; explicit unknown coverage and overlapping health indicators; UTC periods and strict filters; bounded pagination/exports and cancellation. Live reports are not frozen financial statements or provider invoices. Measure report/admission contention rather than equating output limits with bounded scans.
 
 ### 5. Images and vision
 

@@ -293,3 +293,43 @@ fn management_openapi_hardening_finish_inventory_ignores_claimed_helpers() {
         .contains("GROUP")
     );
 }
+
+#[test]
+fn management_openapi_hardening_notification_money_details_are_individually_signed() {
+    let document = super::responses::artifact();
+    let details =
+        &document["components"]["schemas"]["IdentityNotification"]["properties"]["details"];
+    let accepts = |name: &str, value: &str| {
+        super::responses::validator(document, details)
+            .unwrap()
+            .is_valid(&json!({name: value}))
+    };
+    // `pending_microusd` is sum(held - held_unknown) with no sign guard
+    // (alerts.rs spend_conditions; budget_totals has no >= 0 check, migration 0015):
+    // drifted totals can report a negative pending amount.
+    assert!(accepts("pending_microusd", "-5") && accepts("pending_microusd", "5"));
+    assert!(!accepts("pending_microusd", "-0") && !accepts("pending_microusd", "05"));
+    assert!(!accepts("pending_microusd", "1.5") && !accepts("pending_microusd", ""));
+    // Every other money field is non-negative by construction: an incident is only
+    // raised for a positive used amount against a positive reference amount
+    // (threshold_level), reference amounts are validated positive, and the spike
+    // sums read ledger rows with CHECK(actual_microusd >= 0).
+    for name in [
+        "used_microusd",
+        "budget_microusd",
+        "spend_amount_microusd",
+        "current_microusd",
+        "baseline_total_microusd",
+        "baseline_hourly_microusd",
+        "min_spend_microusd",
+    ] {
+        assert!(
+            accepts(name, "0") && accepts(name, "9007199254740993"),
+            "{name}"
+        );
+        assert!(!accepts(name, "-1"), "{name} accepted a negative amount");
+        assert!(!accepts(name, "1.5") && !accepts(name, "01"), "{name}");
+    }
+    // An unknown producer's money field is still an integer string (signed).
+    assert!(accepts("other_microusd", "-1") && !accepts("other_microusd", "x"));
+}

@@ -2,7 +2,7 @@
 
 ## What the gateway measures
 
-Cloud and local deployments use configured rates and provider-reported token evidence. Local models are not implicitly free: an explicit zero rate is different from a missing rate. GPU, electricity, infrastructure amortization, taxes and vendor-specific extra fees are not metered here. Reports are configured-rate estimates, not provider invoices or a customer billing system. The separate [provider-reported cost reconciliation API](provider-cost-reconciliation.md) retains uploaded Anthropic Cost Reports and aggregate comparisons without rewriting estimates; it does not verify invoices.
+Cloud and local deployments use configured rates and provider-reported token evidence. Local models are not implicitly free: an explicit zero rate is different from a missing rate. GPU, electricity, infrastructure amortization, taxes and vendor-specific extra fees are not metered here. Reports are configured-rate estimates, not provider invoices or a customer billing system. The separate [provider-reported cost reconciliation dashboard and browser-session API](provider-cost-reconciliation.md) retain uploaded Anthropic Cost Reports and frozen aggregate comparisons without rewriting estimates; they do not verify invoices. In **Admin → Usage & costs → Provider reconciliation**, Platform Admins upload, attest mappings and freeze snapshots; Auditors read only. This scope is Anthropic-only and USD-only; OpenAI Costs export support is follow-up #393.
 
 The installation has no organization accounting layer. Activity belongs to Personal, Team or Project workspaces, with one execution per actual admitted upstream attempt. A request with explicit fallback can have several attempts and costs; root-request counts distinguish it from attempt counts. Embeddings are input-only: budget reservation uses the hard input ceiling, output is semantic zero, and missing input evidence is unresolved.
 
@@ -33,7 +33,7 @@ Before each attempt the gateway pins a price and reserves conservative cost. Mis
 
 ## Read reports safely
 
-Platform Admin/Auditor reporting includes personal financial totals, without foreign personal keys or request details. Shared administrators see whole-workspace activity; ordinary members their own human-key activity. Platform totals do not grant a private detail/export endpoint.
+Platform Admin/Auditor reporting includes personal financial totals with the workspace's identity (its id; the cost report and usage also an owner label, storage usage only the generic name), without foreign personal keys or request details; provider-cost reconciliation's personal subset is identity-free. Shared administrators see whole-workspace activity; ordinary members their own human-key activity. Platform totals do not grant a private detail/export endpoint.
 
 Financial amounts/counts are decimal strings and unknown measurements null. UTC reports use **[start,end)** with exclusive end, 1–93 days; comparisons use the same filters and equal preceding length. Known settled cost, active holds, unbounded/unknown coverage and overlapping health indicators must remain distinct. Do not sum holds as extra charges, or health indicators as independent failed requests.
 

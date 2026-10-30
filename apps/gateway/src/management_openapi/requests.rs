@@ -31,167 +31,260 @@ impl<'de> serde::Deserializer<'de> for &Fields {
 }
 
 /// Operations whose HANDLER refuses values serde accepts (documented value
-/// rules: length, alphabet, bounds, cross-field rules). The schema carries those
-/// rules, so against serde alone it may be STRICTER, never looser. Each entry is
-/// a reviewed claim; `finish()` still demands executed HTTP boundary vectors for
+/// rules: length, alphabet, exactly-one-of). The schema carries those rules, so
+/// against serde alone it may be STRICTER, never looser. Each entry is a
+/// reviewed claim; `finish()` still demands executed HTTP boundary vectors for
 /// the operation, which compare the schema with the real handler exactly.
-pub(crate) const SEMANTIC_REFINEMENTS: &[(&str, &str, &str)] = &[
+pub(crate) const SEMANTIC_REFINEMENTS: &[(&str, &str, &str, &[&str])] = &[
+    (
+        "POST",
+        "/api/v1/invitations/accept",
+        "the token must be exactly 64 ASCII hexadecimal characters",
+        &["/token"],
+    ),
+    (
+        "POST",
+        "/api/v1/me/access-requests",
+        "idempotency_key is 1 to 128 printable ASCII characters; reason is at most 1000 characters without control characters",
+        &["/idempotency_key", "/reason"],
+    ),
+    (
+        "POST",
+        "/api/v1/me/notifications/read",
+        "exactly one of all=true or a non-empty ids array of at most 200",
+        &["/ids", "/all"],
+    ),
     (
         "POST",
         "/api/v1/platform/catalogs",
         "catalog names are non-blank text without control characters of at most 120 bytes; descriptions at most 2000 bytes",
+        &["/name", "/description"],
     ),
     (
         "PATCH",
         "/api/v1/platform/catalogs/{id}",
         "catalog names are non-blank text without control characters of at most 120 bytes; descriptions at most 2000 bytes",
+        &["/name", "/description"],
     ),
     (
         "POST",
         "/api/v1/platform/models",
         "model aliases, display names, descriptions and protocol sets carry the handler's alphabet, length and one-workload rules",
+        &["/public_name", "/display_name", "/description", "/supported_protocols"],
     ),
     (
         "PATCH",
         "/api/v1/platform/models/{id}",
         "model aliases, display names, descriptions and protocol sets carry the handler's alphabet, length and one-workload rules",
+        &["/public_name", "/display_name", "/description", "/supported_protocols"],
     ),
     (
         "POST",
         "/api/v1/platform/providers",
         "provider kinds are a closed set and each kind constrains the credential reference, endpoint, region and AWS options",
+        &["/name", "/provider", "/credential_ref", "/endpoint", "/region", "/aws_external_id", "/aws_session_name"],
     ),
     (
         "PATCH",
         "/api/v1/platform/providers/{id}",
         "a restated credential reference, AWS options and a Bedrock endpoint carry their shapes, and AWS options need a restated reference",
+        &["/credential_ref", "/endpoint", "/aws_external_id", "/aws_session_name"],
     ),
     (
         "POST",
         "/api/v1/platform/deployments",
         "the upstream model is non-blank text without control characters of at most 512 bytes",
+        &["/upstream_model"],
     ),
     (
         "POST",
         "/api/v1/platform/model-setup",
         "the nested model and route carry the same value rules as their own operations",
+        &["/model", "/route", "/price"],
     ),
     (
         "POST",
         "/api/v1/platform/deployments/{deployment}/prices",
         "the price version selects which rates, cache pricing and price lines are required; ceilings and line counts are bounded",
+        &["/input_microusd_per_million", "/output_microusd_per_million", "/input_token_limit", "/output_token_limit", "/pricing_version", "/cache_pricing", "/price_lines", "/max_units", "/batch_price_lines"],
     ),
     (
         "PUT",
         "/api/v1/platform/deployments/{deployment}/routing",
         "residency is a short lowercase token; weight, threshold and cooldown are bounded",
+        &["/residency", "/priority", "/weight", "/failure_threshold", "/cooldown_seconds"],
     ),
     (
         "PUT",
         "/api/v1/platform/models/{model}/routing",
         "required residency is a short lowercase token; strategy and attempts are bounded",
+        &["/required_residency", "/strategy", "/max_attempts"],
     ),
     (
         "PUT",
         "/api/v1/platform/deployments/{deployment}/batch-scheduling",
         "concurrency, thresholds, time zone, days and times are bounded",
+        &["/max_concurrency", "/yield_live_threshold", "/window"],
     ),
     (
         "PUT",
         "/api/v1/workspaces/{ws}/policy",
         "limits are positive and bounded; exactly one budget form is supplied",
+        &["/requests_per_minute", "/tokens_per_minute", "/concurrent_requests", "/concurrent_jobs", "/storage_bytes", "/key_issuances_per_holder", "/key_issuances_per_workspace", "/budgets", "/monthly_budget_microusd", "/budget_period"],
     ),
 ];
 
 /// May the contract's verdict differ from serde's? Equal always passes; a
-/// stricter contract passes only for a reviewed semantic refinement; a looser
-/// contract (accepting what serde rejects) never does.
-pub(super) fn agrees(refined: bool, contract: bool, serde: bool) -> bool {
-    contract == serde || (refined && !contract)
+/// stricter contract passes only for a vector whose touched pointers are EVERY
+/// ONE a reviewed refined pointer (a vector that also changes an unreviewed
+/// field, the extra item or the root must agree exactly); a looser contract
+/// (accepting what serde rejects) never does.
+pub(super) fn agrees(refined: &[&str], touched: &[String], contract: bool, serde: bool) -> bool {
+    contract == serde
+        || (!contract
+            && !touched.is_empty()
+            && touched
+                .iter()
+                .all(|field| refined.contains(&field.as_str())))
+}
+
+/// Every reviewed refined pointer must exist in the operation's request schema:
+/// as a property of the object form AND (when the schema documents serde's
+/// positional form) as a positional item at the field's index in the DTO's
+/// field order. A stale or misspelled pointer would silently widen nothing and
+/// excuse nothing, so it fails.
+pub(super) fn refined_pointers_exist(
+    component: &Value,
+    fields: &[&str],
+    refined: &[&str],
+) -> anyhow::Result<()> {
+    use anyhow::{Context, ensure};
+    let arms: Vec<&Value> = match component["oneOf"].as_array() {
+        Some(arms) => arms.iter().collect(),
+        None => vec![component],
+    };
+    let object = arms
+        .iter()
+        .find_map(|arm| arm["properties"].as_object())
+        .context("the object form of the request schema is missing")?;
+    let positional = arms.iter().find_map(|arm| arm["prefixItems"].as_array());
+    for pointer in refined {
+        let field = pointer
+            .strip_prefix('/')
+            .with_context(|| format!("refined pointer {pointer} must be a /field pointer"))?;
+        ensure!(
+            object.contains_key(field),
+            "refined pointer {pointer} is not a property of the request schema"
+        );
+        let index = fields
+            .iter()
+            .position(|name| *name == field)
+            .with_context(|| format!("refined pointer {pointer} is not a DTO field"))?;
+        if let Some(items) = positional {
+            ensure!(
+                items.len() > index,
+                "refined pointer {pointer} has no positional item in the request schema"
+            );
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: Value) {
-    let refined = SEMANTIC_REFINEMENTS
+    let pointers = SEMANTIC_REFINEMENTS
         .iter()
-        .any(|(m, t, _)| *m == method && *t == template);
-    let document = super::responses::artifact();
+        .find(|(m, t, ..)| *m == method && *t == template)
+        .map_or(&[][..], |(.., pointers)| *pointers);
+    vectors_in::<T>(
+        super::responses::artifact(),
+        method,
+        template,
+        valid,
+        pointers,
+    )
+    .unwrap_or_else(|e| panic!("{e:#}"));
+}
+
+/// [`vectors`] against an explicit document and reviewed refined pointers.
+/// Failures name method, template, vector label and field names, never values.
+pub(super) fn vectors_in<T: DeserializeOwned>(
+    document: &Value,
+    method: &str,
+    template: &str,
+    valid: Value,
+    refined: &[&str],
+) -> anyhow::Result<()> {
+    use anyhow::{Context, ensure};
     let operation = &document["paths"][template][method.to_ascii_lowercase()];
     let schema = &operation["requestBody"]["content"]["application/json"]["schema"];
-    assert!(
+    ensure!(
         !schema.is_null(),
         "request schema must be bound to an operation"
     );
     let fields = Fields::default();
     let _ = T::deserialize(&fields);
     let actual: BTreeSet<_> = fields.0.borrow().iter().copied().collect();
-    assert!(
+    ensure!(
         !actual.is_empty(),
         "unsupported DTO deserializer: inventory explicitly"
     );
-    let mut component = schema;
-    while let Some(reference) = component["$ref"].as_str() {
-        component = document.pointer(&reference[1..]).unwrap();
-    }
+    let component = document
+        .pointer(
+            &schema["$ref"]
+                .as_str()
+                .context("request schema reference")?[1..],
+        )
+        .context("request schema component")?;
     let object = component
         .get("properties")
         .unwrap_or(&component["oneOf"][0]["properties"]);
     let documented: BTreeSet<_> = object
         .as_object()
-        .expect("ordinary struct object variant required")
+        .context("ordinary struct object variant required")?
         .keys()
         .map(String::as_str)
         .collect();
-    assert_eq!(
-        actual, documented,
+    ensure!(
+        actual == documented,
         "{method} {template}: DTO/schema field inventory drift"
     );
-    assert!(
+    ensure!(
         serde_json::from_value::<T>(valid.clone()).is_ok(),
         "real deserialization positive control"
     );
-    // `exact` probes are structural (unknown fields, nested unknown fields, root
-    // type, positional form): the reviewed refinements never touch them, so the
-    // contract and serde must agree exactly. Other probes sit on field values,
-    // where a refined contract may be stricter, never looser.
-    let check = |label: &str, value: Value, exact: bool| {
+    let names: Vec<&str> = fields.0.borrow().clone();
+    refined_pointers_exist(component, &names, refined)
+        .with_context(|| format!("{method} {template}"))?;
+    let mut failures = Vec::new();
+    let mut compare = |label: &str, value: Value| {
         let actual = serde_json::from_value::<T>(value.clone()).is_ok();
         let contract = super::responses::validate_value(document, schema, &value).is_ok();
-        assert!(
-            if exact {
-                contract == actual
-            } else {
-                agrees(refined, contract, actual)
-            },
-            "{method} {template}: {label}: contract {} but serde {}",
-            if contract { "accepts" } else { "refuses" },
-            if actual { "accepts" } else { "refuses" },
-        );
+        let touched = touched(&names, &valid, &value);
+        if !agrees(refined, &touched, contract, actual) {
+            failures.push(format!(
+                "{method} {template}: {label}: contract {} but serde {} (touches {})",
+                if contract { "accepts" } else { "refuses" },
+                if actual { "accepts" } else { "refuses" },
+                touched.join(", "),
+            ));
+        }
     };
-    let compare = |label: &str, value: Value| check(label, value, false);
-    let structural = |label: &str, value: Value| check(label, value, true);
-    // The valid body is accepted by BOTH: a contract that refuses it is wrong
-    // whatever the reviewed refinements say.
-    assert!(
-        super::responses::validate_value(document, schema, &valid).is_ok(),
-        "{method} {template}: positive: contract refuses the valid body"
-    );
-    let positional = fields
-        .0
-        .borrow()
+    compare("positive", valid.clone());
+    let positional = names
         .iter()
         .map(|name| valid.get(*name).cloned().unwrap_or(Value::Null))
         .collect::<Vec<_>>();
-    structural("serde positional struct representation", json!(positional));
+    compare("serde positional struct representation", json!(positional));
     for length in 0..positional.len() {
-        structural("positional omission", json!(&positional[..length]));
+        compare("positional omission", json!(&positional[..length]));
     }
     let mut extra = positional;
     extra.push(json!({"unexpected_configuration":true}));
-    structural("positional unknown extra item", json!(extra));
+    compare("positional unknown extra item", json!(extra));
     let mut unknown = valid.clone();
     unknown["unexpected_configuration"] = json!(true);
-    structural("unknown", unknown);
-    for field in valid.as_object().unwrap().keys() {
+    compare("unknown", unknown);
+    for field in valid.as_object().context("valid body is an object")?.keys() {
         let mut missing = valid.clone();
         missing.as_object_mut().unwrap().remove(field);
         compare(&format!("missing/omission {field}"), missing);
@@ -207,71 +300,15 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
             probe[field] = wrong;
             compare(&format!("wrong-type/null {field}"), probe);
         }
-        // Probe scalar and array-item boundaries as well as the recursive
-        // nested-object probes below.
+        // These DTOs have no nested object DTO. Inject one at each scalar or
+        // array-item boundary so a future nested shape cannot be silently loose.
         let mut nested = valid.clone();
         if let Some(items) = nested[field].as_array_mut() {
-            if items.is_empty() {
-                items.push(json!({"unexpected_configuration":true}));
-            } else {
-                items[0] = json!({"unexpected_configuration":true});
-            }
+            items[0] = json!({"unexpected_configuration":true});
         } else {
             nested[field] = json!({"unexpected_configuration":true});
         }
-        structural(&format!("nested-unknown {field}"), nested);
-    }
-    // Recursively probe nested DTOs rather than replacing only their parent.
-    fn nested_objects(value: &Value, path: &str, out: &mut Vec<String>) {
-        match value {
-            Value::Object(map) => {
-                if !path.is_empty() {
-                    out.push(path.into());
-                }
-                for (key, child) in map {
-                    nested_objects(
-                        child,
-                        &format!("{path}/{}", key.replace('~', "~0").replace('/', "~1")),
-                        out,
-                    );
-                }
-            }
-            Value::Array(items) => {
-                for (i, child) in items.iter().enumerate() {
-                    nested_objects(child, &format!("{path}/{i}"), out);
-                }
-            }
-            _ => {}
-        }
-    }
-    let mut nested = Vec::new();
-    nested_objects(&valid, "", &mut nested);
-    for path in nested {
-        let mut probe = valid.clone();
-        probe.pointer_mut(&path).unwrap()["unexpected_configuration"] = json!(true);
-        structural(&format!("recursive nested-unknown {path}"), probe);
-        for field in valid.pointer(&path).unwrap().as_object().unwrap().keys() {
-            let mut probe = valid.clone();
-            probe
-                .pointer_mut(&path)
-                .unwrap()
-                .as_object_mut()
-                .unwrap()
-                .remove(field);
-            compare(&format!("nested omission {path}/{field}"), probe);
-            for wrong in [
-                Value::Null,
-                json!(true),
-                json!(1),
-                json!("wrong"),
-                json!([]),
-                json!({}),
-            ] {
-                let mut probe = valid.clone();
-                probe.pointer_mut(&path).unwrap()[field] = wrong;
-                compare(&format!("nested wrong-type/null {path}/{field}"), probe);
-            }
-        }
+        compare(&format!("nested-unknown {field}"), nested);
     }
     for value in [
         Value::Null,
@@ -280,7 +317,7 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
         json!("wrong"),
         json!([]),
     ] {
-        structural("wrong root type / JSON null is not omission", value);
+        compare("wrong root type / JSON null is not omission", value);
     }
     // UUID serde deliberately accepts all these spellings. JSON Schema format
     // assertions must match that parser rather than only canonical output.
@@ -304,6 +341,43 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
             }
         }
     }
+    ensure!(failures.is_empty(), "{}", failures.join("\n"));
+    Ok(())
+}
+
+/// Top-level fields (named `/field`, `(extra)` or `(root)`) a vector changes
+/// relative to the valid body, whether it is an object or serde's positional array.
+pub(super) fn touched(fields: &[&str], valid: &Value, value: &Value) -> Vec<String> {
+    let mut out = BTreeSet::new();
+    match value {
+        Value::Object(map) => {
+            let base = valid.as_object().cloned().unwrap_or_default();
+            for key in map.keys().chain(base.keys()) {
+                if map.get(key) != base.get(key) {
+                    out.insert(format!("/{key}"));
+                }
+            }
+        }
+        Value::Array(items) => {
+            let base: Vec<Value> = fields
+                .iter()
+                .map(|name| valid.get(*name).cloned().unwrap_or(Value::Null))
+                .collect();
+            for i in 0..items.len().max(base.len()) {
+                if items.get(i) != base.get(i) {
+                    out.insert(
+                        fields
+                            .get(i)
+                            .map_or_else(|| "(extra)".to_owned(), |n| format!("/{n}")),
+                    );
+                }
+            }
+        }
+        _ => {
+            out.insert("(root)".to_owned());
+        }
+    }
+    out.into_iter().collect()
 }
 
 #[test]
@@ -325,46 +399,182 @@ fn management_openapi_invitation_and_notification_request_vectors() {
     );
 }
 
-/// RED control: a reviewed refinement may make the contract STRICTER than serde
-/// for probes, but the contract may never refuse the valid (positive) body. A
-/// name with a control character deserializes but the contract refuses it.
-#[test]
-#[should_panic(expected = "positive: contract refuses the valid body")]
-fn management_openapi_request_vectors_refuse_a_contract_that_rejects_the_positive_body() {
-    #[derive(serde::Deserialize)]
-    #[serde(deny_unknown_fields)]
-    #[allow(dead_code)]
-    struct Catalog {
-        name: String,
-        description: Option<String>,
-    }
-    vectors::<Catalog>(
-        "POST",
-        "/api/v1/platform/catalogs",
-        json!({"name":"\u{1}name","description":null}),
-    );
-}
-
 #[test]
 fn management_openapi_request_refinements_are_reviewed_and_one_directional() {
-    assert!(agrees(false, true, true) && agrees(false, false, false));
+    let t = |names: &[&str]| names.iter().map(|n| (*n).to_owned()).collect::<Vec<_>>();
+    assert!(agrees(&[], &t(&[]), true, true) && agrees(&[], &t(&[]), false, false));
     assert!(
-        !agrees(false, false, true),
+        !agrees(&[], &t(&["/a"]), false, true),
         "stricter needs a reviewed refinement"
     );
     assert!(
-        agrees(true, false, true),
-        "reviewed refinement may be stricter"
+        agrees(&["/a"], &t(&["/a"]), false, true),
+        "a reviewed refinement may be stricter on its own pointer"
     );
-    assert!(!agrees(true, true, false), "never looser than serde");
-    assert!(!agrees(false, true, false));
+    assert!(
+        !agrees(&["/a"], &t(&["/b"]), false, true),
+        "...but only on its own pointers"
+    );
+    assert!(
+        !agrees(&["/a"], &t(&[]), false, true),
+        "an untouched vector must agree exactly"
+    );
+    assert!(
+        !agrees(&["/a"], &t(&["(root)"]), false, true),
+        "so must a wrong root"
+    );
+    assert!(
+        !agrees(&["/a"], &t(&["/b", "/a"]), false, true),
+        "...and only when EVERY touched pointer is reviewed"
+    );
+    assert!(agrees(&["/a", "/b"], &t(&["/b", "/a"]), false, true));
+    assert!(
+        !agrees(&["/a"], &t(&["/a", "(extra)"]), false, true),
+        "the extra item is never refined"
+    );
+    assert!(!agrees(&["/a"], &t(&["/a", "(root)"]), false, true));
+    assert!(
+        !agrees(&["/a"], &t(&["/a"]), true, false),
+        "never looser than serde"
+    );
+    assert!(!agrees(&[], &t(&[]), true, false));
     let document = super::responses::artifact();
-    for (method, template, reason) in SEMANTIC_REFINEMENTS {
+    for (method, template, reason, pointers) in SEMANTIC_REFINEMENTS {
         assert!(reason.trim().len() > 20, "{template}");
         let operation = super::responses::operation(document, method, template).unwrap();
         assert!(
             operation.get("requestBody").is_some(),
             "{method} {template} has no request body to refine"
         );
+        assert!(
+            !pointers.is_empty(),
+            "{method} {template} reviews no pointer"
+        );
+        // Every listed pointer exists in the request schema: as a property of the
+        // object form and as an item of the positional form.
+        let schema = &operation["requestBody"]["content"]["application/json"]["schema"];
+        let component = document
+            .pointer(&schema["$ref"].as_str().unwrap()[1..])
+            .unwrap();
+        let arms: Vec<&Value> = match component["oneOf"].as_array() {
+            Some(arms) => arms.iter().collect(),
+            None => vec![component],
+        };
+        let object = arms
+            .iter()
+            .find_map(|a| a["properties"].as_object())
+            .unwrap();
+        let positional = arms
+            .iter()
+            .find_map(|a| a["prefixItems"].as_array())
+            .unwrap();
+        assert!(
+            positional.len() >= object.len(),
+            "{method} {template}: the positional form is shorter than the object form"
+        );
+        for pointer in *pointers {
+            assert!(
+                object.contains_key(pointer.trim_start_matches('/')),
+                "{method} {template}: refined pointer {pointer} is not a request property"
+            );
+        }
     }
+}
+
+#[test]
+fn management_openapi_refined_pointers_must_exist_in_the_request_schema() {
+    let component = json!({"oneOf":[
+        {"type":"object","properties":{"a":{"type":"string"},"b":{"type":"string"}}},
+        {"type":"array","prefixItems":[{"type":"string"},{"type":"string"}]}]});
+    refined_pointers_exist(&component, &["a", "b"], &["/a", "/b"]).unwrap();
+    for (refined, label) in [
+        (&["/c"][..], "an unknown property"),
+        (&["a"][..], "a pointer without its slash"),
+    ] {
+        assert!(
+            refined_pointers_exist(&component, &["a", "b"], refined).is_err(),
+            "accepted {label}"
+        );
+    }
+    // A property the DTO does not have, even when the schema lists it.
+    let extra = json!({"oneOf":[
+        {"type":"object","properties":{"a":{"type":"string"},"z":{"type":"string"}}},
+        {"type":"array","prefixItems":[{"type":"string"},{"type":"string"}]}]});
+    assert!(refined_pointers_exist(&extra, &["a", "b"], &["/z"]).is_err());
+    // A positional form too short to carry the pointer's index.
+    let short = json!({"oneOf":[
+        {"type":"object","properties":{"a":{"type":"string"},"b":{"type":"string"}}},
+        {"type":"array","prefixItems":[{"type":"string"}]}]});
+    refined_pointers_exist(&short, &["a", "b"], &["/a"]).unwrap();
+    let text = format!(
+        "{:#}",
+        refined_pointers_exist(&short, &["a", "b"], &["/b"]).unwrap_err()
+    );
+    assert!(text.contains("/b") && text.contains("positional"), "{text}");
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct Probe {
+    a: String,
+    b: String,
+}
+fn probe_document(a_is_stricter: bool) -> Value {
+    let a = if a_is_stricter {
+        json!({"type":"string","const":"ok"})
+    } else {
+        json!({"type":"string"})
+    };
+    json!({"openapi":"3.1.0","paths":{"/api/v1/x":{"post":{"requestBody":{"content":{"application/json":{
+        "schema":{"$ref":"#/components/schemas/Probe"}}}},"responses":{"200":{"description":"ok"}}}}},
+        "components":{"schemas":{"Probe":{"oneOf":[
+            {"type":"object","required":["a","b"],"additionalProperties":false,
+                "properties":{"a":a.clone(),"b":{"type":"string","const":"x"}}},
+            {"type":"array","prefixItems":[a,{"type":"string","const":"x"}],
+                "minItems":2,"maxItems":2,"items":false}]}}}})
+}
+
+#[test]
+fn management_openapi_refinement_tolerance_is_scoped_to_reviewed_pointers() {
+    let valid = || json!({"a":"ok","b":"x"});
+    let run = |document: &Value, refined: &[&str]| {
+        vectors_in::<Probe>(document, "POST", "/api/v1/x", valid(), refined)
+    };
+    // `b` is stricter than serde on any string but "x": reviewed for /b only.
+    run(&probe_document(false), &["/b"]).unwrap();
+    assert!(run(&probe_document(false), &[]).is_err());
+    // `a` is ALSO stricter, and unreviewed: the old per-DTO tolerance hid it.
+    let text = format!("{:#}", run(&probe_document(true), &["/b"]).unwrap_err());
+    assert!(
+        text.contains("POST /api/v1/x") && text.contains("/a") && text.contains("wrong-type"),
+        "{text}"
+    );
+    assert!(!text.contains("\"ok\""), "{text}");
+    // Reviewing both pointers accepts it.
+    run(&probe_document(true), &["/a", "/b"]).unwrap();
+    // A reviewed pointer the schema does not carry fails, whatever else passes.
+    let text = format!(
+        "{:#}",
+        run(&probe_document(true), &["/a", "/b", "/zzz"]).unwrap_err()
+    );
+    assert!(
+        text.contains("/zzz") && text.contains("POST /api/v1/x"),
+        "{text}"
+    );
+    // The vectors that touch no reviewed pointer are compared exactly.
+    let touched = super::requests::touched(&["a", "b"], &valid(), &json!({"a":"ok","b":"y"}));
+    assert_eq!(touched, vec!["/b".to_owned()]);
+    assert_eq!(
+        super::requests::touched(&["a", "b"], &valid(), &json!(["ok"])),
+        vec!["/b".to_owned()]
+    );
+    assert_eq!(
+        super::requests::touched(&["a", "b"], &valid(), &json!(["ok", "x", 1])),
+        vec!["(extra)".to_owned()]
+    );
+    assert_eq!(
+        super::requests::touched(&["a", "b"], &valid(), &json!(true)),
+        vec!["(root)".to_owned()]
+    );
 }

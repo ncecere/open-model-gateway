@@ -16,10 +16,11 @@ export function csrfCookie(cookie: string): string | undefined {
 }
 const requests = new Set<AbortController>();
 export function abortRequests() { for (const request of requests) request.abort(); requests.clear(); }
-export type RequestOptions = { method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; body?: unknown; signal?: AbortSignal; /** Extra request headers (for example `If-Match`); never a way to set `Content-Type`, `Accept` or the CSRF header, which the client always controls itself. */ headers?: Record<string, string> };
+export type RequestOptions = ({ body?: unknown; rawJson?: never } | { body?: never; /** Byte-preserving JSON evidence; sent directly, never parsed/stringified. */ rawJson: Blob }) & { method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; signal?: AbortSignal; /** Extra request headers (for example `If-Match`); never a way to set `Content-Type`, `Accept` or the CSRF header, which the client always controls itself. */ headers?: Record<string, string> };
 // Relative paths, browser Origin, exact CSRF cookie, no redirects or response cache.
 export async function api<T>(path: string, options: RequestOptions = {}): Promise<T> {
   if (!path.startsWith(`${API}/`) || path.includes("://") || path.includes("#") || path.includes("\\") || /(?:^|\/)\.\.(?:\/|$)/.test(path)) throw new Error("Invalid API path");
+  if (options.body !== undefined && options.rawJson !== undefined) throw new Error("Choose one request body");
   const method = options.method ?? "GET";
   const headers: Record<string, string> = { Accept: "application/json", ...options.headers };
   if (method !== "GET") {
@@ -27,12 +28,12 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
     if (!csrf) throw new ApiError(403, "csrf_missing", "Your security token is missing. Reload this page and sign in again.");
     headers["X-CSRF-Token"] = csrf;
   }
-  if (options.body !== undefined) headers["Content-Type"] = "application/json";
+  if (options.body !== undefined || options.rawJson !== undefined) headers["Content-Type"] = "application/json";
   const controller = new AbortController(); requests.add(controller);
   const signal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
   try {
     let response: Response;
-    try { response = await fetch(path, { method, headers, body: options.body === undefined ? undefined : JSON.stringify(options.body), credentials: "same-origin", cache: "no-store", redirect: "error", signal }); }
+    try { response = await fetch(path, { method, headers, body: options.rawJson ?? (options.body === undefined ? undefined : JSON.stringify(options.body)), credentials: "same-origin", cache: "no-store", redirect: "error", signal }); }
     catch (error) { if (signal.aborted) throw error; throw new ApiError(0, "network_error", "Cannot reach the gateway. Check your connection and try again."); }
     if (response.status === 401 && path !== `${API}/me` && typeof window !== "undefined") window.dispatchEvent(new Event("omg:unauthorized"));
     const text = response.status === 204 ? "" : await response.text();
