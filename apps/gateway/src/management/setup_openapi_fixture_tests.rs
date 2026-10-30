@@ -585,10 +585,10 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         crate::providers::secrets::EnvSecrets::from_lookup(["CONTRACT_REFERENCE".into()], |_| None),
         Default::default(),
     );
-    let admin = browser(&pool, &f.admin).await;
-    let owner = browser(&pool, &f.owner).await;
-    let member = browser(&pool, &f.member).await;
-    let auditor = browser(&pool, &f.auditor).await;
+    let admin = browser(&pool, &f.admin, false).await;
+    let owner = browser(&pool, &f.owner, false).await;
+    let member = browser(&pool, &f.member, false).await;
+    let auditor = browser(&pool, &f.auditor, false).await;
     let mock = crate::identity::tests::MockProvider::start(None).await;
     let identity = mock.state(pool.clone()).await;
     let engine = crate::inference::Engine::new(
