@@ -700,6 +700,7 @@ impl PositiveFixtures {
         }
     }
     /// The `METHOD template` operations that earned positive credit.
+    #[cfg(feature = "integration-tests")]
     pub(crate) fn observed_operations(&self) -> &BTreeSet<String> {
         &self.operations
     }

@@ -57,6 +57,7 @@ impl Probe {
     }
     /// A status-derived verdict for a contract that also refuses input with the
     /// given extra statuses (never a status that can mean something else).
+    #[cfg(feature = "integration-tests")]
     pub(crate) fn refusing(captured: Captured, refusals: &'static [u16]) -> Self {
         Self {
             captured,
