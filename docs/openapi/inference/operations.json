@@ -1,0 +1,179 @@
+{
+  "operations": {
+    "POST /v1/chat/completions": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {}
+    },
+    "POST /v1/responses": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {}
+    },
+    "POST /v1/audio/transcriptions": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {}
+    },
+    "POST /v1/audio/speech": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {}
+    },
+    "GET /v1/videos": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {}
+    },
+    "POST /v1/videos": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {}
+    },
+    "GET /v1/videos/{id}": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {}
+    },
+    "DELETE /v1/videos/{id}": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {}
+    },
+    "GET /v1/videos/{id}/content": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {}
+    },
+    "GET /v1/files": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {}
+    },
+    "POST /v1/files": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {}
+    },
+    "GET /v1/files/{id}": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {}
+    },
+    "DELETE /v1/files/{id}": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {}
+    },
+    "GET /v1/files/{id}/content": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {}
+    },
+    "GET /v1/batches": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {}
+    },
+    "POST /v1/batches": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {}
+    },
+    "GET /v1/batches/{id}": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {}
+    },
+    "POST /v1/batches/{id}/cancel": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {}
+    },
+    "GET /v1/realtime": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {
+        "parameters": [
+          {
+            "name": "model",
+            "in": "query",
+            "required": true,
+            "description": "The public model name (percent-decoded, at most 200 bytes, no control characters). The only query parameter read.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "POST /v1/messages": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {}
+    },
+    "GET /v1/models": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {}
+    },
+    "POST /v1/embeddings": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {}
+    },
+    "POST /v1/rerank": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {}
+    },
+    "POST /v1/images/generations": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {}
+    },
+    "POST /v1/systemone": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {}
+    },
+    "POST /v1/realtime/client_secrets": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {}
+    },
+    "POST /v1/realtime/calls": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {}
+    }
+  },
+  "schemas": {}
+}

@@ -1,0 +1,1451 @@
+{
+  "components": {
+    "headers": {
+      "NoStore": {
+        "description": "Everything is uncacheable.",
+        "required": true,
+        "schema": {
+          "const": "no-store"
+        }
+      },
+      "RequestId": {
+        "description": "The gateway's request ID (UUIDv7), also the attempt ID of a root request.",
+        "required": true,
+        "schema": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "RetryAfter": {
+        "description": "Seconds to wait; only a cooling-down route sends it.",
+        "required": false,
+        "schema": {
+          "pattern": "^[1-9][0-9]*$",
+          "type": "string"
+        }
+      },
+      "ShouldRetryFalse": {
+        "description": "Permanent refusals (unsupported capability, budget, price or token-reservation denials) tell SDKs not to retry.",
+        "required": false,
+        "schema": {
+          "const": "false"
+        }
+      },
+      "WwwAuthenticate": {
+        "description": "Always `Bearer` on a 401.",
+        "required": true,
+        "schema": {
+          "const": "Bearer"
+        }
+      }
+    },
+    "responses": {
+      "OpenAiBadGateway": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+            }
+          }
+        },
+        "description": "The provider was unavailable or returned an invalid or incomplete response",
+        "headers": {
+          "cache-control": {
+            "$ref": "#/components/headers/NoStore"
+          },
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        }
+      },
+      "OpenAiBadRequest": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+            }
+          }
+        },
+        "description": "Invalid request (the closed field set, a bound, a type) or, for the non-generation workloads, an explicit unsupported_capability; error.code tells them apart",
+        "headers": {
+          "cache-control": {
+            "$ref": "#/components/headers/NoStore"
+          },
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          },
+          "x-should-retry": {
+            "$ref": "#/components/headers/ShouldRetryFalse"
+          }
+        }
+      },
+      "OpenAiGatewayTimeout": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+            }
+          }
+        },
+        "description": "The inference deadline was exceeded",
+        "headers": {
+          "cache-control": {
+            "$ref": "#/components/headers/NoStore"
+          },
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        }
+      },
+      "OpenAiNotFound": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+            }
+          }
+        },
+        "description": "The model does not exist or is not available to this key and workspace (model_not_found)",
+        "headers": {
+          "cache-control": {
+            "$ref": "#/components/headers/NoStore"
+          },
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        }
+      },
+      "OpenAiNotImplemented": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+            }
+          }
+        },
+        "description": "A capability no registered deployment supports (unsupported_capability); permanent",
+        "headers": {
+          "cache-control": {
+            "$ref": "#/components/headers/NoStore"
+          },
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          },
+          "x-should-retry": {
+            "$ref": "#/components/headers/ShouldRetryFalse"
+          }
+        }
+      },
+      "OpenAiOverloaded": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+            }
+          }
+        },
+        "description": "The provider reported an overload (HTTP 529)",
+        "headers": {
+          "cache-control": {
+            "$ref": "#/components/headers/NoStore"
+          },
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        }
+      },
+      "OpenAiPayloadTooLarge": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+            }
+          },
+          "text/plain": {
+            "schema": {
+              "const": "length limit exceeded"
+            }
+          }
+        },
+        "description": "The request body exceeds the route's cap. A declared Content-Length over the cap is refused by the body-limit layer with the plain text `length limit exceeded`, before any handler runs; a streamed body is refused by the handler with this JSON error (a different type/code on /v1/embeddings).",
+        "headers": {
+          "cache-control": {
+            "$ref": "#/components/headers/NoStore"
+          },
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        }
+      },
+      "OpenAiTooManyRequests": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+            }
+          }
+        },
+        "description": "Rate or concurrency limit (rate_limit_error), or a permanent budget, unresolved-usage or token-reservation denial (x-should-retry: false)",
+        "headers": {
+          "cache-control": {
+            "$ref": "#/components/headers/NoStore"
+          },
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          },
+          "x-should-retry": {
+            "$ref": "#/components/headers/ShouldRetryFalse"
+          }
+        }
+      },
+      "OpenAiUnauthorized": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+            }
+          }
+        },
+        "description": "Missing, malformed, duplicate, unknown, revoked or no-longer-valid inference key (always authentication_error)",
+        "headers": {
+          "cache-control": {
+            "$ref": "#/components/headers/NoStore"
+          },
+          "www-authenticate": {
+            "$ref": "#/components/headers/WwwAuthenticate"
+          },
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        }
+      },
+      "OpenAiUnavailable": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+            }
+          }
+        },
+        "description": "Authentication, catalog or accounting storage unavailable, provider configuration unavailable, an unbounded price, or every route cooling down (Retry-After)",
+        "headers": {
+          "cache-control": {
+            "$ref": "#/components/headers/NoStore"
+          },
+          "retry-after": {
+            "$ref": "#/components/headers/RetryAfter"
+          },
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          },
+          "x-should-retry": {
+            "$ref": "#/components/headers/ShouldRetryFalse"
+          }
+        }
+      }
+    },
+    "schemas": {
+      "AnthropicErrorEnvelope": {
+        "additionalProperties": false,
+        "description": "Anthropic-shaped /v1/messages error (protocols/messages.rs). It carries NO gateway machine code: unsupported_capability, budget_exceeded and the rest cannot be told apart except by their message.",
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "type": {
+                "$ref": "#/components/schemas/AnthropicErrorType"
+              }
+            },
+            "required": [
+              "type",
+              "message"
+            ],
+            "type": "object"
+          },
+          "type": {
+            "const": "error"
+          }
+        },
+        "required": [
+          "type",
+          "error"
+        ],
+        "type": "object"
+      },
+      "AnthropicErrorType": {
+        "description": "Anthropic error.type. Anthropic's shape has no machine code, so a budget denial is a rate_limit_error distinguishable only by its message.",
+        "enum": [
+          "api_error",
+          "authentication_error",
+          "invalid_request_error",
+          "not_found_error",
+          "overloaded_error",
+          "rate_limit_error",
+          "request_too_large"
+        ],
+        "type": "string"
+      },
+      "FileErrorEnvelope": {
+        "additionalProperties": false,
+        "description": "Files API error (protocols/files.rs): param names the offending field, or is null. The exhaustive code list is documented with the Files operations.",
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "pattern": "^[a-z][a-z0-9_]*$",
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "param": {
+                "pattern": "^[a-z_]+$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "enum": [
+                  "invalid_request_error",
+                  "permission_error",
+                  "insufficient_quota",
+                  "service_unavailable"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "message",
+              "type",
+              "code",
+              "param"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "JobErrorCode": {
+        "description": "Code of a job error: not_found plus the JobError::{Conflict,Invalid,Forbidden} literals scanned from src/jobs.",
+        "enum": [
+          "batch_files_disabled",
+          "batch_not_cancellable",
+          "batch_not_owned",
+          "invalid_completion_window",
+          "invalid_input_file",
+          "invalid_metadata",
+          "not_found",
+          "unsupported_capability",
+          "video_in_progress",
+          "video_not_owned",
+          "video_not_ready"
+        ],
+        "type": "string"
+      },
+      "JobErrorEnvelope": {
+        "additionalProperties": false,
+        "description": "Job (video and batch) error: 404 and 400 are invalid_request_error, 403 permission_error (protocols/videos.rs job_error). Inference errors of a job route use OpenAiErrorEnvelope.",
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "$ref": "#/components/schemas/JobErrorCode"
+              },
+              "message": {
+                "type": "string"
+              },
+              "param": {
+                "type": "null"
+              },
+              "type": {
+                "enum": [
+                  "invalid_request_error",
+                  "permission_error"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "message",
+              "type",
+              "code",
+              "param"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "OpenAiErrorCode": {
+        "description": "Gateway machine code, generated from InferenceError::code over every variant plus the transport codes of OPENAI_TRANSPORT. Clients branch on this, never on the message.",
+        "enum": [
+          "accounting_unavailable",
+          "api_error",
+          "authentication_error",
+          "budget_exceeded",
+          "context_length_exceeded",
+          "invalid_request",
+          "invalid_request_error",
+          "invalid_upstream_response",
+          "job_limit_exceeded",
+          "model_not_found",
+          "model_temporarily_unavailable",
+          "not_found_error",
+          "overloaded_error",
+          "payload_too_large",
+          "price_unbounded",
+          "provider_configuration_error",
+          "rate_limit_error",
+          "timeout_error",
+          "token_reservation_exceeds_limit",
+          "unresolved_usage",
+          "unsupported_capability",
+          "upstream_rejected",
+          "upstream_unavailable"
+        ],
+        "type": "string"
+      },
+      "OpenAiErrorEnvelope": {
+        "additionalProperties": false,
+        "description": "OpenAI-shaped inference error. Never the management ErrorEnvelope: error.code is a gateway machine code, not the HTTP status, and there is no error.reason.",
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "$ref": "#/components/schemas/OpenAiErrorCode"
+              },
+              "message": {
+                "type": "string"
+              },
+              "param": {
+                "type": "null"
+              },
+              "type": {
+                "$ref": "#/components/schemas/OpenAiErrorType"
+              }
+            },
+            "required": [
+              "message",
+              "type",
+              "code",
+              "param"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "OpenAiErrorType": {
+        "description": "OpenAI error.type. Generated from the renderers: budget denials are insufficient_quota, token-reservation and job-limit denials rate_limit_error, a cooling route server_error, every other InferenceError uses its code as its type, plus the transport kinds of OPENAI_TRANSPORT.",
+        "enum": [
+          "accounting_unavailable",
+          "api_error",
+          "authentication_error",
+          "context_length_exceeded",
+          "insufficient_quota",
+          "invalid_request",
+          "invalid_request_error",
+          "invalid_upstream_response",
+          "model_not_found",
+          "not_found_error",
+          "overloaded_error",
+          "price_unbounded",
+          "provider_configuration_error",
+          "rate_limit_error",
+          "server_error",
+          "timeout_error",
+          "unsupported_capability",
+          "upstream_rejected",
+          "upstream_unavailable"
+        ],
+        "type": "string"
+      },
+      "delete_v1_files_by_idRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "delete_v1_files_by_idResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "delete_v1_videos_by_idRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "delete_v1_videos_by_idResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_batchesRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_batchesResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_batches_by_idRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_batches_by_idResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_filesRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_filesResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_files_by_idRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_files_by_idResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_files_by_id_contentRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_files_by_id_contentResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_modelsRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_modelsResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_realtimeRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_realtimeResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_videosRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_videosResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_videos_by_idRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_videos_by_idResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_videos_by_id_contentRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_videos_by_id_contentResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_audio_speechRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_audio_speechResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_audio_transcriptionsRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_audio_transcriptionsResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_batchesRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_batchesResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_batches_by_id_cancelRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_batches_by_id_cancelResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_chat_completionsRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_chat_completionsResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_embeddingsRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_embeddingsResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_filesRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_filesResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_images_generationsRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_images_generationsResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_messagesRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_messagesResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_realtime_callsRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_realtime_callsResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_realtime_client_secretsRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_realtime_client_secretsResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_rerankRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_rerankResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_responsesRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_responsesResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_systemoneRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_systemoneResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_videosRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_videosResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      }
+    },
+    "securitySchemes": {
+      "anthropicApiKey": {
+        "description": "POST /v1/messages only: the inference key in `x-api-key`, as an alternative to Bearer. Sending both, or two of either, is refused with 401.",
+        "in": "header",
+        "name": "x-api-key",
+        "type": "apiKey"
+      },
+      "inferenceKey": {
+        "description": "Inference API key (omg_...) as `Authorization: Bearer`. Belongs to one workspace; tenant and workspace are derived from it, never from the request. Never a management credential.",
+        "scheme": "bearer",
+        "type": "http"
+      },
+      "realtimeSubprotocol": {
+        "description": "GET /v1/realtime only: the inference key as the `openai-insecure-api-key.<key>` WebSocket subprotocol (beside `realtime`), as an alternative to Bearer, never together with it. x-api-key is not accepted.",
+        "in": "header",
+        "name": "Sec-WebSocket-Protocol",
+        "type": "apiKey"
+      }
+    }
+  },
+  "info": {
+    "description": "INCOMPLETE contract (#82 PR1): the operations of areas models, embeddings, rerank, systemone, images and the two realtime refusals are complete and wire-validated against the real handlers; every other operation is an explicit, counted placeholder. Every operation authenticates with an inference key only (Bearer; /v1/messages also accepts x-api-key, GET /v1/realtime also the openai-insecure-api-key.<key> WebSocket subprotocol, never both); inference keys never authorize management and admin tokens never authorize inference. Live key, workspace, catalog and budget checks remain authoritative. The OpenAI-shaped, Anthropic-shaped, job and file error envelopes are distinct schemas and never the management ErrorEnvelope; /v1/messages errors carry no gateway machine code. x-omg-* extensions state what OpenAPI 3.1 cannot express (see docs/openapi/inference/README.md).",
+    "title": "Open Model Gateway inference API",
+    "version": "0.9.3"
+  },
+  "jsonSchemaDialect": "https://spec.openapis.org/oas/3.1/dialect/base",
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/audio/speech": {
+      "post": {
+        "operationId": "post_v1_audio_speech",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_audio_speechRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_audio_speechResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/audio/transcriptions": {
+      "post": {
+        "operationId": "post_v1_audio_transcriptions",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_audio_transcriptionsRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_audio_transcriptionsResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/batches": {
+      "get": {
+        "operationId": "get_v1_batches",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_v1_batchesRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_v1_batchesResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      },
+      "post": {
+        "operationId": "post_v1_batches",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_batchesRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_batchesResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/batches/{id}": {
+      "get": {
+        "operationId": "get_v1_batches_by_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_v1_batches_by_idRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_v1_batches_by_idResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/batches/{id}/cancel": {
+      "post": {
+        "operationId": "post_v1_batches_by_id_cancel",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_batches_by_id_cancelRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_batches_by_id_cancelResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/chat/completions": {
+      "post": {
+        "operationId": "post_v1_chat_completions",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_chat_completionsRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_chat_completionsResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/embeddings": {
+      "post": {
+        "operationId": "post_v1_embeddings",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_embeddingsRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_embeddingsResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/files": {
+      "get": {
+        "operationId": "get_v1_files",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_v1_filesRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_v1_filesResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      },
+      "post": {
+        "operationId": "post_v1_files",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_filesRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_filesResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/files/{id}": {
+      "delete": {
+        "operationId": "delete_v1_files_by_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/delete_v1_files_by_idRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/delete_v1_files_by_idResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      },
+      "get": {
+        "operationId": "get_v1_files_by_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_v1_files_by_idRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_v1_files_by_idResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/files/{id}/content": {
+      "get": {
+        "operationId": "get_v1_files_by_id_content",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_v1_files_by_id_contentRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_v1_files_by_id_contentResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/images/generations": {
+      "post": {
+        "operationId": "post_v1_images_generations",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_images_generationsRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_images_generationsResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/messages": {
+      "post": {
+        "operationId": "post_v1_messages",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          },
+          {
+            "anthropicApiKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_messagesRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_messagesResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "operationId": "get_v1_models",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_v1_modelsRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_v1_modelsResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/realtime": {
+      "get": {
+        "operationId": "get_v1_realtime",
+        "parameters": [
+          {
+            "description": "The public model name (percent-decoded, at most 200 bytes, no control characters). The only query parameter read.",
+            "in": "query",
+            "name": "model",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          },
+          {
+            "realtimeSubprotocol": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_v1_realtimeRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_v1_realtimeResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/realtime/calls": {
+      "post": {
+        "operationId": "post_v1_realtime_calls",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_realtime_callsRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_realtime_callsResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/realtime/client_secrets": {
+      "post": {
+        "operationId": "post_v1_realtime_client_secrets",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_realtime_client_secretsRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_realtime_client_secretsResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/rerank": {
+      "post": {
+        "operationId": "post_v1_rerank",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_rerankRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_rerankResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/responses": {
+      "post": {
+        "operationId": "post_v1_responses",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_responsesRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_responsesResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/systemone": {
+      "post": {
+        "operationId": "post_v1_systemone",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_systemoneRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_systemoneResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/videos": {
+      "get": {
+        "operationId": "get_v1_videos",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_v1_videosRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_v1_videosResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      },
+      "post": {
+        "operationId": "post_v1_videos",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_videosRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_videosResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/videos/{id}": {
+      "delete": {
+        "operationId": "delete_v1_videos_by_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/delete_v1_videos_by_idRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/delete_v1_videos_by_idResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      },
+      "get": {
+        "operationId": "get_v1_videos_by_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_v1_videos_by_idRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_v1_videos_by_idResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/videos/{id}/content": {
+      "get": {
+        "operationId": "get_v1_videos_by_id_content",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_v1_videos_by_id_contentRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_v1_videos_by_id_contentResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    }
+  }
+}

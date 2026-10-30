@@ -3,6 +3,11 @@
 //! validator, quality rules, coverage and HTTP boundary vectors) through its
 //! `pub(crate)` functions; see `generator.rs` for what had to be copied instead.
 //! Documentation: `docs/openapi/inference/README.md`.
+mod errors;
+mod generator;
+mod responses;
+mod wiring_tests;
+
 /// Reviewed open-JSON locations of the inference contract, in the format and
 /// with the semantics of `management_openapi::quality::ARBITRARY_JSON`: the
 /// exact pointer plus the exact `$comment` justification. Everything here is
@@ -93,3 +98,76 @@ pub(crate) const ARBITRARY_JSON: &[(&str, &str)] = &[
         LEGEND,
     ),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::{generator as g, responses as r};
+    use crate::management::openapi::validation as v;
+    use serde_json::{Value, json};
+
+    pub(super) fn generated() -> Value {
+        g::generate(&g::load_fragments().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn inference_openapi_artifact_matches_regeneration() {
+        let document = generated();
+        g::verify(&document).unwrap();
+        v::validate_document_with(&document, &|path| r::completed(r::area(path))).unwrap();
+        let bytes = g::encode(&document);
+        if std::env::var_os("OMG_REGENERATE_OPENAPI").is_some() {
+            assert_eq!(std::env::var("OMG_REGENERATE_OPENAPI").unwrap(), "1");
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "regeneration forbidden in CI"
+            );
+            std::fs::write(g::artifact_path(), &bytes).unwrap();
+        }
+        assert_eq!(
+            std::fs::read(g::artifact_path()).unwrap(),
+            bytes,
+            "inference OpenAPI drift: update reviewed fragments, then explicitly regenerate"
+        );
+    }
+
+    #[test]
+    fn inference_openapi_reports_incomplete_schemas() {
+        let document = generated();
+        let operations = g::operation_count(&document);
+        let placeholders = g::placeholder_count(&document);
+        eprintln!(
+            "inference OpenAPI: {operations} operations; {placeholders} incomplete request/response schemas remaining (#82)"
+        );
+        // Intentionally not acceptance of #82: later PRs must reduce this to zero.
+        assert_eq!(
+            operations, 27,
+            "review route additions and update this baseline"
+        );
+        assert_eq!(
+            placeholders, 54,
+            "review schema completion and update this progress baseline"
+        );
+    }
+
+    #[test]
+    fn inference_openapi_metaschema_and_schema_controls() {
+        let good = generated();
+        v::validate_document_with(&good, &|path| r::completed(r::area(path))).unwrap();
+        for mutation in ["openapi", "responses", "schema"] {
+            let mut bad = good.clone();
+            match mutation {
+                "openapi" => bad["openapi"] = json!("3.0.3"),
+                "responses" => bad["paths"]["/v1/models"]["get"]["responses"] = json!(false),
+                "schema" => {
+                    bad["components"]["schemas"]["OpenAiErrorEnvelope"]["type"] =
+                        json!("not-a-type")
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                v::validate_document_with(&bad, &|path| r::completed(r::area(path))).is_err(),
+                "accepted {mutation} corruption"
+            );
+        }
+    }
+}
