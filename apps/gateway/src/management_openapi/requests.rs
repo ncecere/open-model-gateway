@@ -190,27 +190,6 @@ pub(super) fn refined_pointers_exist(
     Ok(())
 }
 
-/// The request schema component behind a body slot. A slot may be a bare
-/// reference to the operation's own component (a chain of references), which
-/// the vectors follow to the schema that declares the DTO's object form.
-fn request_component<'a>(document: &'a Value, schema: &'a Value) -> anyhow::Result<&'a Value> {
-    use anyhow::{Context, ensure};
-    let mut component = schema;
-    for _ in 0..8 {
-        let Some(reference) = component["$ref"].as_str() else {
-            ensure!(
-                component.is_object(),
-                "request schema component must be an object schema"
-            );
-            return Ok(component);
-        };
-        component = document
-            .pointer(reference.strip_prefix('#').context("local reference")?)
-            .context("request schema component")?;
-    }
-    anyhow::bail!("request schema reference chain too deep")
-}
-
 pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: Value) {
     let pointers = SEMANTIC_REFINEMENTS
         .iter()
@@ -249,7 +228,13 @@ pub(super) fn vectors_in<T: DeserializeOwned>(
         !actual.is_empty(),
         "unsupported DTO deserializer: inventory explicitly"
     );
-    let component = request_component(document, schema)?;
+    let component = document
+        .pointer(
+            &schema["$ref"]
+                .as_str()
+                .context("request schema reference")?[1..],
+        )
+        .context("request schema component")?;
     let object = component
         .get("properties")
         .unwrap_or(&component["oneOf"][0]["properties"]);
@@ -468,7 +453,9 @@ fn management_openapi_request_refinements_are_reviewed_and_one_directional() {
         // Every listed pointer exists in the request schema: as a property of the
         // object form and as an item of the positional form.
         let schema = &operation["requestBody"]["content"]["application/json"]["schema"];
-        let component = request_component(document, schema).unwrap();
+        let component = document
+            .pointer(&schema["$ref"].as_str().unwrap()[1..])
+            .unwrap();
         let arms: Vec<&Value> = match component["oneOf"].as_array() {
             Some(arms) => arms.iter().collect(),
             None => vec![component],
@@ -589,35 +576,5 @@ fn management_openapi_refinement_tolerance_is_scoped_to_reviewed_pointers() {
     assert_eq!(
         super::requests::touched(&["a", "b"], &valid(), &json!(true)),
         vec!["(root)".to_owned()]
-    );
-}
-
-#[test]
-fn management_openapi_request_slots_may_reference_the_dto_schema() {
-    // A slot that is a bare reference to the schema declaring the DTO (a chain
-    // of references) is followed, not mistaken for a schema without properties.
-    let mut document = probe_document(false);
-    document["components"]["schemas"]["Alias"] = json!({"$ref":"#/components/schemas/Probe"});
-    document["paths"]["/api/v1/x"]["post"]["requestBody"]["content"]["application/json"]["schema"] =
-        json!({"$ref":"#/components/schemas/Alias"});
-    vectors_in::<Probe>(
-        &document,
-        "POST",
-        "/api/v1/x",
-        json!({"a":"ok","b":"x"}),
-        &["/b"],
-    )
-    .unwrap();
-    // A chain that never reaches a schema fails instead of looping.
-    document["components"]["schemas"]["Alias"] = json!({"$ref":"#/components/schemas/Alias"});
-    assert!(
-        vectors_in::<Probe>(
-            &document,
-            "POST",
-            "/api/v1/x",
-            json!({"a":"ok","b":"x"}),
-            &["/b"]
-        )
-        .is_err()
     );
 }
