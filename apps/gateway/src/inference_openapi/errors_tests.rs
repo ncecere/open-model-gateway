@@ -236,3 +236,77 @@ async fn send(request: Request<Body>) -> (StatusCode, axum::http::HeaderMap, Vec
     let bytes = to_bytes(body, 8 * 1024 * 1024).await.unwrap().to_vec();
     (parts.status, parts.headers, bytes)
 }
+
+/// The documented exception of /v1/messages: the outer layer answers an
+/// oversized body in Anthropic's shape (`request_too_large`), while every other
+/// route answers in its own (http.rs request_context, protocols/messages.rs).
+#[tokio::test]
+async fn inference_openapi_documents_the_messages_transport_exception() {
+    let doc = generated();
+    let responses = &doc["paths"]["/v1/messages"]["post"]["responses"];
+    for status in ["405", "413"] {
+        assert_eq!(
+            responses[status]["content"]["application/json"]["schema"],
+            schema("AnthropicErrorEnvelope"),
+            "/v1/messages {status} is not documented in Anthropic's shape"
+        );
+    }
+    assert_eq!(
+        responses["405"]["headers"]["allow"]["schema"],
+        json!({"const":"POST"})
+    );
+    // The real 413 (a declared length over the cap, before any credential).
+    let too_large = 2 * 1024 * 1024 + 1;
+    let (status, headers, bytes) = send(
+        Request::builder()
+            .method("POST")
+            .uri("/v1/messages?beta=true")
+            .header("content-length", too_large)
+            .body(Body::from(vec![b'x'; too_large]))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    validate_documented(&doc, "POST", "/v1/messages", status, &headers, &bytes).unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["error"]["type"], "request_too_large");
+    // The real 405 body (the status rewrite keeps Allow; the stack adds the rest).
+    let method_not_allowed = crate::protocols::messages::http_error(StatusCode::METHOD_NOT_ALLOWED);
+    let (parts, body) = method_not_allowed.into_parts();
+    let bytes = to_bytes(body, 4096).await.unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(parts.status, StatusCode::METHOD_NOT_ALLOWED);
+    validate_value(&doc, &schema("AnthropicErrorEnvelope"), &body).unwrap();
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    // Every other route answers its 413 in the OpenAI-shaped family, so a
+    // Messages-shaped body there would be a contract violation.
+    let (status, headers, bytes) = send(
+        Request::builder()
+            .method("POST")
+            .uri("/v1/embeddings")
+            .header("content-length", too_large)
+            .body(Body::from(vec![b'x'; too_large]))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    r::validate(&doc, "POST", "/v1/embeddings", status, &headers, &bytes).unwrap();
+}
+
+/// The Messages 405/413 exception must be IN the document, not only in prose:
+/// removing it from the Messages operation is drift.
+#[test]
+fn inference_openapi_rejects_a_document_without_the_messages_exception() {
+    let good = generated();
+    for status in ["405", "413"] {
+        let mut bad = good.clone();
+        bad["paths"]["/v1/messages"]["post"]["responses"]
+            .as_object_mut()
+            .unwrap()
+            .remove(status);
+        assert!(
+            g::verify(&bad).is_err(),
+            "accepted a document without the /v1/messages {status} exception"
+        );
+    }
+}
