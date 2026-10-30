@@ -50,6 +50,12 @@ impl Vx<'_> {
     }
 }
 
+/// A binding instant exactly as the handler's serde reads it
+/// (`provider_costs.rs` Binding: `DateTime<Utc>`); anything else is a decode
+/// refusal, not a relation.
+fn instant(value: &Value) -> Option<chrono::DateTime<chrono::Utc>> {
+    serde_json::from_value(value.clone()).ok()
+}
 /// create_mapping()'s relations between elements, recomputed from the body:
 /// a window must end after it starts, a binding's provider models are unique,
 /// and two bindings may not overlap in time when they share a provider
@@ -549,6 +555,7 @@ impl Vx<'_> {
                 async |captured, input| {
                     self.schedule_verdict(
                         captured,
+                        self.schema_body("POST", template, &input),
                         view(&input, SCHEDULE_CREATE),
                         platform_scope,
                         &known_zone,
@@ -581,6 +588,7 @@ impl Vx<'_> {
                 async |captured, input| {
                     self.schedule_verdict(
                         captured,
+                        self.schema_body("PATCH", &patch_template, &input),
                         view(&input, SCHEDULE_UPDATE),
                         platform_scope,
                         &known_zone,
@@ -713,10 +721,16 @@ impl Vx<'_> {
     async fn schedule_verdict(
         &self,
         captured: Captured,
+        schema_accepts: bool,
         object: Value,
         platform: bool,
         known_zone: &impl Fn(&Value) -> bool,
     ) -> Probe {
+        // A body the schema refuses never earns a domain verdict: the handler's
+        // input checks (for example more than 50 recipients) refuse it first.
+        if !schema_accepts {
+            return Probe::from(captured);
+        }
         let ineligible = if captured.status == StatusCode::BAD_REQUEST {
             let recipients = object["recipient_user_ids"]
                 .as_array()

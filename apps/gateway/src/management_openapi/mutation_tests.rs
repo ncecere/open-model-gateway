@@ -27,6 +27,10 @@ fn sample(document: &Value, schema: &Value) -> Value {
                         .map(|s| sample(document, s))
                         .collect::<Vec<_>>()
                 )
+            } else if schema["maxItems"] == json!(0) || schema["items"] == json!(false) {
+                // A reviewed always-empty array (for example the platform cost
+                // report's service accounts) has no element to sample.
+                json!([])
             } else {
                 json!([sample(document, &schema["items"])])
             }
