@@ -201,7 +201,9 @@ fn instances(
     stack.push(component.to_owned());
     let mut total = 0;
     for (target, holder) in sites {
-        if target != component {
+        // A reference INTO the component (`#/components/schemas/S/properties/p`)
+        // reaches the annotations under `S` just like a reference to `S`.
+        if target != component && !target.starts_with(&format!("{component}/")) {
             continue;
         }
         total += match holder {
@@ -276,6 +278,7 @@ fn request_schemas(document: &Value) -> (BTreeSet<String>, BTreeSet<String>) {
 /// Does `location` lie within a JSON request body schema?
 fn in_request_schema(document: &Value, location: &str) -> bool {
     location.starts_with("/operation/requestBody")
+        || location.starts_with("/components/requestBodies/")
         || component_of(location)
             .is_some_and(|component| request_schemas(document).1.contains(&component))
 }
@@ -635,6 +638,7 @@ fn schema(
             super::http_vectors::MAX_BYTES
         );
     }
+    unprobed_request_keywords(document, node, location)?;
     // Reviewed arbitrary JSON still declares its JSON type (e.g. "object").
     if arbitrary(location, node) {
         ensure!(
@@ -757,6 +761,48 @@ fn schema(
                 seen,
             )?;
         }
+    }
+    Ok(())
+}
+
+/// Keywords the vector harness cannot probe: a REQUEST schema using one would
+/// pass `finish` with the constraint never exercised, so they are refused there
+/// (add vectors for the keyword first, or restructure the schema).
+const UNPROBED_REQUEST_KEYWORDS: &[&str] = &[
+    "minProperties",
+    "maxProperties",
+    "multipleOf",
+    "propertyNames",
+    "contains",
+    "minContains",
+    "maxContains",
+    "not",
+];
+
+/// Numeric bounds the vectors can probe are integers within i64 (the vectors
+/// are `bound` and `bound` +/- 1 as i64).
+const NUMERIC_BOUNDS: &[&str] = &["minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"];
+
+fn unprobed_request_keywords(document: &Value, node: &Value, location: &str) -> Result<()> {
+    let keyword = UNPROBED_REQUEST_KEYWORDS
+        .iter()
+        .find(|keyword| node.get(**keyword).is_some())
+        .copied()
+        .or_else(|| {
+            NUMERIC_BOUNDS
+                .iter()
+                .find(|keyword| node.get(**keyword).is_some_and(|v| v.as_i64().is_none()))
+                .copied()
+        });
+    if let Some(keyword) = keyword
+        && in_request_schema(document, location)
+    {
+        let why = if NUMERIC_BOUNDS.contains(&keyword) {
+            "a request bound must be an integer within i64"
+        } else {
+            "the vector harness cannot probe it"
+        };
+        anyhow::bail!("{keyword} is not allowed in a request schema at {location}: {why}");
     }
     Ok(())
 }
@@ -942,13 +988,19 @@ pub(super) fn completed(document: &Value) -> Result<()> {
     }
     // Generated reusable responses/headers are complete contracts too, even
     // when only an area that is still incomplete references them today.
+    // Each reusable component is checked AT ITS OWN LOCATION, so the shared
+    // component ban does not depend on an operation referencing it.
     for kind in ["responses", "headers", "parameters", "requestBodies"] {
-        for node in document["components"][kind]
+        for (name, node) in document["components"][kind]
             .as_object()
             .into_iter()
-            .flat_map(|m| m.values())
+            .flatten()
         {
-            operation(document, node)?;
+            operation_at(
+                document,
+                node,
+                &format!("/components/{kind}/{}", segment(name)),
+            )?;
         }
     }
     for (path, item) in document["paths"].as_object().context("paths missing")? {
@@ -962,6 +1014,11 @@ pub(super) fn completed(document: &Value) -> Result<()> {
 }
 
 pub(super) fn operation(document: &Value, operation: &Value) -> Result<()> {
+    operation_at(document, operation, "/operation")
+}
+
+/// [`operation`] for a node that lives at `location` in the document.
+fn operation_at(document: &Value, operation: &Value, location: &str) -> Result<()> {
     fn discover(
         document: &Value,
         node: &Value,
@@ -1028,5 +1085,5 @@ pub(super) fn operation(document: &Value, operation: &Value) -> Result<()> {
         }
         Ok(())
     }
-    discover(document, operation, "/operation", &mut BTreeSet::new())
+    discover(document, operation, location, &mut BTreeSet::new())
 }

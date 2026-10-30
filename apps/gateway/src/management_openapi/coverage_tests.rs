@@ -1172,3 +1172,139 @@ fn management_openapi_coverage_arrays_are_keyed_by_schema_pointer_too() {
     assert!(gap.contains("/response/200/items"), "{gap}");
     run(&document, &[json!([["a"], ["b"]])], &[]).unwrap();
 }
+
+// ----- round 3: unprobed request keywords, shared-component counting ----
+
+fn request_doc(schema: Value) -> Value {
+    json!({"components":{"schemas":{"Body":schema}},"paths":{"/api/v1/x":{"post":{
+        "requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/Body"}}}},
+        "responses":{"200":{"description":"ok"}}}}}})
+}
+fn response_doc(schema: Value) -> Value {
+    json!({"components":{"schemas":{"Reply":schema}},"paths":{"/api/v1/x":{"get":{
+        "responses":{"200":{"description":"ok","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Reply"}}}}}}}}})
+}
+
+#[test]
+fn management_openapi_coverage_request_schemas_refuse_keywords_the_vectors_cannot_probe() {
+    for keyword in [
+        ("minProperties", json!(1)),
+        ("maxProperties", json!(3)),
+        ("multipleOf", json!(5)),
+        (
+            "propertyNames",
+            json!({"type":"string","pattern":"^[a-z]+$"}),
+        ),
+        ("contains", json!({"type":"string"})),
+        ("minContains", json!(1)),
+        ("maxContains", json!(2)),
+        ("not", json!({"type":"object","required":["a"]})),
+    ] {
+        // `contains` and friends belong to arrays; the rest to a closed object.
+        let base = || {
+            if keyword.0.ends_with("ontains") {
+                json!({"type":"array","items":{"type":"string"}})
+            } else {
+                closed(json!({"a":{"type":"string"}}))
+            }
+        };
+        let mut schema = base();
+        schema[keyword.0] = keyword.1.clone();
+        // RED: a request schema carrying it passed with the constraint never probed.
+        let text = format!(
+            "{:#}",
+            quality::completed(&request_doc(schema.clone())).unwrap_err()
+        );
+        assert!(
+            text.contains(keyword.0) && text.contains("request schema"),
+            "{}: {text}",
+            keyword.0
+        );
+        // The same keyword in a RESPONSE-only schema is not a request vector gap.
+        let mut reply = base();
+        reply[keyword.0] = keyword.1;
+        quality::completed(&response_doc(reply)).unwrap_or_else(|e| panic!("{}: {e:#}", keyword.0));
+    }
+    // Numeric bounds must be integers within i64.
+    for bound in [json!(0.5), json!(u64::MAX), json!(1e30)] {
+        let schema = closed(json!({"n":{"type":"integer","maximum":bound}}));
+        let text = format!(
+            "{:#}",
+            quality::completed(&request_doc(schema)).unwrap_err()
+        );
+        assert!(text.contains("maximum") && text.contains("i64"), "{text}");
+    }
+    // Integers and uniqueItems (probed with distinct elements) are fine.
+    quality::completed(&request_doc(closed(json!({
+        "n":{"type":"integer","minimum":-5,"maximum":9007199254740993i64},
+        "xs":{"type":"array","uniqueItems":true,"minItems":1,"maxItems":3,"items":{"type":"string"}}}))))
+    .unwrap();
+    // A bare inline request body is covered too.
+    let inline = json!({"components":{"schemas":{}},"paths":{"/api/v1/x":{"post":{
+        "requestBody":{"required":true,"content":{"application/json":{"schema":
+            {"type":"object","required":[],"additionalProperties":false,"properties":{},"minProperties":1}}}},
+        "responses":{"200":{"description":"ok"}}}}}});
+    assert!(quality::operation(&inline, &inline["paths"]["/api/v1/x"]["post"]).is_err());
+}
+
+#[test]
+fn management_openapi_coverage_shared_counting_follows_references_into_a_component() {
+    let list =
+        json!({"type":"array","items":{"type":"string"},"x-omg-may-be-empty":"reviewed reason"});
+    let component = closed(json!({"p":list}));
+    let probe = |extra: Value| {
+        let mut properties = json!({"whole":{"$ref":"#/components/schemas/Shared"}});
+        for (k, v) in extra.as_object().unwrap() {
+            properties[k] = v.clone();
+        }
+        json!({"components":{"schemas":{"Shared":component.clone(),"Probe":closed(properties)}},"paths":{}})
+    };
+    // Referenced once as a whole: fine.
+    quality::completed(&probe(json!({}))).unwrap();
+    // RED: a SECOND reference into a part of it (`.../Shared/properties/p`) is a
+    // second place the annotation applies, but was not counted.
+    let text = format!(
+        "{:#}",
+        quality::completed(&probe(
+            json!({"part":{"$ref":"#/components/schemas/Shared/properties/p"}})
+        ))
+        .unwrap_err()
+    );
+    assert!(text.contains("shared component"), "{text}");
+}
+
+#[test]
+fn management_openapi_coverage_exemptions_on_shared_parameter_and_reusable_components_are_refused()
+{
+    let parameter = json!({"in":"query","name":"limit","schema":{"type":"integer","minimum":1,"maximum":9},
+        "x-omg-unobserved-parameter":"the handler never accepts it"});
+    let document = |paths: &[&str]| {
+        let mut items = serde_json::Map::new();
+        for path in paths {
+            items.insert(
+                (*path).to_owned(),
+                json!({"get":{"parameters":[{"$ref":"#/components/parameters/Limit"}],
+                    "responses":{"200":{"description":"ok"}}}}),
+            );
+        }
+        json!({"components":{"schemas":{},"parameters":{"Limit":parameter.clone()}},"paths":items})
+    };
+    // Referenced once: allowed.
+    quality::completed(&document(&["/api/v1/me"])).unwrap();
+    // N1: referenced by two completed operations: refused.
+    let text = format!(
+        "{:#}",
+        quality::completed(&document(&["/api/v1/me", "/api/v1/me/sessions"])).unwrap_err()
+    );
+    assert!(text.contains("shared component"), "{text}");
+    // N2: referenced by two operations of an area that is NOT completed (so no
+    // completed operation follows the reference): the component itself is checked
+    // at its own location, independent of any referencing operation.
+    let text = format!(
+        "{:#}",
+        quality::completed(&document(&["/api/v1/unfinished-a", "/api/v1/unfinished-b"]))
+            .unwrap_err()
+    );
+    assert!(text.contains("shared component"), "{text}");
+    quality::completed(&document(&["/api/v1/unfinished-a"])).unwrap();
+}
