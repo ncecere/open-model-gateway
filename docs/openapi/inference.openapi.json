@@ -292,12 +292,22 @@
         "additionalProperties": false,
         "properties": {
           "embedding": {
-            "items": {
-              "type": "number"
-            },
-            "maxItems": 16384,
-            "minItems": 1,
-            "type": "array"
+            "oneOf": [
+              {
+                "description": "encoding_format float (or omitted/null): finite numbers.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 16384,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "description": "encoding_format base64: padded standard base64 of little-endian float32 values (four bytes per dimension).",
+                "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+                "type": "string"
+              }
+            ]
           },
           "index": {
             "minimum": 0,

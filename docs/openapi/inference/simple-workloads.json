@@ -635,12 +635,22 @@
           "minimum": 0
         },
         "embedding": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 16384,
-          "items": {
-            "type": "number"
-          }
+          "oneOf": [
+            {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 16384,
+              "items": {
+                "type": "number"
+              },
+              "description": "encoding_format float (or omitted/null): finite numbers."
+            },
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+              "description": "encoding_format base64: padded standard base64 of little-endian float32 values (four bytes per dimension)."
+            }
+          ]
         }
       }
     },

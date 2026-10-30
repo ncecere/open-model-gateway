@@ -463,7 +463,62 @@ fn finish(fixtures: &PositiveFixtures, document: &Value, areas: &[&str]) -> Resu
 }
 
 /// The embedding vectors of a response are in the representation the REQUEST
-/// asked for (not yet enforced).
-pub(super) fn embedding_encoding_matches(_request: &Value, _response: &Value) -> Result<()> {
+/// asked for (`protocols/embeddings.rs` `render`): float arrays by default, or
+/// for `encoding_format: base64` padded base64 of little-endian float32 values,
+/// four bytes per dimension, every vector of one length. The schema allows both
+/// representations at every vector, so this cross-check carries what OpenAPI
+/// cannot express. Messages name the vector index, never a value.
+pub(super) fn embedding_encoding_matches(request: &Value, response: &Value) -> Result<()> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    // Object form `encoding_format`, or serde's positional form (index 2).
+    let format = request
+        .get("encoding_format")
+        .or_else(|| request.get(2))
+        .and_then(Value::as_str)
+        .unwrap_or("float");
+    let input = request.get("input").or_else(|| request.get(1));
+    let inputs = match input {
+        Some(Value::Array(items)) => items.len(),
+        _ => 1,
+    };
+    let data = response["data"]
+        .as_array()
+        .context("response has no data array")?;
+    ensure!(data.len() == inputs, "one vector per input is required");
+    let mut dimensions = None;
+    for (index, item) in data.iter().enumerate() {
+        ensure!(
+            item["index"] == index,
+            "vector {index} is out of input order"
+        );
+        let length = match (format, &item["embedding"]) {
+            ("base64", Value::String(text)) => {
+                let bytes = STANDARD
+                    .decode(text)
+                    .map_err(|_| anyhow::anyhow!("vector {index} is not valid base64"))?;
+                ensure!(
+                    !bytes.is_empty() && bytes.len() % 4 == 0,
+                    "vector {index} is not whole float32 values"
+                );
+                bytes.len() / 4
+            }
+            ("float", Value::Array(numbers)) => {
+                ensure!(
+                    numbers.iter().all(Value::is_number),
+                    "vector {index} has a non-number"
+                );
+                numbers.len()
+            }
+            (wanted, _) => {
+                anyhow::bail!("vector {index} is not in the requested {wanted} representation")
+            }
+        };
+        ensure!(
+            dimensions
+                .replace(length)
+                .is_none_or(|first| first == length),
+            "vectors differ in length"
+        );
+    }
     Ok(())
 }
