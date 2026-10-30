@@ -96,6 +96,41 @@ fn inference_openapi_rejects_a_vocabulary_that_misses_a_variant() {
 }
 
 #[test]
+fn inference_openapi_keeps_the_envelopes_distinct() {
+    let good = generated();
+    // Swapping the two shapes is a drift of the generated envelopes ...
+    let mut swapped = good.clone();
+    let (openai, anthropic) = (
+        good["components"]["schemas"]["OpenAiErrorEnvelope"].clone(),
+        good["components"]["schemas"]["AnthropicErrorEnvelope"].clone(),
+    );
+    swapped["components"]["schemas"]["OpenAiErrorEnvelope"] = anthropic.clone();
+    swapped["components"]["schemas"]["AnthropicErrorEnvelope"] = openai;
+    assert!(g::verify(&swapped).is_err(), "accepted swapped envelopes");
+    // ... and so is an operation that answers in another protocol's shape.
+    for (path, method, status, wrong) in [
+        ("/v1/messages", "post", "401", "OpenAiErrorEnvelope"),
+        ("/v1/messages", "post", "413", "OpenAiErrorEnvelope"),
+        ("/v1/embeddings", "post", "400", "AnthropicErrorEnvelope"),
+    ] {
+        let mut bad = good.clone();
+        bad["paths"][path][method]["responses"][status] = json!({
+            "description":"wrong family",
+            "content":{"application/json":{"schema":schema(wrong)}}});
+        assert!(
+            g::verify(&bad).is_err(),
+            "{path} {status} accepted the {wrong}"
+        );
+    }
+    // The shared responses carry the OpenAI envelope: pointing one at Anthropic fails too.
+    let mut bad = good.clone();
+    bad["components"]["responses"]["OpenAiUnauthorized"]["content"]["application/json"]["schema"] =
+        schema("AnthropicErrorEnvelope");
+    assert!(g::verify(&bad).is_err());
+    g::verify(&good).unwrap();
+}
+
+#[test]
 fn inference_openapi_transport_error_literals_are_still_in_source() {
     for (kind, code, file) in e::OPENAI_TRANSPORT {
         let source =
