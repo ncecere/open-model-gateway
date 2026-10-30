@@ -575,7 +575,7 @@
     "DELETE /api/v1/platform/users/{user}/roles/{role}": {
       "access": "PlatformWrite",
       "operation": {
-        "description": "Live authorization and current grant provenance are rechecked. Platform Auditor authority is read-only; independent workspace membership remains usable. Inference keys are never management credentials.",
+        "description": "Live authorization and current grant provenance are rechecked. Platform Auditor authority is read-only; independent workspace membership remains usable. Inference keys are never management credentials. The `{role}` path value: Platform role (directory.rs platform_role_valid: any other value is refused with 400).",
         "responses": {
           "200": {
             "description": "Successful handler representation",
@@ -630,6 +630,18 @@
             "required": true,
             "schema": {
               "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
+          {
+            "name": "role",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "user",
+                "auditor",
+                "admin"
+              ]
             }
           }
         ]
@@ -2030,7 +2042,7 @@
     "GET /api/v1/platform/workspace-types/{kind}/catalogs": {
       "access": "PlatformRead",
       "operation": {
-        "description": "Live type defaults and replacement workspace overrides are separate. Empty replacement is deny-all, DELETE restores inheritance. Removed catalog selections never resurrect. Platform readers can read allocation metadata for personal/disabled workspaces without any keys or request detail.",
+        "description": "Live type defaults and replacement workspace overrides are separate. Empty replacement is deny-all, DELETE restores inheritance. Removed catalog selections never resurrect. Platform readers can read allocation metadata for personal/disabled workspaces without any keys or request detail. The `{kind}` path value: Workspace type (catalogs.rs kind_valid / policies.rs kind(): any other value is refused with 400).",
         "responses": {
           "200": {
             "description": "Successful handler representation",
@@ -2067,7 +2079,21 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "personal",
+                "team",
+                "project"
+              ]
+            }
+          }
+        ]
       },
       "scope": "platform:read",
       "token_policy": "Scope"
@@ -2075,7 +2101,7 @@
     "PUT /api/v1/platform/workspace-types/{kind}/catalogs": {
       "access": "PlatformWrite",
       "operation": {
-        "description": "Live type defaults and replacement workspace overrides are separate. Empty replacement is deny-all, DELETE restores inheritance. Removed catalog selections never resurrect. Platform readers can read allocation metadata for personal/disabled workspaces without any keys or request detail.",
+        "description": "Live type defaults and replacement workspace overrides are separate. Empty replacement is deny-all, DELETE restores inheritance. Removed catalog selections never resurrect. Platform readers can read allocation metadata for personal/disabled workspaces without any keys or request detail. The `{kind}` path value: Workspace type (catalogs.rs kind_valid / policies.rs kind(): any other value is refused with 400).",
         "responses": {
           "200": {
             "description": "Successful handler representation",
@@ -2152,7 +2178,21 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "personal",
+                "team",
+                "project"
+              ]
+            }
+          }
+        ]
       },
       "scope": "catalog:write",
       "token_policy": "Scope"
@@ -2160,7 +2200,7 @@
     "GET /api/v1/platform/workspace-types/{kind}/policy": {
       "access": "PlatformRead",
       "operation": {
-        "description": "Live type default or replacement workspace policy, never installation-wide limits. Policy rates are required nullable fields; supplied fields distinguish omission (keep) from null (clear); present budgets/budget_period reject null. Budgets replace the full period set; deprecated monthly form is mutually exclusive. Money is exact micro-USD strings. Platform totals are permitted without request details.",
+        "description": "Live type default or replacement workspace policy, never installation-wide limits. Policy rates are required nullable fields; supplied fields distinguish omission (keep) from null (clear); present budgets/budget_period reject null. Budgets replace the full period set; deprecated monthly form is mutually exclusive. Money is exact micro-USD strings. Platform totals are permitted without request details. The `{kind}` path value: Workspace type (catalogs.rs kind_valid / policies.rs kind(): any other value is refused with 400).",
         "responses": {
           "200": {
             "description": "Successful handler representation",
@@ -2197,7 +2237,21 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "personal",
+                "team",
+                "project"
+              ]
+            }
+          }
+        ]
       },
       "scope": "platform:read",
       "token_policy": "Scope"
@@ -2205,7 +2259,7 @@
     "PUT /api/v1/platform/workspace-types/{kind}/policy": {
       "access": "PlatformWrite",
       "operation": {
-        "description": "Live type default or replacement workspace policy, never installation-wide limits. Policy rates are required nullable fields; supplied fields distinguish omission (keep) from null (clear); present budgets/budget_period reject null. Budgets replace the full period set; deprecated monthly form is mutually exclusive. Money is exact micro-USD strings. Platform totals are permitted without request details.",
+        "description": "Live type default or replacement workspace policy, never installation-wide limits. Policy rates are required nullable fields; supplied fields distinguish omission (keep) from null (clear); present budgets/budget_period reject null. Budgets replace the full period set; deprecated monthly form is mutually exclusive. Money is exact micro-USD strings. Platform totals are permitted without request details. The `{kind}` path value: Workspace type (catalogs.rs kind_valid / policies.rs kind(): any other value is refused with 400).",
         "responses": {
           "200": {
             "description": "Successful handler representation",
@@ -2282,7 +2336,21 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "personal",
+                "team",
+                "project"
+              ]
+            }
+          }
+        ]
       },
       "scope": "governance:write",
       "token_policy": "Scope"
