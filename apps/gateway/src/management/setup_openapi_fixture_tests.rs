@@ -444,6 +444,44 @@ async fn query_set(
     )
     .await;
 }
+/// [`query_set`] with boundary `candidates` for a parameter whose pattern has no
+/// derivable length bounds (the schema computes each candidate's verdict).
+async fn query_set_with(
+    j: &mut Journey<'_>,
+    who: &Browser,
+    template: &str,
+    path: &str,
+    base: &[(&str, &str)],
+    candidates: &[(&str, &str)],
+) {
+    let (client, root) = (j.client.clone(), j.base.clone());
+    let fixed: Vec<(String, String)> = base
+        .iter()
+        .map(|(n, v)| ((*n).to_owned(), (*v).to_owned()))
+        .collect();
+    http_vectors::query_vectors_extended(
+        &mut j.observed,
+        "GET",
+        template,
+        &[],
+        candidates,
+        async || ((), fixed.clone()),
+        async |_: &(), query: String| {
+            Probe::from(
+                send(
+                    &client,
+                    &root,
+                    Some(who),
+                    "GET",
+                    &format!("{path}?{query}"),
+                    None,
+                )
+                .await,
+            )
+        },
+    )
+    .await;
+}
 /// Body boundary vectors for one operation with a fixed target.
 async fn body_set(
     j: &mut Journey<'_>,
@@ -1741,12 +1779,18 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         .as_str()
         .unwrap_or("0_00000000-0000-0000-0000-000000000000")
         .to_owned();
-    query_set(
+    // The cursor's leading zeros are unbounded, so its pattern has no derivable length
+    // bounds: candidates straddle the upper instant bound (one digit apart).
+    query_set_with(
         &mut j,
         a,
         "/api/v1/platform/deployments/{id}/configuration/history",
         &history,
         &[("limit", "1"), ("cursor", &cursor)],
+        &[
+            ("cursor", "8210266876799999999_00000000-0000-0000-0000-000000000000"),
+            ("cursor", "8210266876899999999_00000000-0000-0000-0000-000000000000"),
+        ],
     )
     .await;
     let (unp_s, nd_s) = (Uuid::new_v4().to_string(), Uuid::new_v4().to_string());
