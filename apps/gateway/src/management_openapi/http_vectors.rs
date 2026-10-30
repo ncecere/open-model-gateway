@@ -9,7 +9,10 @@
 //! * The schema is the oracle; the handler "accepts" when it got past input
 //!   validation (2xx/3xx, or a domain refusal 404/409) and "refuses" with 400 or
 //!   422. Any other status (401/403/413/415/429/5xx) is a harness failure, never
-//!   silently counted. A fixture whose status cannot tell input refusal from a
+//!   silently counted. The one exception is a RAW upload body
+//!   (`Probe::upload_verdict`), where 413 (over the documented size) and 415
+//!   (not the declared media type, or empty) ARE input refusals; 401/403/429/5xx
+//!   still fail there. A fixture whose status cannot tell input refusal from a
 //!   domain refusal supplies its own verdict through [`Probe::decided`].
 //! * Executing a full set is recorded per operation; `finish` refuses completed
 //!   operations with query parameters or a request body that never ran theirs.
