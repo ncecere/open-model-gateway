@@ -359,9 +359,23 @@ pub(super) fn components() -> Result<Value> {
 
 // ----------------------------------------------------------- drift checks ----
 
-/// Generated components must be byte-for-byte what source dictates, the
-/// management `ErrorEnvelope` must not appear, and each operation may use only
-/// the envelope family of its protocol. (Not yet enforced.)
-pub(super) fn verify_components(_document: &Value) -> Result<()> {
+/// Generated components must be byte-for-byte what source dictates.
+pub(super) fn verify_components(document: &Value) -> Result<()> {
+    let generated = components()?;
+    let schemas = document["components"]["schemas"]
+        .as_object()
+        .context("schemas missing")?;
+    for (name, schema) in generated["schemas"].as_object().unwrap() {
+        ensure!(
+            schemas.get(name) == Some(schema),
+            "undocumented error vocabulary or envelope drift: {name}"
+        );
+    }
+    for kind in ["headers", "responses"] {
+        ensure!(
+            document["components"][kind] == generated[kind],
+            "shared {kind} drift"
+        );
+    }
     Ok(())
 }
