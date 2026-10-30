@@ -1430,6 +1430,8 @@ mod database {
         for (resource, attribute) in [
             ("Users", "userName"),
             ("Users", "externalId"),
+            ("Users", "emails.value"),
+            ("Users", "id"),
             ("Groups", "displayName"),
             ("Groups", "externalId"),
         ] {
@@ -1463,5 +1465,30 @@ mod database {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(found["Resources"][0]["id"], ada.to_string());
+        // The PATCH member path parses its filter the same way.
+        let (status, _, group) = send(
+            &app,
+            Method::POST,
+            "/scim/v2/Groups",
+            Some(&auth),
+            Some(json!({"schemas":[GROUP_SCHEMA],"displayName":"Filter controls"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let path = format!("/scim/v2/Groups/{}", group["id"].as_str().unwrap());
+        let (status, _, body) = send(
+            &app,
+            Method::PATCH,
+            &path,
+            Some(&auth),
+            Some(patch(
+                json!([{"op":"remove","path":"members[value eq \"\\u0000\"]"}]),
+            )),
+        )
+        .await;
+        assert_eq!(
+            (status, body["scimType"].clone()),
+            (StatusCode::BAD_REQUEST, json!("invalidFilter"))
+        );
     }
 }
