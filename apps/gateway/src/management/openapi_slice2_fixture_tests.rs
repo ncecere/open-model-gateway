@@ -17,9 +17,14 @@ use std::cell::RefCell;
 
 const ORIGIN: &str = "http://127.0.0.1:3000";
 const ISSUER: &str = "https://issuer.example.test";
+/// The issuer of the generated vector runs: the trailing slash puts the
+/// vectors' generated fill in the PATH, where a 2048-byte multibyte value is
+/// valid (in the host it would form a non-ASCII label over the URL parser's
+/// 1000-character limit, a documented divergence probed separately).
+const VECTOR_ISSUER: &str = "https://issuer.example.test/";
 /// Handler-derived probes run by the fixture, and how many of the expected
 /// accepts the handler gives as a domain refusal (404/409) rather than 2xx.
-const EXPECTED_PINS: usize = 147;
+const EXPECTED_PINS: usize = 153;
 const EXPECTED_DOMAIN_PINS: usize = 1;
 struct Server(tokio::task::JoinHandle<()>);
 impl Drop for Server {
@@ -2325,11 +2330,11 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
     for (kind, valid) in [
         (
             "platform",
-            json!({"issuer":ISSUER,"group_value":"vector-created","target_kind":"platform","platform_role":"user","workspace_id":null,"workspace_role":null,"enabled":true}),
+            json!({"issuer":VECTOR_ISSUER,"group_value":"vector-created","target_kind":"platform","platform_role":"user","workspace_id":null,"workspace_role":null,"enabled":true}),
         ),
         (
             "workspace",
-            json!({"issuer":ISSUER,"group_value":"vector-created","target_kind":"workspace","platform_role":null,"workspace_id":vector_ws,"workspace_role":"member","enabled":true}),
+            json!({"issuer":VECTOR_ISSUER,"group_value":"vector-created","target_kind":"workspace","platform_role":null,"workspace_id":vector_ws,"workspace_role":"member","enabled":true}),
         ),
     ] {
         body!(
@@ -2358,7 +2363,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         // Every mapping field, so each optional field's constraints run; the
         // merge is then fully determined by the body, whatever an accepted
         // vector stored before.
-        json!({"issuer":ISSUER,"group_value":"vector-group","target_kind":"platform","platform_role":"user","workspace_id":null,"workspace_role":null,"enabled":true})
+        json!({"issuer":VECTOR_ISSUER,"group_value":"vector-group","target_kind":"platform","platform_role":"user","workspace_id":null,"workspace_role":null,"enabled":true})
     );
     body!(
         "POST /platform/oidc/group-mappings/{id}/preview",
@@ -2366,7 +2371,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         "/api/v1/platform/oidc/group-mappings/{id}/preview",
         &admin,
         format!("/api/v1/platform/oidc/group-mappings/{vector_mapping}/preview"),
-        json!({"issuer":ISSUER,"group_value":"vector-group","target_kind":"platform","platform_role":"user","workspace_id":null,"workspace_role":null,"enabled":true,"delete":false})
+        json!({"issuer":VECTOR_ISSUER,"group_value":"vector-group","target_kind":"platform","platform_role":"user","workspace_id":null,"workspace_role":null,"enabled":true,"delete":false})
     );
 
     // The positional wire form (serde's struct-as-array representation) of every
@@ -2533,7 +2538,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         (
             "platform",
             json!([
-                ISSUER,
+                VECTOR_ISSUER,
                 "vector-positional",
                 "platform",
                 "user",
@@ -2545,7 +2550,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         (
             "workspace",
             json!([
-                ISSUER,
+                VECTOR_ISSUER,
                 "vector-positional",
                 "workspace",
                 null,
@@ -2591,6 +2596,12 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
     c.guarded("issuer probes", async {
         let long_path = format!("https://issuer.example.test/{}", "\u{e9}".repeat(1011));
         let exact_path = format!("https://issuer.example.test/{}", "\u{e9}".repeat(1010));
+        // A non-ASCII host label is limited to 1000 characters by the URL parser
+        // (idna uts46.rs); ASCII labels are not, and a long non-ASCII PATH is fine.
+        let label_1000 = format!("https://{}.example.test", "\u{e9}".repeat(1000));
+        let label_1001 = format!("https://{}.example.test", "\u{e9}".repeat(1001));
+        let short_host_long_path = format!("https://\u{e9}.example.test/{}", "\u{e9}".repeat(1000));
+        let ascii_label_beside = format!("https://{}.\u{e9}.test", "a".repeat(1001));
         // (what, issuer, schema accepts, handler accepts)
         let probes: Vec<(&str, &str, bool, bool)> = vec![
             (
@@ -2688,13 +2699,13 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             (
                 "leading whitespace",
                 " https://issuer.example.test",
-                false,
+                true,
                 true,
             ),
             (
                 "trailing whitespace",
                 "https://issuer.example.test ",
-                false,
+                true,
                 true,
             ),
             (
@@ -2706,25 +2717,25 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             (
                 "space in the path",
                 "https://issuer.example.test/a b",
-                false,
+                true,
                 true,
             ),
             (
                 "C0 control character in the path",
                 "https://issuer.example.test/a\u{1}b",
-                false,
+                true,
                 true,
             ),
             (
                 "C1 control character in the path",
                 "https://issuer.example.test/a\u{85}b",
-                false,
+                true,
                 true,
             ),
             (
                 "no-break space in the path",
                 "https://issuer.example.test/a\u{a0}b",
-                false,
+                true,
                 true,
             ),
             (
@@ -2774,6 +2785,32 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
                 "multibyte path of exactly 2048 bytes",
                 exact_path.as_str(),
                 true,
+                true,
+            ),
+            (
+                "non-ASCII host label of 1000 characters",
+                label_1000.as_str(),
+                false,
+                true,
+            ),
+            // The schema accepts ASCII hosts only (documented); the parser takes
+            // internationalized hosts with labels of at most 1000 characters.
+            (
+                "non-ASCII host label of 1001 characters",
+                label_1001.as_str(),
+                false,
+                false,
+            ),
+            (
+                "short non-ASCII host, long non-ASCII path",
+                short_host_long_path.as_str(),
+                false,
+                true,
+            ),
+            (
+                "long ASCII label beside a non-ASCII label",
+                ascii_label_beside.as_str(),
+                false,
                 true,
             ),
         ];
