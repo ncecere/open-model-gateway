@@ -4077,9 +4077,10 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "x-omg-max-bytes": 200
             },
-            "description": "Public model name: 1 to 200 UTF-8 bytes (logs.rs filters counts bytes, without trimming), no control characters. The schema's maxLength counts characters, so a multibyte name of at most 200 characters can exceed the handler's limit."
+            "description": "Exact public model name: 1 to 200 UTF-8 bytes (maxLength counts characters and is necessary, not sufficient), no control characters (LogQuery::filters, logs.rs:114-120)."
           },
           {
             "name": "status",
@@ -4252,9 +4253,10 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "x-omg-max-bytes": 200
             },
-            "description": "Public model name: 1 to 200 UTF-8 bytes (logs.rs filters counts bytes, without trimming), no control characters. The schema's maxLength counts characters, so a multibyte name of at most 200 characters can exceed the handler's limit."
+            "description": "Exact public model name: 1 to 200 UTF-8 bytes (maxLength counts characters and is necessary, not sufficient), no control characters (LogQuery::filters, logs.rs:114-120)."
           },
           {
             "name": "status",

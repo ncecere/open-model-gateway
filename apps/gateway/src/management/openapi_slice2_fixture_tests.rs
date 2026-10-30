@@ -8,7 +8,9 @@
 //! vectors run last because their accepted variants change state.
 use super::*;
 use futures::FutureExt;
-use openapi::http_vectors::{Probe, body_vectors_http, query_vectors, query_vectors_extended, query_vectors_fixed};
+use openapi::http_vectors::{
+    Probe, body_vectors_http, query_vectors, query_vectors_extended, query_vectors_fixed,
+};
 use openapi::responses::{Captured, PositiveFixtures, SLICE2_AREAS, capture_http};
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
@@ -201,7 +203,8 @@ impl Client {
         handler_accepts: bool,
     ) {
         self.pins.set(self.pins.get() + 1);
-        let schema = crate::management::openapi_semantic::check_request(method, path, &body).is_ok();
+        let schema =
+            crate::management::openapi_semantic::check_request(method, path, &body).is_ok();
         let r = self.raw(who, method, path, Some(body), &[]).await;
         self.expect(
             schema == schema_accepts,
@@ -792,10 +795,16 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         )
         .await;
     }
-    // Semantic: well-typed bodies that name nothing to change (null is the
-    // same as omission) are accepted by the schema and refused by the handler.
-    for body in [json!({}), json!({"object_visibility":null})] {
-        c.refused(&owner, "PATCH", &own, body, StatusCode::BAD_REQUEST, true)
+    // Bodies that name nothing to change (null is the same as omission) are
+    // refused by the handler (directory.rs:406-408) and by the schema, which has
+    // one arm per way of giving a name or a visibility.
+    for body in [
+        json!({}),
+        json!({"object_visibility":null}),
+        json!({"name":null}),
+        json!({"name":null,"object_visibility":null}),
+    ] {
+        c.refused(&owner, "PATCH", &own, body, StatusCode::BAD_REQUEST, false)
             .await;
     }
     c.refused(
@@ -1922,30 +1931,30 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             ("limit", "1".to_owned()),
         ]);
         // Boundary candidates for the query patterns whose length the harness cannot
-    // derive: each pair straddles the boundary within one edit.
-    let cut = |text: &str| text.chars().skip(1).collect::<String>();
-    let session_candidates: Vec<(&str, String)> = vec![
-        ("status", "succeeded".to_owned()),
-        ("status", cut("succeeded")),
-        ("finish_reason", "stop".to_owned()),
-        ("finish_reason", cut("stop")),
-        ("cursor", cursor.clone()),
-        ("cursor", cursor.replacen('_', "", 1)),
-        ("q", "abcd".to_owned()),
-        ("q", "abc".to_owned()),
-        ("q", "a".repeat(36)),
-        ("q", "a".repeat(37)),
-    ];
-    let detail_candidates: Vec<(&str, &str)> = session_candidates
-        .iter()
-        .filter(|(name, _)| *name != "cursor")
-        .map(|(name, value)| (*name, value.as_str()))
-        .collect();
-    let session_candidates: Vec<(&str, &str)> = session_candidates
-        .iter()
-        .map(|(name, value)| (*name, value.as_str()))
-        .collect();
-    let list_base: Vec<(String, String)> = base
+        // derive: each pair straddles the boundary within one edit.
+        let cut = |text: &str| text.chars().skip(1).collect::<String>();
+        let session_candidates: Vec<(&str, String)> = vec![
+            ("status", "succeeded".to_owned()),
+            ("status", cut("succeeded")),
+            ("finish_reason", "stop".to_owned()),
+            ("finish_reason", cut("stop")),
+            ("cursor", cursor.clone()),
+            ("cursor", cursor.replacen('_', "", 1)),
+            ("q", "abcd".to_owned()),
+            ("q", "abc".to_owned()),
+            ("q", "a".repeat(36)),
+            ("q", "a".repeat(37)),
+        ];
+        let detail_candidates: Vec<(&str, &str)> = session_candidates
+            .iter()
+            .filter(|(name, _)| *name != "cursor")
+            .map(|(name, value)| (*name, value.as_str()))
+            .collect();
+        let session_candidates: Vec<(&str, &str)> = session_candidates
+            .iter()
+            .map(|(name, value)| (*name, value.as_str()))
+            .collect();
+        let list_base: Vec<(String, String)> = base
             .iter()
             .map(|(n, v)| ((*n).to_owned(), v.clone()))
             .collect();
@@ -2043,6 +2052,23 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         format!("/api/v1/platform/users/{}", vector_user.user_id),
         json!({"email":"vector-patched@example.test","disabled":false,"oidc_link_allowed":true})
     );
+    // The null side of each optional field (null is absence for the handler).
+    body!(
+        "PATCH /platform/users/{user} (nulls)",
+        "PATCH",
+        "/api/v1/platform/users/{user}",
+        &admin,
+        format!("/api/v1/platform/users/{}", vector_user.user_id),
+        json!({"email":"vector-patched-nulls@example.test","disabled":null,"oidc_link_allowed":null})
+    );
+    body!(
+        "PATCH /platform/users/{user} (positional, nulls)",
+        "PATCH",
+        "/api/v1/platform/users/{user}",
+        &admin,
+        format!("/api/v1/platform/users/{}", vector_user.user_id),
+        json!(["vector-patched-nulls-p@example.test", null, null])
+    );
     body!(
         "POST /platform/users/{user}/roles",
         "POST",
@@ -2066,6 +2092,22 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         &admin,
         vector_platform.clone(),
         json!({"name":"Vector renamed","disabled":false,"cost_center_id":cost_center})
+    );
+    body!(
+        "PATCH /platform/workspaces/{ws} (nulls)",
+        "PATCH",
+        "/api/v1/platform/workspaces/{ws}",
+        &admin,
+        vector_platform.clone(),
+        json!({"name":"Vector renamed nulls","disabled":null,"cost_center_id":null})
+    );
+    body!(
+        "PATCH /platform/workspaces/{ws} (positional, nulls)",
+        "PATCH",
+        "/api/v1/platform/workspaces/{ws}",
+        &admin,
+        vector_platform.clone(),
+        json!(["Vector renamed nulls positional", null, null])
     );
     body!(
         "PATCH /workspaces/{ws}",
@@ -2143,17 +2185,27 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             format!("{vector_platform}/policy"),
         ),
     ] {
-        body!(
-            label,
-            "PUT",
-            template,
-            &admin,
-            path,
-            // Every rate non-null, so each bound runs; one budget per period, so the
-            // array at its maxItems limit is the valid array itself (a repeated
-            // period is refused by the handler and not expressible in the contract).
-            json!({"requests_per_minute":100,"tokens_per_minute":100,"concurrent_requests":3,"concurrent_jobs":2,"storage_bytes":1024,"key_issuances_per_holder":3,"key_issuances_per_workspace":9,"budgets":[{"period":"day","amount_microusd":"5"},{"period":"week","amount_microusd":"6"},{"period":"month","amount_microusd":"9007199254740993"},{"period":"lifetime","amount_microusd":"7"}]})
-        );
+        // Every rate non-null, so each bound runs. ONE budget per run: a repeated
+        // period is refused by the handler (policies.rs:569-581) and not
+        // expressible in the contract, so a second budget would turn every
+        // period vector into a duplicate. The two forms of a budget item are
+        // separate runs (the object, then the tuple).
+        for (form, budgets) in [
+            (
+                "object",
+                json!([{"period":"month","amount_microusd":"9007199254740993"}]),
+            ),
+            ("tuple", json!([["month", "9007199254740993"]])),
+        ] {
+            body!(
+                &format!("{label} ({form} item)"),
+                "PUT",
+                template,
+                &admin,
+                path.clone(),
+                json!({"requests_per_minute":100,"tokens_per_minute":100,"concurrent_requests":3,"concurrent_jobs":2,"storage_bytes":1024,"key_issuances_per_holder":3,"key_issuances_per_workspace":9,"budgets":budgets})
+            );
+        }
     }
     // The monthly (deprecated single-budget) form is refused with 409 while more
     // than one budget is stored (policies.rs:372-374), whatever the body says, so
@@ -2187,8 +2239,18 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             "PUT",
             template,
             &admin,
-            path,
+            path.clone(),
             json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"monthly_budget_microusd":"5000","budget_period":"month"})
+        );
+        // Every optional rate explicitly null (the null side of each union).
+        reset_policy(&path).await;
+        body!(
+            &format!("{label} (nulls)"),
+            "PUT",
+            template,
+            &admin,
+            path,
+            json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"concurrent_jobs":null,"storage_bytes":null,"key_issuances_per_holder":null,"key_issuances_per_workspace":null,"monthly_budget_microusd":null,"budget_period":"month"})
         );
     }
     // Handler-derived policy vectors the derived set cannot generate: the
@@ -2236,6 +2298,8 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
                     ("repeated period, other amount", json!({"budgets":[{"period":"month","amount_microusd":"5"},{"period":"month","amount_microusd":"6"}]}), true, false),
                     ("repeated period, positional", json!({"budgets":[["day","5"],["day","6"]]}), true, false),
                     ("repeated period, mixed forms", json!({"budgets":[{"period":"week","amount_microusd":"5"},["week","6"]]}), true, false),
+                    // Five budgets cannot have distinct periods (parse_budgets refuses more than four).
+                    ("five budgets", json!({"budgets":[["day","5"],["week","5"],["month","5"],["lifetime","5"],["day","6"]]}), true, false),
                     ("two distinct periods", json!({"budgets":[["day","5"],{"period":"lifetime","amount_microusd":"6"}]}), true, true),
                 ];
                 for (what, extra, schema, handler) in probes {
@@ -2418,6 +2482,24 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         json!([[catalog]])
     );
     reset_policy("/api/v1/platform/workspace-types/team/policy").await;
+    reset_policy("/api/v1/platform/workspace-types/team/policy").await;
+    body!(
+        "PUT /platform/workspace-types/{kind}/policy (positional, nulls)",
+        "PUT",
+        "/api/v1/platform/workspace-types/{kind}/policy",
+        &admin,
+        "/api/v1/platform/workspace-types/team/policy".to_owned(),
+        json!([null, null, null, null, null, null, null, null, "month"])
+    );
+    reset_policy(&format!("{vector_platform}/policy")).await;
+    body!(
+        "PUT /platform/workspaces/{ws}/policy (positional, nulls)",
+        "PUT",
+        "/api/v1/platform/workspaces/{ws}/policy",
+        &admin,
+        format!("{vector_platform}/policy"),
+        json!([null, null, null, null, null, null, null, null, "month"])
+    );
     body!(
         "PUT /platform/workspace-types/{kind}/policy (positional)",
         "PUT",
@@ -2438,11 +2520,27 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
     for (kind, positional) in [
         (
             "platform",
-            json!([ISSUER, "vector-positional", "platform", "user", null, null, true]),
+            json!([
+                ISSUER,
+                "vector-positional",
+                "platform",
+                "user",
+                null,
+                null,
+                true
+            ]),
         ),
         (
             "workspace",
-            json!([ISSUER, "vector-positional", "workspace", null, vector_ws, "member", true]),
+            json!([
+                ISSUER,
+                "vector-positional",
+                "workspace",
+                null,
+                vector_ws,
+                "member",
+                true
+            ]),
         ),
     ] {
         body!(

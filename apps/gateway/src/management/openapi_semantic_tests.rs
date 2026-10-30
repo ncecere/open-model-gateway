@@ -53,8 +53,8 @@ fn request_schema(method: &str, path: &str) -> &'static serde_json::Value {
         }
     }
     let (template, _) = best.expect("request operation must be documented");
-    let schema = &document["paths"][template.as_str()][&verb]["requestBody"]["content"]
-        ["application/json"]["schema"];
+    let schema = &document["paths"][template.as_str()][&verb]["requestBody"]["content"]["application/json"]
+        ["schema"];
     assert!(!schema.is_null(), "operation has no JSON request body");
     schema
 }
@@ -77,8 +77,8 @@ pub(crate) fn check_request(
 /// synthetic DTO that could silently disagree with `Json<Value>` handling.
 pub(crate) fn manual_fields(method: &str, template: &str, fields: &[&str]) {
     let document = crate::management::openapi::responses::artifact();
-    let mut schema = &document["paths"][template][method.to_ascii_lowercase()]["requestBody"]
-        ["content"]["application/json"]["schema"];
+    let mut schema = &document["paths"][template][method.to_ascii_lowercase()]["requestBody"]["content"]
+        ["application/json"]["schema"];
     while let Some(reference) = schema["$ref"].as_str() {
         schema = document.pointer(&reference[1..]).unwrap();
     }
@@ -97,16 +97,45 @@ pub(crate) fn manual_fields(method: &str, template: &str, fields: &[&str]) {
 
 #[test]
 fn scratch_url_probe() {
-    let ok = |s: &str| reqwest::Url::parse(s).ok().and_then(|u| u.host_str().map(|_| ())).is_some();
+    let ok = |s: &str| {
+        reqwest::Url::parse(s)
+            .ok()
+            .and_then(|u| u.host_str().map(|_| ()))
+            .is_some()
+    };
     let first = |build: &dyn Fn(usize) -> String| (1..4200usize).find(|n| !ok(&build(*n)));
-    println!("URLPROBE e+a*N {:?}", first(&|n| format!("https://\u{e9}{}", "a".repeat(n))));
-    println!("URLPROBE a*N+e {:?}", first(&|n| format!("https://{}\u{e9}", "a".repeat(n))));
-    println!("URLPROBE (e a)*N/2 {:?}", first(&|n| format!("https://{}", "\u{e9}a".repeat(n))));
-    println!("URLPROBE e*N.test {:?}", first(&|n| format!("https://{}.test", "\u{e9}".repeat(n))));
-    println!("URLPROBE sub.e*N {:?}", first(&|n| format!("https://sub.{}", "\u{e9}".repeat(n))));
-    println!("URLPROBE e*60.e*N {:?}", first(&|n| format!("https://{}.{}", "\u{e9}".repeat(60), "\u{e9}".repeat(n))));
-    println!("URLPROBE ascii a*N {:?}", first(&|n| format!("https://{}", "a".repeat(n))));
-    println!("URLPROBE tick*N {:?}", first(&|n| format!("https://{}", "\u{2713}".repeat(n))));
+    println!(
+        "URLPROBE e+a*N {:?}",
+        first(&|n| format!("https://\u{e9}{}", "a".repeat(n)))
+    );
+    println!(
+        "URLPROBE a*N+e {:?}",
+        first(&|n| format!("https://{}\u{e9}", "a".repeat(n)))
+    );
+    println!(
+        "URLPROBE (e a)*N/2 {:?}",
+        first(&|n| format!("https://{}", "\u{e9}a".repeat(n)))
+    );
+    println!(
+        "URLPROBE e*N.test {:?}",
+        first(&|n| format!("https://{}.test", "\u{e9}".repeat(n)))
+    );
+    println!(
+        "URLPROBE sub.e*N {:?}",
+        first(&|n| format!("https://sub.{}", "\u{e9}".repeat(n)))
+    );
+    println!(
+        "URLPROBE e*60.e*N {:?}",
+        first(&|n| format!("https://{}.{}", "\u{e9}".repeat(60), "\u{e9}".repeat(n)))
+    );
+    println!(
+        "URLPROBE ascii a*N {:?}",
+        first(&|n| format!("https://{}", "a".repeat(n)))
+    );
+    println!(
+        "URLPROBE tick*N {:?}",
+        first(&|n| format!("https://{}", "\u{2713}".repeat(n)))
+    );
 }
 #[test]
 fn scratch_q_probe() {
@@ -141,9 +170,13 @@ fn scratch_q_probe() {
                 t.is_empty() || !(t.chars().count() > 200 || t.chars().any(char::is_control))
             };
             let schema_ok =
-                crate::management::openapi::responses::validate_value(doc, schema, &json!(v)).is_ok();
+                crate::management::openapi::responses::validate_value(doc, schema, &json!(v))
+                    .is_ok();
             if handler != schema_ok {
-                println!("MISMATCH {tpl} {:?} handler={handler} schema={schema_ok}", v);
+                println!(
+                    "MISMATCH {tpl} {:?} handler={handler} schema={schema_ok}",
+                    v
+                );
             }
         }
     }
