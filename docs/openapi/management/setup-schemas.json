@@ -1158,7 +1158,6 @@
                     ]
                   },
                   "minItems": 1,
-                  "maxItems": 3,
                   "uniqueItems": true
                 },
                 {
@@ -1180,7 +1179,7 @@
                   "maxItems": 1
                 }
               ],
-              "description": "ApiProtocol::valid_set: known, distinct protocols of one workload; only chat_completions, responses and messages combine, every other protocol stands alone."
+              "description": "ApiProtocol::valid_set: known, distinct protocols of one workload; only chat_completions, responses and messages combine, every other protocol stands alone. At most three protocols follows from uniqueItems over the three combinable ones."
             }
           },
           "required": [
@@ -1230,7 +1229,6 @@
                     ]
                   },
                   "minItems": 1,
-                  "maxItems": 3,
                   "uniqueItems": true
                 },
                 {
@@ -1321,7 +1319,6 @@
                     ]
                   },
                   "minItems": 1,
-                  "maxItems": 3,
                   "uniqueItems": true
                 },
                 {
@@ -1343,7 +1340,7 @@
                   "maxItems": 1
                 }
               ],
-              "description": "Omitted keeps; explicit null rejected. ApiProtocol::valid_set: known, distinct protocols of one workload; only chat_completions, responses and messages combine, every other protocol stands alone."
+              "description": "Omitted keeps; explicit null rejected. ApiProtocol::valid_set: known, distinct protocols of one workload; only chat_completions, responses and messages combine, every other protocol stands alone. At most three protocols follows from uniqueItems over the three combinable ones."
             }
           },
           "required": [],
@@ -1406,7 +1403,6 @@
                     ]
                   },
                   "minItems": 1,
-                  "maxItems": 3,
                   "uniqueItems": true
                 },
                 {
