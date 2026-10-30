@@ -131,6 +131,38 @@ fn inference_openapi_keeps_the_envelopes_distinct() {
 }
 
 #[test]
+fn inference_openapi_never_reuses_the_management_error_envelope() {
+    let good = generated();
+    let management =
+        crate::management::openapi::responses::artifact()["components"]["schemas"]["ErrorEnvelope"]
+            .clone();
+    assert!(management["properties"]["error"]["properties"]["reason"].is_object());
+    // A component of that name, with the management shape, is refused.
+    let mut named = good.clone();
+    named["components"]["schemas"]["ErrorEnvelope"] = management.clone();
+    assert!(
+        g::verify(&named).is_err(),
+        "accepted a management ErrorEnvelope"
+    );
+    // So is an operation that references it.
+    let mut referenced = good.clone();
+    referenced["paths"]["/v1/embeddings"]["post"]["responses"]["400"] = json!({
+        "description":"management envelope",
+        "content":{"application/json":{"schema":schema("ErrorEnvelope")}}});
+    assert!(g::verify(&referenced).is_err());
+    // A fragment cannot smuggle one in either (its name collides with nothing generated,
+    // but the document must still carry no ErrorEnvelope).
+    let mut fragments = g::load_fragments().unwrap();
+    fragments.schemas.insert("ErrorEnvelope".into(), management);
+    let smuggled = g::generate(&fragments).unwrap();
+    assert!(g::verify(&smuggled).is_err());
+    // No inference response schema has the management shape.
+    let text = serde_json::to_string(&good).unwrap();
+    assert!(!text.contains("ErrorEnvelope\"}") || text.contains("OpenAiErrorEnvelope"));
+    assert!(!text.contains("#/components/schemas/ErrorEnvelope"));
+}
+
+#[test]
 fn inference_openapi_transport_error_literals_are_still_in_source() {
     for (kind, code, file) in e::OPENAI_TRANSPORT {
         let source =
