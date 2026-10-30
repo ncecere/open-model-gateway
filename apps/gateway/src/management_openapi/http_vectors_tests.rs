@@ -1,7 +1,9 @@
 //! Controls for the HTTP boundary-vector harness: real axum extractors behind
 //! `oneshot`, synthetic schemas, no database. A handler that is looser or
 //! stricter than its schema must FAIL, and the failure names no sent value.
-use super::http_vectors::{Edit, Probe, body_cases, query_cases, run_body, run_query};
+use super::http_vectors::{
+    Edit, Probe, binary_cases, body_cases, query_cases, run_binary, run_body, run_query,
+};
 use super::responses::Captured;
 use axum::{
     Json, Router,
@@ -2457,4 +2459,105 @@ fn management_openapi_http_vectors_reach_controls_for_allof_conditionals_arms_an
     assert!(unreached_paths(&by_ref, &reached).is_empty());
     let reached = reach_of(&by_ref, &json!({"a":"x","b":"y"}), &[]);
     assert_eq!(stale_paths(&by_ref, &reached), ["/properties/b"]);
+}
+
+// ---------------------------------------------------------------------------
+// Raw (non-JSON) upload bodies
+// ---------------------------------------------------------------------------
+
+fn upload_document() -> Value {
+    let body = json!({"type":"string","format":"binary","minLength":1,"maxLength":16});
+    json!({"openapi":"3.1.0","paths":{TEMPLATE:{"put":{"requestBody":{"required":true,"content":{
+        "image/png":{"schema":body},"image/jpeg":{"schema":body}}},
+        "responses":{"200":{"description":"ok"}}}}},"components":{"schemas":{}}})
+}
+#[test]
+fn management_openapi_http_vectors_binary_cases_cover_raw_uploads() {
+    let document = upload_document();
+    let operation = &document["paths"][TEMPLATE]["put"];
+    let cases = binary_cases(
+        operation,
+        "image/png",
+        &[7u8; 8],
+        &[("oversize", vec![1u8; 32])],
+    )
+    .unwrap();
+    let find = |kind: &str| cases.iter().find(|c| c.kind == kind).unwrap();
+    assert!(!find("empty").accept && find("empty").bytes.is_empty());
+    assert!(!find("maxLength+1").accept && find("maxLength+1").bytes.len() == 17);
+    assert!(find("truncated").accept && find("truncated").bytes.len() == 4);
+    assert!(find("trailing byte").accept && find("trailing byte").bytes.len() == 9);
+    let other = find("other media type");
+    assert!(other.accept && other.media == "image/jpeg");
+    assert!(!find("oversize").accept);
+    // A media type the operation does not document, or a body that is not valid, is refused.
+    assert!(binary_cases(operation, "text/plain", &[1], &[]).is_err());
+    assert!(binary_cases(operation, "image/png", &[], &[]).is_err());
+    assert!(
+        binary_cases(
+            &json!({"requestBody":{"content":{"image/png":{"schema":{"type":"string"}}}}}),
+            "image/png",
+            &[1],
+            &[]
+        )
+        .is_err()
+    );
+}
+fn upload_app(max: usize) -> Router {
+    Router::new().route(
+        TEMPLATE,
+        axum::routing::put(move |body: axum::body::Bytes| async move {
+            if (1..=max).contains(&body.len()) {
+                StatusCode::OK
+            } else {
+                StatusCode::PAYLOAD_TOO_LARGE
+            }
+        }),
+    )
+}
+async fn run_uploads(app: &Router, document: &Value) -> anyhow::Result<Vec<Captured>> {
+    run_binary(
+        document,
+        "PUT",
+        TEMPLATE,
+        "image/png",
+        vec![7u8; 8],
+        &[],
+        &async |media: String, bytes: Vec<u8>| {
+            let request = Request::builder()
+                .method("PUT")
+                .uri(TEMPLATE)
+                .header(header::CONTENT_TYPE, media)
+                .body(Body::from(bytes))
+                .unwrap();
+            let captured = exchange(app, "PUT", request).await;
+            // 413 is an input refusal here, not a harness failure: decide it explicitly.
+            let accepted = captured.status.is_success();
+            Probe::decided(captured, accepted)
+        },
+    )
+    .await
+}
+#[tokio::test]
+async fn management_openapi_http_vectors_binary_agreement_passes() {
+    let exchanges = run_uploads(&upload_app(16), &upload_document())
+        .await
+        .unwrap();
+    assert!(exchanges.len() >= 6);
+}
+#[tokio::test]
+async fn management_openapi_http_vectors_binary_disagreement_fails_without_values() {
+    // Looser than the schema: accepts a body over maxLength.
+    let text = message(run_uploads(&upload_app(32), &upload_document()).await);
+    assert!(
+        text.contains("maxLength+1") && text.contains("schema refuses but handler accepts"),
+        "{text}"
+    );
+    // Stricter than the schema: refuses the valid body.
+    let text = message(run_uploads(&upload_app(4), &upload_document()).await);
+    assert!(
+        text.contains("schema accepts but handler refuses"),
+        "{text}"
+    );
+    assert!(!text.contains("[7, 7"), "{text}");
 }
