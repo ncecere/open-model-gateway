@@ -1,6 +1,18 @@
 //! Test-only management contract: no runtime endpoint or production dependency.
+pub(crate) mod coverage;
+mod coverage_tests;
 mod generator;
+mod hardening_tests;
+pub(crate) mod http_vectors;
+mod http_vectors_tests;
+mod middleware;
+mod mutation_tests;
+mod quality;
+mod request_reach;
+pub(crate) mod requests;
+pub(crate) mod responses;
 mod validation;
+mod wiring_tests;
 
 #[cfg(test)]
 mod tests {
@@ -46,7 +58,7 @@ mod tests {
             "review route additions and update this progress baseline"
         );
         assert_eq!(
-            placeholders, 502,
+            placeholders, 458,
             "review schema completion and update this progress baseline"
         );
     }
