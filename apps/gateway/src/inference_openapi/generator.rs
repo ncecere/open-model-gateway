@@ -38,7 +38,7 @@ pub(super) fn load_fragments() -> Result<Fragments> {
 }
 
 /// Credential alternatives beyond the Bearer inference key, by path. Reviewed
-/// table: `credential_tests.rs` proves it against the real credential parsers
+/// table: `wiring_tests.rs` proves it against the real credential parsers
 /// (`http::credential` for Messages, `protocols::realtime::credential`).
 const EXTRA_CREDENTIALS: &[(&str, &str)] = &[
     ("/v1/messages", "anthropicApiKey"),

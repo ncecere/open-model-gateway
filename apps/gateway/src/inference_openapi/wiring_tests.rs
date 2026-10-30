@@ -416,3 +416,39 @@ fn inference_openapi_area_groups_are_bound_to_executed_fixtures() {
         );
     }
 }
+
+/// The shared positive-coverage rule credits a reviewed 400 refusal
+/// (`x-omg-positive-kind: refusal`) only for the inference contract's
+/// refusal-only operations. No management response may carry that kind, so the
+/// widened rule can never credit a management operation that only refuses.
+#[test]
+fn inference_openapi_refusal_credit_never_reaches_management() {
+    fn walk(value: &Value, found: &mut usize) {
+        match value {
+            Value::Object(map) => {
+                if map.get("x-omg-positive-kind") == Some(&json!("refusal")) {
+                    *found += 1;
+                }
+                map.values().for_each(|child| walk(child, found));
+            }
+            Value::Array(items) => items.iter().for_each(|child| walk(child, found)),
+            _ => {}
+        }
+    }
+    let mut found = 0;
+    walk(
+        crate::management::openapi::responses::artifact(),
+        &mut found,
+    );
+    assert_eq!(
+        found, 0,
+        "management responses must not use the refusal positive kind"
+    );
+    // Control: the inference contract does use it.
+    let mut inference = 0;
+    walk(&generated(), &mut inference);
+    assert!(
+        inference > 0,
+        "control: the inference refusal operations carry the kind"
+    );
+}

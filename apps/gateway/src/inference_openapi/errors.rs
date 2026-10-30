@@ -57,7 +57,7 @@ pub(super) fn all() -> Vec<InferenceError> {
     }
     all
 }
-const fn guard(error: InferenceError) -> usize {
+pub(super) const fn guard(error: InferenceError) -> usize {
     match error {
         InferenceError::InvalidRequest => 0,
         InferenceError::InvalidField(_) => 1,

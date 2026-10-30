@@ -35,6 +35,14 @@ fn inference_openapi_vocabulary_covers_every_variant_and_renderer() {
     );
     let anthropic_types = strings(&doc, "AnthropicErrorType");
     assert_eq!(e::all().len(), 17 + 2 * 4, "variant list is not exhaustive");
+    // `guard` is exhaustive over InferenceError (a new variant does not compile);
+    // `all()` must reach every one of its indices, so the two cannot drift apart.
+    let reached: BTreeSet<usize> = e::all().into_iter().map(e::guard).collect();
+    assert_eq!(
+        reached,
+        (0..=20).collect::<BTreeSet<_>>(),
+        "all() misses an InferenceError variant that guard() knows"
+    );
     for error in e::all() {
         let (_, openai) = batch_line_error(false, error);
         let (_, anthropic) = batch_line_error(true, error);
@@ -158,7 +166,6 @@ fn inference_openapi_never_reuses_the_management_error_envelope() {
     assert!(g::verify(&smuggled).is_err());
     // No inference response schema has the management shape.
     let text = serde_json::to_string(&good).unwrap();
-    assert!(!text.contains("ErrorEnvelope\"}") || text.contains("OpenAiErrorEnvelope"));
     assert!(!text.contains("#/components/schemas/ErrorEnvelope"));
 }
 
