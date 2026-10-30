@@ -1463,14 +1463,8 @@
         "legend": {
           "type": "object",
           "additionalProperties": {
-            "type": [
-              "string",
-              "object",
-              "array"
-            ],
-            "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
-            "$comment": "Open JSON by design: System One forwards content parts verbatim (TypeSafe), so the gateway fixes only the JSON kind here.",
-            "description": "Non-blank text, or JSON content parts (inference/workload_types.rs text_or_json)."
+            "$comment": "Provider-controlled JSON: parse_answers (inference/workload_types.rs, Score) copies each legend value from the System One answer unvalidated (only the keys are checked against the level indices), so any JSON value, including null, a number or blank text, can be returned.",
+            "description": "The level's description as System One returned it (normally the caller's criterion text or content parts; not validated by the gateway)."
           },
           "$comment": "Legend keys are the caller's score level indices.",
           "description": "Map of level index to the caller's description of that level."

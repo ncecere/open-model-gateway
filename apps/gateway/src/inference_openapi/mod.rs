@@ -24,6 +24,7 @@ const OPTIONS: &str = "Option keys are caller chosen: 2 to 255 options, each key
 const ANSWERS: &str =
     "Answer keys are the caller's question keys: exactly one answer per question.";
 const PROBABILITIES: &str = "Probability keys are the caller's option keys or score level indices.";
+const PROVIDER_LEGEND: &str = "Provider-controlled JSON: parse_answers (inference/workload_types.rs, Score) copies each legend value from the System One answer unvalidated (only the keys are checked against the level indices), so any JSON value, including null, a number or blank text, can be returned.";
 const LEGEND: &str = "Legend keys are the caller's score level indices.";
 pub(crate) const ARBITRARY_JSON: &[(&str, &str)] = &[
     (
@@ -72,7 +73,7 @@ pub(crate) const ARBITRARY_JSON: &[(&str, &str)] = &[
     ),
     (
         "/components/schemas/SystemoneScoreAnswer/properties/legend/additionalProperties",
-        OPEN_CONTENT,
+        PROVIDER_LEGEND,
     ),
     (
         "/components/schemas/post_v1_systemoneRequest/oneOf/0/properties/questions",

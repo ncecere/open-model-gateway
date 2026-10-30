@@ -197,6 +197,25 @@ fn inference_openapi_embedding_vectors_follow_the_requested_encoding() {
     }
 }
 
+/// A score answer's legend values come from the provider unvalidated
+/// (`parse_answers`, Score: only the keys are checked), so the response schema
+/// must accept any JSON value there; the keys stay the level indices.
+#[test]
+fn inference_openapi_score_legend_values_are_provider_json() {
+    let doc = generated();
+    let answer = json!({"$ref":"#/components/schemas/SystemoneScoreAnswer"});
+    for legend in [
+        json!({"0":"casual","1":"formal"}),
+        json!({"0":null,"1":5}),
+        json!({"0":"  ","1":true}),
+        json!({"0":[{"type":"text","text":"a"}],"1":{"k":1}}),
+    ] {
+        let body =
+            json!({"type":"score","score":1,"legend":legend,"probabilities":{"0":0.5,"1":0.5}});
+        assert!(r::validate_value(&doc, &answer, &body).is_ok());
+    }
+}
+
 /// The real handlers, served below the transport layer (their extractors, serde
 /// and error mapping are the production code; only authentication and the
 /// outer layers are replaced by extensions), refuse an invalid body BEFORE any
