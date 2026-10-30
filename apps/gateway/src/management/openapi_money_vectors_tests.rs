@@ -200,6 +200,7 @@ impl Vx<'_> {
                 seen,
                 "GET",
                 template,
+                &[],
                 async || ((), valid.clone()),
                 async |_: &(), query: String| {
                     let captured = send(
