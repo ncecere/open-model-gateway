@@ -2023,6 +2023,18 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         .await);
     let vector_path = format!("/api/v1/workspaces/{vector_ws}");
     let vector_platform = format!("/api/v1/platform/workspaces/{vector_ws}");
+    // The platform workspace PATCH vectors flip `disabled` to true (a real 200), so
+    // they get their own workspace: disabling the shared vector workspace would turn
+    // every later vector against it into a 404 that proves nothing.
+    let patch_ws = id(&c
+        .ok(
+            &admin,
+            "POST",
+            "/api/v1/platform/workspaces",
+            Some(json!({"name":"Vector patch target","kind":"project","owner_user_id":f.owner.user_id})),
+        )
+        .await);
+    let patch_platform = format!("/api/v1/platform/workspaces/{patch_ws}");
     macro_rules! body {
         ($label:expr, $method:expr, $template:expr, $who:expr, $path:expr, $valid:expr) => {{
             let path: String = $path;
@@ -2090,7 +2102,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         "PATCH",
         "/api/v1/platform/workspaces/{ws}",
         &admin,
-        vector_platform.clone(),
+        patch_platform.clone(),
         json!({"name":"Vector renamed","disabled":false,"cost_center_id":cost_center})
     );
     body!(
@@ -2098,7 +2110,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         "PATCH",
         "/api/v1/platform/workspaces/{ws}",
         &admin,
-        vector_platform.clone(),
+        patch_platform.clone(),
         json!({"name":"Vector renamed nulls","disabled":null,"cost_center_id":null})
     );
     body!(
@@ -2106,7 +2118,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         "PATCH",
         "/api/v1/platform/workspaces/{ws}",
         &admin,
-        vector_platform.clone(),
+        patch_platform.clone(),
         json!(["Vector renamed nulls positional", null, null])
     );
     body!(
