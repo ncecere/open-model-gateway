@@ -12119,9 +12119,8 @@
             "type": "object"
           },
           {
-            "description": "Serde's positional form of the deprecated single budget: the monthly_budget_microusd item (index 7) is always supplied, so the handler (Policy::limits, policies.rs:284-302) refuses a positional array that also carries budgets (index 9) or omits the single budget (fewer than 8 items) with 400; the positional form therefore has no budgets item.",
+            "description": "Serde's positional form of the deprecated single budget: the monthly_budget_microusd item (index 7) is always supplied, so the handler (Policy::limits, policies.rs:284-302) refuses a positional array that omits it (fewer than 8 items) or also carries serde's budgets item (index 9, which no accepted request can carry: false) with 400.",
             "items": false,
-            "maxItems": 9,
             "minItems": 8,
             "prefixItems": [
               {
@@ -12201,7 +12200,8 @@
                   "month",
                   "lifetime"
                 ]
-              }
+              },
+              false
             ],
             "type": "array"
           }
