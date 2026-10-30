@@ -23772,7 +23772,7 @@
         "x-omg-schema-status": "incomplete"
       },
       "post_api_v1_platform_oidc_group_mappingsRequest": {
-        "description": "A complete mapping (create, and the preview of a not-yet-saved mapping): target_kind platform requires platform_role and no workspace fields; target_kind workspace requires workspace_id and workspace_role (admin or member) and no platform_role (directory.rs mapping_valid, the oidc_group_mappings CHECK). The positional array form does not repeat the cross-field rule. The preview handler refuses a null or missing required value exactly like create.",
+        "description": "A complete mapping (create, and the preview of a not-yet-saved mapping): target_kind platform requires platform_role and no workspace fields; target_kind workspace requires workspace_id and workspace_role (admin or member) and no platform_role (directory.rs mapping_valid, the oidc_group_mappings CHECK). The positional array form carries the same cross-field rule as a platform tuple and a workspace tuple, split by target_kind at position 2. The preview handler refuses a null or missing required value exactly like create.",
         "oneOf": [
           {
             "additionalProperties": false,
@@ -24068,7 +24068,7 @@
         "$ref": "#/components/schemas/AccessMappingExistingResult"
       },
       "post_api_v1_platform_oidc_group_mappings_previewRequest": {
-        "description": "A complete mapping (create, and the preview of a not-yet-saved mapping): target_kind platform requires platform_role and no workspace fields; target_kind workspace requires workspace_id and workspace_role (admin or member) and no platform_role (directory.rs mapping_valid, the oidc_group_mappings CHECK). The positional array form does not repeat the cross-field rule. The preview handler refuses a null or missing required value exactly like create.",
+        "description": "A complete mapping (create, and the preview of a not-yet-saved mapping): target_kind platform requires platform_role and no workspace fields; target_kind workspace requires workspace_id and workspace_role (admin or member) and no platform_role (directory.rs mapping_valid, the oidc_group_mappings CHECK). The positional array form carries the same cross-field rule as a platform tuple and a workspace tuple, split by target_kind at position 2. The preview handler refuses a null or missing required value exactly like create.",
         "oneOf": [
           {
             "additionalProperties": false,
@@ -25178,7 +25178,7 @@
             "additionalProperties": false,
             "properties": {
               "catalog_ids": {
-                "description": "At most 200 distinct catalog ids (duplicates collapse).",
+                "description": "At most 200 catalog ids, counted before duplicates are removed (ids_valid: len() > 200 is refused, then sort and dedup).",
                 "items": {
                   "$ref": "#/components/schemas/IdentityUuid"
                 },
@@ -25197,7 +25197,7 @@
             "minItems": 1,
             "prefixItems": [
               {
-                "description": "At most 200 distinct catalog ids (duplicates collapse).",
+                "description": "At most 200 catalog ids, counted before duplicates are removed (ids_valid: len() > 200 is refused, then sort and dedup).",
                 "items": {
                   "$ref": "#/components/schemas/IdentityUuid"
                 },
@@ -25532,7 +25532,7 @@
             "additionalProperties": false,
             "properties": {
               "catalog_ids": {
-                "description": "At most 200 distinct catalog ids (duplicates collapse).",
+                "description": "At most 200 catalog ids, counted before duplicates are removed (ids_valid: len() > 200 is refused, then sort and dedup).",
                 "items": {
                   "$ref": "#/components/schemas/IdentityUuid"
                 },
@@ -25558,7 +25558,7 @@
                 "const": "replace"
               },
               {
-                "description": "At most 200 distinct catalog ids (duplicates collapse).",
+                "description": "At most 200 catalog ids, counted before duplicates are removed (ids_valid: len() > 200 is refused, then sort and dedup).",
                 "items": {
                   "$ref": "#/components/schemas/IdentityUuid"
                 },
@@ -38359,7 +38359,7 @@
     },
     "/api/v1/platform/users/{user}/roles/{role}": {
       "delete": {
-        "description": "Live authorization and current grant provenance are rechecked. Platform Auditor authority is read-only; independent workspace membership remains usable. Inference keys are never management credentials.",
+        "description": "Live authorization and current grant provenance are rechecked. Platform Auditor authority is read-only; independent workspace membership remains usable. Inference keys are never management credentials. The `{role}` path value: Platform role (directory.rs platform_role_valid: any other value is refused with 400).",
         "operationId": "delete_api_v1_platform_users_by_user_roles_by_role",
         "parameters": [
           {
@@ -38375,7 +38375,11 @@
             "name": "role",
             "required": true,
             "schema": {
-              "type": "string"
+              "enum": [
+                "user",
+                "auditor",
+                "admin"
+              ]
             }
           }
         ],
@@ -38573,7 +38577,7 @@
     },
     "/api/v1/platform/workspace-types/{kind}/catalogs": {
       "get": {
-        "description": "Live type defaults and replacement workspace overrides are separate. Empty replacement is deny-all, DELETE restores inheritance. Removed catalog selections never resurrect. Platform readers can read allocation metadata for personal/disabled workspaces without any keys or request detail.",
+        "description": "Live type defaults and replacement workspace overrides are separate. Empty replacement is deny-all, DELETE restores inheritance. Removed catalog selections never resurrect. Platform readers can read allocation metadata for personal/disabled workspaces without any keys or request detail. The `{kind}` path value: Workspace type (catalogs.rs kind_valid / policies.rs kind(): any other value is refused with 400).",
         "operationId": "get_api_v1_platform_workspace_types_by_kind_catalogs",
         "parameters": [
           {
@@ -38581,7 +38585,11 @@
             "name": "kind",
             "required": true,
             "schema": {
-              "type": "string"
+              "enum": [
+                "personal",
+                "team",
+                "project"
+              ]
             }
           }
         ],
@@ -38662,7 +38670,7 @@
         "x-omg-token-policy": "Scope"
       },
       "put": {
-        "description": "Live type defaults and replacement workspace overrides are separate. Empty replacement is deny-all, DELETE restores inheritance. Removed catalog selections never resurrect. Platform readers can read allocation metadata for personal/disabled workspaces without any keys or request detail.",
+        "description": "Live type defaults and replacement workspace overrides are separate. Empty replacement is deny-all, DELETE restores inheritance. Removed catalog selections never resurrect. Platform readers can read allocation metadata for personal/disabled workspaces without any keys or request detail. The `{kind}` path value: Workspace type (catalogs.rs kind_valid / policies.rs kind(): any other value is refused with 400).",
         "operationId": "put_api_v1_platform_workspace_types_by_kind_catalogs",
         "parameters": [
           {
@@ -38670,7 +38678,11 @@
             "name": "kind",
             "required": true,
             "schema": {
-              "type": "string"
+              "enum": [
+                "personal",
+                "team",
+                "project"
+              ]
             }
           }
         ],
@@ -38795,7 +38807,7 @@
     },
     "/api/v1/platform/workspace-types/{kind}/policy": {
       "get": {
-        "description": "Live type default or replacement workspace policy, never installation-wide limits. Policy rates are required nullable fields; supplied fields distinguish omission (keep) from null (clear); present budgets/budget_period reject null. Budgets replace the full period set; deprecated monthly form is mutually exclusive. Money is exact micro-USD strings. Platform totals are permitted without request details.",
+        "description": "Live type default or replacement workspace policy, never installation-wide limits. Policy rates are required nullable fields; supplied fields distinguish omission (keep) from null (clear); present budgets/budget_period reject null. Budgets replace the full period set; deprecated monthly form is mutually exclusive. Money is exact micro-USD strings. Platform totals are permitted without request details. The `{kind}` path value: Workspace type (catalogs.rs kind_valid / policies.rs kind(): any other value is refused with 400).",
         "operationId": "get_api_v1_platform_workspace_types_by_kind_policy",
         "parameters": [
           {
@@ -38803,7 +38815,11 @@
             "name": "kind",
             "required": true,
             "schema": {
-              "type": "string"
+              "enum": [
+                "personal",
+                "team",
+                "project"
+              ]
             }
           }
         ],
@@ -38884,7 +38900,7 @@
         "x-omg-token-policy": "Scope"
       },
       "put": {
-        "description": "Live type default or replacement workspace policy, never installation-wide limits. Policy rates are required nullable fields; supplied fields distinguish omission (keep) from null (clear); present budgets/budget_period reject null. Budgets replace the full period set; deprecated monthly form is mutually exclusive. Money is exact micro-USD strings. Platform totals are permitted without request details.",
+        "description": "Live type default or replacement workspace policy, never installation-wide limits. Policy rates are required nullable fields; supplied fields distinguish omission (keep) from null (clear); present budgets/budget_period reject null. Budgets replace the full period set; deprecated monthly form is mutually exclusive. Money is exact micro-USD strings. Platform totals are permitted without request details. The `{kind}` path value: Workspace type (catalogs.rs kind_valid / policies.rs kind(): any other value is refused with 400).",
         "operationId": "put_api_v1_platform_workspace_types_by_kind_policy",
         "parameters": [
           {
@@ -38892,7 +38908,11 @@
             "name": "kind",
             "required": true,
             "schema": {
-              "type": "string"
+              "enum": [
+                "personal",
+                "team",
+                "project"
+              ]
             }
           }
         ],
