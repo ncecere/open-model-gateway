@@ -1463,6 +1463,14 @@
         "legend": {
           "type": "object",
           "additionalProperties": {
+            "type": [
+              "null",
+              "boolean",
+              "number",
+              "string",
+              "array",
+              "object"
+            ],
             "$comment": "Provider-controlled JSON: parse_answers (inference/workload_types.rs, Score) copies each legend value from the System One answer unvalidated (only the keys are checked against the level indices), so any JSON value, including null, a number or blank text, can be returned.",
             "description": "The level's description as System One returned it (normally the caller's criterion text or content parts; not validated by the gateway)."
           },
