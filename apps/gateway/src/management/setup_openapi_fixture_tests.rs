@@ -1924,7 +1924,30 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     .await;
     body_set(&mut j, a, "POST", "/api/v1/platform/models", "/api/v1/platform/models", json!({"public_name":"vector/created","display_name":"Vector created","description":"A model","enabled":true,"supported_protocols":["chat_completions"]}), &[]).await;
     body_set(&mut j, a, "PATCH", "/api/v1/platform/models/{id}", &format!("/api/v1/platform/models/{vmodel}"), json!({"public_name":"vector/target","display_name":"Vector target","description":"A model","enabled":true,"supported_protocols":["chat_completions"]}), &["route_unsupported_capability"]).await;
-    body_set(&mut j, a, "POST", "/api/v1/platform/providers", "/api/v1/platform/providers", json!({"name":"Vector provider","provider":"openrouter","credential_ref":"env:CONTRACT_REFERENCE","endpoint":null,"region":null,"enabled":false,"aws_external_id":null,"aws_session_name":null}), &[]).await;
+    // The env reference pattern has no length bound (credential_valid checks the
+    // alphabet, then the allowlist): its boundary is the alphabet, straddled by an
+    // allowlisted name and the same name plus one character the pattern refuses.
+    {
+        let (client, root) = (j.client.clone(), j.base.clone());
+        http_vectors::body_vectors_extended(
+            &mut j.observed,
+            "POST",
+            "/api/v1/platform/providers",
+            json!({"name":"Vector provider","provider":"openrouter","credential_ref":"env:CONTRACT_REFERENCE","endpoint":null,"region":null,"enabled":false,"aws_external_id":null,"aws_session_name":null}),
+            &[],
+            &[
+                ("/credential_ref", json!("env:CONTRACT_REFERENCE")),
+                ("/credential_ref", json!("env:CONTRACT_REFERENCE-")),
+            ],
+            async |body: Value| {
+                judged(
+                    send(&client, &root, Some(a), "POST", "/api/v1/platform/providers", Some(body)).await,
+                    &[],
+                )
+            },
+        )
+        .await;
+    }
     // A Bedrock connection: region, role identity and the AWS options it alone takes.
     let bedrock_body = json!({"name":"Vector Bedrock","provider":"bedrock","credential_ref":"aws:role:arn:aws:iam::123456789012:role/gateway/vector","aws_external_id":"tenant-ext-42","aws_session_name":"gateway.vector","endpoint":null,"region":"us-east-1","enabled":false});
     body_set(
