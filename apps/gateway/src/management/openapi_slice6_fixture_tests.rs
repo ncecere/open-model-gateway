@@ -6,7 +6,9 @@
 //! static label and the status, never a path, id, header or body.
 use super::*;
 use futures::FutureExt;
-use openapi::http_vectors::{Probe, body_vectors_extended, body_vectors_seeded, query_vectors_extended};
+use openapi::http_vectors::{
+    Probe, body_vectors_extended, body_vectors_seeded, query_vectors_extended,
+};
 use openapi::responses::{Captured, PositiveFixtures, capture_http};
 use sha2::{Digest, Sha256};
 #[path = "openapi_slice6_seed_tests.rs"]
@@ -396,10 +398,7 @@ fn query_candidates(template: &str, base: &[(&str, &str)]) -> Vec<(String, Strin
             }
             // Twenty actions of up to 64 characters.
             "exclude_actions" => {
-                out.push((
-                    "exclude_actions".into(),
-                    vec!["a"; 20].join(","),
-                ));
+                out.push(("exclude_actions".into(), vec!["a"; 20].join(",")));
                 out.push(("exclude_actions".into(), vec!["a"; 21].join(",")));
                 out.push(("exclude_actions".into(), "a".repeat(64)));
                 out.push(("exclude_actions".into(), "a".repeat(65)));
@@ -2399,9 +2398,7 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
             Some(json!({"name":"keyed account"})),
         )
         .await);
-    let key_fields = |name: &str, account: Value, models: Value, limits: Value, budgets: Value| {
-        json!({"name":name,"expires_in_days":30,"service_account_id":account,"model_ids":models,"requests_per_minute":limits[0],"tokens_per_minute":limits[1],"concurrent_requests":limits[2],"concurrent_jobs":limits[3],"budgets":budgets})
-    };
+    let key_fields = |name: &str, account: Value, models: Value, limits: Value, budgets: Value| json!({"name":name,"expires_in_days":30,"service_account_id":account,"model_ids":models,"requests_per_minute":limits[0],"tokens_per_minute":limits[1],"concurrent_requests":limits[2],"concurrent_jobs":limits[3],"budgets":budgets});
     let to_positional = |object: &Value, fields: &[&str]| {
         Value::Array(fields.iter().map(|f| object[*f].clone()).collect())
     };
@@ -2544,7 +2541,10 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
         "POST",
         "/api/v1/workspaces/{ws}/service-accounts",
         &format!("{project}/service-accounts"),
-        vec![plain(json!({"name":"contract"})), plain(json!(["contract"]))],
+        vec![
+            plain(json!({"name":"contract"})),
+            plain(json!(["contract"])),
+        ],
     )
     .await;
     let project_account = id(&w
