@@ -1583,8 +1583,7 @@ fn management_openapi_http_vectors_annotations_beside_a_ref_take_effect() {
         &json!({"n":"a"}),
         &[],
     )
-    .err()
-    .expect("an unsendable bound behind a $ref must fail");
+    .expect_err("an unsendable bound behind a $ref must fail");
     assert!(format!("{error:#}").contains("maxLength+1"));
     cases_of(
         &ref_document(big, json!({"x-omg-unsendable-boundary":REASON})),
@@ -1712,7 +1711,7 @@ fn two_arms() -> Value {
     body_only(json!({"type":"array","minItems":1,"maxItems":4,
         "items":{"oneOf":[arm_object("a", 3), arm_object("b", 5)]}}))
 }
-fn arms_ok(items: &Vec<Value>, b_cap: usize) -> bool {
+fn arms_ok(items: &[Value], b_cap: usize) -> bool {
     (1..=4).contains(&items.len())
         && items.iter().all(|item| {
             let Some(map) = item.as_object().filter(|m| m.len() == 1) else {
@@ -1725,9 +1724,13 @@ fn arms_ok(items: &Vec<Value>, b_cap: usize) -> bool {
             }
         })
 }
+// `judge::<Vec<Value>>` takes `fn(&Vec<Value>)`.
+#[allow(clippy::ptr_arg)]
 fn arms_exact(items: &Vec<Value>) -> bool {
     arms_ok(items, 5)
 }
+// `judge::<Vec<Value>>` takes `fn(&Vec<Value>)`.
+#[allow(clippy::ptr_arg)]
 fn arms_loose_b(items: &Vec<Value>) -> bool {
     arms_ok(items, 4)
 }

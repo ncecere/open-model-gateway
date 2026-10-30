@@ -1647,7 +1647,7 @@ impl Walk<'_> {
     /// valid body, then walk the WHOLE seeded body from its root (a seed such as
     /// `/mode` changes which conditional arms and union branches constrain the
     /// siblings, so the siblings must be mutated in the seeded base too).
-    fn seeded(&mut self, path: &mut Vec<Step>) -> Result<()> {
+    fn seeded(&mut self, path: &mut [Step]) -> Result<()> {
         let at = pointer(path);
         let Some(seed) = self.seeds.get(&at).cloned() else {
             return Ok(());
@@ -1738,7 +1738,7 @@ impl Walk<'_> {
         schema: &Value,
         nodes: &[&Value],
         items: &[Value],
-        path: &mut Vec<Step>,
+        path: &mut [Step],
     ) -> Result<()> {
         let mins = distinct_u64(nodes, "minItems");
         let maxs = distinct_u64(nodes, "maxItems");
