@@ -134,10 +134,10 @@ impl Vx<'_> {
 
     // -----------------------------------------------------------------
     // UTF-8 byte limits: the handler counts bytes (valid_name, bounded(),
-    // the report filters); the schema's maxLength counts characters (#405).
-    // The probes prove the descriptions' claim against the real handler: a
-    // multibyte value of exactly the limit in bytes is accepted, two bytes
-    // more is refused, while the schema accepts both.
+    // the report filters); the schema states them as x-omg-max-bytes (its
+    // maxLength counts characters, #405). The probes prove it against the real
+    // handler: a multibyte value of exactly the limit in bytes is accepted by
+    // both, two bytes more is refused by both.
     // -----------------------------------------------------------------
     async fn multibyte(&self) {
         let centers = "/api/v1/platform/cost-centers";
@@ -168,7 +168,7 @@ impl Vx<'_> {
             ),
         ] {
             let want = if over {
-                Want::Pinned(Handler::Refuse, true)
+                Want::Pinned(Handler::Refuse, false)
             } else {
                 Want::Pinned(Handler::Status(200), true)
             };
@@ -205,7 +205,7 @@ impl Vx<'_> {
         for (label, limit, set) in fields {
             for (extra, want) in [
                 (0, Want::Pinned(Handler::Status(200), true)),
-                (2, Want::Pinned(Handler::Refuse, true)),
+                (2, Want::Pinned(Handler::Refuse, false)),
             ] {
                 let mut body = self.base_mapping(&format!("mb-{}", unique()));
                 set(&mut body, mb(limit + extra));
@@ -224,7 +224,7 @@ impl Vx<'_> {
         // The upstream model counts bytes as well.
         for (extra, want) in [
             (0, Want::Pinned(Handler::Status(200), true)),
-            (2, Want::Pinned(Handler::Refuse, true)),
+            (2, Want::Pinned(Handler::Refuse, false)),
         ] {
             let mut body = self.base_mapping(&format!("mb-{}", unique()));
             body["bindings"][0]["model_mappings"] =
@@ -245,7 +245,7 @@ impl Vx<'_> {
         for name in ["model", "provider"] {
             for (characters, want) in [
                 (100, Want::Pinned(Handler::Status(200), true)),
-                (101, Want::Pinned(Handler::Refuse, true)),
+                (101, Want::Pinned(Handler::Refuse, false)),
             ] {
                 self.probe_query(
                     &format!("{name} filter of {characters} two-byte characters"),

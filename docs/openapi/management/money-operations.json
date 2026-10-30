@@ -490,9 +490,10 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "x-omg-max-bytes": 200
             },
-            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema's maxLength counts characters (see #405). No control characters."
+            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). No control characters."
           },
           {
             "name": "provider",
@@ -502,9 +503,10 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "x-omg-max-bytes": 200
             },
-            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema's maxLength counts characters (see #405). No control characters."
+            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). No control characters."
           },
           {
             "name": "accounting_status",
@@ -2497,9 +2499,10 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "x-omg-max-bytes": 200
             },
-            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema's maxLength counts characters (see #405). No control characters."
+            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). No control characters."
           },
           {
             "name": "provider",
@@ -2509,9 +2512,10 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "x-omg-max-bytes": 200
             },
-            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema's maxLength counts characters (see #405). No control characters."
+            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). No control characters."
           },
           {
             "name": "accounting_status",
@@ -2726,9 +2730,10 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "x-omg-max-bytes": 200
             },
-            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema's maxLength counts characters (see #405). No control characters."
+            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). No control characters."
           },
           {
             "name": "provider",
@@ -2738,9 +2743,10 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "x-omg-max-bytes": 200
             },
-            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema's maxLength counts characters (see #405). No control characters."
+            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). No control characters."
           },
           {
             "name": "accounting_status",
@@ -3525,9 +3531,10 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "x-omg-max-bytes": 200
             },
-            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema's maxLength counts characters (see #405). No control characters."
+            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). No control characters."
           },
           {
             "name": "provider",
@@ -3537,9 +3544,10 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+              "x-omg-max-bytes": 200
             },
-            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema's maxLength counts characters (see #405). No control characters."
+            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). No control characters."
           },
           {
             "name": "accounting_status",

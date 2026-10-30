@@ -2,7 +2,9 @@
 //! JSON request body is compared, schema versus the real handler, over HTTP.
 use super::*;
 use futures::FutureExt;
-use openapi::http_vectors::{Probe, body_vectors_http, query_vectors, query_vectors_fixed};
+use openapi::http_vectors::{
+    Probe, body_vectors_http, query_vectors_extended, query_vectors_fixed,
+};
 
 pub(super) struct Vx<'a> {
     pub client: &'a reqwest::Client,
@@ -35,7 +37,7 @@ impl Vx<'_> {
         let document = openapi::responses::artifact();
         let schema = &document["paths"][template][method.to_ascii_lowercase()]["requestBody"]["content"]
             ["application/json"]["schema"];
-        openapi::responses::validate_value(document, schema, body).is_ok()
+        openapi::http_vectors::accepts(document, schema, body).unwrap()
     }
     /// The artifact's verdict on one query parameter value.
     pub(super) fn schema_param(&self, template: &str, name: &str, raw: &str) -> bool {
@@ -44,59 +46,10 @@ impl Vx<'_> {
             .as_array()
             .and_then(|all| all.iter().find(|p| p["name"] == name))
             .unwrap();
-        openapi::responses::validate_value(document, &parameter["schema"], &json!(raw)).is_ok()
+        openapi::http_vectors::accepts(document, &parameter["schema"], &json!(raw)).unwrap()
     }
 }
 
-fn instant(v: &Value) -> Option<chrono::DateTime<chrono::Utc>> {
-    v.as_str()?.parse().ok()
-}
-/// parse()'s rules for the page chain, recomputed from the body: every page
-/// but the last has has_more=true and a distinct cursor, the last has
-/// has_more=false and no cursor, and the buckets are consecutive one-day
-/// buckets from request.starting_at to request.ending_at.
-fn chain_broken(input: &Value) -> bool {
-    let (Some(start), Some(end)) = (
-        instant(&input["request"]["starting_at"]),
-        instant(&input["request"]["ending_at"]),
-    ) else {
-        return false;
-    };
-    let Some(pages) = input["pages"].as_array() else {
-        return false;
-    };
-    let mut expected = start;
-    let mut cursors = std::collections::BTreeSet::new();
-    for (index, page) in pages.iter().enumerate() {
-        let last = index + 1 == pages.len();
-        if page["has_more"].as_bool() == Some(last) {
-            return true;
-        }
-        if !last
-            && !page["next_page"]
-                .as_str()
-                .is_some_and(|s| cursors.insert(s.to_owned()))
-        {
-            return true;
-        }
-        if last && !page["next_page"].is_null() {
-            return true;
-        }
-        for bucket in page["data"].as_array().into_iter().flatten() {
-            let (Some(from), Some(to)) = (
-                instant(&bucket["starting_at"]),
-                instant(&bucket["ending_at"]),
-            ) else {
-                return false;
-            };
-            if from != expected || to != from + chrono::TimeDelta::days(1) || to > end {
-                return true;
-            }
-            expected = to;
-        }
-    }
-    expected != end
-}
 /// create_mapping()'s relations between elements, recomputed from the body:
 /// a window must end after it starts, a binding's provider models are unique,
 /// and two bindings may not overlap in time when they share a provider
@@ -196,11 +149,19 @@ impl Vx<'_> {
         let valid = pairs(&base);
         self.guard(
             template,
-            query_vectors(
+            query_vectors_extended(
                 seen,
                 "GET",
                 template,
                 &[],
+                // The status list is a comma-separated pattern with no length
+                // bound; one state and the same state with a trailing comma
+                // straddle its boundary.
+                if valid.iter().any(|(name, _)| name == "status") {
+                    &[("status", "succeeded"), ("status", "succeeded,")]
+                } else {
+                    &[]
+                },
                 async || ((), valid.clone()),
                 async |_: &(), query: String| {
                     let captured = send(
@@ -289,7 +250,9 @@ impl Vx<'_> {
         let ws = self.team;
         let wsbase = format!("/api/v1/workspaces/{ws}");
         let page = || vec![("limit", "10".to_owned()), ("offset", "0".to_owned())];
-        let cursor = format!("1700000000000000_{}", Uuid::nil());
+        // 19 digits: the longest cursor the schema allows (56 characters) is also a
+        // timestamp within timestamptz's range, so the vectors can start from it.
+        let cursor = format!("1700000000000000000_{}", Uuid::nil());
         let holds = || vec![("limit", "10".to_owned()), ("cursor", cursor.clone())];
         self.query(
             seen,
@@ -483,45 +446,57 @@ impl Vx<'_> {
         .await;
     }
 
-    async fn body(
+    /// Run the HTTP body vectors once per wire form: every `valid` body (an
+    /// object, the serde positional array, or a mix of nested forms) is walked
+    /// as its own run, so each declared union arm is carried by one of them.
+    /// `decide` reads the handler's answer with the ORIGINAL input in hand.
+    #[allow(clippy::too_many_arguments)]
+    async fn forms(
         &self,
         seen: &mut PositiveFixtures,
         actor: &Browser,
         method: &str,
         template: &str,
-        path: &str,
-        valid: Value,
+        runs: Vec<Value>,
+        path: impl AsyncFn() -> String,
+        decide: impl AsyncFn(Captured, Value) -> Probe,
     ) {
-        self.guard(
-            template,
-            body_vectors_http(seen, method, template, valid, async |input: Value| {
-                Probe::from(
-                    send(
+        for valid in runs {
+            self.guard(
+                template,
+                body_vectors_http(seen, method, template, valid, async |input: Value| {
+                    let target = path().await;
+                    let captured = send(
                         self.client,
                         self.base,
                         Some(actor),
                         method,
-                        path,
-                        Some(input),
+                        &target,
+                        Some(input.clone()),
                     )
-                    .await,
-                )
-            }),
-        )
-        .await;
+                    .await;
+                    decide(captured, input).await
+                }),
+            )
+            .await;
+        }
     }
 
     pub(super) async fn bodies(&self, seen: &mut PositiveFixtures) {
         let platform = "/api/v1/platform";
         let wsbase = format!("/api/v1/workspaces/{}", self.team);
+        let plain = async |captured: Captured, _: Value| Probe::from(captured);
         // Cost centers.
-        self.body(
+        let centers = "/api/v1/platform/cost-centers";
+        let center = json!({"name":"Vector label","code":"VECTOR"});
+        self.forms(
             seen,
             self.admin,
             "POST",
-            "/api/v1/platform/cost-centers",
-            "/api/v1/platform/cost-centers",
-            json!({"name":"Vector label","code":"VECTOR"}),
+            centers,
+            vec![center.clone(), seq(&center, COST_CENTER)],
+            async || centers.to_owned(),
+            plain,
         )
         .await;
         let target = Uuid::new_v4();
@@ -530,13 +505,15 @@ impl Vx<'_> {
             .execute(self.pool)
             .await
             .unwrap();
-        self.body(
+        let patched = json!({"name":"Patched label","code":"PATCHED"});
+        self.forms(
             seen,
             self.admin,
             "PATCH",
             "/api/v1/platform/cost-centers/{id}",
-            &format!("{platform}/cost-centers/{target}"),
-            json!({"name":"Patched label","code":"PATCHED"}),
+            vec![patched.clone(), seq(&patched, COST_CENTER)],
+            async || format!("{platform}/cost-centers/{target}"),
+            plain,
         )
         .await;
         // Report schedules, both scopes. A paused schedule is the PATCH target.
@@ -554,6 +531,7 @@ impl Vx<'_> {
                 self.f.owner.user_id,
             ),
         ] {
+            let platform_scope = scope == platform;
             let create = json!({"cadence":"weekly","timezone":"UTC","delivery_time":"00:01","state":"paused","cost_center_id":self.cc,"recipient_user_ids":[recipient]});
             let path = format!("{scope}/report-schedules");
             let known_zone = |body: &Value| {
@@ -561,26 +539,22 @@ impl Vx<'_> {
                     .as_str()
                     .is_none_or(|zone| jiff::tz::TimeZone::get(zone).is_ok())
             };
-            self.guard(
+            self.forms(
+                seen,
+                actor,
+                "POST",
                 template,
-                body_vectors_http(
-                    seen,
-                    "POST",
-                    template,
-                    create.clone(),
-                    async |input: Value| {
-                        let captured = send(
-                            self.client,
-                            self.base,
-                            Some(actor),
-                            "POST",
-                            &path,
-                            Some(input.clone()),
-                        )
-                        .await;
-                        zone_verdict(captured, &input, known_zone(&input))
-                    },
-                ),
+                vec![create.clone(), seq(&create, SCHEDULE_CREATE)],
+                async || path.clone(),
+                async |captured, input| {
+                    self.schedule_verdict(
+                        captured,
+                        view(&input, SCHEDULE_CREATE),
+                        platform_scope,
+                        &known_zone,
+                    )
+                    .await
+                },
             )
             .await;
             let created = id(&body(
@@ -597,58 +571,45 @@ impl Vx<'_> {
             let target = format!("{path}/{created}");
             let patch = json!({"cadence":"monthly","timezone":"UTC","delivery_time":"00:05","state":"paused","recipient_user_ids":[recipient]});
             let patch_template = format!("{template}/{{id}}");
-            self.guard(
+            self.forms(
+                seen,
+                actor,
+                "PATCH",
                 &patch_template,
-                body_vectors_http(
-                    seen,
-                    "PATCH",
-                    &patch_template,
-                    patch.clone(),
-                    async |input: Value| {
-                        let captured = send(
-                            self.client,
-                            self.base,
-                            Some(actor),
-                            "PATCH",
-                            &target,
-                            Some(input.clone()),
-                        )
-                        .await;
-                        zone_verdict(captured, &input, known_zone(&input))
-                    },
-                ),
+                vec![patch.clone(), seq(&patch, SCHEDULE_UPDATE)],
+                async || target.clone(),
+                async |captured, input| {
+                    self.schedule_verdict(
+                        captured,
+                        view(&input, SCHEDULE_UPDATE),
+                        platform_scope,
+                        &known_zone,
+                    )
+                    .await
+                },
             )
             .await;
         }
-        // Provider evidence.
+        // Provider evidence. A chain of pages or buckets must be contiguous and
+        // linked by has_more/next_page, which per-element schemas cannot state.
+        // The refusal is decided only when THIS body really breaks the chain
+        // (the parser's own rules, recomputed from the body) and the schema
+        // accepts it; a refusal of an intact chain, or any other status, stands.
         let imports = "/api/v1/platform/provider-cost-imports";
-        let day = chrono::Utc::now().date_naive() - chrono::TimeDelta::days(20);
-        let mut upload = provider_cost_tests::upload();
-        upload["account_id"] = json!("vector-account");
-        upload["request"]["starting_at"] = json!(format!("{day}T00:00:00Z"));
-        upload["request"]["ending_at"] =
-            json!(format!("{}T00:00:00Z", day + chrono::TimeDelta::days(1)));
-        upload["exported_at"] = json!(format!("{}T00:00:00Z", day + chrono::TimeDelta::days(1)));
-        upload["pages"][0]["data"][0]["starting_at"] = upload["request"]["starting_at"].clone();
-        upload["pages"][0]["data"][0]["ending_at"] = upload["request"]["ending_at"].clone();
-        // A chain of pages or buckets must be contiguous and linked by
-        // has_more/next_page, which per-element schemas cannot state. The
-        // refusal is decided only when THIS body really breaks the chain (the
-        // parser's own rules, recomputed from the body) and the schema accepts
-        // it; a refusal of an intact chain, or any other status, stands.
-        self.guard(
+        let runs: Vec<Value> = [(false, false), (false, true), (true, false), (true, true)]
+            .into_iter()
+            .enumerate()
+            .map(|(n, (root, request))| upload_valid(root, request, n))
+            .collect();
+        self.forms(
+            seen,
+            self.admin,
+            "POST",
             imports,
-            body_vectors_http(seen, "POST", imports, upload, async |input: Value| {
-                let captured = send(
-                    self.client,
-                    self.base,
-                    Some(self.admin),
-                    "POST",
-                    imports,
-                    Some(input.clone()),
-                )
-                .await;
-                if chain_broken(&input)
+            runs,
+            async || imports.to_owned(),
+            async |captured, input| {
+                if !provider_costs::parser::upload_parses(&input)
                     && captured.status == StatusCode::BAD_REQUEST
                     && self.schema_body("POST", imports, &input)
                 {
@@ -656,32 +617,28 @@ impl Vx<'_> {
                 } else {
                     Probe::from(captured)
                 }
-            }),
+            },
         )
         .await;
-        let mappings = "/api/v1/platform/provider-cost-mappings";
-        let mut mapping = provider_cost_tests::mapping(self.connection, Some(self.team));
-        mapping["account_id"] = json!("vector-account");
-        mapping["bindings"][0]["effective_start"] = json!(format!("{day}T00:00:00Z"));
-        mapping["bindings"][0]["effective_end"] =
-            json!(format!("{}T00:00:00Z", day + chrono::TimeDelta::days(1)));
         // Bindings may not overlap in time or ownership, end after they start,
         // and a binding's provider models are unique: relations between
         // elements that a schema cannot state. Decided only when this body
         // really violates one of them (create_mapping's rules, recomputed).
-        self.guard(
+        let mappings = "/api/v1/platform/provider-cost-mappings";
+        let runs: Vec<Value> = [false, true]
+            .into_iter()
+            .enumerate()
+            .map(|(n, root)| self.mapping_valid(root, n))
+            .collect();
+        self.forms(
+            seen,
+            self.admin,
+            "POST",
             mappings,
-            body_vectors_http(seen, "POST", mappings, mapping, async |input: Value| {
-                let captured = send(
-                    self.client,
-                    self.base,
-                    Some(self.admin),
-                    "POST",
-                    mappings,
-                    Some(input.clone()),
-                )
-                .await;
-                if mapping_conflicts(&input)
+            runs,
+            async || mappings.to_owned(),
+            async |captured, input| {
+                if mapping_conflicts(&mapping_view(&input))
                     && captured.status == StatusCode::BAD_REQUEST
                     && self.schema_body("POST", mappings, &input)
                 {
@@ -689,58 +646,305 @@ impl Vx<'_> {
                 } else {
                     Probe::from(captured)
                 }
-            }),
+            },
         )
         .await;
         let recon = "/api/v1/platform/provider-reconciliations";
-        self.body(
+        let pair = json!({"import_id":self.import,"mapping_id":self.mapping});
+        self.forms(
             seen,
             self.admin,
             "POST",
             recon,
-            recon,
-            json!({"import_id":self.import,"mapping_id":self.mapping}),
+            vec![pair.clone(), seq(&pair, RECONCILIATION)],
+            async || recon.to_owned(),
+            plain,
         )
         .await;
         // Reconciliation consumes its hold, so every request gets a fresh one.
-        // The valid base carries every optional sibling (meter evidence, image
-        // variant, provider cost) and a coherent billing_usage, so the nested
-        // fields are walked too.
-        let valid = json!({"input_tokens":"3","output_tokens":"2","billing_usage":coherent_billing(),"evidence":"vector:receipt","meter_usage":meters(),"output_image_variant":"1024x1024","provider_cost_microusd":"5"});
-        self.guard(
-            "reconcile",
-            body_vectors_http(
-                seen,
-                "POST",
-                "/api/v1/workspaces/{ws}/costs/{execution}/reconcile",
-                valid,
-                async |input: Value| {
-                    let hold = seed_attempt(
-                        self.pool,
-                        self.team,
-                        self.key,
-                        self.deployment,
-                        self.price,
-                        false,
-                        3,
-                    )
-                    .await;
-                    Probe::from(
-                        send(
-                            self.client,
-                            self.base,
-                            Some(self.admin),
-                            "POST",
-                            &format!("{wsbase}/costs/{hold}/reconcile"),
-                            Some(input),
-                        )
-                        .await,
-                    )
-                },
-            ),
+        // billing_usage is null: BillingUsage's cross-field rules refuse an
+        // incoherent counter with 503 (#408), so no counter can be varied on
+        // its own (the schema's billing arm carries the reviewed exemption and
+        // the pinned probes cover the counters). The meter evidence, the image
+        // variant and the provider cost carry every optional sibling, in each
+        // wire form of the root and of the meter evidence.
+        let meter = json!({"output_images":"1","input_characters":"2","input_audio_seconds_ms":"3","output_audio_seconds_ms":"4","search_units":"5","requests":"6","output_video_seconds_ms":"7"});
+        let reconcile = |meter: Value| json!({"input_tokens":"1","output_tokens":"1","billing_usage":null,"evidence":"vector:receipt","meter_usage":meter,"output_image_variant":"1024x1024","provider_cost_microusd":"5"});
+        let mut runs = Vec::new();
+        for root in [false, true] {
+            for meter in [meter.clone(), seq(&meter, METER), Value::Null] {
+                let object = reconcile(meter);
+                runs.push(if root {
+                    seq(&object, RECONCILE)
+                } else {
+                    object
+                });
+            }
+        }
+        self.forms(
+            seen,
+            self.admin,
+            "POST",
+            "/api/v1/workspaces/{ws}/costs/{execution}/reconcile",
+            runs,
+            async || {
+                let hold = seed_attempt(
+                    self.pool,
+                    self.team,
+                    self.key,
+                    self.deployment,
+                    self.price,
+                    false,
+                    3,
+                )
+                .await;
+                format!("{wsbase}/costs/{hold}/reconcile")
+            },
+            plain,
         )
         .await;
     }
+
+    /// The handler's verdict on a report schedule body. Two refusals are DOMAIN
+    /// refusals a schema cannot state, and are decided only when the real state
+    /// proves them and the schema accepts the body: an unknown time-zone, and a
+    /// recipient who is not eligible for the scope (the handler's own count,
+    /// recomputed from the database). Every other status stands.
+    async fn schedule_verdict(
+        &self,
+        captured: Captured,
+        object: Value,
+        platform: bool,
+        known_zone: &impl Fn(&Value) -> bool,
+    ) -> Probe {
+        let ineligible = if captured.status == StatusCode::BAD_REQUEST {
+            let recipients = object["recipient_user_ids"]
+                .as_array()
+                .map(|ids| {
+                    ids.iter()
+                        .map(|id| id.as_str().and_then(|id| id.parse::<Uuid>().ok()))
+                        .collect::<Option<Vec<_>>>()
+                })
+                .unwrap_or_default();
+            match recipients {
+                Some(recipients) => {
+                    let eligible: i64 = sqlx::query_scalar("SELECT count(*) FROM effective_platform_roles p WHERE p.user_id=ANY($1) AND ((p.role IN ('admin','auditor') AND $2) OR ($2 IS FALSE AND EXISTS(SELECT FROM effective_workspace_memberships m WHERE m.workspace_id=$3 AND m.user_id=p.user_id AND m.role IN ('owner','admin'))))")
+                        .bind(&recipients)
+                        .bind(platform)
+                        .bind(self.team)
+                        .fetch_one(self.pool)
+                        .await
+                        .unwrap();
+                    eligible != recipients.len() as i64
+                }
+                None => false,
+            }
+        } else {
+            false
+        };
+        if ineligible {
+            return Probe::decided(captured, true);
+        }
+        zone_verdict(captured, &object, known_zone(&object))
+    }
+    /// A mapping that satisfies create_mapping, carrying every binding form
+    /// (object, positional non-exclusive, positional exclusive) and both forms
+    /// of model mapping in each, on its own days so no run overlaps another.
+    fn mapping_valid(&self, positional: bool, run: usize) -> Value {
+        let first =
+            chrono::Utc::now().date_naive() - chrono::TimeDelta::days(200 + 10 * run as i64);
+        let day = |n: i64| format!("{}T00:00:00Z", first + chrono::TimeDelta::days(n));
+        let models = |n: usize| {
+            let first = json!({"provider_model":format!("provider-model-{run}-{n}"),"upstream_model":"upstream-model"});
+            let second = json!({"provider_model":format!("provider-model-{run}-{}", n + 1),"upstream_model":"upstream-model"});
+            json!([first, seq(&second, MODEL_MAPPING)])
+        };
+        let binding = |n: i64, exclusive: bool| {
+            json!({"provider_workspace_id":format!("provider-workspace-{run}-{n}"),"connection_id":self.connection,"deployment_id":null,
+                "workspace_id":if exclusive { json!(self.team) } else { Value::Null },
+                "effective_start":day(n),"effective_end":day(n + 1),"exclusive":exclusive,"non_omg_traffic":false,
+                "attested":true,"evidence_reference":format!("finance:binding-{run}-{n}"),"model_mappings":models(2 * n as usize)})
+        };
+        let mapping = json!({"account_id":format!("vector-account-{run}"),"supersedes":null,"evidence_reference":"finance:mapping",
+            "bindings":[binding(0, false), seq(&binding(1, false), BINDING), seq(&binding(2, true), BINDING)]});
+        if positional {
+            seq(&mapping, MAPPING)
+        } else {
+            mapping
+        }
+    }
+}
+
+// Serde field order of every DTO that also accepts a positional array (the
+// schema documents both wire forms).
+const COST_CENTER: &[&str] = &["name", "code"];
+const SCHEDULE_CREATE: &[&str] = &[
+    "cadence",
+    "timezone",
+    "delivery_time",
+    "state",
+    "cost_center_id",
+    "recipient_user_ids",
+];
+const SCHEDULE_UPDATE: &[&str] = &[
+    "cadence",
+    "timezone",
+    "delivery_time",
+    "state",
+    "recipient_user_ids",
+];
+const UPLOAD: &[&str] = &[
+    "account_id",
+    "evidence_reference",
+    "exported_at",
+    "supersedes",
+    "request",
+    "pages",
+];
+const PARAMETERS: &[&str] = &[
+    "starting_at",
+    "ending_at",
+    "bucket_width",
+    "group_by",
+    "limit",
+];
+const PAGE: &[&str] = &["data", "has_more", "next_page"];
+const BUCKET: &[&str] = &["starting_at", "ending_at", "results"];
+const ITEM: &[&str] = &[
+    "amount",
+    "currency",
+    "workspace_id",
+    "description",
+    "model",
+    "service_tier",
+    "context_window",
+    "cost_type",
+    "token_type",
+    "inference_geo",
+    "speed",
+];
+const MAPPING: &[&str] = &["account_id", "supersedes", "evidence_reference", "bindings"];
+const BINDING: &[&str] = &[
+    "provider_workspace_id",
+    "connection_id",
+    "deployment_id",
+    "workspace_id",
+    "effective_start",
+    "effective_end",
+    "exclusive",
+    "non_omg_traffic",
+    "attested",
+    "evidence_reference",
+    "model_mappings",
+];
+const MODEL_MAPPING: &[&str] = &["provider_model", "upstream_model"];
+const RECONCILIATION: &[&str] = &["import_id", "mapping_id"];
+const RECONCILE: &[&str] = &[
+    "input_tokens",
+    "output_tokens",
+    "billing_usage",
+    "evidence",
+    "meter_usage",
+    "output_image_variant",
+    "provider_cost_microusd",
+];
+const METER: &[&str] = &[
+    "output_images",
+    "input_characters",
+    "input_audio_seconds_ms",
+    "output_audio_seconds_ms",
+    "search_units",
+    "requests",
+    "output_video_seconds_ms",
+];
+
+/// The serde positional (sequence) wire form of an object: its values in
+/// field order.
+fn seq(object: &Value, keys: &[&str]) -> Value {
+    Value::Array(keys.iter().map(|key| object[*key].clone()).collect())
+}
+/// The object view of a value that may be a positional array.
+fn view(value: &Value, keys: &[&str]) -> Value {
+    match value {
+        Value::Array(items) => Value::Object(
+            keys.iter()
+                .zip(items)
+                .map(|(key, item)| ((*key).to_owned(), item.clone()))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+/// Every binding and model mapping of a mapping as objects.
+fn mapping_view(input: &Value) -> Value {
+    let mut mapping = view(input, MAPPING);
+    if let Some(bindings) = mapping
+        .as_object_mut()
+        .and_then(|m| m.get_mut("bindings"))
+        .and_then(Value::as_array_mut)
+    {
+        for binding in bindings {
+            *binding = view(binding, BINDING);
+            if let Some(models) = binding
+                .as_object_mut()
+                .and_then(|b| b.get_mut("model_mappings"))
+                .and_then(Value::as_array_mut)
+            {
+                for model in models {
+                    *model = view(model, MODEL_MAPPING);
+                }
+            }
+        }
+    }
+    mapping
+}
+/// An RFC 3339 instant of EXACTLY 40 characters (the handler's limit): a day at
+/// midnight with 19 fractional-second digits. Every value the vectors start from
+/// is at the limit, so the at-limit and one-past-the-limit vectors are the value
+/// itself and the value plus one character.
+fn instant40(day: chrono::NaiveDate) -> String {
+    format!("{day}T00:00:00.0000000000000000000Z")
+}
+/// An upload carrying every wire form of every nesting level: three pages (an
+/// object page, a positional continuing page and a positional last page), each
+/// of two consecutive one-day buckets (an object and a positional one), each of
+/// two lines (an object and a positional one). `root` and `request` choose the
+/// wire form of the upload itself and of its request parameters. Every instant
+/// is 40 characters and every amount 64 (the handler's limits).
+fn upload_valid(root: bool, request: bool, run: usize) -> Value {
+    let first = chrono::Utc::now().date_naive() - chrono::TimeDelta::days(300 + 10 * run as i64);
+    let line = |n: usize| {
+        json!({"amount":format!("{}1.25", "0".repeat(60)),"currency":"USD","workspace_id":"wrkspc-vector",
+            "description":format!("Vector line {run}-{n}"),"model":"claude-vector","service_tier":"standard",
+            "context_window":"0-200k","cost_type":"tokens","token_type":"uncached_input_tokens",
+            "inference_geo":"global","speed":"standard"})
+    };
+    let bucket = |n: i64| {
+        let object = json!({"starting_at":instant40(first + chrono::TimeDelta::days(n)),
+            "ending_at":instant40(first + chrono::TimeDelta::days(n + 1)),
+            "results":[line(2 * n as usize), seq(&line(2 * n as usize + 1), ITEM)]});
+        if n % 2 == 0 {
+            object
+        } else {
+            seq(&object, BUCKET)
+        }
+    };
+    let page = |n: i64, positional: bool, last: bool| {
+        let object = json!({"data":[bucket(2 * n), bucket(2 * n + 1)],"has_more":!last,
+            "next_page":if last { Value::Null } else { json!(format!("cursor-{run}-{n}")) }});
+        if positional {
+            seq(&object, PAGE)
+        } else {
+            object
+        }
+    };
+    let parameters = json!({"starting_at":instant40(first),"ending_at":instant40(first + chrono::TimeDelta::days(6)),
+        "bucket_width":"1d","group_by":["workspace_id","description"],"limit":31});
+    let upload = json!({"account_id":format!("vector-account-{run}"),"evidence_reference":"finance:vector-export",
+        "exported_at":instant40(first + chrono::TimeDelta::days(6)),"supersedes":null,
+        "request":if request { seq(&parameters, PARAMETERS) } else { parameters },
+        "pages":[page(0, false, false), page(1, true, false), page(2, true, true)]});
+    if root { seq(&upload, UPLOAD) } else { upload }
 }
 
 /// The time-zone database is not enumerable in a schema: a well-formed but

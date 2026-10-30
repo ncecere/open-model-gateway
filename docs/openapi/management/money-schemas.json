@@ -6734,7 +6734,8 @@
               "items": {
                 "$ref": "#/components/schemas/MoneyProviderBinding"
               },
-              "maxItems": 1000
+              "maxItems": 1000,
+              "x-omg-unsendable-boundary": "At most 1000 bindings (create_mapping): the 1001-element vector is past the harness's 1000-item cap, so the maxItems boundary cannot be sent; the cap is pinned by the mapping_caps probe in openapi_money_probes_tests.rs."
             }
           },
           "required": [
@@ -6775,7 +6776,8 @@
               "items": {
                 "$ref": "#/components/schemas/MoneyProviderBinding"
               },
-              "maxItems": 1000
+              "maxItems": 1000,
+              "x-omg-unsendable-boundary": "At most 1000 bindings (create_mapping): the 1001-element vector is past the harness's 1000-item cap, so the maxItems boundary cannot be sent; the cap is pinned by the mapping_caps probe in openapi_money_probes_tests.rs."
             }
           ],
           "items": false,
@@ -6945,7 +6947,8 @@
             "billing_usage": {
               "anyOf": [
                 {
-                  "$ref": "#/components/schemas/MoneyBillingUsageInput"
+                  "$ref": "#/components/schemas/MoneyBillingUsageInput",
+                  "x-omg-unprobed-location": "billing_usage counters cannot be varied one at a time: BillingUsage::validate and usage_values (governance.rs) refuse an incoherent set with a Storage error, which reconcile maps to 503 instead of 400 (#408), so the HTTP vectors run with billing_usage null. The pinned probes in openapi_money_probes_tests.rs (reconcile_probes) compare every counter rule with the real handler."
                 },
                 {
                   "type": "null"
@@ -7010,7 +7013,8 @@
             {
               "anyOf": [
                 {
-                  "$ref": "#/components/schemas/MoneyBillingUsageInput"
+                  "$ref": "#/components/schemas/MoneyBillingUsageInput",
+                  "x-omg-unprobed-location": "billing_usage counters cannot be varied one at a time: BillingUsage::validate and usage_values (governance.rs) refuse an incoherent set with a Storage error, which reconcile maps to 503 instead of 400 (#408), so the HTTP vectors run with billing_usage null. The pinned probes in openapi_money_probes_tests.rs (reconcile_probes) compare every counter rule with the real handler."
                 },
                 {
                   "type": "null"
