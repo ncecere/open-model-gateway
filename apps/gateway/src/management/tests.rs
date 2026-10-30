@@ -66,6 +66,8 @@ mod me_models_tests;
 mod member_tests;
 #[path = "openapi_fixture_tests.rs"]
 mod openapi_fixtures;
+#[path = "openapi_settings_fixture_tests.rs"]
+mod openapi_settings_fixture_tests;
 #[path = "openapi_slice6_fixture_tests.rs"]
 mod openapi_slice6_fixture_tests;
 #[path = "personal_data_tests.rs"]

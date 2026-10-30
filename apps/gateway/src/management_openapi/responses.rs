@@ -15,6 +15,13 @@ pub(crate) const IDENTITY_SELF_SERVICE_AREAS: &[&str] = &[
     "me",
     "access-request-targets",
 ];
+pub(crate) const SLICE5_AREAS: &[&str] = &[
+    "platform/alerts",
+    "platform/installation",
+    "platform/server-policy",
+    "platform/settings",
+    "workspaces/{ws}/alerts",
+];
 pub(crate) const SLICE6_AREAS: &[&str] = &[
     "platform/admin-tokens",
     "platform/audit",
@@ -36,6 +43,7 @@ pub(crate) const SLICE6_AREAS: &[&str] = &[
 ];
 pub(crate) const AREA_GROUPS: &[(&str, &[&str])] = &[
     ("IDENTITY_SELF_SERVICE_AREAS", IDENTITY_SELF_SERVICE_AREAS),
+    ("SLICE5_AREAS", SLICE5_AREAS),
     ("SLICE6_AREAS", SLICE6_AREAS),
 ];
 
@@ -1007,7 +1015,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(count, 65);
+        assert_eq!(count, 102);
     }
     #[test]
     fn management_openapi_response_rejects_incomplete_completed_slot() {
