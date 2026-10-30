@@ -12,6 +12,7 @@ mod quality;
 mod request_reach;
 pub(crate) mod requests;
 pub(crate) mod responses;
+mod settings_tests;
 mod validation;
 mod wiring_tests;
 
@@ -59,7 +60,7 @@ mod tests {
             "review route additions and update this progress baseline"
         );
         assert_eq!(
-            placeholders, 278,
+            placeholders, 204,
             "review schema completion and update this progress baseline"
         );
     }

@@ -327,10 +327,14 @@ fn management_openapi_money_provider_request_vectors() {
         }
     }
     super::openapi::requests::component_vectors::<DecodedBinding>(
+        "POST",
+        "/api/v1/platform/provider-cost-mappings",
         "MoneyProviderBinding",
         mapping["bindings"][0].clone(),
     );
     super::openapi::requests::component_vectors::<DecodedModelMapping>(
+        "POST",
+        "/api/v1/platform/provider-cost-mappings",
         "MoneyProviderModelMapping",
         mapping["bindings"][0]["model_mappings"][0].clone(),
     );

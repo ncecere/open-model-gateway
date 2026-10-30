@@ -22,6 +22,14 @@ pub(super) const ARBITRARY_JSON: &[(&str, &str)] = &[
         "/components/schemas/MoneyProviderReconciliationSnapshot/properties/personal_activity/properties/exclusively_attributed_imported_by_category",
         "Frozen provider_reconciliations.snapshot groups signed imported amounts by provider-supplied cost_type; arbitrary historical category labels map only to integer micro-USD strings.",
     ),
+    (
+        "/components/schemas/SettingsWorkspaceAlertEvent/properties/details",
+        "Workspace history rows return alert_events.details verbatim as stored producer-specific JSON; monetary refinements apply on this shared base, and every concrete workspace event variant refines it with the closed schema of its kind (Settings*Details).",
+    ),
+    (
+        "/components/schemas/SettingsAlertEvent/properties/details",
+        "EVENT_JSON returns alert_events.details verbatim as stored producer-specific JSON; monetary refinements apply on this shared base, and every concrete event variant refines it with the closed schema of its kind (Settings*Details).",
+    ),
     // Slice 6: audit rows are stored jsonb objects, not deserialized DTOs.
     (
         "/components/schemas/S6WorkspaceAudit/properties/metadata",

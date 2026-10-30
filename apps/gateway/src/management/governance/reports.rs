@@ -627,10 +627,14 @@ pub(super) struct Reconcile {
 #[test]
 fn management_openapi_money_reconcile_request_vectors() {
     super::super::openapi::requests::component_vectors::<crate::billing::BillingUsage>(
+        "POST",
+        "/api/v1/workspaces/{ws}/costs/{execution}/reconcile",
         "MoneyBillingUsageInput",
         serde_json::to_value(crate::billing::BillingUsage::default()).unwrap(),
     );
     super::super::openapi::requests::component_vectors::<crate::billing::MeterUsage>(
+        "POST",
+        "/api/v1/workspaces/{ws}/costs/{execution}/reconcile",
         "MoneyMeterUsageInput",
         serde_json::to_value(crate::billing::MeterUsage::default()).unwrap(),
     );

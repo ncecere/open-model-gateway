@@ -56,6 +56,160 @@ pub(crate) const SEMANTIC_REFINEMENTS: &[(&str, &str, &str, &[&str])] = &[
     ),
     (
         "POST",
+        "/api/v1/platform/alerts/rules",
+        "the kind decides which fields are required and which are refused, with ranges, enums and at most ten emails",
+        &[
+            "/name",
+            "/kind",
+            "/budget_layers",
+            "/thresholds",
+            "/spike_factor_percent",
+            "/min_spend_microusd",
+            "/window_minutes",
+            "/error_rate_percent",
+            "/min_requests",
+            "/consecutive_failures",
+            "/provider_connection_id",
+            "/spend_period",
+            "/spend_amount_microusd",
+            "/ceiling_requests_per_second",
+            "/ceiling_lock_wait_ms",
+            "/notify_emails",
+            "/notify_workspace_admins",
+            "/notify_platform_admins",
+        ],
+    ),
+    (
+        "PUT",
+        "/api/v1/platform/alerts/rules/{id}",
+        "the kind decides which fields are required and which are refused, with ranges, enums and at most ten emails",
+        &[
+            "/name",
+            "/kind",
+            "/budget_layers",
+            "/thresholds",
+            "/spike_factor_percent",
+            "/min_spend_microusd",
+            "/window_minutes",
+            "/error_rate_percent",
+            "/min_requests",
+            "/consecutive_failures",
+            "/provider_connection_id",
+            "/spend_period",
+            "/spend_amount_microusd",
+            "/ceiling_requests_per_second",
+            "/ceiling_lock_wait_ms",
+            "/notify_emails",
+            "/notify_workspace_admins",
+            "/notify_platform_admins",
+        ],
+    ),
+    (
+        "POST",
+        "/api/v1/workspaces/{ws}/alerts/rules",
+        "the kind decides which fields are required and which are refused, with ranges, enums and at most ten emails",
+        &[
+            "/name",
+            "/kind",
+            "/budget_layers",
+            "/thresholds",
+            "/spike_factor_percent",
+            "/min_spend_microusd",
+            "/window_minutes",
+            "/error_rate_percent",
+            "/min_requests",
+            "/consecutive_failures",
+            "/provider_connection_id",
+            "/spend_period",
+            "/spend_amount_microusd",
+            "/ceiling_requests_per_second",
+            "/ceiling_lock_wait_ms",
+            "/notify_emails",
+            "/notify_workspace_admins",
+            "/notify_platform_admins",
+        ],
+    ),
+    (
+        "PUT",
+        "/api/v1/workspaces/{ws}/alerts/rules/{id}",
+        "the kind decides which fields are required and which are refused, with ranges, enums and at most ten emails",
+        &[
+            "/name",
+            "/kind",
+            "/budget_layers",
+            "/thresholds",
+            "/spike_factor_percent",
+            "/min_spend_microusd",
+            "/window_minutes",
+            "/error_rate_percent",
+            "/min_requests",
+            "/consecutive_failures",
+            "/provider_connection_id",
+            "/spend_period",
+            "/spend_amount_microusd",
+            "/ceiling_requests_per_second",
+            "/ceiling_lock_wait_ms",
+            "/notify_emails",
+            "/notify_workspace_admins",
+            "/notify_platform_admins",
+        ],
+    ),
+    (
+        "PUT",
+        "/api/v1/platform/settings/general",
+        "display name 1 to 120 characters without control characters, https URLs without credentials, lifetime 1 to 365 days",
+        &[
+            "/display_name",
+            "/support_url",
+            "/logo_url",
+            "/human_key_max_lifetime_days",
+        ],
+    ),
+    (
+        "PUT",
+        "/api/v1/platform/settings/privacy",
+        "data collection is deny or allow; retention is absent or 30 to 3650 days",
+        &["/openrouter_data_collection", "/request_log_retention_days"],
+    ),
+    (
+        "PUT",
+        "/api/v1/platform/settings/email",
+        "either every field absent, or host, port 1-65535, tls enum, sender and a username with its password reference; plaintext only to loopback",
+        &[
+            "/host",
+            "/port",
+            "/tls",
+            "/username",
+            "/password_ref",
+            "/from_address",
+            "/from_name",
+        ],
+    ),
+    (
+        "PUT",
+        "/api/v1/platform/settings/storage",
+        "every retention is 1 to 365 days",
+        &["/batch", "/video", "/user_files", "/export"],
+    ),
+    (
+        "POST",
+        "/api/v1/platform/alerts/webhooks",
+        "a trimmed label of at most 120 characters, an approved https URL and an env: reference",
+        &["/label", "/url", "/current_secret_ref"],
+    ),
+    (
+        "PATCH",
+        "/api/v1/platform/alerts/webhooks/{id}",
+        "the same value rules as create; a rotation reference and its expiry end together",
+        &[
+            "/label",
+            "/current_secret_ref",
+            "/previous_secret_ref",
+            "/previous_secret_until",
+        ],
+    ),
+    (
+        "POST",
         "/api/v1/platform/legal-holds",
         "exactly one of user_id or workspace_id is a UUID; the reference is a short code of at most 64 characters",
         &["/user_id", "/workspace_id", "/reference"],
@@ -198,29 +352,77 @@ pub(super) fn vectors_in<T: DeserializeOwned>(
         !schema.is_null(),
         "request schema must be bound to an operation"
     );
-    schema_vectors_in::<T>(document, method, template, schema, valid, refined)
+    schema_vectors::<T>(
+        document,
+        &format!("{method} {template}"),
+        schema,
+        valid,
+        refined,
+    )
 }
 
-/// Bind an independently named, recursively reachable DTO (a component that is
-/// not a request root) to real serde, so a newly added optional nested field is
-/// caught even when the root fixture omits it. Components carry no reviewed
-/// refinement: contract and serde must agree exactly.
-pub(crate) fn component_vectors<T: DeserializeOwned>(name: &str, valid: Value) {
-    schema_vectors_in::<T>(
+/// Bind a NESTED request DTO to its own component (`#/components/schemas/<name>`),
+/// so a new field or a looser rule on a nested object cannot hide behind the
+/// parent's valid body. The operation's reviewed refined pointers that are
+/// properties of the component apply to it; the others belong to the parent.
+pub(crate) fn component_vectors<T: DeserializeOwned>(
+    method: &str,
+    template: &str,
+    component: &str,
+    valid: Value,
+) {
+    component_vectors_in::<T>(
         super::responses::artifact(),
-        "component",
-        name,
-        &json!({"$ref":format!("#/components/schemas/{name}")}),
+        method,
+        template,
+        component,
         valid,
-        &[],
     )
     .unwrap_or_else(|e| panic!("{e:#}"));
 }
 
-fn schema_vectors_in<T: DeserializeOwned>(
+pub(super) fn component_vectors_in<T: DeserializeOwned>(
     document: &Value,
     method: &str,
     template: &str,
+    component: &str,
+    valid: Value,
+) -> anyhow::Result<()> {
+    let schema = json!({"$ref": format!("#/components/schemas/{component}")});
+    let schema_of = &document["components"]["schemas"][component];
+    let properties = schema_of
+        .get("properties")
+        .or_else(|| {
+            schema_of["oneOf"]
+                .as_array()
+                .and_then(|arms| arms.iter().find_map(|arm| arm.get("properties")))
+        })
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let refined: Vec<&str> = SEMANTIC_REFINEMENTS
+        .iter()
+        .find(|(m, t, ..)| *m == method && *t == template)
+        .map_or(&[][..], |(.., pointers)| *pointers)
+        .iter()
+        .copied()
+        .filter(|pointer| properties.contains_key(pointer.trim_start_matches('/')))
+        .collect();
+    schema_vectors::<T>(
+        document,
+        &format!("{method} {template} component {component}"),
+        &schema,
+        valid,
+        &refined,
+    )
+}
+
+/// The boundary vectors of one DTO against the request schema `schema` (a
+/// `$ref`), labelled `scope` in failures. `vectors_in` binds the operation's body
+/// schema; `component_vectors` binds a nested DTO's own component.
+fn schema_vectors<T: DeserializeOwned>(
+    document: &Value,
+    scope: &str,
     schema: &Value,
     valid: Value,
     refined: &[&str],
@@ -233,13 +435,20 @@ fn schema_vectors_in<T: DeserializeOwned>(
         !actual.is_empty(),
         "unsupported DTO deserializer: inventory explicitly"
     );
-    let component = document
-        .pointer(
-            &schema["$ref"]
-                .as_str()
-                .context("request schema reference")?[1..],
-        )
-        .context("request schema component")?;
+    // The generated per-operation request component may be an alias of a shared
+    // input schema (one DTO serving several operations): follow the chain.
+    let mut component = schema;
+    let mut seen = BTreeSet::new();
+    while let Some(reference) = component["$ref"].as_str() {
+        ensure!(seen.insert(reference), "cyclic request component alias");
+        component = document
+            .pointer(&reference[1..])
+            .context("request schema component")?;
+    }
+    ensure!(
+        !std::ptr::eq(component, schema),
+        "request schema reference required"
+    );
     let object = component
         .get("properties")
         .unwrap_or(&component["oneOf"][0]["properties"]);
@@ -251,15 +460,14 @@ fn schema_vectors_in<T: DeserializeOwned>(
         .collect();
     ensure!(
         actual == documented,
-        "{method} {template}: DTO/schema field inventory drift"
+        "{scope}: DTO/schema field inventory drift"
     );
     ensure!(
         serde_json::from_value::<T>(valid.clone()).is_ok(),
         "real deserialization positive control"
     );
     let names: Vec<&str> = fields.0.borrow().clone();
-    refined_pointers_exist(component, &names, refined)
-        .with_context(|| format!("{method} {template}"))?;
+    refined_pointers_exist(component, &names, refined).with_context(|| scope.to_owned())?;
     let mut failures = Vec::new();
     let mut compare = |label: &str, value: Value| {
         let actual = serde_json::from_value::<T>(value.clone()).is_ok();
@@ -267,7 +475,7 @@ fn schema_vectors_in<T: DeserializeOwned>(
         let touched = touched(&names, &valid, &value);
         if !agrees(refined, &touched, contract, actual) {
             failures.push(format!(
-                "{method} {template}: {label}: contract {} but serde {} (touches {})",
+                "{scope}: {label}: contract {} but serde {} (touches {})",
                 if contract { "accepts" } else { "refuses" },
                 if actual { "accepts" } else { "refuses" },
                 touched.join(", "),
@@ -515,9 +723,10 @@ fn management_openapi_request_refinements_are_reviewed_and_one_directional() {
         // Every listed pointer exists in the request schema: as a property of the
         // object form and as an item of the positional form.
         let schema = &operation["requestBody"]["content"]["application/json"]["schema"];
-        let component = document
-            .pointer(&schema["$ref"].as_str().unwrap()[1..])
-            .unwrap();
+        let mut component = schema;
+        while let Some(reference) = component["$ref"].as_str() {
+            component = document.pointer(&reference[1..]).unwrap();
+        }
         let arms: Vec<&Value> = match component["oneOf"].as_array() {
             Some(arms) => arms.iter().collect(),
             None => vec![component],
@@ -641,6 +850,52 @@ fn management_openapi_refinement_tolerance_is_scoped_to_reviewed_pointers() {
     );
 }
 
+#[test]
+fn management_openapi_component_vectors_bind_a_nested_dto_to_its_own_component() {
+    // RED control: a nested component that is looser than its DTO (an extra
+    // property, then a field serde requires but the schema does not) must fail.
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[allow(dead_code)]
+    struct Nested {
+        days: i32,
+    }
+    let document = |schema: Value| {
+        json!({"openapi":"3.1.0","paths":{"/api/v1/x":{"put":{"requestBody":{"content":{"application/json":{
+            "schema":{"$ref":"#/components/schemas/Parent"}}}},"responses":{"200":{"description":"ok"}}}}},
+            "components":{"schemas":{"Parent":{"type":"object","required":[],"additionalProperties":false,"properties":{}},
+                "Nested":schema}}})
+    };
+    let run = |schema: Value| {
+        component_vectors_in::<Nested>(
+            &document(schema),
+            "PUT",
+            "/api/v1/x",
+            "Nested",
+            json!({"days":3}),
+        )
+    };
+    let exact = json!({"oneOf":[
+        {"type":"object","required":["days"],"additionalProperties":false,
+            "properties":{"days":{"type":"integer"}}},
+        {"type":"array","prefixItems":[{"type":"integer"}],"minItems":1,"maxItems":1,"items":false}]});
+    run(exact.clone()).unwrap();
+    let mut open = exact.clone();
+    open["oneOf"][0]["additionalProperties"] = json!(true);
+    let text = format!("{:#}", run(open).unwrap_err());
+    assert!(
+        text.contains("component Nested") && text.contains("unknown"),
+        "{text}"
+    );
+    let mut optional = exact;
+    optional["oneOf"][0]["required"] = json!([]);
+    let text = format!("{:#}", run(optional).unwrap_err());
+    assert!(
+        text.contains("component Nested") && text.contains("missing"),
+        "{text}"
+    );
+}
+
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
@@ -675,10 +930,9 @@ fn management_openapi_component_vectors_probe_nested_dto_fields() {
             "Inner":inner(loose, required)}}})
     };
     let run = |document: &Value, valid: Value| {
-        schema_vectors_in::<NestedOuter>(
+        schema_vectors::<NestedOuter>(
             document,
-            "component",
-            "Outer",
+            "component Outer",
             &json!({"$ref":"#/components/schemas/Outer"}),
             valid,
             &[],

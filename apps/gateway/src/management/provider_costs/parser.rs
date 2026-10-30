@@ -297,18 +297,26 @@ fn management_openapi_money_raw_upload_request_vectors() {
     }
     let upload = json!({"account_id":"account","evidence_reference":"receipt:upload","exported_at":"2025-08-03T00:00:00Z","supersedes":null,"request":{"starting_at":"2025-08-01T00:00:00Z","ending_at":"2025-08-02T00:00:00Z","bucket_width":"1d","group_by":["workspace_id","description"],"limit":31},"pages":[{"data":[{"starting_at":"2025-08-01T00:00:00Z","ending_at":"2025-08-02T00:00:00Z","results":[{"amount":"-1","currency":"USD","workspace_id":null,"description":null,"model":null,"service_tier":null,"context_window":null,"cost_type":null,"token_type":null,"inference_geo":null,"speed":null}]}],"has_more":false,"next_page":null}]});
     super::super::openapi::requests::component_vectors::<DecodedParameters>(
+        "POST",
+        "/api/v1/platform/provider-cost-imports",
         "MoneyProviderParameters",
         upload["request"].clone(),
     );
     super::super::openapi::requests::component_vectors::<DecodedPage>(
+        "POST",
+        "/api/v1/platform/provider-cost-imports",
         "MoneyProviderPage",
         upload["pages"][0].clone(),
     );
     super::super::openapi::requests::component_vectors::<DecodedBucket>(
+        "POST",
+        "/api/v1/platform/provider-cost-imports",
         "MoneyProviderBucket",
         upload["pages"][0]["data"][0].clone(),
     );
     super::super::openapi::requests::component_vectors::<DecodedItem>(
+        "POST",
+        "/api/v1/platform/provider-cost-imports",
         "MoneyProviderItem",
         upload["pages"][0]["data"][0]["results"][0].clone(),
     );

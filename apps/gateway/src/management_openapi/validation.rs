@@ -111,6 +111,13 @@ pub(super) fn compile_schema(schema: &Value) -> Result<Validator> {
         // JSON UUID fields use uuid's serde parser, which also accepts compact,
         // braced and URN forms; do not silently narrow the request boundary.
         .with_format("uuid", |value: &str| uuid::Uuid::parse_str(value).is_ok())
+        // Webhook rotation uses chrono's real serde parser, whose accepted
+        // strings include relaxed RFC 3339 spellings (for example a space
+        // instead of T). Keep request acceptance distinct from canonical
+        // response timestamps rather than silently narrowing that decoder.
+        .with_format("omg-chrono-date-time", |value: &str| {
+            serde_json::from_value::<chrono::DateTime<chrono::Utc>>(json!(value)).is_ok()
+        })
         .with_retriever(local_schemas()?)
         .with_pattern_options(PatternOptions::regex().size_limit(1 << 20))
         .build(schema)

@@ -1,17 +1,5 @@
 {
   "operations": {
-    "DELETE /api/v1/platform/alerts/rules/{id}": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "governance:write",
-      "token_policy": "Scope"
-    },
-    "DELETE /api/v1/platform/alerts/webhooks/{id}": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "settings:write",
-      "token_policy": "Scope"
-    },
     "DELETE /api/v1/platform/catalogs/{id}": {
       "access": "PlatformWrite",
       "operation": {},
@@ -40,12 +28,6 @@
       "access": "PlatformWrite",
       "operation": {},
       "scope": "catalog:write",
-      "token_policy": "Scope"
-    },
-    "DELETE /api/v1/platform/settings/general/logo": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "settings:write",
       "token_policy": "Scope"
     },
     "DELETE /api/v1/platform/users/{user}/roles/{role}": {
@@ -78,12 +60,6 @@
       "scope": "governance:write",
       "token_policy": "Scope"
     },
-    "DELETE /api/v1/workspaces/{ws}/alerts/rules/{id}": {
-      "access": "WorkspaceAdmin",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
-    },
     "DELETE /api/v1/workspaces/{ws}/invitations/{id}": {
       "access": "WorkspaceAdmin",
       "operation": {},
@@ -101,42 +77,6 @@
       "operation": {},
       "scope": null,
       "token_policy": "Denied"
-    },
-    "GET /api/v1/platform/alerts/events": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/alerts/rules": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/alerts/rules/{id}": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/alerts/webhooks": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/alerts/webhooks/{id}": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/alerts/webhooks/{id}/deliveries": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
     },
     "GET /api/v1/platform/catalog-defaults": {
       "access": "PlatformRead",
@@ -210,12 +150,6 @@
       "scope": null,
       "token_policy": "Denied"
     },
-    "GET /api/v1/platform/installation/policy": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
     "GET /api/v1/platform/models": {
       "access": "PlatformRead",
       "operation": {},
@@ -259,48 +193,6 @@
       "token_policy": "Scope"
     },
     "GET /api/v1/platform/providers/{id}": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/server-policy": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/settings/audit-export": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/settings/email": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/settings/general": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/settings/privacy": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/settings/sign-in": {
-      "access": "PlatformRead",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/platform/settings/storage": {
       "access": "PlatformRead",
       "operation": {},
       "scope": "platform:read",
@@ -384,24 +276,6 @@
       "scope": "platform:read",
       "token_policy": "Scope"
     },
-    "GET /api/v1/workspaces/{ws}/alerts/events": {
-      "access": "WorkspaceAdminOrReader",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/workspaces/{ws}/alerts/rules": {
-      "access": "WorkspaceAdminOrReader",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
-    "GET /api/v1/workspaces/{ws}/alerts/rules/{id}": {
-      "access": "WorkspaceAdminOrReader",
-      "operation": {},
-      "scope": "platform:read",
-      "token_policy": "Scope"
-    },
     "GET /api/v1/workspaces/{ws}/available-models": {
       "access": "WorkspaceMetadata",
       "operation": {},
@@ -462,12 +336,6 @@
       "scope": null,
       "token_policy": "Denied"
     },
-    "PATCH /api/v1/platform/alerts/webhooks/{id}": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "settings:write",
-      "token_policy": "Scope"
-    },
     "PATCH /api/v1/platform/catalogs/{id}": {
       "access": "PlatformWrite",
       "operation": {},
@@ -515,24 +383,6 @@
       "operation": {},
       "scope": null,
       "token_policy": "Denied"
-    },
-    "POST /api/v1/platform/alerts/rules": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "governance:write",
-      "token_policy": "Scope"
-    },
-    "POST /api/v1/platform/alerts/webhooks": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "settings:write",
-      "token_policy": "Scope"
-    },
-    "POST /api/v1/platform/alerts/webhooks/{id}/test": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "settings:write",
-      "token_policy": "Scope"
     },
     "POST /api/v1/platform/catalogs": {
       "access": "PlatformWrite",
@@ -594,24 +444,6 @@
       "scope": "catalog:write",
       "token_policy": "Scope"
     },
-    "POST /api/v1/platform/settings/audit-export/test": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "settings:write",
-      "token_policy": "Scope"
-    },
-    "POST /api/v1/platform/settings/email/test": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "settings:write",
-      "token_policy": "Scope"
-    },
-    "POST /api/v1/platform/settings/storage/test": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "settings:write",
-      "token_policy": "Scope"
-    },
     "POST /api/v1/platform/users": {
       "access": "PlatformWrite",
       "operation": {},
@@ -654,12 +486,6 @@
       "scope": "catalog:write",
       "token_policy": "Scope"
     },
-    "POST /api/v1/workspaces/{ws}/alerts/rules": {
-      "access": "WorkspaceAdmin",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
-    },
     "POST /api/v1/workspaces/{ws}/invitations": {
       "access": "WorkspaceAdmin",
       "operation": {},
@@ -677,12 +503,6 @@
       "operation": {},
       "scope": null,
       "token_policy": "Denied"
-    },
-    "PUT /api/v1/platform/alerts/rules/{id}": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "governance:write",
-      "token_policy": "Scope"
     },
     "PUT /api/v1/platform/catalog-defaults": {
       "access": "PlatformWrite",
@@ -708,12 +528,6 @@
       "scope": "catalog:write",
       "token_policy": "Scope"
     },
-    "PUT /api/v1/platform/installation/policy": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "governance:write",
-      "token_policy": "Scope"
-    },
     "PUT /api/v1/platform/models/{id}/catalogs": {
       "access": "PlatformWrite",
       "operation": {},
@@ -724,36 +538,6 @@
       "access": "PlatformWrite",
       "operation": {},
       "scope": "catalog:write",
-      "token_policy": "Scope"
-    },
-    "PUT /api/v1/platform/settings/email": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "settings:write",
-      "token_policy": "Scope"
-    },
-    "PUT /api/v1/platform/settings/general": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "settings:write",
-      "token_policy": "Scope"
-    },
-    "PUT /api/v1/platform/settings/general/logo": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "settings:write",
-      "token_policy": "Scope"
-    },
-    "PUT /api/v1/platform/settings/privacy": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "settings:write",
-      "token_policy": "Scope"
-    },
-    "PUT /api/v1/platform/settings/storage": {
-      "access": "PlatformWrite",
-      "operation": {},
-      "scope": "settings:write",
       "token_policy": "Scope"
     },
     "PUT /api/v1/platform/workspace-types/{kind}/catalogs": {
@@ -779,12 +563,6 @@
       "operation": {},
       "scope": "governance:write",
       "token_policy": "Scope"
-    },
-    "PUT /api/v1/workspaces/{ws}/alerts/rules/{id}": {
-      "access": "WorkspaceAdmin",
-      "operation": {},
-      "scope": null,
-      "token_policy": "Denied"
     },
     "PUT /api/v1/workspaces/{ws}/policy": {
       "access": "WorkspaceAdmin",
