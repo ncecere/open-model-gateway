@@ -4,6 +4,7 @@
 //! `pub(crate)` functions; see `generator.rs` for what had to be copied instead.
 //! Documentation: `docs/openapi/inference/README.md`.
 mod errors;
+mod errors_tests;
 mod generator;
 mod responses;
 mod wiring_tests;
