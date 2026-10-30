@@ -130,7 +130,79 @@
       "access": "InferenceKey",
       "token_policy": "Denied",
       "scope": null,
-      "operation": {}
+      "operation": {
+        "summary": "Anthropic Messages (incomplete in this document)",
+        "description": "Incomplete: the request, the success and the SSE contracts arrive with the generation protocols. Documented already because they differ from every other route: errors are Anthropic-shaped with NO gateway machine code, and the outer transport layer rewrites 405 and 413 into the same shape on this path (http.rs request_context; protocols/messages.rs http_error). Authentication is Authorization: Bearer or x-api-key, never both.",
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          },
+          "401": {
+            "description": "Missing, malformed, duplicate, mixed or unknown credential",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "www-authenticate": {
+                "$ref": "#/components/headers/WwwAuthenticate"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnthropicErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Another method on /v1/messages, after authentication: an Anthropic-shaped invalid_request_error 'Method not allowed' that keeps the Allow header (http.rs request_context). Not an operation of this path: only POST is served.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "allow": {
+                "description": "The served method.",
+                "required": true,
+                "schema": {
+                  "const": "POST"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnthropicErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The body exceeds the shared 2 MiB cap, whether the body-limit layer or the handler refuses it: always request_too_large, never the OpenAI payload_too_large",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnthropicErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "GET /v1/models": {
       "access": "InferenceKey",

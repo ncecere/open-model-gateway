@@ -289,6 +289,33 @@ pub(super) fn verify(document: &Value) -> Result<()> {
     }
     ensure!(actual.iter().eq(inventory.keys()), "omitted operations");
     super::errors::verify_components(document)?;
+    verify_transport_exceptions(document)?;
+    Ok(())
+}
+
+/// Transport statuses a route answers in a shape of its own, even though the
+/// operation is still incomplete: `/v1/messages` rewrites 405 and 413 into
+/// Anthropic's shape in the outer layer (`http.rs` request_context,
+/// `protocols/messages.rs` http_error), unlike every other route. They must be
+/// IN the document, with the Anthropic envelope.
+const TRANSPORT_EXCEPTIONS: &[(&str, &str, &[&str])] = &[("/v1/messages", "post", &["405", "413"])];
+
+fn verify_transport_exceptions(document: &Value) -> Result<()> {
+    for (path, method, statuses) in TRANSPORT_EXCEPTIONS {
+        for status in *statuses {
+            let response = &document["paths"][*path][*method]["responses"][*status];
+            ensure!(
+                response["content"]["application/json"]["schema"]
+                    == json!({"$ref":"#/components/schemas/AnthropicErrorEnvelope"}),
+                "{method} {path} must document its {status} transport exception in the Anthropic envelope"
+            );
+        }
+    }
+    ensure!(
+        document["paths"]["/v1/messages"]["post"]["responses"]["405"]["headers"]["allow"]["schema"]
+            == json!({"const":"POST"}),
+        "the /v1/messages 405 must keep its Allow header"
+    );
     Ok(())
 }
 
