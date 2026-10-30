@@ -2703,6 +2703,24 @@
           "413": {
             "$ref": "#/components/responses/OpenAiPayloadTooLarge"
           },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Request validation failure (TypeSafe-compatible): the closed field set, a bound, a type, the question criteria of its kind",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
           "429": {
             "$ref": "#/components/responses/OpenAiTooManyRequests"
           },
