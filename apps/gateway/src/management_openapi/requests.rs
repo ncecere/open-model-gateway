@@ -189,13 +189,7 @@ pub(crate) const SEMANTIC_REFINEMENTS: &[(&str, &str, &str, &[&str])] = &[
         "PUT",
         "/api/v1/platform/settings/storage",
         "every retention is 1 to 365 days",
-        &[
-            "/batch",
-            "/video",
-            "/user_files",
-            "/export",
-            "/retention_days",
-        ],
+        &["/batch", "/video", "/user_files", "/export"],
     ),
     (
         "POST",
@@ -340,8 +334,15 @@ pub(super) fn component_vectors_in<T: DeserializeOwned>(
     valid: Value,
 ) -> anyhow::Result<()> {
     let schema = json!({"$ref": format!("#/components/schemas/{component}")});
-    let properties = document["components"]["schemas"][component]["properties"]
-        .as_object()
+    let schema_of = &document["components"]["schemas"][component];
+    let properties = schema_of
+        .get("properties")
+        .or_else(|| {
+            schema_of["oneOf"]
+                .as_array()
+                .and_then(|arms| arms.iter().find_map(|arm| arm.get("properties")))
+        })
+        .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
     let refined: Vec<&str> = SEMANTIC_REFINEMENTS
@@ -379,13 +380,20 @@ fn schema_vectors<T: DeserializeOwned>(
         !actual.is_empty(),
         "unsupported DTO deserializer: inventory explicitly"
     );
-    let component = document
-        .pointer(
-            &schema["$ref"]
-                .as_str()
-                .context("request schema reference")?[1..],
-        )
-        .context("request schema component")?;
+    // The generated per-operation request component may be an alias of a shared
+    // input schema (one DTO serving several operations): follow the chain.
+    let mut component = schema;
+    let mut seen = BTreeSet::new();
+    while let Some(reference) = component["$ref"].as_str() {
+        ensure!(seen.insert(reference), "cyclic request component alias");
+        component = document
+            .pointer(&reference[1..])
+            .context("request schema component")?;
+    }
+    ensure!(
+        !std::ptr::eq(component, schema),
+        "request schema reference required"
+    );
     let object = component
         .get("properties")
         .unwrap_or(&component["oneOf"][0]["properties"]);
@@ -603,9 +611,10 @@ fn management_openapi_request_refinements_are_reviewed_and_one_directional() {
         // Every listed pointer exists in the request schema: as a property of the
         // object form and as an item of the positional form.
         let schema = &operation["requestBody"]["content"]["application/json"]["schema"];
-        let component = document
-            .pointer(&schema["$ref"].as_str().unwrap()[1..])
-            .unwrap();
+        let mut component = schema;
+        while let Some(reference) = component["$ref"].as_str() {
+            component = document.pointer(&reference[1..]).unwrap();
+        }
         let arms: Vec<&Value> = match component["oneOf"].as_array() {
             Some(arms) => arms.iter().collect(),
             None => vec![component],
@@ -754,18 +763,20 @@ fn management_openapi_component_vectors_bind_a_nested_dto_to_its_own_component()
             json!({"days":3}),
         )
     };
-    let exact = json!({"type":"object","required":["days"],"additionalProperties":false,
-        "properties":{"days":{"type":"integer"}}});
+    let exact = json!({"oneOf":[
+        {"type":"object","required":["days"],"additionalProperties":false,
+            "properties":{"days":{"type":"integer"}}},
+        {"type":"array","prefixItems":[{"type":"integer"}],"minItems":1,"maxItems":1,"items":false}]});
     run(exact.clone()).unwrap();
     let mut open = exact.clone();
-    open["additionalProperties"] = json!(true);
+    open["oneOf"][0]["additionalProperties"] = json!(true);
     let text = format!("{:#}", run(open).unwrap_err());
     assert!(
         text.contains("component Nested") && text.contains("unknown"),
         "{text}"
     );
     let mut optional = exact;
-    optional["required"] = json!([]);
+    optional["oneOf"][0]["required"] = json!([]);
     let text = format!("{:#}", run(optional).unwrap_err());
     assert!(
         text.contains("component Nested") && text.contains("missing"),

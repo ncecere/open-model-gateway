@@ -6,14 +6,6 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) const ARBITRARY_JSON: &[(&str, &str)] = &[
-    (
-        "/components/schemas/SettingsWorkspaceAlertEvent/properties/details",
-        "Workspace history rows return alert_events.details verbatim as stored producer-specific JSON; monetary refinements apply on this shared base, and every concrete workspace event variant refines it with the closed schema of its kind (Settings*Details).",
-    ),
-    (
-        "/components/schemas/SettingsAlertEvent/properties/details",
-        "EVENT_JSON returns alert_events.details verbatim as stored producer-specific JSON; monetary refinements apply on this shared base, and every concrete event variant refines it with the closed schema of its kind (Settings*Details).",
-    ),
     // alert_events.details is a stored jsonb object, not a deserialized DTO.
     // Its reviewed privacy refinements still constrain personal identities.
     (
@@ -25,6 +17,14 @@ pub(super) const ARBITRARY_JSON: &[(&str, &str)] = &[
     (
         "/components/schemas/get_api_v1_me_exportResponse/properties/audit/properties/items/items/properties/metadata",
         "Stored audit_events.metadata is exported verbatim as JSON; its vocabulary depends on the audited action.",
+    ),
+    (
+        "/components/schemas/SettingsWorkspaceAlertEvent/properties/details",
+        "Workspace history rows return alert_events.details verbatim as stored producer-specific JSON; monetary refinements apply on this shared base, and every concrete workspace event variant refines it with the closed schema of its kind (Settings*Details).",
+    ),
+    (
+        "/components/schemas/SettingsAlertEvent/properties/details",
+        "EVENT_JSON returns alert_events.details verbatim as stored producer-specific JSON; monetary refinements apply on this shared base, and every concrete event variant refines it with the closed schema of its kind (Settings*Details).",
     ),
 ];
 
