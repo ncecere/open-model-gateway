@@ -213,9 +213,83 @@ pub(super) fn generate(fragments: &Fragments) -> Result<Value> {
 }
 
 /// Compare a document against what the compiled routes and sources dictate.
-pub(super) fn verify(_document: &Value) -> Result<()> {
-    let _ = QUERY_PARAMETERS;
-    inventory().map(|_| ())
+pub(super) fn verify(document: &Value) -> Result<()> {
+    let inventory = inventory()?;
+    let paths = document["paths"]
+        .as_object()
+        .context("paths object missing")?;
+    let mut actual = BTreeSet::new();
+    let mut ids = BTreeSet::new();
+    for (path, item) in paths {
+        ensure!(path.starts_with(PREFIX), "non-inference path {path}");
+        for (method, operation) in item.as_object().context("invalid path item")? {
+            let key = format!("{} {path}", method.to_ascii_uppercase());
+            let declaration = inventory
+                .get(&key)
+                .with_context(|| format!("extra operation {key}"))?;
+            ensure!(
+                method == &declaration.method,
+                "noncanonical method {method}"
+            );
+            actual.insert(key.clone());
+            ensure!(
+                operation["operationId"] == operation_id(declaration),
+                "operationId drift for {key}"
+            );
+            ensure!(
+                ids.insert(
+                    operation["operationId"]
+                        .as_str()
+                        .context("operationId missing")?
+                ),
+                "duplicate operationId"
+            );
+            ensure!(
+                operation["x-omg-access"] == "InferenceKey"
+                    && operation["x-omg-token-policy"] == "Denied"
+                    && operation.get("x-omg-required-scope").is_none(),
+                "access/token/scope drift for {key}"
+            );
+            ensure!(
+                operation["security"] == declaration.security,
+                "security drift for {key}"
+            );
+            let parameters = operation["parameters"]
+                .as_array()
+                .context("parameters missing")?;
+            let actual_path = parameters
+                .iter()
+                .filter(|p| p["in"] == "path")
+                .cloned()
+                .collect::<Vec<_>>();
+            ensure!(
+                actual_path == path_parameters(path),
+                "path parameters drift for {key}"
+            );
+            // Only parameters a real handler reads may be documented.
+            let documented: BTreeSet<&str> = parameters
+                .iter()
+                .filter(|p| p["in"] != "path")
+                .filter_map(|p| p["name"].as_str())
+                .collect();
+            let read: BTreeSet<&str> = QUERY_PARAMETERS
+                .iter()
+                .filter(|(m, p, _)| m.eq_ignore_ascii_case(method) && p == path)
+                .map(|(_, _, name)| *name)
+                .collect();
+            ensure!(
+                parameters
+                    .iter()
+                    .filter(|p| p["in"] != "path")
+                    .all(|p| p["in"] == "query")
+                    && documented == read,
+                "query parameter drift for {key}: document exactly the parameters the handler reads"
+            );
+        }
+    }
+    ensure!(actual.iter().eq(inventory.keys()), "omitted operations");
+    super::errors::verify_components(document)?;
+    Ok(())
 }
 
 pub(super) fn operation_count(document: &Value) -> usize {
