@@ -204,7 +204,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "user",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": "platform:read",
       "token_policy": "Scope"
@@ -289,7 +299,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "user",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": "access:write",
       "token_policy": "Scope"
@@ -376,7 +396,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "user",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": "platform:read",
       "token_policy": "Scope"
@@ -431,7 +461,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "user",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": "access:write",
       "token_policy": "Scope"
@@ -516,7 +556,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "user",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": "access:write",
       "token_policy": "Scope"
@@ -571,7 +621,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "user",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": "access:write",
       "token_policy": "Scope"
@@ -626,7 +686,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "user",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": "access:write",
       "token_policy": "Scope"
@@ -832,7 +902,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": "platform:read",
       "token_policy": "Scope"
@@ -917,7 +997,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": "access:write",
       "token_policy": "Scope"
@@ -972,7 +1062,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": "catalog:write",
       "token_policy": "Scope"
@@ -1017,7 +1117,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": "platform:read",
       "token_policy": "Scope"
@@ -1102,7 +1212,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": "catalog:write",
       "token_policy": "Scope"
@@ -1187,7 +1307,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": null,
       "token_policy": "Denied"
@@ -1234,6 +1364,14 @@
           }
         },
         "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
           {
             "name": "q",
             "in": "query",
@@ -1293,6 +1431,14 @@
           }
         },
         "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
           {
             "name": "limit",
             "in": "query",
@@ -1408,7 +1554,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": "access:write",
       "token_policy": "Scope"
@@ -1463,7 +1619,25 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
+          {
+            "name": "user",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": "access:write",
       "token_policy": "Scope"
@@ -1548,7 +1722,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": "catalog:write",
       "token_policy": "Scope"
@@ -1603,7 +1787,25 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
+          {
+            "name": "model",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": "catalog:write",
       "token_policy": "Scope"
@@ -1658,7 +1860,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": "governance:write",
       "token_policy": "Scope"
@@ -1703,7 +1915,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": "platform:read",
       "token_policy": "Scope"
@@ -1788,7 +2010,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": "governance:write",
       "token_policy": "Scope"
@@ -2160,7 +2392,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": null,
       "token_policy": "Denied"
@@ -2215,7 +2457,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": null,
       "token_policy": "Denied"
@@ -2510,6 +2762,14 @@
         },
         "parameters": [
           {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
+          {
             "name": "If-Match",
             "in": "header",
             "schema": {
@@ -2620,6 +2880,14 @@
         },
         "parameters": [
           {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
+          {
             "name": "If-Match",
             "in": "header",
             "schema": {
@@ -2717,7 +2985,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": null,
       "token_policy": "Denied"
@@ -2762,7 +3040,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": "platform:read",
       "token_policy": "Scope"
@@ -2847,7 +3135,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": null,
       "token_policy": "Denied"
@@ -2894,6 +3192,14 @@
           }
         },
         "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
           {
             "name": "model_id",
             "in": "query",
@@ -2948,6 +3254,14 @@
           }
         },
         "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
           {
             "name": "limit",
             "in": "query",
@@ -3023,7 +3337,25 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": null,
       "token_policy": "Denied"
@@ -3078,7 +3410,25 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": null,
       "token_policy": "Denied"
@@ -3125,6 +3475,14 @@
           }
         },
         "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
           {
             "name": "limit",
             "in": "query",
@@ -3230,7 +3588,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": null,
       "token_policy": "Denied"
@@ -3285,7 +3653,25 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": null,
       "token_policy": "Denied"
@@ -3332,6 +3718,14 @@
           }
         },
         "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
           {
             "name": "limit",
             "in": "query",
@@ -3447,7 +3841,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": null,
       "token_policy": "Denied"
@@ -3502,7 +3906,25 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
+          {
+            "name": "user",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
       },
       "scope": null,
       "token_policy": "Denied"
@@ -3549,6 +3971,14 @@
           }
         },
         "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
           {
             "name": "q",
             "in": "query",
@@ -3608,6 +4038,14 @@
           }
         },
         "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
           {
             "name": "start_date",
             "in": "query",
@@ -3773,6 +4211,14 @@
           }
         },
         "parameters": [
+          {
+            "name": "ws",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
           {
             "name": "start_date",
             "in": "query",
