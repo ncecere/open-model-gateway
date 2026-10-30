@@ -527,8 +527,7 @@
             },
             "credential_ref": {
               "type": "string",
-              "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints.",
-              "minLength": 1
+              "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints. Every provider kind constrains it by a pattern below (credential_valid), which also refuses an empty value."
             },
             "endpoint": {
               "anyOf": [
