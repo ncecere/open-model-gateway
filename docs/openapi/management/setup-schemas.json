@@ -513,7 +513,6 @@
                 {
                   "type": "string",
                   "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints. Shape: none, an env: reference, or an aws:default / aws:profile:NAME / aws:role:ARN reference (the union over every provider kind; the stored kind and the server allowlists decide the rest).",
-                  "minLength": 1,
                   "maxLength": 2057,
                   "pattern": "^(?:none|env:[A-Z_][A-Z0-9_]*|aws:(?:default|profile:[A-Za-z0-9_.+][A-Za-z0-9_.+-]{0,63}|role:arn:(?:aws|aws-[a-z]+(?:-[a-z]+)*):iam::[0-9]{12}:role/(?:[A-Za-z0-9_+=,.@-]+/)*[A-Za-z0-9_+=,.@-]{1,64}))$"
                 },
@@ -616,7 +615,6 @@
                 {
                   "type": "string",
                   "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints. Shape: none, an env: reference, or an aws:default / aws:profile:NAME / aws:role:ARN reference (the union over every provider kind; the stored kind and the server allowlists decide the rest).",
-                  "minLength": 1,
                   "maxLength": 2057,
                   "pattern": "^(?:none|env:[A-Z_][A-Z0-9_]*|aws:(?:default|profile:[A-Za-z0-9_.+][A-Za-z0-9_.+-]{0,63}|role:arn:(?:aws|aws-[a-z]+(?:-[a-z]+)*):iam::[0-9]{12}:role/(?:[A-Za-z0-9_+=,.@-]+/)*[A-Za-z0-9_+=,.@-]{1,64}))$"
                 },
