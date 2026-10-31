@@ -393,7 +393,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; range is 1\u201393 days (366 for storage)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1\u201393 days (usage.rs period)."
           },
           {
             "name": "end_date",
@@ -578,7 +578,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; range is 1\u201393 days (366 for storage)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1\u201393 days (usage.rs period)."
           },
           {
             "name": "end_date",
@@ -779,7 +779,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; range is 1\u201393 days (366 for storage)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1\u201393 days (usage.rs period)."
           },
           {
             "name": "end_date",
@@ -920,7 +920,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; range is 1\u201393 days (366 for storage)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1\u201393 days (usage.rs period)."
           },
           {
             "name": "end_date",
@@ -2402,7 +2402,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; range is 1\u201393 days (366 for storage)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1\u201393 days (usage.rs period)."
           },
           {
             "name": "end_date",
@@ -2633,7 +2633,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; range is 1\u201393 days (366 for storage)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1\u201393 days (usage.rs period)."
           },
           {
             "name": "end_date",
@@ -2981,7 +2981,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; range is 1\u201393 days (366 for storage)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1\u201393 days (usage.rs period)."
           },
           {
             "name": "end_date",
@@ -3182,7 +3182,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; range is 1\u201393 days (366 for storage)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1\u201393 days (usage.rs period)."
           },
           {
             "name": "end_date",
@@ -3323,7 +3323,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; range is 1\u201393 days (366 for storage)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1\u201393 days (usage.rs period)."
           },
           {
             "name": "end_date",
@@ -3434,7 +3434,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; range is 1\u201393 days (366 for storage)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1\u201393 days (usage.rs period)."
           },
           {
             "name": "end_date",
