@@ -337,11 +337,19 @@ async fn extra_body(
         captured.status
     );
     let handler = handler_accepts(&captured, &[]);
-    assert_eq!(
-        (schema, handler),
-        expected,
-        "{method} {template}: {label}: schema accepts {schema}, handler accepts {handler}"
-    );
+    // Collected, not asserted one by one: a run reports every pinned verdict that
+    // moved (labels and verdicts only, never a value), checked at the end.
+    if (schema, handler) != expected {
+        PROBE_FAILURES.with(|failures| {
+            failures.borrow_mut().push(format!(
+                "{method} {template}: {label}: schema accepts {schema}, handler accepts {handler}; pinned {expected:?}"
+            ));
+        });
+    }
+}
+thread_local! {
+    /// Pinned-probe mismatches of the running fixture (one test thread).
+    static PROBE_FAILURES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 fn enc(raw: &str) -> String {
     raw.bytes()
@@ -3302,5 +3310,11 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         .await;
     j.request("DELETE", &format!("/api/v1/platform/catalogs/{cat}"), None)
         .await;
+    let probe_failures = PROBE_FAILURES.with(|failures| failures.take());
+    assert!(
+        probe_failures.is_empty(),
+        "pinned probe verdicts moved:\n{}",
+        probe_failures.join("\n")
+    );
     j.observed.finish(SLICE3_AREAS);
 }
