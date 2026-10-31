@@ -1133,6 +1133,56 @@ fn reach_of(document: &Value, valid: &Value, seeds: &[(&str, Value)]) -> BTreeSe
 fn unreached_in(document: &Value, reached: &BTreeSet<String>) -> Vec<(String, &'static str)> {
     request_reach::unreached(document, body_schema_of(document), reached).unwrap()
 }
+/// A shared definition reached through one path is reached through every other
+/// path of the same operation (a `then` branch that restates the property, a
+/// second reference): the identity of a location is the component it lives in,
+/// plus its path inside the component, with `allOf`/`then`/`else` segments
+/// dropped. Union arms stay distinct, and an arm no path reached stays unreached.
+#[test]
+fn management_openapi_request_reach_shared_definitions_count_once_per_operation() {
+    let document = json!({"openapi":"3.1.0","paths":{TEMPLATE:{"post":{
+        "requestBody":{"required":true,"content":{"application/json":{"schema":{
+            "type":"object","additionalProperties":false,
+            "properties":{"kind":{"enum":["a","b"]},"line":{"$ref":"#/components/schemas/Line"}},
+            "allOf":[{"if":{"properties":{"kind":{"const":"b"}},"required":["kind"]},
+                "then":{"properties":{"line":{"$ref":"#/components/schemas/Line"}}}}]}}}},
+        "responses":{"200":{"description":"ok"}}}}},
+        "components":{"schemas":{"Line":{"oneOf":[
+            {"type":"object","properties":{"x":{"type":"string"}},"required":["x"],"additionalProperties":false},
+            {"type":"object","properties":{"y":{"type":"string"}},"required":["y"],"additionalProperties":false}]}}}});
+    // Both arms reached through the base property.
+    let reached: BTreeSet<String> = [
+        "/properties/kind",
+        "/properties/line",
+        "/properties/line/oneOf/0",
+        "/properties/line/oneOf/0/properties/x",
+        "/properties/line/oneOf/1",
+        "/properties/line/oneOf/1/properties/y",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    assert_eq!(unreached_paths(&document, &reached), Vec::<String>::new());
+    // Only arm 0 reached: arm 1 stays unreached on every path.
+    let partial: BTreeSet<String> = reached
+        .iter()
+        .filter(|path| !path.contains("oneOf/1"))
+        .cloned()
+        .collect();
+    let left = unreached_paths(&document, &partial);
+    assert!(
+        left.contains(&"/properties/line/oneOf/1".to_owned()),
+        "{left:?}"
+    );
+    assert!(
+        left.contains(&"/allOf/0/then/properties/line/oneOf/1".to_owned()),
+        "{left:?}"
+    );
+    assert!(
+        !left.iter().any(|path| path.contains("oneOf/0")),
+        "{left:?}"
+    );
+}
 fn unreached_paths(document: &Value, reached: &BTreeSet<String>) -> Vec<String> {
     unreached_in(document, reached)
         .into_iter()
