@@ -632,6 +632,8 @@ async fn extra_query(
 }
 const THRESHOLD_MISSING: &str = "Set at least one server load threshold.";
 const THRESHOLD_RANGE: &str = "A server load threshold is out of range.";
+/// The handler's window refusal (an unknown IANA zone among its causes).
+const WINDOW_ZONE: &str = "The time window needs a known IANA time zone, days and HH:MM times.";
 const METRICS_URL: &str =
     "The metrics URL must be /metrics on an approved local endpoint's origin.";
 /// A priority hint on a route that is not vLLM-compatible: route state.
@@ -3150,11 +3152,28 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
                     let positional_gate_without_threshold = gate
                         .as_array()
                         .is_some_and(|items| items.iter().skip(1).all(Value::is_null));
+                    // An IANA zone must be known to the server: another length-valid
+                    // name (every window here is UTC) is a domain refusal, read from
+                    // the handler's window message.
+                    let window = if body.is_array() {
+                        &body[4]
+                    } else {
+                        &body["window"]
+                    };
+                    let zone = if window.is_array() {
+                        &window[0]
+                    } else {
+                        &window["timezone"]
+                    };
+                    let unknown_zone = zone
+                        .as_str()
+                        .is_some_and(|z| (1..=64).contains(&z.len()) && z != "UTC");
                     if schema_valid
                         && captured.status == StatusCode::BAD_REQUEST
                         && (matches!(message.as_deref(), Some(METRICS_URL | PRIORITY_ROUTE))
                             || (positional_gate_without_threshold
-                                && message.as_deref() == Some(THRESHOLD_MISSING)))
+                                && message.as_deref() == Some(THRESHOLD_MISSING))
+                            || (unknown_zone && message.as_deref() == Some(WINDOW_ZONE)))
                     {
                         Probe::decided(captured, true)
                     } else {

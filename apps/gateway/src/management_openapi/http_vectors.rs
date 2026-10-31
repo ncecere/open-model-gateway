@@ -2414,7 +2414,14 @@ pub(crate) async fn body_vectors_extended(
     let run = match run {
         Ok(run) => run,
         Err(e) => {
-            fixtures.record_failure(&e.context(format!("{method} {template}")));
+            // Name the operation once (most run errors already lead with it).
+            let operation = format!("{method} {template}");
+            let e = if format!("{e:#}").starts_with(&operation) {
+                e
+            } else {
+                e.context(operation)
+            };
+            fixtures.record_failure(&e);
             return;
         }
     };
