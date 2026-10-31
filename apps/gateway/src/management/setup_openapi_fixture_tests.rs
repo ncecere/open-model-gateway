@@ -2718,6 +2718,188 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         &[],
     )
     .await;
+    // The positional wire form (and null arms) of the remaining setup operations.
+    for (method, template, path, body) in [
+        (
+            "POST",
+            "/api/v1/platform/deployments/{id}/configuration/preview",
+            format!("/api/v1/platform/deployments/{vdep}/configuration/preview"),
+            json!([false]),
+        ),
+        (
+            "PUT",
+            "/api/v1/platform/catalogs/{id}/models",
+            format!("/api/v1/platform/catalogs/{vcat}/models"),
+            json!([[vmodel]]),
+        ),
+        (
+            "PUT",
+            "/api/v1/platform/models/{id}/catalogs",
+            format!("/api/v1/platform/models/{vmodel}/catalogs"),
+            json!([[vcat]]),
+        ),
+        (
+            "PUT",
+            "/api/v1/platform/deployments/{deployment}/routing",
+            format!("/api/v1/platform/deployments/{vdep}/routing"),
+            json!([1, 2, "eu", 3, 30]),
+        ),
+        (
+            "PUT",
+            "/api/v1/platform/deployments/{deployment}/routing",
+            format!("/api/v1/platform/deployments/{vdep}/routing"),
+            json!({"priority":1,"weight":2,"residency":null,"failure_threshold":3,"cooldown_seconds":30}),
+        ),
+        (
+            "PUT",
+            "/api/v1/platform/deployments/{deployment}/routing",
+            format!("/api/v1/platform/deployments/{vdep}/routing"),
+            json!([1, 2, null, 3, 30]),
+        ),
+        (
+            "PUT",
+            "/api/v1/platform/models/{model}/routing",
+            format!("/api/v1/platform/models/{vmodel}/routing"),
+            json!(["priority", 2, false, "eu"]),
+        ),
+        (
+            "PUT",
+            "/api/v1/platform/models/{model}/routing",
+            format!("/api/v1/platform/models/{vmodel}/routing"),
+            json!({"strategy":"priority","max_attempts":2,"allow_ambiguous_failover":false,"required_residency":null}),
+        ),
+        (
+            "PUT",
+            "/api/v1/platform/models/{model}/routing",
+            format!("/api/v1/platform/models/{vmodel}/routing"),
+            json!(["priority", 2, false, null]),
+        ),
+        (
+            "POST",
+            "/api/v1/platform/models",
+            "/api/v1/platform/models".to_owned(),
+            json!([
+                "vector/created-positional",
+                "Vector created",
+                "A model",
+                true,
+                ["chat_completions"]
+            ]),
+        ),
+        (
+            "POST",
+            "/api/v1/platform/models",
+            "/api/v1/platform/models".to_owned(),
+            json!({"public_name":"vector/created-embeddings","display_name":"Vector created","description":"A model","enabled":true,"supported_protocols":["embeddings"]}),
+        ),
+        (
+            "POST",
+            "/api/v1/platform/models",
+            "/api/v1/platform/models".to_owned(),
+            json!([
+                "vector/created-embeddings-positional",
+                "Vector created",
+                "A model",
+                true,
+                ["embeddings"]
+            ]),
+        ),
+        (
+            "POST",
+            "/api/v1/platform/providers",
+            "/api/v1/platform/providers".to_owned(),
+            json!([
+                "Vector Bedrock positional",
+                "bedrock",
+                "aws:role:arn:aws:iam::123456789012:role/gateway/vector",
+                null,
+                "us-east-1",
+                false,
+                "tenant-ext-42",
+                "gateway.vector"
+            ]),
+        ),
+    ] {
+        body_set(
+            &mut j,
+            a,
+            method,
+            template,
+            &path,
+            body,
+            &["route_unsupported_capability"],
+        )
+        .await;
+    }
+    // Batch scheduling: a metrics gate in both forms, a priority, the null arms and
+    // the positional window. The fixture approves no local endpoint, so a gate's URL
+    // is refused by server state (the handler's METRICS_URL message): that 400 is a
+    // domain refusal, read from the message (see thresholds_accepted).
+    {
+        let (client, root) = (j.client.clone(), j.base.clone());
+        let path = format!("/api/v1/platform/deployments/{vdep}/batch-scheduling");
+        let template = "/api/v1/platform/deployments/{deployment}/batch-scheduling";
+        let gate = json!({"url":"http://127.0.0.1:8000/metrics","max_waiting":5,"max_running":null,"max_kv_cache_percent":null});
+        let times = |at: &str| -> Vec<(String, Value)> {
+            vec![
+                (format!("{at}/start"), json!("23:00")),
+                (format!("{at}/start"), json!("23:0")),
+                (format!("{at}/end"), json!("06:00")),
+                (format!("{at}/end"), json!("06:0")),
+            ]
+        };
+        for (valid, candidates) in [
+            (
+                json!({"max_concurrency":3,"yield_live_threshold":5,"metrics":gate.clone(),"priority":10,"window":null}),
+                vec![],
+            ),
+            (
+                json!({"max_concurrency":3,"yield_live_threshold":null,"metrics":["http://127.0.0.1:8000/metrics",null,4,50],"priority":null,"window":["UTC",["mon"],"23:00","06:00"]}),
+                vec![
+                    ("/window/2".to_owned(), json!("23:00")),
+                    ("/window/2".to_owned(), json!("23:0")),
+                    ("/window/3".to_owned(), json!("06:00")),
+                    ("/window/3".to_owned(), json!("06:0")),
+                ],
+            ),
+            (
+                json!([3, 5, null, 10, {"timezone":"UTC","days":["mon","fri"],"start":"23:00","end":"06:00"}]),
+                times("/4"),
+            ),
+            (json!([3, null, gate, null, null]), vec![]),
+        ] {
+            let candidates: Vec<(&str, Value)> = candidates
+                .iter()
+                .map(|(p, v)| (p.as_str(), v.clone()))
+                .collect();
+            let (client, root, path) = (client.clone(), root.clone(), path.clone());
+            http_vectors::body_vectors_extended(
+                &mut j.observed,
+                "PUT",
+                template,
+                valid,
+                &[],
+                &candidates,
+                async |body: Value| {
+                    let schema_valid = schema_accepts("PUT", template, &body);
+                    let captured =
+                        send(&client, &root, Some(a), "PUT", &path, Some(body.clone())).await;
+                    let message = serde_json::from_slice::<Value>(&captured.bytes)
+                        .ok()
+                        .and_then(|v| v["error"]["message"].as_str().map(str::to_owned));
+                    if schema_valid
+                        && captured.status == StatusCode::BAD_REQUEST
+                        && message.as_deref() == Some(METRICS_URL)
+                    {
+                        Probe::decided(captured, true)
+                    } else {
+                        judged(captured, &[])
+                    }
+                },
+            )
+            .await;
+        }
+    }
     {
         // The model is inserted (and may conflict on its unique alias) before the route
         // is validated, so every request names a fresh alias unless the vector changes it.
@@ -2779,6 +2961,16 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         &[],
     )
     .await;
+    body_set(
+        &mut j,
+        o,
+        "POST",
+        "/api/v1/workspaces/{ws}/models",
+        &format!("/api/v1/workspaces/{team}/models"),
+        json!([second]),
+        &[],
+    )
+    .await;
     {
         // A fresh team per request: the policy PUT is tighten-only against stored values.
         // One budget per period for all four periods, so the 4-item bound's at-limit
@@ -2792,42 +2984,54 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             {"period":"day","amount_microusd":"1000000"},
             {"period":"week","amount_microusd":"7000000"},
             {"period":"month","amount_microusd":"9007199254740993"},
-            {"period":"lifetime","amount_microusd":"9007199254740993"}
+            ["lifetime","9007199254740993"]
         ]);
-        http_vectors::body_vectors_http(
-            &mut j.observed,
-            "PUT",
-            "/api/v1/workspaces/{ws}/policy",
+        // Every request shape: one budget per period (one item positional), the
+        // monthly form, every limit null with no budget, and the positional forms.
+        let unlimited = json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"concurrent_jobs":null,"storage_bytes":null,"key_issuances_per_holder":null,"key_issuances_per_workspace":null,"monthly_budget_microusd":null});
+        let monthly = json!({"requests_per_minute":10,"tokens_per_minute":1000,"concurrent_requests":2,"concurrent_jobs":1,"storage_bytes":10_000,"key_issuances_per_holder":5,"key_issuances_per_workspace":50,"monthly_budget_microusd":"100","budget_period":"month"});
+        for valid in [
             all_periods,
-            async |body: Value| {
-                let ws = workspace(pool, "Vector workspace", "team", owner_id).await;
-                // One budget per period is a cross-item rule the schema documents
-                // but cannot state: the REAL parser decides that refusal.
-                let budgets = if body.is_array() {
-                    body[9].clone()
-                } else {
-                    body["budgets"].clone()
-                };
-                let cross_item = budgets.is_array()
-                    && schema_accepts("PUT", "/api/v1/workspaces/{ws}/policy", &body)
-                    && !crate::management::governance::budgets_parse(&budgets);
-                let captured = send(
-                    &client,
-                    &root,
-                    Some(o),
-                    "PUT",
-                    &format!("/api/v1/workspaces/{ws}/policy"),
-                    Some(body),
-                )
-                .await;
-                if cross_item && captured.status == StatusCode::BAD_REQUEST {
-                    Probe::decided(captured, true)
-                } else {
-                    judged(captured, &["exceeds_parent_rate", "exceeds_parent_budget"])
-                }
-            },
-        )
-        .await;
+            monthly,
+            unlimited,
+            json!([10, 1000, 2, 1, 10_000, 5, 50, "100", "month"]),
+            json!([null, null, null, null, null, null, null, null]),
+        ] {
+            http_vectors::body_vectors_http(
+                &mut j.observed,
+                "PUT",
+                "/api/v1/workspaces/{ws}/policy",
+                valid,
+                async |body: Value| {
+                    let ws = workspace(pool, "Vector workspace", "team", owner_id).await;
+                    // One budget per period is a cross-item rule the schema documents
+                    // but cannot state: the REAL parser decides that refusal.
+                    let budgets = if body.is_array() {
+                        body[9].clone()
+                    } else {
+                        body["budgets"].clone()
+                    };
+                    let cross_item = budgets.is_array()
+                        && schema_accepts("PUT", "/api/v1/workspaces/{ws}/policy", &body)
+                        && !crate::management::governance::budgets_parse(&budgets);
+                    let captured = send(
+                        &client,
+                        &root,
+                        Some(o),
+                        "PUT",
+                        &format!("/api/v1/workspaces/{ws}/policy"),
+                        Some(body),
+                    )
+                    .await;
+                    if cross_item && captured.status == StatusCode::BAD_REQUEST {
+                        Probe::decided(captured, true)
+                    } else {
+                        judged(captured, &["exceeds_parent_rate", "exceeds_parent_budget"])
+                    }
+                },
+            )
+            .await;
+        }
     }
     // ---- Handler-derived vectors the artifact-derived ones cannot generate. ----
     // Each compares the SCHEMA's verdict with the real handler's. `Some((schema,
@@ -3616,6 +3820,16 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         "/api/v1/platform/catalog-defaults",
         "/api/v1/platform/catalog-defaults",
         json!({"personal":[cat],"team":[cat],"project":[cat]}),
+        &[],
+    )
+    .await;
+    body_set(
+        &mut j,
+        a,
+        "PUT",
+        "/api/v1/platform/catalog-defaults",
+        "/api/v1/platform/catalog-defaults",
+        json!([[cat], [cat], [cat]]),
         &[],
     )
     .await;
