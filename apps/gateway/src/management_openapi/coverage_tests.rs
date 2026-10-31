@@ -278,7 +278,8 @@ fn management_openapi_coverage_microusd_markers_are_non_numeric_literals_only() 
     // Only an identifier-like literal is a marker: decimals, signs, exponents
     // and punctuation could all be read as an amount (review).
     for number in [
-        "", "0", "7", "-1", "-", "007", "1.5", "+5", "1e3", "-n/a-", "N/A",
+        "", "0", "7", "-1", "-", "007", "1.5", "+5", "1e3", "-n/a-", "N/A", "nan", "inf",
+        "infinity",
     ] {
         assert!(
             check(closed(json!({"cost_microusd":{"const":number}}))).is_err(),
