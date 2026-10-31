@@ -5541,10 +5541,18 @@
               "if": {
                 "minItems": 5,
                 "prefixItems": [
-                  {},
-                  {},
-                  {},
-                  {},
+                  {
+                    "description": "This item's own schema applies (no further rule here)."
+                  },
+                  {
+                    "description": "This item's own schema applies (no further rule here)."
+                  },
+                  {
+                    "description": "This item's own schema applies (no further rule here)."
+                  },
+                  {
+                    "description": "This item's own schema applies (no further rule here)."
+                  },
                   {
                     "const": 3
                   }
@@ -5559,10 +5567,18 @@
                   {
                     "type": "null"
                   },
-                  {},
-                  {},
-                  {},
-                  {},
+                  {
+                    "description": "This item's own schema applies (no further rule here)."
+                  },
+                  {
+                    "description": "This item's own schema applies (no further rule here)."
+                  },
+                  {
+                    "description": "This item's own schema applies (no further rule here)."
+                  },
+                  {
+                    "description": "This item's own schema applies (no further rule here)."
+                  },
                   {
                     "type": "array",
                     "items": {
@@ -5582,9 +5598,15 @@
                   {
                     "minimum": 1
                   },
-                  {},
-                  {},
-                  {},
+                  {
+                    "description": "This item's own schema applies (no further rule here)."
+                  },
+                  {
+                    "description": "This item's own schema applies (no further rule here)."
+                  },
+                  {
+                    "description": "This item's own schema applies (no further rule here)."
+                  },
                   {
                     "type": "null"
                   },
@@ -5601,10 +5623,18 @@
               "if": {
                 "minItems": 5,
                 "prefixItems": [
-                  {},
-                  {},
-                  {},
-                  {},
+                  {
+                    "description": "This item's own schema applies (no further rule here)."
+                  },
+                  {
+                    "description": "This item's own schema applies (no further rule here)."
+                  },
+                  {
+                    "description": "This item's own schema applies (no further rule here)."
+                  },
+                  {
+                    "description": "This item's own schema applies (no further rule here)."
+                  },
                   {
                     "const": 2
                   }
@@ -5613,11 +5643,21 @@
               "then": {
                 "minItems": 6,
                 "prefixItems": [
-                  {},
-                  {},
-                  {},
-                  {},
-                  {},
+                  {
+                    "description": "This item's own schema applies (no further rule here)."
+                  },
+                  {
+                    "description": "This item's own schema applies (no further rule here)."
+                  },
+                  {
+                    "description": "This item's own schema applies (no further rule here)."
+                  },
+                  {
+                    "description": "This item's own schema applies (no further rule here)."
+                  },
+                  {
+                    "description": "This item's own schema applies (no further rule here)."
+                  },
                   {
                     "$ref": "#/components/schemas/SetupCachePricing"
                   }
@@ -5625,11 +5665,21 @@
               },
               "else": {
                 "prefixItems": [
-                  {},
-                  {},
-                  {},
-                  {},
-                  {},
+                  {
+                    "description": "This item's own schema applies (no further rule here)."
+                  },
+                  {
+                    "description": "This item's own schema applies (no further rule here)."
+                  },
+                  {
+                    "description": "This item's own schema applies (no further rule here)."
+                  },
+                  {
+                    "description": "This item's own schema applies (no further rule here)."
+                  },
+                  {
+                    "description": "This item's own schema applies (no further rule here)."
+                  },
                   {
                     "type": "null"
                   }
