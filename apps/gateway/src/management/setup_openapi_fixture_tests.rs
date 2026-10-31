@@ -2455,14 +2455,24 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     .await;
     {
         // A fresh team per request: the policy PUT is tighten-only against stored values.
+        // One budget per period for all four periods, so the 4-item bound's at-limit
+        // vector is this valid body (one budget per period is a cross-item rule the
+        // generated variants cannot satisfy).
         let (client, root) = (j.client.clone(), j.base.clone());
         let pool = &pool;
         let owner_id = f.owner.user_id;
+        let mut all_periods = policy.clone();
+        all_periods["budgets"] = json!([
+            {"period":"day","amount_microusd":"1000000"},
+            {"period":"week","amount_microusd":"7000000"},
+            {"period":"month","amount_microusd":"9007199254740993"},
+            {"period":"lifetime","amount_microusd":"9007199254740993"}
+        ]);
         http_vectors::body_vectors_http(
             &mut j.observed,
             "PUT",
             "/api/v1/workspaces/{ws}/policy",
-            policy.clone(),
+            all_periods,
             async |body: Value| {
                 let ws = workspace(pool, "Vector workspace", "team", owner_id).await;
                 judged(
