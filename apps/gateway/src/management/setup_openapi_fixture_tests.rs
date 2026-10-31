@@ -353,6 +353,12 @@ fn price_lines_refused(body: &Value) -> bool {
             && serde_json::from_value::<crate::billing::v3::PriceLines>(lines.clone()).is_err()
     })
 }
+/// The price rules the contract documents but cannot state, decided for a price
+/// body: a version 3 zero input ceiling (valid only when every input-family meter
+/// is not applicable) and the cross-line rules of [`price_lines_refused`].
+fn price_refused(b: &Value) -> bool {
+    (b["pricing_version"] == 3 && b["input_token_limit"] == 0) || price_lines_refused(b)
+}
 /// Body boundary vectors with a state-dependent domain refusal (see [`judged_when`]).
 async fn body_set_when(
     j: &mut Journey<'_>,
@@ -2735,7 +2741,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
                     // A nested price whose lines the REAL PriceLines rules refuse
                     // is the documented cross-line refusal (see price_lines_refused).
                     let cross_line = schema_accepts("POST", "/api/v1/platform/model-setup", &body)
-                        && price_lines_refused(&body["price"]);
+                        && price_refused(&body["price"]);
                     let captured = send(
                         &client,
                         &root,
