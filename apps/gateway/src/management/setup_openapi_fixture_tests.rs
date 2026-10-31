@@ -2836,20 +2836,6 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
                 ["embeddings"]
             ]),
         ),
-        (
-            "POST",
-            "/api/v1/platform/providers",
-            "/api/v1/platform/providers".to_owned(),
-            json!([
-                "Vector Bedrock positional",
-                "bedrock",
-                "aws:role:arn:aws:iam::123456789012:role/gateway/vector",
-                null,
-                "us-east-1",
-                false,
-                "tenant-ext-42",
-                "gateway.vector"
-            ]),
         ),
     ] {
         body_set(
@@ -2863,6 +2849,20 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         )
         .await;
     }
+    // Provider create, positional: the form documents that it carries none of the
+    // object form's per-kind cross-field rules (every per-field bound is still in
+    // its item), so a 400 for a schema-valid positional body is that documented
+    // divergence.
+    body_set_when(
+        &mut j,
+        a,
+        "POST",
+        "/api/v1/platform/providers",
+        "/api/v1/platform/providers",
+        json!(["Vector Bedrock positional", "bedrock", "aws:role:arn:aws:iam::123456789012:role/gateway/vector", null, "us-east-1", false, "tenant-ext-42", "gateway.vector"]),
+        (&|b| b.is_array(), &[]),
+    )
+    .await;
     // Batch scheduling: a metrics gate in both forms, a priority, the null arms and
     // the positional window. The fixture approves no local endpoint, so a gate's URL
     // is refused by server state (the handler's METRICS_URL message): that 400 is a
