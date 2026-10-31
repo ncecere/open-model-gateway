@@ -2533,8 +2533,9 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         ("an empty budget list, a null monthly budget and a period", json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"budgets":[],"monthly_budget_microusd":null,"budget_period":"month"}), BOTH_REFUSE),
         ("a budget list with a period", json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"budgets":[{"period":"month","amount_microusd":"5"}],"budget_period":"month"}), BOTH_REFUSE),
         ("a positional policy with a monthly budget", json!([10, 1000, 2, 1, 10_000, 5, 50, "100", "month"]), BOTH_ACCEPT),
-        ("a positional policy without a budget form", json!([10, 1000, 2, 1]), SCHEMA_ONLY),
-        ("a positional policy with both budget forms", json!([10, 1000, 2, 1, 10_000, 5, 50, "100", "month", [{"period":"day","amount_microusd":"5"}]]), SCHEMA_ONLY),
+        // The positional form has 8 or 9 items (Policy::limits, as the schema states).
+        ("a positional policy without a budget form", json!([10, 1000, 2, 1]), BOTH_REFUSE),
+        ("a positional policy with both budget forms", json!([10, 1000, 2, 1, 10_000, 5, 50, "100", "month", [{"period":"day","amount_microusd":"5"}]]), BOTH_REFUSE),
     ]);
     for (label, body, expected) in policy_vectors {
         // A fresh team per request: the policy PUT is tighten-only against stored values.
