@@ -2836,7 +2836,6 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
                 ["embeddings"]
             ]),
         ),
-        ),
     ] {
         body_set(
             &mut j,
@@ -2859,7 +2858,16 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         "POST",
         "/api/v1/platform/providers",
         "/api/v1/platform/providers",
-        json!(["Vector Bedrock positional", "bedrock", "aws:role:arn:aws:iam::123456789012:role/gateway/vector", null, "us-east-1", false, "tenant-ext-42", "gateway.vector"]),
+        json!([
+            "Vector Bedrock positional",
+            "bedrock",
+            "aws:role:arn:aws:iam::123456789012:role/gateway/vector",
+            null,
+            "us-east-1",
+            false,
+            "tenant-ext-42",
+            "gateway.vector"
+        ]),
         (&|b| b.is_array(), &[]),
     )
     .await;
