@@ -2289,6 +2289,15 @@ pub(super) async fn run_body(
     )
 }
 
+/// `OMG_OPENAPI_PLAN_ONLY=1`: a fast development run. Body vector runs are
+/// planned (reach, seeds, candidates and decisive boundaries are all checked) but
+/// only each valid body is sent, so a fixture's request-location coverage is known
+/// in minutes rather than after every vector. `finish` always FAILS such a run
+/// (it is never a contract check); the full run without it is the gate.
+pub(crate) fn plan_only() -> bool {
+    std::env::var_os("OMG_OPENAPI_PLAN_ONLY").is_some_and(|v| v == "1")
+}
+
 pub(super) async fn run_body_with(
     document: &Value,
     method: &str,
@@ -2306,11 +2315,15 @@ pub(super) async fn run_body_with(
     let exempt_used = plan.exempt_used;
     let cases = plan.cases;
     let mut plan = vec![("valid", "(root)".to_owned(), valid_body.clone(), true)];
-    plan.extend(
-        cases
-            .into_iter()
-            .map(|case| (case.kind, case.pointer, case.body, case.accept)),
-    );
+    // Plan-only (a development aid, see [`plan_only`]): the walk above is planned
+    // and its reach recorded, but only the valid body is sent.
+    if !plan_only() {
+        plan.extend(
+            cases
+                .into_iter()
+                .map(|case| (case.kind, case.pointer, case.body, case.accept)),
+        );
+    }
     let mut exchanges = Vec::new();
     let mut accepted_seen = false;
     for (kind, location, body, expected) in plan {

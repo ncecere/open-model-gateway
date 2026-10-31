@@ -885,6 +885,16 @@ impl PositiveFixtures {
         if let Err(e) = self.check_contract_coverage(artifact(), &expected) {
             problems.push(format!("{e:#}"));
         }
+        if super::http_vectors::plan_only() {
+            // Vectors were not sent: only request-location gaps and vector-plan
+            // failures are meaningful (response coverage needs the vectors), and
+            // the run can never pass.
+            refuse(anyhow::anyhow!(
+                "PLAN-ONLY run (OMG_OPENAPI_PLAN_ONLY=1, vectors not sent; never a pass): {} problem(s):\n{}",
+                problems.len(),
+                problems.join("\n")
+            ));
+        }
         if !problems.is_empty() {
             refuse(anyhow::anyhow!(
                 "{} problem(s):\n{}",
