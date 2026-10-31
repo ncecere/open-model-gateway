@@ -5542,16 +5542,38 @@
                 "minItems": 5,
                 "prefixItems": [
                   {
-                    "description": "This item's own schema applies (no further rule here)."
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 19,
+                        "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   {
-                    "description": "This item's own schema applies (no further rule here)."
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 19,
+                        "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   {
-                    "description": "This item's own schema applies (no further rule here)."
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2147483647
                   },
                   {
-                    "description": "This item's own schema applies (no further rule here)."
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2147483647
                   },
                   {
                     "const": 3
@@ -5568,16 +5590,32 @@
                     "type": "null"
                   },
                   {
-                    "description": "This item's own schema applies (no further rule here)."
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2147483647
                   },
                   {
-                    "description": "This item's own schema applies (no further rule here)."
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2147483647
                   },
                   {
-                    "description": "This item's own schema applies (no further rule here)."
+                    "enum": [
+                      1,
+                      2,
+                      3
+                    ],
+                    "default": 1
                   },
                   {
-                    "description": "This item's own schema applies (no further rule here)."
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/SetupCachePricing"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   {
                     "type": "array",
@@ -5599,13 +5637,27 @@
                     "minimum": 1
                   },
                   {
-                    "description": "This item's own schema applies (no further rule here)."
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2147483647
                   },
                   {
-                    "description": "This item's own schema applies (no further rule here)."
+                    "enum": [
+                      1,
+                      2,
+                      3
+                    ],
+                    "default": 1
                   },
                   {
-                    "description": "This item's own schema applies (no further rule here)."
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/SetupCachePricing"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   {
                     "type": "null"
@@ -5624,16 +5676,38 @@
                 "minItems": 5,
                 "prefixItems": [
                   {
-                    "description": "This item's own schema applies (no further rule here)."
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 19,
+                        "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   {
-                    "description": "This item's own schema applies (no further rule here)."
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 19,
+                        "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   {
-                    "description": "This item's own schema applies (no further rule here)."
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2147483647
                   },
                   {
-                    "description": "This item's own schema applies (no further rule here)."
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2147483647
                   },
                   {
                     "const": 2
@@ -5644,19 +5718,46 @@
                 "minItems": 6,
                 "prefixItems": [
                   {
-                    "description": "This item's own schema applies (no further rule here)."
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 19,
+                        "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   {
-                    "description": "This item's own schema applies (no further rule here)."
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 19,
+                        "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   {
-                    "description": "This item's own schema applies (no further rule here)."
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2147483647
                   },
                   {
-                    "description": "This item's own schema applies (no further rule here)."
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2147483647
                   },
                   {
-                    "description": "This item's own schema applies (no further rule here)."
+                    "enum": [
+                      1,
+                      2,
+                      3
+                    ],
+                    "default": 1
                   },
                   {
                     "$ref": "#/components/schemas/SetupCachePricing"
@@ -5666,19 +5767,46 @@
               "else": {
                 "prefixItems": [
                   {
-                    "description": "This item's own schema applies (no further rule here)."
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 19,
+                        "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   {
-                    "description": "This item's own schema applies (no further rule here)."
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 19,
+                        "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   {
-                    "description": "This item's own schema applies (no further rule here)."
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2147483647
                   },
                   {
-                    "description": "This item's own schema applies (no further rule here)."
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2147483647
                   },
                   {
-                    "description": "This item's own schema applies (no further rule here)."
+                    "enum": [
+                      1,
+                      2,
+                      3
+                    ],
+                    "default": 1
                   },
                   {
                     "type": "null"
