@@ -7814,8 +7814,8 @@
                 ]
               },
               "minItems": 1,
-              "maxItems": 7,
-              "uniqueItems": true
+              "uniqueItems": true,
+              "description": "At most seven days follows from uniqueItems over the seven day names."
             },
             "start": {
               "type": "string",
@@ -7858,8 +7858,8 @@
                 ]
               },
               "minItems": 1,
-              "maxItems": 7,
-              "uniqueItems": true
+              "uniqueItems": true,
+              "description": "At most seven days follows from uniqueItems over the seven day names."
             },
             {
               "type": "string",
