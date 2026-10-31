@@ -2475,18 +2475,30 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             all_periods,
             async |body: Value| {
                 let ws = workspace(pool, "Vector workspace", "team", owner_id).await;
-                judged(
-                    send(
-                        &client,
-                        &root,
-                        Some(o),
-                        "PUT",
-                        &format!("/api/v1/workspaces/{ws}/policy"),
-                        Some(body),
-                    )
-                    .await,
-                    &["exceeds_parent_rate", "exceeds_parent_budget"],
+                // One budget per period is a cross-item rule the schema documents
+                // but cannot state: the REAL parser decides that refusal.
+                let budgets = if body.is_array() {
+                    body[9].clone()
+                } else {
+                    body["budgets"].clone()
+                };
+                let cross_item = budgets.is_array()
+                    && schema_accepts("PUT", "/api/v1/workspaces/{ws}/policy", &body)
+                    && !crate::management::governance::budgets_parse(&budgets);
+                let captured = send(
+                    &client,
+                    &root,
+                    Some(o),
+                    "PUT",
+                    &format!("/api/v1/workspaces/{ws}/policy"),
+                    Some(body),
                 )
+                .await;
+                if cross_item && captured.status == StatusCode::BAD_REQUEST {
+                    Probe::decided(captured, true)
+                } else {
+                    judged(captured, &["exceeds_parent_rate", "exceeds_parent_budget"])
+                }
             },
         )
         .await;
