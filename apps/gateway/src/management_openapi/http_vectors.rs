@@ -1497,8 +1497,14 @@ pub(crate) async fn query_vectors_extended<C>(
         &fresh,
         &send,
     )
-    .await
-    .unwrap_or_else(|e| responses::refuse(e));
+    .await;
+    let exchanges = match exchanges {
+        Ok(exchanges) => exchanges,
+        Err(e) => {
+            fixtures.record_failure(&e.context(format!("{method} {template}")));
+            return;
+        }
+    };
     for exchange in &exchanges {
         fixtures.observe(exchange);
     }
@@ -2391,8 +2397,14 @@ pub(crate) async fn body_vectors_extended(
         &own_values(candidates),
         &send,
     )
-    .await
-    .unwrap_or_else(|e| responses::refuse(e));
+    .await;
+    let run = match run {
+        Ok(run) => run,
+        Err(e) => {
+            fixtures.record_failure(&e);
+            return;
+        }
+    };
     for exchange in &run.exchanges {
         fixtures.observe(exchange);
     }
@@ -2556,8 +2568,14 @@ pub(crate) async fn binary_body_vectors_http(
         &extra,
         &send,
     )
-    .await
-    .unwrap_or_else(|e| responses::refuse(e));
+    .await;
+    let exchanges = match exchanges {
+        Ok(exchanges) => exchanges,
+        Err(e) => {
+            fixtures.record_failure(&e.context(format!("{method} {template}")));
+            return;
+        }
+    };
     for exchange in &exchanges {
         fixtures.observe(exchange);
     }

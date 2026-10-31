@@ -672,6 +672,9 @@ pub(crate) struct PositiveFixtures {
     /// Per `METHOD template`: each reviewed unsendable-boundary location some
     /// run bounded, and whether ANY run needed its reason.
     unsendable: std::collections::BTreeMap<String, std::collections::BTreeMap<String, bool>>,
+    /// Sanitised contract failures of vector runs (method, template, kind,
+    /// pointers; never a captured value), reported together by `finish`.
+    failures: Vec<String>,
 }
 impl PositiveFixtures {
     /// Record that every HTTP boundary vector of `kind` (`query` or `body`)
@@ -694,6 +697,15 @@ impl PositiveFixtures {
             .entry(format!("{method} {template}"))
             .or_default()
             .extend(reached.iter().cloned());
+    }
+    /// A vector run's contract failure: recorded so the remaining operations
+    /// still run, and reported with every other failure by `finish`.
+    pub(crate) fn record_failure(&mut self, error: &anyhow::Error) {
+        self.failures.push(format!("{error:#}"));
+    }
+    /// The recorded contract failures, in run order.
+    pub(crate) fn failures(&self) -> &[String] {
+        &self.failures
     }
     /// The unsendable-boundary use of one body vector run; runs of one operation
     /// accumulate (a reason any run needed is used).
@@ -864,9 +876,22 @@ impl PositiveFixtures {
             .filter(|key| areas.contains(&area(key.split_once(' ').unwrap().1)))
             .cloned()
             .collect();
-        require_positives(&expected, &observed).unwrap_or_else(|e| refuse(e));
-        self.check_contract_coverage(artifact(), &expected)
-            .unwrap_or_else(|e| refuse(e));
+        // Every problem of the run at once: vector failures, missing positives
+        // and coverage gaps (one run lists everything that is left).
+        let mut problems = self.failures.clone();
+        if let Err(e) = require_positives(&expected, &observed) {
+            problems.push(format!("{e:#}"));
+        }
+        if let Err(e) = self.check_contract_coverage(artifact(), &expected) {
+            problems.push(format!("{e:#}"));
+        }
+        if !problems.is_empty() {
+            refuse(anyhow::anyhow!(
+                "{} problem(s):\n{}",
+                problems.len(),
+                problems.join("\n")
+            ));
+        }
     }
 }
 
