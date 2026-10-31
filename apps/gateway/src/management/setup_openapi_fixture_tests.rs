@@ -2512,6 +2512,53 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         ),
     )
     .await;
+    // The other price shapes: version 1 (rates), version 2 (cache pricing) and a
+    // version 3 list with explicit unknown lines, seven of them in serde's object
+    // spelling of the meter ({"cache_read_tokens":null}) and one as a string.
+    let mut unknowns = v3_price();
+    let object_meters = [
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "cache_write_5m_tokens",
+        "cache_write_1h_tokens",
+        "output_images",
+        "input_characters",
+        "input_audio_seconds_ms",
+    ];
+    let mut lines: Vec<Value> = unknowns["price_lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|l| !object_meters.contains(&l["meter"].as_str().unwrap_or("")))
+        .cloned()
+        .collect();
+    for meter in object_meters {
+        lines.push(json!({"meter":{meter:null},"unknown":true}));
+    }
+    lines.push(json!({"meter":"output_audio_tokens","unknown":true}));
+    unknowns["price_lines"] = json!(lines);
+    for body in [
+        json!({"pricing_version":1,"input_microusd_per_million":"1","output_microusd_per_million":"2","input_token_limit":100,"output_token_limit":10}),
+        json!({"pricing_version":2,"input_microusd_per_million":"1","output_microusd_per_million":"2","input_token_limit":100,"output_token_limit":10,"cache_pricing":{"read":{"status":"priced","microusd_per_million":"1"},"write":{"status":"unknown"},"write_5m":{"status":"unknown"},"write_1h":{"status":"unknown"}}}),
+        unknowns,
+    ] {
+        body_set_when(
+            &mut j,
+            a,
+            "POST",
+            "/api/v1/platform/deployments/{deployment}/prices",
+            &format!("/api/v1/platform/deployments/{vdep}/prices"),
+            body,
+            (
+                &|b| {
+                    (b["pricing_version"] == 3 && b["input_token_limit"] == 0)
+                        || price_lines_refused(b)
+                },
+                &["price_meters_incomplete"],
+            ),
+        )
+        .await;
+    }
     body_set(&mut j, a, "PUT", "/api/v1/platform/deployments/{deployment}/routing", &format!("/api/v1/platform/deployments/{vdep}/routing"), json!({"priority":1,"weight":2,"residency":"eu","failure_threshold":3,"cooldown_seconds":30}), &[]).await;
     body_set(&mut j, a, "PUT", "/api/v1/platform/models/{model}/routing", &format!("/api/v1/platform/models/{vmodel}/routing"), json!({"strategy":"priority","max_attempts":2,"allow_ambiguous_failover":false,"required_residency":"eu"}), &[]).await;
     // An IANA zone must be known to the server: another length-valid name is a domain refusal.
