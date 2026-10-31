@@ -237,8 +237,9 @@
                 "null"
               ],
               "maxLength": 2000,
-              "description": "At most 2000 UTF-8 bytes (x-omg-max-bytes; maxLength counts characters), or null.",
-              "x-omg-max-bytes": 2000
+              "description": "At most 2000 UTF-8 bytes (x-omg-max-bytes; maxLength counts characters), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
+              "x-omg-max-bytes": 2000,
+              "pattern": "^[^\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F]*$"
             }
           },
           "required": [
@@ -263,8 +264,9 @@
                 "null"
               ],
               "maxLength": 2000,
-              "description": "At most 2000 UTF-8 bytes (x-omg-max-bytes; maxLength counts characters), or null.",
-              "x-omg-max-bytes": 2000
+              "description": "At most 2000 UTF-8 bytes (x-omg-max-bytes; maxLength counts characters), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
+              "x-omg-max-bytes": 2000,
+              "pattern": "^[^\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F]*$"
             }
           ],
           "minItems": 2,
@@ -693,8 +695,9 @@
                 "null"
               ],
               "maxLength": 2000,
-              "description": "At most 2000 UTF-8 bytes (x-omg-max-bytes; maxLength counts characters), or null.",
-              "x-omg-max-bytes": 2000
+              "description": "At most 2000 UTF-8 bytes (x-omg-max-bytes; maxLength counts characters), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
+              "x-omg-max-bytes": 2000,
+              "pattern": "^[^\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F]*$"
             },
             "enabled": {
               "type": "boolean"
@@ -764,8 +767,9 @@
                 "null"
               ],
               "maxLength": 2000,
-              "description": "At most 2000 UTF-8 bytes (x-omg-max-bytes; maxLength counts characters), or null.",
-              "x-omg-max-bytes": 2000
+              "description": "At most 2000 UTF-8 bytes (x-omg-max-bytes; maxLength counts characters), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
+              "x-omg-max-bytes": 2000,
+              "pattern": "^[^\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F]*$"
             },
             {
               "type": "boolean"
@@ -842,13 +846,14 @@
               "x-omg-max-bytes": 120
             },
             "description": {
-              "description": "At most 2000 UTF-8 bytes (x-omg-max-bytes; maxLength counts characters), or null.",
+              "description": "At most 2000 UTF-8 bytes (x-omg-max-bytes; maxLength counts characters), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
               "type": [
                 "string",
                 "null"
               ],
               "maxLength": 2000,
-              "x-omg-max-bytes": 2000
+              "x-omg-max-bytes": 2000,
+              "pattern": "^[^\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F]*$"
             },
             "enabled": {
               "anyOf": [
@@ -926,13 +931,14 @@
               "x-omg-max-bytes": 120
             },
             {
-              "description": "At most 2000 UTF-8 bytes (x-omg-max-bytes; maxLength counts characters), or null.",
+              "description": "At most 2000 UTF-8 bytes (x-omg-max-bytes; maxLength counts characters), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
               "type": [
                 "string",
                 "null"
               ],
               "maxLength": 2000,
-              "x-omg-max-bytes": 2000
+              "x-omg-max-bytes": 2000,
+              "pattern": "^[^\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F]*$"
             },
             {
               "anyOf": [
