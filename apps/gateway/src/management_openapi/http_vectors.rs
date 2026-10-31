@@ -1679,10 +1679,20 @@ impl Walk<'_> {
     /// [`Notes::settle`] that also records whether a reviewed
     /// [`UNSENDABLE`] reason was actually USED at this location (a decisive
     /// vector really was unsendable): an unused one is stale.
-    fn settle_at(&mut self, here: &str, dropped: &[String], sent: &[&str], exempt: bool) {
+    /// A reason is judged only in a run where the location HAS a decisive bound
+    /// (`bounded`): a union arm or conditional branch that bounds nothing there
+    /// has nothing to excuse, so it neither uses nor stales the reason.
+    fn settle_at(
+        &mut self,
+        here: &str,
+        dropped: &[String],
+        sent: &[&str],
+        exempt: bool,
+        bounded: bool,
+    ) {
         let before = self.notes.exempt;
         self.notes.settle(here, dropped, sent, exempt);
-        if exempt {
+        if exempt && bounded {
             let used = self.exempt_used.entry(here.to_owned()).or_insert(false);
             *used |= self.notes.exempt > before;
         }
@@ -1831,7 +1841,13 @@ impl Walk<'_> {
             .collect();
         let exempt = nodes.iter().any(|node| node.get(UNSENDABLE).is_some());
         let here = pointer(path);
-        self.settle_at(&here, &evidence.dropped, &sent, exempt);
+        self.settle_at(
+            &here,
+            &evidence.dropped,
+            &sent,
+            exempt,
+            decisively_bounded(nodes),
+        );
         for (_, kind, value) in evidence.labelled {
             self.push(path, kind, Some(value))?;
         }
@@ -1867,10 +1883,11 @@ impl Walk<'_> {
             .chain(mutations.labelled.iter().map(|(label, ..)| label.as_str()))
             .collect();
         let exempt = nodes.iter().any(|node| node.get(UNSENDABLE).is_some());
-        if exempt {
+        let bounded = decisively_bounded(&nodes);
+        if exempt && bounded {
             self.exempt_used.entry(here.clone()).or_insert(false);
         }
-        self.settle_at(&here, &mutations.dropped, &sent, exempt);
+        self.settle_at(&here, &mutations.dropped, &sent, exempt, bounded);
         // Decisive kinds first: a body sent twice keeps the first kind's name.
         for (_, kind, new) in mutations.labelled {
             self.push(path, kind, Some(new))?;
@@ -2152,6 +2169,22 @@ pub(super) fn body_cases(
     seeds: &[(String, Value)],
 ) -> Result<Vec<BodyCase>> {
     Ok(body_plan(document, operation, valid_body, seeds, &[])?.cases)
+}
+
+/// Whether any applicable node bounds the location's length, bytes or items:
+/// the bounds whose vectors [`UNSENDABLE`] may excuse.
+fn decisively_bounded(nodes: &[&Value]) -> bool {
+    nodes.iter().any(|node| {
+        [
+            "minLength",
+            "maxLength",
+            "x-omg-max-bytes",
+            "minItems",
+            "maxItems",
+        ]
+        .iter()
+        .any(|keyword| node.get(*keyword).is_some())
+    })
 }
 
 /// [`body_cases`] with the account of what could not be sent. Fails when a
