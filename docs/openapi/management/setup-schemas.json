@@ -10926,7 +10926,8 @@
             },
             "credential_ref": {
               "type": "string",
-              "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints. Every provider kind constrains it by a pattern below (credential_valid), which also refuses an empty value."
+              "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints. Every provider kind constrains it by a pattern below (credential_valid), which also refuses an empty value.",
+              "x-omg-unsendable-boundary": "The 2057-character bound applies only on the Bedrock branch, where padding cannot keep an aws:role: ARN valid; setup_openapi_fixture_tests pins 2057 characters (schema accepts, handler refuses: the 510-character role path limit) and 2058 (both refuse)."
             },
             "endpoint": {
               "anyOf": [
@@ -10946,7 +10947,8 @@
                 {
                   "type": "null"
                 }
-              ]
+              ],
+              "x-omg-unsendable-boundary": "The 32-character bound applies only on the Bedrock branch, where padding cannot keep a region code valid; setup_openapi_fixture_tests pins 32 characters (both accept) and 33 (both refuse)."
             },
             "enabled": {
               "type": "boolean"
