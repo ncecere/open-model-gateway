@@ -325,6 +325,27 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                     );
                     h.insert("x-omg-export-sha256", "a".repeat(64).parse().unwrap());
                 }
+                // Every other header the success response requires, sampled from
+                // its own schema (a const, an enum member or a pattern candidate).
+                for (name, header) in op["responses"][success]["headers"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                {
+                    let header = header["$ref"]
+                        .as_str()
+                        .and_then(|r| document.pointer(&r[1..]))
+                        .unwrap_or(header);
+                    let name = name.to_ascii_lowercase();
+                    if header["required"] == true && !h.contains_key(name.as_str()) {
+                        if let Some(text) = sample(&document, &header["schema"]).as_str() {
+                            h.insert(
+                                axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                                text.parse().unwrap(),
+                            );
+                        }
+                    }
+                }
                 let mut valid = sample(&document, schema);
                 if valid["error"].is_object() {
                     valid["error"]["code"] = json!(status.as_str());
