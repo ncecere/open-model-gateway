@@ -116,7 +116,11 @@ fn positional_baseline() -> Value {
                     l["microusd_per_batch"],
                     l["batch"],
                     l["unit_label"],
-                    l["sku_label"]
+                    l["sku_label"],
+                    null,
+                    null,
+                    false,
+                    false
                 ])
             }
         })
