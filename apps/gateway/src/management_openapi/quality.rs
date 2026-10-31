@@ -682,6 +682,8 @@ fn schema(
         let marker = child["const"].as_str().is_some_and(|c| {
             c.bytes().next().is_some_and(|b| b.is_ascii_lowercase())
                 && c.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+                // Words a numeric parser reads as a number are amounts.
+                && !matches!(c, "nan" | "inf" | "infinity")
         });
         if money_name(name) && !decimal_rate(name) && !marker {
             ensure!(

@@ -393,7 +393,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–93 days (governance/reports.rs Filters::parse)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–93 days (governance/reports.rs Filters::parse). Stricter than the handler (documented): the schema takes the canonical YYYY-MM-DD spelling; chrono's %Y-%m-%d parse also accepts one-digit fields, a leading space before a field and a signed year."
           },
           {
             "name": "end_date",
@@ -403,7 +403,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Exclusive UTC date, not after tomorrow."
+            "description": "Exclusive UTC date, not after tomorrow. Stricter than the handler (documented): the schema takes the canonical YYYY-MM-DD spelling; chrono's %Y-%m-%d parse also accepts one-digit fields, a leading space before a field and a signed year."
           },
           {
             "name": "compare",
@@ -578,7 +578,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–93 days (usage.rs period)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–93 days (usage.rs period). Stricter than the handler (documented): the schema takes the canonical YYYY-MM-DD spelling; chrono's %Y-%m-%d parse also accepts one-digit fields, a leading space before a field and a signed year."
           },
           {
             "name": "end_date",
@@ -588,7 +588,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Exclusive UTC date, not after tomorrow."
+            "description": "Exclusive UTC date, not after tomorrow. Stricter than the handler (documented): the schema takes the canonical YYYY-MM-DD spelling; chrono's %Y-%m-%d parse also accepts one-digit fields, a leading space before a field and a signed year."
           },
           {
             "name": "workspace_id",
@@ -779,7 +779,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–93 days (usage.rs period)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–93 days (usage.rs period). Stricter than the handler (documented): the schema takes the canonical YYYY-MM-DD spelling; chrono's %Y-%m-%d parse also accepts one-digit fields, a leading space before a field and a signed year."
           },
           {
             "name": "end_date",
@@ -789,7 +789,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Exclusive UTC date, not after tomorrow."
+            "description": "Exclusive UTC date, not after tomorrow. Stricter than the handler (documented): the schema takes the canonical YYYY-MM-DD spelling; chrono's %Y-%m-%d parse also accepts one-digit fields, a leading space before a field and a signed year."
           },
           {
             "name": "workspace_id",
@@ -920,7 +920,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–366 days (storage_usage.rs)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–366 days (storage_usage.rs). Stricter than the handler (documented): the schema takes the canonical YYYY-MM-DD spelling; chrono's %Y-%m-%d parse also accepts one-digit fields, a leading space before a field and a signed year."
           },
           {
             "name": "end_date",
@@ -930,7 +930,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Exclusive UTC date, not after tomorrow."
+            "description": "Exclusive UTC date, not after tomorrow. Stricter than the handler (documented): the schema takes the canonical YYYY-MM-DD spelling; chrono's %Y-%m-%d parse also accepts one-digit fields, a leading space before a field and a signed year."
           }
         ]
       },
@@ -2402,7 +2402,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–93 days (governance/reports.rs Filters::parse)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–93 days (governance/reports.rs Filters::parse). Stricter than the handler (documented): the schema takes the canonical YYYY-MM-DD spelling; chrono's %Y-%m-%d parse also accepts one-digit fields, a leading space before a field and a signed year."
           },
           {
             "name": "end_date",
@@ -2412,7 +2412,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Exclusive UTC date, not after tomorrow."
+            "description": "Exclusive UTC date, not after tomorrow. Stricter than the handler (documented): the schema takes the canonical YYYY-MM-DD spelling; chrono's %Y-%m-%d parse also accepts one-digit fields, a leading space before a field and a signed year."
           },
           {
             "name": "compare",
@@ -2434,7 +2434,8 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            }
+            },
+            "description": " On this workspace route the filter must be the route's own workspace: any other workspace id is refused with 400 (the schema cannot compare a query value with {ws})."
           },
           {
             "name": "actor_user_id",
@@ -2633,7 +2634,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–93 days (governance/reports.rs Filters::parse)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–93 days (governance/reports.rs Filters::parse). Stricter than the handler (documented): the schema takes the canonical YYYY-MM-DD spelling; chrono's %Y-%m-%d parse also accepts one-digit fields, a leading space before a field and a signed year."
           },
           {
             "name": "end_date",
@@ -2643,7 +2644,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Exclusive UTC date, not after tomorrow."
+            "description": "Exclusive UTC date, not after tomorrow. Stricter than the handler (documented): the schema takes the canonical YYYY-MM-DD spelling; chrono's %Y-%m-%d parse also accepts one-digit fields, a leading space before a field and a signed year."
           },
           {
             "name": "compare",
@@ -2665,7 +2666,8 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            }
+            },
+            "description": " On this workspace route the filter must be the route's own workspace: any other workspace id is refused with 400 (the schema cannot compare a query value with {ws})."
           },
           {
             "name": "actor_user_id",
@@ -2981,7 +2983,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–93 days (usage.rs period)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–93 days (usage.rs period). Stricter than the handler (documented): the schema takes the canonical YYYY-MM-DD spelling; chrono's %Y-%m-%d parse also accepts one-digit fields, a leading space before a field and a signed year."
           },
           {
             "name": "end_date",
@@ -2991,7 +2993,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Exclusive UTC date, not after tomorrow."
+            "description": "Exclusive UTC date, not after tomorrow. Stricter than the handler (documented): the schema takes the canonical YYYY-MM-DD spelling; chrono's %Y-%m-%d parse also accepts one-digit fields, a leading space before a field and a signed year."
           },
           {
             "name": "workspace_id",
@@ -3000,7 +3002,8 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            }
+            },
+            "description": " On this workspace route the filter must be the route's own workspace: any other workspace id is refused with 400 (the schema cannot compare a query value with {ws})."
           },
           {
             "name": "model_id",
@@ -3182,7 +3185,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–93 days (usage.rs period)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–93 days (usage.rs period). Stricter than the handler (documented): the schema takes the canonical YYYY-MM-DD spelling; chrono's %Y-%m-%d parse also accepts one-digit fields, a leading space before a field and a signed year."
           },
           {
             "name": "end_date",
@@ -3192,7 +3195,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Exclusive UTC date, not after tomorrow."
+            "description": "Exclusive UTC date, not after tomorrow. Stricter than the handler (documented): the schema takes the canonical YYYY-MM-DD spelling; chrono's %Y-%m-%d parse also accepts one-digit fields, a leading space before a field and a signed year."
           },
           {
             "name": "workspace_id",
@@ -3201,7 +3204,8 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            }
+            },
+            "description": " On this workspace route the filter must be the route's own workspace: any other workspace id is refused with 400 (the schema cannot compare a query value with {ws})."
           },
           {
             "name": "model_id",
@@ -3323,7 +3327,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–366 days (storage_usage.rs)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–366 days (storage_usage.rs). Stricter than the handler (documented): the schema takes the canonical YYYY-MM-DD spelling; chrono's %Y-%m-%d parse also accepts one-digit fields, a leading space before a field and a signed year."
           },
           {
             "name": "end_date",
@@ -3333,7 +3337,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Exclusive UTC date, not after tomorrow."
+            "description": "Exclusive UTC date, not after tomorrow. Stricter than the handler (documented): the schema takes the canonical YYYY-MM-DD spelling; chrono's %Y-%m-%d parse also accepts one-digit fields, a leading space before a field and a signed year."
           }
         ]
       },
@@ -3434,7 +3438,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–93 days (governance/reports.rs Filters::parse)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–93 days (governance/reports.rs Filters::parse). Stricter than the handler (documented): the schema takes the canonical YYYY-MM-DD spelling; chrono's %Y-%m-%d parse also accepts one-digit fields, a leading space before a field and a signed year."
           },
           {
             "name": "end_date",
@@ -3444,7 +3448,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Exclusive UTC date, not after tomorrow."
+            "description": "Exclusive UTC date, not after tomorrow. Stricter than the handler (documented): the schema takes the canonical YYYY-MM-DD spelling; chrono's %Y-%m-%d parse also accepts one-digit fields, a leading space before a field and a signed year."
           },
           {
             "name": "compare",
@@ -3466,7 +3470,8 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            }
+            },
+            "description": " On this workspace route the filter must be the route's own workspace: any other workspace id is refused with 400 (the schema cannot compare a query value with {ws})."
           },
           {
             "name": "actor_user_id",

@@ -3916,13 +3916,13 @@
               "type": "string",
               "format": "date-time",
               "maxLength": 40,
-              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide."
+              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide. Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
             },
             "ending_at": {
               "type": "string",
               "format": "date-time",
               "maxLength": 40,
-              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide."
+              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide. Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
             },
             "bucket_width": {
               "const": "1d"
@@ -3961,13 +3961,13 @@
               "type": "string",
               "format": "date-time",
               "maxLength": 40,
-              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide."
+              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide. Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
             },
             {
               "type": "string",
               "format": "date-time",
               "maxLength": 40,
-              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide."
+              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide. Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
             },
             {
               "const": "1d"
@@ -4354,13 +4354,13 @@
               "type": "string",
               "format": "date-time",
               "maxLength": 40,
-              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide."
+              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide. Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
             },
             "ending_at": {
               "type": "string",
               "format": "date-time",
               "maxLength": 40,
-              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide."
+              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide. Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
             },
             "results": {
               "type": "array",
@@ -4383,13 +4383,13 @@
               "type": "string",
               "format": "date-time",
               "maxLength": 40,
-              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide."
+              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide. Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
             },
             {
               "type": "string",
               "format": "date-time",
               "maxLength": 40,
-              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide."
+              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide. Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
             },
             {
               "type": "array",
@@ -4540,7 +4540,7 @@
               "type": "string",
               "format": "date-time",
               "maxLength": 40,
-              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide."
+              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide. Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
             },
             "supersedes": {
               "anyOf": [
@@ -4597,7 +4597,7 @@
               "type": "string",
               "format": "date-time",
               "maxLength": 40,
-              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide."
+              "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide. Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
             },
             {
               "anyOf": [
@@ -4718,11 +4718,13 @@
             },
             "effective_start": {
               "type": "string",
-              "format": "date-time"
+              "format": "date-time",
+              "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
             },
             "effective_end": {
               "type": "string",
-              "format": "date-time"
+              "format": "date-time",
+              "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
             },
             "exclusive": {
               "type": "boolean"
@@ -4822,11 +4824,13 @@
             },
             {
               "type": "string",
-              "format": "date-time"
+              "format": "date-time",
+              "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
             },
             {
               "type": "string",
-              "format": "date-time"
+              "format": "date-time",
+              "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
             },
             {
               "const": false
@@ -4889,11 +4893,13 @@
             },
             {
               "type": "string",
-              "format": "date-time"
+              "format": "date-time",
+              "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
             },
             {
               "type": "string",
-              "format": "date-time"
+              "format": "date-time",
+              "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
             },
             {
               "const": true
@@ -4968,11 +4974,13 @@
         },
         "effective_start": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
         },
         "effective_end": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
         },
         "exclusive": {
           "type": "boolean"
@@ -5169,19 +5177,23 @@
         },
         "period_start": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
         },
         "period_end": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
         },
         "exported_at": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
         },
         "imported_at": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
         },
         "actor_user_id": {
           "type": "string",
@@ -5243,19 +5255,23 @@
         },
         "period_start": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
         },
         "period_end": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
         },
         "exported_at": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
         },
         "imported_at": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
         },
         "actor_user_id": {
           "type": "string",
@@ -5336,7 +5352,8 @@
         },
         "created_at": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
         },
         "binding_count": {
           "type": "integer"
@@ -5387,7 +5404,8 @@
         },
         "created_at": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
         },
         "binding_count": {
           "type": "integer"
@@ -5435,11 +5453,13 @@
               },
               "effective_start": {
                 "type": "string",
-                "format": "date-time"
+                "format": "date-time",
+                "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
               },
               "effective_end": {
                 "type": "string",
-                "format": "date-time"
+                "format": "date-time",
+                "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
               },
               "exclusive": {
                 "type": "boolean"
@@ -5522,11 +5542,13 @@
         },
         "bucket_start": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
         },
         "bucket_end": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
         },
         "dimensions": {
           "$ref": "#/components/schemas/MoneyProviderDimensions"
@@ -5626,18 +5648,21 @@
         },
         "observed_at": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
         },
         "period": {
           "type": "object",
           "properties": {
             "start": {
               "type": "string",
-              "format": "date-time"
+              "format": "date-time",
+              "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
             },
             "end": {
               "type": "string",
-              "format": "date-time"
+              "format": "date-time",
+              "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
             }
           },
           "required": [
@@ -5779,7 +5804,8 @@
                 "properties": {
                   "day": {
                     "type": "string",
-                    "format": "date-time"
+                    "format": "date-time",
+                    "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
                   },
                   "provider_workspace_id": {
                     "anyOf": [
@@ -5907,7 +5933,8 @@
                 "properties": {
                   "day": {
                     "type": "string",
-                    "format": "date-time"
+                    "format": "date-time",
+                    "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
                   },
                   "workspace_id": {
                     "type": "string",
@@ -6021,7 +6048,8 @@
         },
         "observed_at": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
         },
         "actor_user_id": {
           "type": "string",
@@ -6062,7 +6090,8 @@
         },
         "observed_at": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "description": " Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00."
         },
         "actor_user_id": {
           "type": "string",

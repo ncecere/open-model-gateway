@@ -120,6 +120,52 @@ impl Vx<'_> {
         self.guard("holds cursor", self.cursor_probes()).await;
         self.guard("positional forms", self.positional_probes())
             .await;
+        self.guard("workspace scope filter", self.scope_probes())
+            .await;
+    }
+
+    /// On a workspace-scoped report, a `workspace_id` filter must be the route's
+    /// own workspace (reports.rs report filters, usage.rs filters): the schema
+    /// cannot compare a query value with a path parameter, so another workspace's
+    /// id is a documented schema-only divergence and the route's own id is accepted.
+    async fn scope_probes(&self) {
+        let other = Uuid::new_v4();
+        for (route, extra) in [
+            ("cost-report", ""),
+            ("costs", ""),
+            ("usage-export", ""),
+            ("usage/overview", ""),
+            ("usage/explore", "&metric=spend&group_by=model"),
+        ] {
+            let template = format!("/api/v1/workspaces/{{ws}}/{route}");
+            let path = format!("/api/v1/workspaces/{}/{route}", self.team);
+            for (label, workspace, want) in [
+                (
+                    "its own workspace",
+                    self.team,
+                    Want::Pinned(Handler::Status(200), true),
+                ),
+                (
+                    "another workspace",
+                    other,
+                    Want::Pinned(Handler::Refuse, true),
+                ),
+            ] {
+                self.probe_query(
+                    &format!("{route} workspace_id filter of {label}"),
+                    self.owner,
+                    &template,
+                    &path,
+                    format!(
+                        "start_date={}&end_date={}&workspace_id={workspace}{extra}",
+                        self.start, self.end
+                    ),
+                    ("workspace_id", workspace.to_string()),
+                    want,
+                )
+                .await;
+            }
+        }
     }
 
     fn base_mapping(&self, account: &str) -> Value {
