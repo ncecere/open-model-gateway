@@ -21,17 +21,22 @@ fn management_openapi_slice3_price_and_routing_request_vectors() {
     // Externally tagged unit enums can also arrive as a one-key JSON map.
     // Compare the real nested custom parser rather than assuming string-only.
     let mapped_meter = json!({"pricing_version":3,"input_token_limit":100,"output_token_limit":10,"price_lines":[{"meter":{"input_tokens":null},"microusd_per_batch":"123","batch":1000000,"unit_label":"/M tokens","sku_label":"Input"}]});
-    vectors::<Price>(
-        "POST",
-        "/api/v1/platform/deployments/{deployment}/prices",
-        mapped_meter.clone(),
-    );
+    // The contract states meters as strings, stricter than serde, which also takes
+    // the externally tagged object spelling of a unit variant (documented; the
+    // fixture pins it handler-only).
     let schema = json!({"$ref":"#/components/schemas/SetupPrice"});
     assert_eq!(
-        openapi::responses::validate_value(openapi::responses::artifact(), &schema, &mapped_meter)
+        (
+            openapi::responses::validate_value(
+                openapi::responses::artifact(),
+                &schema,
+                &mapped_meter
+            )
             .is_ok(),
-        serde_json::from_value::<Price>(mapped_meter).is_ok(),
-        "externally tagged Meter representation"
+            serde_json::from_value::<Price>(mapped_meter).is_ok(),
+        ),
+        (false, true),
+        "externally tagged Meter representation: schema refuses, serde accepts"
     );
     vectors::<ModelRouting>(
         "PUT",

@@ -3614,7 +3614,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         (
             "a name of 61 two-byte characters",
             json!({"name":"\u{e9}".repeat(61)}),
-            SCHEMA_ONLY,
+            BOTH_REFUSE,
         ),
         (
             "a name of 60 two-byte characters",
@@ -3624,7 +3624,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         (
             "a description of 1001 two-byte characters",
             json!({"name":"Bytes","description":"\u{e9}".repeat(1001)}),
-            SCHEMA_ONLY,
+            BOTH_REFUSE,
         ),
         (
             "a description of 1000 two-byte characters",
@@ -3913,11 +3913,11 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         .await;
     j.request("DELETE", &format!("/api/v1/platform/catalogs/{cat}"), None)
         .await;
-    let probe_failures = PROBE_FAILURES.with(|failures| failures.take());
-    assert!(
-        probe_failures.is_empty(),
-        "pinned probe verdicts moved:\n{}",
-        probe_failures.join("\n")
-    );
+    // Moved pinned verdicts join the vector failures and coverage gaps in the one
+    // report `finish` prints.
+    for moved in PROBE_FAILURES.with(|failures| failures.take()) {
+        j.observed
+            .record_failure(&anyhow::anyhow!("pinned probe verdict moved: {moved}"));
+    }
     j.observed.finish(SLICE3_AREAS);
 }
