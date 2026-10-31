@@ -8998,17 +8998,19 @@
             {
               "required": [
                 "budgets"
-              ],
-              "properties": {
-                "budget_period": false
-              }
+              ]
             },
             {
               "required": [
                 "monthly_budget_microusd"
               ]
             }
-          ]
+          ],
+          "dependentRequired": {
+            "budget_period": [
+              "monthly_budget_microusd"
+            ]
+          }
         },
         {
           "type": "array",

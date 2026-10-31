@@ -20,12 +20,7 @@ impl Journey<'_> {
             input,
         )
         .await;
-        assert!(
-            r.status.is_success(),
-            "{method} {path}: {} {:?}",
-            r.status,
-            r.bytes
-        );
+        assert!(r.status.is_success(), "{method} {path}: {}", r.status);
         self.observed.observe(&r);
         let value: Value = serde_json::from_slice(&r.bytes).unwrap();
         if let Some(data) = value.get("data") {
@@ -2420,6 +2415,11 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             body["budgets"] = json!([{"period":"month","amount_microusd":"100"},{"period":"month","amount_microusd":"200"}]);
             body
         }, SCHEMA_ONLY),
+        // Exactly one budget form; budget_period only beside the monthly form
+        // (Policy::limits: anything else is invalid).
+        ("both budget forms with a period", json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"budgets":[{"period":"month","amount_microusd":"5"}],"monthly_budget_microusd":"5","budget_period":"month"}), BOTH_REFUSE),
+        ("an empty budget list, a null monthly budget and a period", json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"budgets":[],"monthly_budget_microusd":null,"budget_period":"month"}), BOTH_REFUSE),
+        ("a budget list with a period", json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"budgets":[{"period":"month","amount_microusd":"5"}],"budget_period":"month"}), BOTH_REFUSE),
         ("a positional policy with a monthly budget", json!([10, 1000, 2, 1, 10_000, 5, 50, "100", "month"]), BOTH_ACCEPT),
         ("a positional policy without a budget form", json!([10, 1000, 2, 1]), SCHEMA_ONLY),
         ("a positional policy with both budget forms", json!([10, 1000, 2, 1, 10_000, 5, 50, "100", "month", [{"period":"day","amount_microusd":"5"}]]), SCHEMA_ONLY),
