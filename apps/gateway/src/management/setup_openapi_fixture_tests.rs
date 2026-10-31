@@ -284,6 +284,35 @@ async fn body_set_when(
     )
     .await;
 }
+/// [`body_set_when`] with boundary `candidates` for patterns without derivable
+/// length bounds (`(pointer, value)`, straddling within one edit).
+#[allow(clippy::too_many_arguments)]
+async fn body_set_when_candidates(
+    j: &mut Journey<'_>,
+    who: &Browser,
+    method: &str,
+    template: &str,
+    path: &str,
+    valid: Value,
+    rules: DomainRules<'_>,
+    candidates: &[(&str, Value)],
+) {
+    let (client, root) = (j.client.clone(), j.base.clone());
+    http_vectors::body_vectors_extended(
+        &mut j.observed,
+        method,
+        template,
+        valid,
+        &[],
+        candidates,
+        async |body: Value| {
+            let schema_valid = schema_accepts(method, template, &body);
+            let captured = send(&client, &root, Some(who), method, path, Some(body.clone())).await;
+            judged_when(captured, schema_valid, &body, rules)
+        },
+    )
+    .await;
+}
 /// A handler-derived body vector the artifact-derived ones cannot generate. Both
 /// verdicts are pinned in `expected`: `BOTH_ACCEPT`/`BOTH_REFUSE` for agreement, and
 /// `SCHEMA_ONLY`/`HANDLER_ONLY` for a divergence the contract cannot express (a
@@ -2370,7 +2399,9 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     body_set(&mut j, a, "PUT", "/api/v1/platform/deployments/{deployment}/routing", &format!("/api/v1/platform/deployments/{vdep}/routing"), json!({"priority":1,"weight":2,"residency":"eu","failure_threshold":3,"cooldown_seconds":30}), &[]).await;
     body_set(&mut j, a, "PUT", "/api/v1/platform/models/{model}/routing", &format!("/api/v1/platform/models/{vmodel}/routing"), json!({"strategy":"priority","max_attempts":2,"allow_ambiguous_failover":false,"required_residency":"eu"}), &[]).await;
     // An IANA zone must be known to the server: another length-valid name is a domain refusal.
-    body_set_when(&mut j, a, "PUT", "/api/v1/platform/deployments/{deployment}/batch-scheduling", &format!("/api/v1/platform/deployments/{vdep}/batch-scheduling"), json!({"max_concurrency":3,"yield_live_threshold":5,"window":{"timezone":"UTC","days":["mon","fri"],"start":"23:00","end":"06:00"}}), (&|b| b["window"]["timezone"].as_str().is_some_and(|z| (1..=64).contains(&z.len()) && z != "UTC"), &[])).await;
+    // The HH:MM window times have no derivable length bounds: candidates one edit
+    // apart (a valid time, the same time missing its last digit).
+    body_set_when_candidates(&mut j, a, "PUT", "/api/v1/platform/deployments/{deployment}/batch-scheduling", &format!("/api/v1/platform/deployments/{vdep}/batch-scheduling"), json!({"max_concurrency":3,"yield_live_threshold":5,"window":{"timezone":"UTC","days":["mon","fri"],"start":"23:00","end":"06:00"}}), (&|b| b["window"]["timezone"].as_str().is_some_and(|z| (1..=64).contains(&z.len()) && z != "UTC"), &[]), &[("/window/start", json!("23:00")), ("/window/start", json!("23:0")), ("/window/end", json!("06:00")), ("/window/end", json!("06:0"))]).await;
     body_set(
         &mut j,
         a,
