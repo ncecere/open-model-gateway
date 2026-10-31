@@ -3053,7 +3053,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             monthly,
             unlimited,
             json!([10, 1000, 2, 1, 10_000, 5, 50, "100", "month"]),
-            json!([null, null, null, null, null, null, null, null]),
+            json!([null, null, null, null, null, null, null, null, "month"]),
         ] {
             http_vectors::body_vectors_http(
                 &mut j.observed,
