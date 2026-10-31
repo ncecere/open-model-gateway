@@ -2399,10 +2399,35 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     // allowlisted profile or endpoint takes the default or a role reference and no endpoint
     // (options beside a non-role reference are the schema's own rule, so not trusted here).
     let refused_by_state = |kind: &str, b: &Value| {
+        // The positional form in field order (enabled, credential_ref,
+        // aws_external_id, aws_session_name, endpoint): the same stored-kind rules.
+        let object;
+        let b = if let Some(items) = b.as_array() {
+            let mut map = serde_json::Map::new();
+            for (name, value) in [
+                "enabled",
+                "credential_ref",
+                "aws_external_id",
+                "aws_session_name",
+                "endpoint",
+            ]
+            .into_iter()
+            .zip(items)
+            {
+                map.insert(name.to_owned(), value.clone());
+            }
+            object = Value::Object(map);
+            &object
+        } else {
+            b
+        };
         let reference = b["credential_ref"].as_str();
+        let aws_options = b["aws_external_id"].is_string() || b["aws_session_name"].is_string();
         if kind == "bedrock" {
             b["endpoint"].is_string()
                 || reference.is_some_and(|c| !(c == "aws:default" || c.starts_with("aws:role:")))
+                // AWS options need a restated aws:role reference (update_provider).
+                || (aws_options && !reference.is_some_and(|c| c.starts_with("aws:role:")))
         } else {
             b.get("endpoint").is_some()
                 || b["aws_external_id"].is_string()
