@@ -1949,6 +1949,16 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     body_set(
         &mut j,
         a,
+        "POST",
+        "/api/v1/platform/catalogs",
+        "/api/v1/platform/catalogs",
+        json!(["Vector catalog positional", "A catalog"]),
+        &[],
+    )
+    .await;
+    body_set(
+        &mut j,
+        a,
         "PATCH",
         "/api/v1/platform/catalogs/{id}",
         &format!("/api/v1/platform/catalogs/{vcat}"),
@@ -1989,6 +1999,31 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     .await;
     body_set(&mut j, a, "POST", "/api/v1/platform/models", "/api/v1/platform/models", json!({"public_name":"vector/created","display_name":"Vector created","description":"A model","enabled":true,"supported_protocols":["chat_completions"]}), &[]).await;
     body_set(&mut j, a, "PATCH", "/api/v1/platform/models/{id}", &format!("/api/v1/platform/models/{vmodel}"), json!({"public_name":"vector/target","display_name":"Vector target","description":"A model","enabled":true,"supported_protocols":["chat_completions"]}), &["route_unsupported_capability"]).await;
+    // The other request shapes of the model PATCH: null keeps (public_name,
+    // enabled), the single-workload protocol arm, and the positional wire form.
+    for body in [
+        json!({"public_name":null,"enabled":null}),
+        json!({"supported_protocols":["embeddings"]}),
+        json!([
+            "vector/target",
+            "Vector target",
+            "A model",
+            true,
+            ["chat_completions"]
+        ]),
+        json!([null, "Vector target", "A model", null, ["embeddings"]]),
+    ] {
+        body_set(
+            &mut j,
+            a,
+            "PATCH",
+            "/api/v1/platform/models/{id}",
+            &format!("/api/v1/platform/models/{vmodel}"),
+            body,
+            &["route_unsupported_capability"],
+        )
+        .await;
+    }
     // The env reference pattern has no length bound (credential_valid checks the
     // alphabet, then the allowlist): its boundary is the alphabet, straddled by an
     // allowlisted name and the same name plus one character the pattern refuses.
@@ -2388,7 +2423,59 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     let (kind_or, kind_bed) = (stored_kind(vprov).await, stored_kind(vbed).await);
     body_set_when(&mut j, a, "PATCH", patch_template, &patch_or, json!({"enabled":true,"credential_ref":"env:CONTRACT_REFERENCE","aws_external_id":null,"aws_session_name":null}), (&|b| refused_by_state(&kind_or, b), &[])).await;
     body_set_when(&mut j, a, "PATCH", patch_template, &patch_bed, json!({"enabled":true,"credential_ref":"aws:role:arn:aws:iam::123456789012:role/gateway/vector","aws_external_id":"tenant-ext-42","aws_session_name":"gateway.vector","endpoint":null}), (&|b| refused_by_state(&kind_bed, b), &[])).await;
+    // The other request shapes of the provider PATCH: a null reference (keep), an
+    // endpoint string, and the positional wire form with each union arm.
+    for (path, kind, body) in [
+        (
+            &patch_or,
+            &kind_or,
+            json!({"enabled":true,"credential_ref":null}),
+        ),
+        (
+            &patch_bed,
+            &kind_bed,
+            json!({"enabled":true,"endpoint":"https://bedrock-runtime.us-east-1.amazonaws.com"}),
+        ),
+        (
+            &patch_or,
+            &kind_or,
+            json!([true, "env:CONTRACT_REFERENCE", null, null]),
+        ),
+        (&patch_or, &kind_or, json!([true, null, null, null])),
+        (
+            &patch_bed,
+            &kind_bed,
+            json!([
+                true,
+                "aws:role:arn:aws:iam::123456789012:role/gateway/vector",
+                "tenant-ext-42",
+                "gateway.vector",
+                null
+            ]),
+        ),
+    ] {
+        body_set_when(
+            &mut j,
+            a,
+            "PATCH",
+            patch_template,
+            path,
+            body,
+            (&|b| refused_by_state(kind, b), &[]),
+        )
+        .await;
+    }
     body_set(&mut j, a, "POST", "/api/v1/platform/deployments", "/api/v1/platform/deployments", json!({"model_id":vmodel,"provider_connection_id":vprov,"upstream_model":"vector/upstream","enabled":false}), &["route_unsupported_capability"]).await;
+    body_set(
+        &mut j,
+        a,
+        "POST",
+        "/api/v1/platform/deployments",
+        "/api/v1/platform/deployments",
+        json!([vmodel, vprov, "vector/upstream-positional", false]),
+        &["route_unsupported_capability"],
+    )
+    .await;
     body_set(
         &mut j,
         a,
@@ -2396,6 +2483,16 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         "/api/v1/platform/deployments/{id}",
         &format!("/api/v1/platform/deployments/{vdep}"),
         json!({"enabled":true}),
+        &[],
+    )
+    .await;
+    body_set(
+        &mut j,
+        a,
+        "PATCH",
+        "/api/v1/platform/deployments/{id}",
+        &format!("/api/v1/platform/deployments/{vdep}"),
+        json!([true]),
         &[],
     )
     .await;
