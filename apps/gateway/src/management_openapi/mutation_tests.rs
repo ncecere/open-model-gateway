@@ -503,7 +503,16 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                 );
                 h.insert("referrer-policy", "no-referrer".parse().unwrap());
                 let image = crate::management::branding::fixtures::png(16, 16);
-                let csv_body = b"dimension,id,name,known_cost_microusd,held_microusd\n".as_slice();
+                // The CSV sample is the route's documented header-row prefix (its
+                // pattern's literal part) plus one column.
+                let csv_text = format!(
+                    "{}x\n",
+                    op["responses"]["200"]["content"]["text/csv"]["schema"]["pattern"]
+                        .as_str()
+                        .unwrap_or("^")
+                        .trim_start_matches('^')
+                );
+                let csv_body = csv_text.as_bytes();
                 let (header, valid_body) = if csv {
                     h.insert("content-type", "text/csv".parse().unwrap());
                     for (name, header) in op["responses"]["200"]["headers"]
