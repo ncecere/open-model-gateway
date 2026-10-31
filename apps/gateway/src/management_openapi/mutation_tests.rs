@@ -481,7 +481,10 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                 // These operations have no JSON representation: remove a
                 // required wire header, corrupt its type/format, and inject
                 // an unexpected sensitive JSON body. Each must fail too.
-                let status = if path == "/api/v1/branding/logo" {
+                // A CSV download (report-run CSV): 200 text/csv with its own
+                // required headers, sampled from their schemas.
+                let csv = op["responses"]["200"]["content"].get("text/csv").is_some();
+                let status = if path == "/api/v1/branding/logo" || csv {
                     StatusCode::OK
                 } else if method == "POST" {
                     StatusCode::NO_CONTENT
@@ -490,7 +493,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                 };
                 h.insert(
                     "cache-control",
-                    if status == StatusCode::OK {
+                    if status == StatusCode::OK && !csv {
                         "public, max-age=300"
                     } else {
                         "no-store"
@@ -500,7 +503,30 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                 );
                 h.insert("referrer-policy", "no-referrer".parse().unwrap());
                 let image = crate::management::branding::fixtures::png(16, 16);
-                let (header, valid_body) = if status == StatusCode::OK {
+                let csv_body = b"start_date,end_date\n2026-10-28,2026-10-29\n".as_slice();
+                let (header, valid_body) = if csv {
+                    h.insert("content-type", "text/csv".parse().unwrap());
+                    for (name, header) in op["responses"]["200"]["headers"]
+                        .as_object()
+                        .into_iter()
+                        .flatten()
+                    {
+                        let header = header["$ref"]
+                            .as_str()
+                            .and_then(|r| document.pointer(&r[1..]))
+                            .unwrap_or(header);
+                        let name = name.to_ascii_lowercase();
+                        if header["required"] == true && !h.contains_key(name.as_str()) {
+                            if let Some(text) = sample(&document, &header["schema"]).as_str() {
+                                h.insert(
+                                    axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                                    text.parse().unwrap(),
+                                );
+                            }
+                        }
+                    }
+                    ("content-disposition", csv_body)
+                } else if status == StatusCode::OK {
                     h.insert("content-type", "image/png".parse().unwrap());
                     h.insert("etag", format!("\"{}\"", "a".repeat(64)).parse().unwrap());
                     h.insert("x-content-type-options", "nosniff".parse().unwrap());
