@@ -314,13 +314,15 @@ fn request_schema(method: &str, template: &str) -> &'static Value {
         ["application/json"]["schema"]
 }
 /// Does the SCHEMA accept this body?
+/// The SCHEMA's verdict exactly as the vector harness computes it: JSON Schema
+/// validity plus the reviewed byte limits (`x-omg-max-bytes`).
 fn schema_accepts(method: &str, template: &str, body: &Value) -> bool {
-    openapi::responses::validate_value(
+    http_vectors::accepts(
         openapi::responses::artifact(),
         request_schema(method, template),
         body,
     )
-    .is_ok()
+    .unwrap_or(false)
 }
 /// Does the SCHEMA accept this raw value of a documented query parameter?
 fn param_accepts(template: &str, name: &str, raw: &str) -> bool {

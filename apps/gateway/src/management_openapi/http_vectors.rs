@@ -338,7 +338,7 @@ fn bytes_ok(document: &Value, schema: &Value, instance: &Value, depth: usize) ->
 }
 
 /// The schema's verdict: JSON Schema validity plus the reviewed byte limits.
-pub(super) fn accepts(document: &Value, schema: &Value, instance: &Value) -> Result<bool> {
+pub(crate) fn accepts(document: &Value, schema: &Value, instance: &Value) -> Result<bool> {
     Ok(valid(document, schema, instance)? && bytes_ok(document, schema, instance, 0)?)
 }
 
