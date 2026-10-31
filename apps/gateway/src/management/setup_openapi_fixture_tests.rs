@@ -90,7 +90,7 @@ fn full_price(tier: usize, positional: bool) -> Value {
         .iter()
         .map(|(meter, (batch, unit))| {
             if positional {
-                json!([meter, "1", batch, unit, "Rate"])
+                json!([meter, "1", batch, unit, "Rate", null, null, false, false])
             } else {
                 json!({"meter":meter,"microusd_per_batch":"1","batch":batch,"unit_label":unit,"sku_label":"Rate"})
             }
@@ -99,8 +99,8 @@ fn full_price(tier: usize, positional: bool) -> Value {
     json!({"pricing_version":3,"input_token_limit":100,"output_token_limit":10,"price_lines":lines,
         "max_units":{"output_images":"1","input_characters":"1","input_audio_seconds_ms":"1","output_audio_seconds_ms":"1","search_units":"1","requests":"1","output_video_seconds_ms":"1"}})
 }
-/// [`v3_price`] with every line in the positional form (priced lines in five
-/// items, not-applicable lines in nine), plus a positional explicit unknown line.
+/// [`v3_price`] with every line in the positional form (all nine items, so the
+/// 9-item bound is the line itself), plus a positional explicit unknown line.
 fn positional_baseline() -> Value {
     let mut body = v3_price();
     let mut lines: Vec<Value> = body["price_lines"]
