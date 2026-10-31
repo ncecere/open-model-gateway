@@ -1,6 +1,143 @@
 use super::*;
 use axum::http::HeaderMap;
 
+#[cfg(test)]
+#[test]
+fn management_openapi_slice2_directory_request_vectors() {
+    use crate::management::openapi::requests::vectors;
+    use crate::management::openapi_semantic::Checked;
+    // The handler's value rules (email shape, role/kind vocabulary, the mapping
+    // cross-field constraint) are documented in the schema, so the real DTO is
+    // wrapped in the predicate the handler itself calls.
+    vectors::<Checked<NewUser>>(
+        "POST",
+        "/api/v1/platform/users",
+        json!({"email":"fixture@example.test","platform_role":"user"}),
+    );
+    vectors::<Checked<UserUpdate>>(
+        "PATCH",
+        "/api/v1/platform/users/{user}",
+        json!({"email":"fixture@example.test","disabled":false,"oidc_link_allowed":true}),
+    );
+    vectors::<Checked<RoleInput>>(
+        "POST",
+        "/api/v1/platform/users/{user}/roles",
+        json!({"role":"user"}),
+    );
+    // object_visibility is a raw Value in the production DTO and validated
+    // by hand (`member`/`workspace`, else 400). The vectors therefore run on a
+    // typed wire mirror that does include object_visibility; the HTTP probes
+    // (openapi_slice2_fixture_tests) compare the real handler with the schema.
+    for body in [
+        json!({"name":"Fixture","object_visibility":"workspace"}),
+        json!({"object_visibility":"member"}),
+    ] {
+        vectors::<Checked<slice2_wire::OwnWorkspaceUpdateWire>>(
+            "PATCH",
+            "/api/v1/workspaces/{ws}",
+            body,
+        );
+    }
+    vectors::<Checked<NewWorkspace>>(
+        "POST",
+        "/api/v1/platform/workspaces",
+        json!({"name":"Fixture","kind":"team","owner_user_id":Uuid::nil()}),
+    );
+    vectors::<WorkspaceUpdate>(
+        "PATCH",
+        "/api/v1/platform/workspaces/{ws}",
+        json!({"name":"Fixture","disabled":false,"cost_center_id":Uuid::nil()}),
+    );
+    for body in [
+        json!({"issuer":"https://issuer.example.test","group_value":"fixture","target_kind":"platform","platform_role":"user","workspace_id":null,"workspace_role":null,"enabled":true}),
+        json!({"issuer":"https://issuer.example.test","group_value":"fixture","target_kind":"workspace","platform_role":null,"workspace_id":Uuid::nil(),"workspace_role":"member","enabled":true}),
+    ] {
+        vectors::<Checked<MappingInput>>("POST", "/api/v1/platform/oidc/group-mappings", body);
+    }
+    crate::management::openapi_semantic::manual_fields(
+        "PATCH",
+        "/api/v1/platform/oidc/group-mappings/{id}",
+        &MAPPING_PATCH_FIELDS,
+    );
+    crate::management::openapi_semantic::manual_fields(
+        "POST",
+        "/api/v1/platform/oidc/group-mappings/{id}/preview",
+        &[MAPPING_PATCH_FIELDS.as_slice(), &["delete"]].concat(),
+    );
+}
+
+/// The handlers' non-database acceptance rules, for the DTO-level vectors.
+#[cfg(test)]
+mod slice2_semantic {
+    use super::*;
+    use crate::management::openapi_semantic::Semantic;
+    fn email_ok(email: &str) -> bool {
+        email_valid(&email.trim().to_lowercase())
+    }
+    impl Semantic for NewUser {
+        fn accepted(&self) -> bool {
+            email_ok(&self.email) && platform_role_valid(&self.platform_role)
+        }
+    }
+    impl Semantic for UserUpdate {
+        fn accepted(&self) -> bool {
+            self.email.as_deref().is_none_or(email_ok)
+        }
+    }
+    impl Semantic for RoleInput {
+        fn accepted(&self) -> bool {
+            platform_role_valid(&self.role)
+        }
+    }
+    impl Semantic for NewWorkspace {
+        fn accepted(&self) -> bool {
+            valid_name(&self.name) && shared(&self.kind)
+        }
+    }
+    impl Semantic for MappingInput {
+        fn accepted(&self) -> bool {
+            mapping_valid(self)
+        }
+    }
+}
+
+/// Test-only wire mirror of [`OwnWorkspaceUpdate`] with object_visibility typed
+/// as its accepted values. The exhaustive destructuring stops compiling if the
+/// production DTO gains or renames a field.
+#[cfg(test)]
+mod slice2_wire {
+    use super::*;
+    #[derive(Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    pub(super) enum Visibility {
+        Member,
+        Workspace,
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub(super) struct OwnWorkspaceUpdateWire {
+        #[allow(dead_code)]
+        name: Option<String>,
+        #[allow(dead_code)]
+        object_visibility: Option<Visibility>,
+    }
+    /// `update_own_workspace`: a name or a visibility must be given (a null is
+    /// absence), a given name must satisfy `valid_name`.
+    impl crate::management::openapi_semantic::Semantic for OwnWorkspaceUpdateWire {
+        fn accepted(&self) -> bool {
+            (self.name.is_some() || self.object_visibility.is_some())
+                && self.name.as_deref().is_none_or(valid_name)
+        }
+    }
+    #[allow(dead_code)]
+    fn same_fields_as_production(p: OwnWorkspaceUpdate) {
+        let OwnWorkspaceUpdate {
+            name: _,
+            object_visibility: _,
+        } = p;
+    }
+}
+
 pub(super) fn routes() -> Router<Store> {
     Router::new()
         .route(

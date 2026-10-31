@@ -1,6 +1,39 @@
 //! Multiple live catalogs, replacement overrides, and independent authorization sources.
 use super::*;
 
+#[cfg(test)]
+#[test]
+fn management_openapi_slice2_catalog_assignment_request_vectors() {
+    use crate::management::openapi::requests::vectors;
+    use crate::management::openapi_semantic::Checked;
+    vectors::<CatalogIds>(
+        "PUT",
+        "/api/v1/platform/workspace-types/{kind}/catalogs",
+        json!({"catalog_ids":[Uuid::nil()]}),
+    );
+    vectors::<Checked<Override>>(
+        "PUT",
+        "/api/v1/platform/workspaces/{ws}/catalogs",
+        json!({"mode":"replace","catalog_ids":[Uuid::nil()]}),
+    );
+    vectors::<Grant>(
+        "POST",
+        "/api/v1/platform/workspaces/{ws}/models",
+        json!({"model_id":Uuid::nil()}),
+    );
+}
+
+/// The handlers' non-database acceptance rules, for the DTO-level vectors.
+#[cfg(test)]
+mod slice2_semantic {
+    use super::*;
+    impl crate::management::openapi_semantic::Semantic for Override {
+        fn accepted(&self) -> bool {
+            self.mode == "replace"
+        }
+    }
+}
+
 pub(super) fn routes() -> Router<Store> {
     Router::new()
         .route(
