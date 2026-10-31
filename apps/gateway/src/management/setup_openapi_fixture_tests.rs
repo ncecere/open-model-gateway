@@ -2932,9 +2932,22 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
                     let message = serde_json::from_slice::<Value>(&captured.bytes)
                         .ok()
                         .and_then(|v| v["error"]["message"].as_str().map(str::to_owned));
+                    // The positional metrics gate does not carry the at-least-one-
+                    // threshold rule (documented divergence): a positional gate with no
+                    // threshold set is refused with THRESHOLD_MISSING.
+                    let gate = if body.is_array() {
+                        &body[2]
+                    } else {
+                        &body["metrics"]
+                    };
+                    let positional_gate_without_threshold = gate
+                        .as_array()
+                        .is_some_and(|items| items.iter().skip(1).all(Value::is_null));
                     if schema_valid
                         && captured.status == StatusCode::BAD_REQUEST
-                        && matches!(message.as_deref(), Some(METRICS_URL | PRIORITY_ROUTE))
+                        && (matches!(message.as_deref(), Some(METRICS_URL | PRIORITY_ROUTE))
+                            || (positional_gate_without_threshold
+                                && message.as_deref() == Some(THRESHOLD_MISSING)))
                     {
                         Probe::decided(captured, true)
                     } else {
