@@ -57,6 +57,95 @@ fn v3_price() -> Value {
     }
     json!({"pricing_version":3,"input_token_limit":100,"output_token_limit":10,"price_lines":lines,"max_units":{"requests":"1"}})
 }
+/// Every meter priced in one version 3 price, as object or positional lines, with
+/// the time-based meters at one billing unit (`tier`: per second, minute, hour)
+/// and a ceiling for every capped meter: one price per arm family of the price
+/// line union (a meter takes one line per variant and tier key).
+fn full_price(tier: usize, positional: bool) -> Value {
+    let time = [
+        (1_000_u64, "/second"),
+        (60_000, "/minute"),
+        (3_600_000, "/hour"),
+    ][tier];
+    let tokens = (1_000_000_u64, "/M tokens");
+    let meters: [(&str, (u64, &str)); 16] = [
+        ("input_tokens", tokens),
+        ("output_tokens", tokens),
+        ("cache_read_tokens", tokens),
+        ("cache_write_tokens", tokens),
+        ("cache_write_5m_tokens", tokens),
+        ("cache_write_1h_tokens", tokens),
+        ("output_images", (1, "/image")),
+        ("input_characters", (1_000_000, "/M characters")),
+        ("input_audio_seconds_ms", time),
+        ("output_audio_seconds_ms", time),
+        ("search_units", (1, "/search")),
+        ("requests", (1, "/request")),
+        ("input_audio_tokens", tokens),
+        ("cache_read_audio_tokens", tokens),
+        ("output_audio_tokens", tokens),
+        ("output_video_seconds_ms", time),
+    ];
+    let lines: Vec<Value> = meters
+        .iter()
+        .map(|(meter, (batch, unit))| {
+            if positional {
+                json!([meter, "1", batch, unit, "Rate"])
+            } else {
+                json!({"meter":meter,"microusd_per_batch":"1","batch":batch,"unit_label":unit,"sku_label":"Rate"})
+            }
+        })
+        .collect();
+    json!({"pricing_version":3,"input_token_limit":100,"output_token_limit":10,"price_lines":lines,
+        "max_units":{"output_images":"1","input_characters":"1","input_audio_seconds_ms":"1","output_audio_seconds_ms":"1","search_units":"1","requests":"1","output_video_seconds_ms":"1"}})
+}
+/// [`v3_price`] with every line in the positional form (priced lines in five
+/// items, not-applicable lines in nine), plus a positional explicit unknown line.
+fn positional_baseline() -> Value {
+    let mut body = v3_price();
+    let mut lines: Vec<Value> = body["price_lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| {
+            if l["not_applicable"] == true {
+                json!([l["meter"], null, null, null, null, null, null, true, false])
+            } else {
+                json!([
+                    l["meter"],
+                    l["microusd_per_batch"],
+                    l["batch"],
+                    l["unit_label"],
+                    l["sku_label"]
+                ])
+            }
+        })
+        .collect();
+    lines.push(json!([
+        "input_audio_tokens",
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        false,
+        true
+    ]));
+    body["price_lines"] = json!(lines);
+    body
+}
+/// Every price shape the vectors walk: the baseline, its positional form, each
+/// arm family of the price-line union (object and positional), version 1 and 2.
+fn price_variants() -> Vec<Value> {
+    let mut out = vec![v3_price(), positional_baseline()];
+    for tier in 0..3 {
+        for positional in [false, true] {
+            out.push(full_price(tier, positional));
+        }
+    }
+    out
+}
 /// The twelve meters every price must state (`Meter::ALL`).
 const METERS: [&str; 12] = [
     "input_tokens",
@@ -2581,11 +2670,11 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     }
     lines.push(json!({"meter":"output_audio_tokens","unknown":true}));
     unknowns["price_lines"] = json!(lines);
-    for body in [
+    for body in price_variants().into_iter().skip(1).chain([
         json!({"pricing_version":1,"input_microusd_per_million":"1","output_microusd_per_million":"2","input_token_limit":100,"output_token_limit":10}),
         json!({"pricing_version":2,"input_microusd_per_million":"1","output_microusd_per_million":"2","input_token_limit":100,"output_token_limit":10,"cache_pricing":{"read":{"status":"priced","microusd_per_million":"1"},"write":{"status":"unknown"},"write_5m":{"status":"unknown"},"write_1h":{"status":"unknown"}}}),
         unknowns,
-    ] {
+    ]) {
         body_set_when(
             &mut j,
             a,
@@ -2623,19 +2712,27 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         // The model is inserted (and may conflict on its unique alias) before the route
         // is validated, so every request names a fresh alias unless the vector changes it.
         let (client, root) = (j.client.clone(), j.base.clone());
-        let valid = json!({"model":{"public_name":"vector/setup","display_name":"Vector setup","description":"A model","enabled":true,"supported_protocols":["chat_completions"]},"route":{"provider_connection_id":vprov,"upstream_model":"vector/setup","enabled":false},"price":null,"catalog_ids":[vcat]});
-        http_vectors::body_vectors_http(
-            &mut j.observed,
-            "POST",
-            "/api/v1/platform/model-setup",
-            valid,
-            async |mut body: Value| {
-                if body["model"]["public_name"] == "vector/setup" {
-                    body["model"]["public_name"] =
-                        json!(format!("vector/setup-{}", Uuid::new_v4()));
-                }
-                judged(
-                    send(
+        let base = json!({"model":{"public_name":"vector/setup","display_name":"Vector setup","description":"A model","enabled":true,"supported_protocols":["chat_completions"]},"route":{"provider_connection_id":vprov,"upstream_model":"vector/setup","enabled":false},"price":null,"catalog_ids":[vcat]});
+        // The nested price walks every price shape too (null, then each variant).
+        for price in std::iter::once(Value::Null).chain(price_variants()) {
+            let mut valid = base.clone();
+            valid["price"] = price;
+            let (client, root) = (client.clone(), root.clone());
+            http_vectors::body_vectors_http(
+                &mut j.observed,
+                "POST",
+                "/api/v1/platform/model-setup",
+                valid,
+                async |mut body: Value| {
+                    if body["model"]["public_name"] == "vector/setup" {
+                        body["model"]["public_name"] =
+                            json!(format!("vector/setup-{}", Uuid::new_v4()));
+                    }
+                    // A nested price whose lines the REAL PriceLines rules refuse
+                    // is the documented cross-line refusal (see price_lines_refused).
+                    let cross_line = schema_accepts("POST", "/api/v1/platform/model-setup", &body)
+                        && price_lines_refused(&body["price"]);
+                    let captured = send(
                         &client,
                         &root,
                         Some(a),
@@ -2643,12 +2740,21 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
                         "/api/v1/platform/model-setup",
                         Some(body),
                     )
-                    .await,
-                    &["route_unsupported_capability"],
-                )
-            },
-        )
-        .await;
+                    .await;
+                    if cross_line
+                        && matches!(
+                            captured.status,
+                            StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY
+                        )
+                    {
+                        Probe::decided(captured, true)
+                    } else {
+                        judged(captured, &["route_unsupported_capability"])
+                    }
+                },
+            )
+            .await;
+        }
     }
     body_set(
         &mut j,
