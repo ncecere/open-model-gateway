@@ -11306,7 +11306,8 @@
                 {
                   "type": "null"
                 }
-              ]
+              ],
+              "x-omg-unsendable-boundary": "The 2057-character bound covers an aws:role: ARN, which padding cannot keep valid; setup_openapi_fixture_tests pins 2057 characters on the Bedrock connection (schema accepts, handler refuses: the 510-character role path limit) and 2058 (both refuse) through the object form of the same field."
             },
             {
               "anyOf": [
