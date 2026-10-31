@@ -2457,9 +2457,9 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         (
             &patch_or,
             &kind_or,
-            json!([true, "env:CONTRACT_REFERENCE", null, null]),
+            json!([true, "env:CONTRACT_REFERENCE", null, null, null]),
         ),
-        (&patch_or, &kind_or, json!([true, null, null, null])),
+        (&patch_or, &kind_or, json!([true, null, null, null, null])),
         (
             &patch_bed,
             &kind_bed,
