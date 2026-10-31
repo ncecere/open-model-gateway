@@ -2717,3 +2717,45 @@ async fn management_openapi_http_vectors_binary_only_size_and_media_statuses_are
     );
     run_uploads(&app, &upload_document()).await.unwrap();
 }
+
+/// One run reports EVERY operation's contract failure: a failing vector run is
+/// recorded (sanitised: method, template, kind, pointers) and the next operation
+/// still runs; `finish` then fails once, naming them all (a run used to stop at
+/// the first disagreement, so each fix revealed only the next one).
+#[tokio::test]
+async fn management_openapi_http_vectors_failures_are_collected_across_operations() {
+    use axum::http::{HeaderMap, StatusCode};
+    let mut fixtures = super::responses::PositiveFixtures::default();
+    for (template, body) in [
+        (
+            "/api/v1/platform/catalogs/{id}/models",
+            json!({"model_ids":[uuid::Uuid::nil()]}),
+        ),
+        (
+            "/api/v1/platform/models/{id}/catalogs",
+            json!({"catalog_ids":[uuid::Uuid::nil()]}),
+        ),
+    ] {
+        super::http_vectors::body_vectors_http(&mut fixtures, "PUT", template, body, async |_| {
+            super::http_vectors::Probe::from(Captured {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                headers: HeaderMap::new(),
+                bytes: Default::default(),
+                method: "PUT".into(),
+                template: Some(template.into()),
+                query: vec![],
+            })
+        })
+        .await;
+    }
+    let failures = fixtures.failures();
+    assert_eq!(failures.len(), 2, "{failures:?}");
+    assert!(
+        failures[0].contains("PUT /api/v1/platform/catalogs/{id}/models"),
+        "{failures:?}"
+    );
+    assert!(
+        failures[1].contains("PUT /api/v1/platform/models/{id}/catalogs"),
+        "{failures:?}"
+    );
+}
