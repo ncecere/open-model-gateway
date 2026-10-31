@@ -188,7 +188,10 @@ struct CatalogInput {
     description: Option<String>,
 }
 fn catalog_valid(b: &CatalogInput) -> bool {
-    valid_name(&b.name) && b.description.as_ref().is_none_or(|s| s.len() <= 2000)
+    valid_name(&b.name)
+        && b.description
+            .as_deref()
+            .is_none_or(super::description_valid)
 }
 async fn create_catalog(
     State(s): State<Store>,
