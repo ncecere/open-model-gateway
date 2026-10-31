@@ -502,175 +502,6 @@
       ],
       "additionalProperties": false
     },
-    "SetupProviderUpdate": {
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "type": "boolean"
-            },
-            "credential_ref": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints. Shape: none, an env: reference, or an aws:default / aws:profile:NAME / aws:role:ARN reference (the union over every provider kind; the stored kind and the server allowlists decide the rest).",
-                  "maxLength": 2057,
-                  "pattern": "^(?:none|env:[A-Z_][A-Z0-9_]*|aws:(?:default|profile:[A-Za-z0-9_.+][A-Za-z0-9_.+-]{0,63}|role:arn:(?:aws|aws-[a-z]+(?:-[a-z]+)*):iam::[0-9]{12}:role/(?:[A-Za-z0-9_+=,.@-]+/)*[A-Za-z0-9_+=,.@-]{1,64}))$"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "aws_external_id": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "pattern": "^[A-Za-z0-9_+=,.@:/-]{2,1224}$",
-                  "description": "STS ExternalId: 2-1224 characters of letters, digits and _+=,.@:/- (valid_external_id). Only with a restated aws:role: reference on a Bedrock connection."
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "aws_session_name": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "pattern": "^[A-Za-z0-9_+=,.@-]{2,64}$",
-                  "description": "STS RoleSessionName: 2-64 characters of letters, digits and _+=,.@- (valid_session_name). Only with a restated aws:role: reference on a Bedrock connection."
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "endpoint": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "pattern": "^https://[a-z0-9.-]+(?::[0-9]{1,5})?/?$",
-                  "description": "A canonical HTTPS origin without credentials, path, query or fragment (canonical_endpoint); Bedrock endpoints must also be allowlisted by the server (GATEWAY_BEDROCK_ENDPOINT_ALLOWLIST, not expressible here). Only the canonical form is accepted (connection_valid compares the policy's canonical endpoint), so a trailing slash or an explicit default port is schema-valid and refused with 400 (documented divergence)."
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Omission keeps the endpoint; explicit null clears it (regional endpoint). Endpoint updates are Bedrock only: any endpoint member, including an explicit null, on a non-Bedrock connection is refused with 400. The schema cannot express this because the provider kind is stored, not in the body. Local HTTP approval comes from server-controlled GATEWAY_LOCAL_UPSTREAMS, never client approval fields."
-            }
-          },
-          "required": [
-            "enabled"
-          ],
-          "additionalProperties": false,
-          "allOf": [
-            {
-              "if": {
-                "anyOf": [
-                  {
-                    "required": [
-                      "aws_external_id"
-                    ],
-                    "properties": {
-                      "aws_external_id": {
-                        "type": "string"
-                      }
-                    }
-                  },
-                  {
-                    "required": [
-                      "aws_session_name"
-                    ],
-                    "properties": {
-                      "aws_session_name": {
-                        "type": "string"
-                      }
-                    }
-                  }
-                ]
-              },
-              "then": {
-                "required": [
-                  "credential_ref"
-                ],
-                "properties": {
-                  "credential_ref": {
-                    "type": "string",
-                    "pattern": "^aws:role:"
-                  }
-                }
-              }
-            }
-          ],
-          "description": "AWS options (aws_external_id, aws_session_name) need a restated aws:role: credential_ref in the same body, whatever the stored provider kind: update_provider answers 400 for options without a reference, with a null reference and with any reference that is not an aws:role: reference (stored_reference: only a Bedrock role reference takes options, AwsAuth::from_parts), and the schema states exactly that. Not expressible: a non-Bedrock connection refuses the options even beside a role reference, and the role must be valid and allowed for a Bedrock connection (the stored kind and the server allowlists are not in the body)."
-        },
-        {
-          "type": "array",
-          "prefixItems": [
-            {
-              "type": "boolean"
-            },
-            {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints. Shape: none, an env: reference, or an aws:default / aws:profile:NAME / aws:role:ARN reference (the union over every provider kind; the stored kind and the server allowlists decide the rest).",
-                  "maxLength": 2057,
-                  "pattern": "^(?:none|env:[A-Z_][A-Z0-9_]*|aws:(?:default|profile:[A-Za-z0-9_.+][A-Za-z0-9_.+-]{0,63}|role:arn:(?:aws|aws-[a-z]+(?:-[a-z]+)*):iam::[0-9]{12}:role/(?:[A-Za-z0-9_+=,.@-]+/)*[A-Za-z0-9_+=,.@-]{1,64}))$"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "pattern": "^[A-Za-z0-9_+=,.@:/-]{2,1224}$",
-                  "description": "STS ExternalId: 2-1224 characters of letters, digits and _+=,.@:/- (valid_external_id). Only with a restated aws:role: reference on a Bedrock connection."
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "pattern": "^[A-Za-z0-9_+=,.@-]{2,64}$",
-                  "description": "STS RoleSessionName: 2-64 characters of letters, digits and _+=,.@- (valid_session_name). Only with a restated aws:role: reference on a Bedrock connection."
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "pattern": "^https://[a-z0-9.-]+(?::[0-9]{1,5})?/?$",
-                  "description": "A canonical HTTPS origin without credentials, path, query or fragment (canonical_endpoint); Bedrock endpoints must also be allowlisted by the server (GATEWAY_BEDROCK_ENDPOINT_ALLOWLIST, not expressible here). Only the canonical form is accepted (connection_valid compares the policy's canonical endpoint), so a trailing slash or an explicit default port is schema-valid and refused with 400 (documented divergence)."
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Omission keeps the endpoint; explicit null clears it (regional endpoint). Endpoint updates are Bedrock only: any endpoint member, including an explicit null, on a non-Bedrock connection is refused with 400. The schema cannot express this because the provider kind is stored, not in the body. Local HTTP approval comes from server-controlled GATEWAY_LOCAL_UPSTREAMS, never client approval fields."
-            }
-          ],
-          "minItems": 4,
-          "maxItems": 5,
-          "items": false,
-          "description": "The positional array form carries none of the object form's cross-field rules: it cannot require an aws:role: reference for the AWS options, so [true, \"aws:default\", \"ab\", null] is schema-valid and refused with 400 (documented divergence, probed)."
-        }
-      ],
-      "description": "Closed serde object or existing positional struct array in declared field order. Handler semantic validation is additional. enabled is required. Omitted/null credential_ref keeps the reference; AWS options require a restated role reference. Omitted endpoint keeps it, null clears; any endpoint member, including null, on a non-Bedrock connection is refused with 400. Local approval cannot be supplied by a client."
-    },
     "SetupModelInput": {
       "oneOf": [
         {
@@ -11358,7 +11189,174 @@
       "$ref": "#/components/schemas/SetupProvider"
     },
     "patch_api_v1_platform_providers_by_idRequest": {
-      "$ref": "#/components/schemas/SetupProviderUpdate"
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "credential_ref": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints. Shape: none, an env: reference, or an aws:default / aws:profile:NAME / aws:role:ARN reference (the union over every provider kind; the stored kind and the server allowlists decide the rest).",
+                  "maxLength": 2057,
+                  "pattern": "^(?:none|env:[A-Z_][A-Z0-9_]*|aws:(?:default|profile:[A-Za-z0-9_.+][A-Za-z0-9_.+-]{0,63}|role:arn:(?:aws|aws-[a-z]+(?:-[a-z]+)*):iam::[0-9]{12}:role/(?:[A-Za-z0-9_+=,.@-]+/)*[A-Za-z0-9_+=,.@-]{1,64}))$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "x-omg-unsendable-boundary": "The 2057-character bound covers an aws:role: ARN, which padding cannot keep valid; setup_openapi_fixture_tests pins 2057 characters on the Bedrock connection (schema accepts, handler refuses: the 510-character role path limit) and 2058 (both refuse)."
+            },
+            "aws_external_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_+=,.@:/-]{2,1224}$",
+                  "description": "STS ExternalId: 2-1224 characters of letters, digits and _+=,.@:/- (valid_external_id). Only with a restated aws:role: reference on a Bedrock connection."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "aws_session_name": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_+=,.@-]{2,64}$",
+                  "description": "STS RoleSessionName: 2-64 characters of letters, digits and _+=,.@- (valid_session_name). Only with a restated aws:role: reference on a Bedrock connection."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "endpoint": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^https://[a-z0-9.-]+(?::[0-9]{1,5})?/?$",
+                  "description": "A canonical HTTPS origin without credentials, path, query or fragment (canonical_endpoint); Bedrock endpoints must also be allowlisted by the server (GATEWAY_BEDROCK_ENDPOINT_ALLOWLIST, not expressible here). Only the canonical form is accepted (connection_valid compares the policy's canonical endpoint), so a trailing slash or an explicit default port is schema-valid and refused with 400 (documented divergence)."
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Omission keeps the endpoint; explicit null clears it (regional endpoint). Endpoint updates are Bedrock only: any endpoint member, including an explicit null, on a non-Bedrock connection is refused with 400. The schema cannot express this because the provider kind is stored, not in the body. Local HTTP approval comes from server-controlled GATEWAY_LOCAL_UPSTREAMS, never client approval fields."
+            }
+          },
+          "required": [
+            "enabled"
+          ],
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "aws_external_id"
+                    ],
+                    "properties": {
+                      "aws_external_id": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  {
+                    "required": [
+                      "aws_session_name"
+                    ],
+                    "properties": {
+                      "aws_session_name": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                ]
+              },
+              "then": {
+                "required": [
+                  "credential_ref"
+                ],
+                "properties": {
+                  "credential_ref": {
+                    "type": "string",
+                    "pattern": "^aws:role:"
+                  }
+                }
+              }
+            }
+          ],
+          "description": "AWS options (aws_external_id, aws_session_name) need a restated aws:role: credential_ref in the same body, whatever the stored provider kind: update_provider answers 400 for options without a reference, with a null reference and with any reference that is not an aws:role: reference (stored_reference: only a Bedrock role reference takes options, AwsAuth::from_parts), and the schema states exactly that. Not expressible: a non-Bedrock connection refuses the options even beside a role reference, and the role must be valid and allowed for a Bedrock connection (the stored kind and the server allowlists are not in the body)."
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "boolean"
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "description": "Credential REFERENCE only: an explicitly allowlisted env:NAME, AWS identity reference, or none for approved local connections. Never supply a secret value. References are not returned by these endpoints. Shape: none, an env: reference, or an aws:default / aws:profile:NAME / aws:role:ARN reference (the union over every provider kind; the stored kind and the server allowlists decide the rest).",
+                  "maxLength": 2057,
+                  "pattern": "^(?:none|env:[A-Z_][A-Z0-9_]*|aws:(?:default|profile:[A-Za-z0-9_.+][A-Za-z0-9_.+-]{0,63}|role:arn:(?:aws|aws-[a-z]+(?:-[a-z]+)*):iam::[0-9]{12}:role/(?:[A-Za-z0-9_+=,.@-]+/)*[A-Za-z0-9_+=,.@-]{1,64}))$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_+=,.@:/-]{2,1224}$",
+                  "description": "STS ExternalId: 2-1224 characters of letters, digits and _+=,.@:/- (valid_external_id). Only with a restated aws:role: reference on a Bedrock connection."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_+=,.@-]{2,64}$",
+                  "description": "STS RoleSessionName: 2-64 characters of letters, digits and _+=,.@- (valid_session_name). Only with a restated aws:role: reference on a Bedrock connection."
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^https://[a-z0-9.-]+(?::[0-9]{1,5})?/?$",
+                  "description": "A canonical HTTPS origin without credentials, path, query or fragment (canonical_endpoint); Bedrock endpoints must also be allowlisted by the server (GATEWAY_BEDROCK_ENDPOINT_ALLOWLIST, not expressible here). Only the canonical form is accepted (connection_valid compares the policy's canonical endpoint), so a trailing slash or an explicit default port is schema-valid and refused with 400 (documented divergence)."
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Omission keeps the endpoint; explicit null clears it (regional endpoint). Endpoint updates are Bedrock only: any endpoint member, including an explicit null, on a non-Bedrock connection is refused with 400. The schema cannot express this because the provider kind is stored, not in the body. Local HTTP approval comes from server-controlled GATEWAY_LOCAL_UPSTREAMS, never client approval fields."
+            }
+          ],
+          "minItems": 4,
+          "maxItems": 5,
+          "items": false,
+          "description": "The positional array form carries none of the object form's cross-field rules: it cannot require an aws:role: reference for the AWS options, so [true, \"aws:default\", \"ab\", null] is schema-valid and refused with 400 (documented divergence, probed)."
+        }
+      ],
+      "description": "Closed serde object or existing positional struct array in declared field order. Handler semantic validation is additional. enabled is required. Omitted/null credential_ref keeps the reference; AWS options require a restated role reference. Omitted endpoint keeps it, null clears; any endpoint member, including null, on a non-Bedrock connection is refused with 400. Local approval cannot be supplied by a client."
     },
     "patch_api_v1_platform_providers_by_idResponse": {
       "$ref": "#/components/schemas/SetupOk"

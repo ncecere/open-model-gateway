@@ -2140,6 +2140,40 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         )
         .await;
     }
+    // The PATCH reference's 2057-character bound, built by hand (padding breaks an
+    // ARN): x-omg-unsendable-boundary points here. On the Bedrock connection a
+    // 2057-character role reference is refused by valid_role_arn's 510-character
+    // path limit (documented divergence); one more character is refused by both.
+    let long_role = |name: &str| {
+        format!(
+            "aws:role:arn:aws:iam::123456789012:role/{}{name}",
+            format!("{}/", "a".repeat(125)).repeat(16)
+        )
+    };
+    for (label, reference, expected) in [
+        (
+            "a 2057-character role reference",
+            long_role("n"),
+            SCHEMA_ONLY,
+        ),
+        (
+            "a 2058-character role reference",
+            long_role("nn"),
+            BOTH_REFUSE,
+        ),
+    ] {
+        extra_body(
+            &j,
+            a,
+            "PATCH",
+            patch_template,
+            &patch_bed,
+            label,
+            json!({"enabled":true,"credential_ref":reference}),
+            expected,
+        )
+        .await;
+    }
     // A role reference with options is the schema's way in; a connection that is not
     // Bedrock still refuses it (the stored kind is not in the body).
     extra_body(
