@@ -3055,11 +3055,19 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             json!([10, 1000, 2, 1, 10_000, 5, 50, "100", "month"]),
             json!([null, null, null, null, null, null, null, null, "month"]),
         ] {
-            http_vectors::body_vectors_http(
+            // A positional policy is seeded with serde's tenth field (a budget list):
+            // the 10-item vector past maxItems 9 needs a valid value there.
+            let seeds: Vec<(&str, Value)> = if valid.is_array() {
+                vec![("/9", json!([{"period":"day","amount_microusd":"5"}]))]
+            } else {
+                vec![]
+            };
+            http_vectors::body_vectors_seeded(
                 &mut j.observed,
                 "PUT",
                 "/api/v1/workspaces/{ws}/policy",
                 valid,
+                &seeds,
                 async |body: Value| {
                     let ws = workspace(pool, "Vector workspace", "team", owner_id).await;
                     // One budget per period is a cross-item rule the schema documents
