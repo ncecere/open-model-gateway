@@ -2414,7 +2414,7 @@ pub(crate) async fn body_vectors_extended(
     let run = match run {
         Ok(run) => run,
         Err(e) => {
-            fixtures.record_failure(&e);
+            fixtures.record_failure(&e.context(format!("{method} {template}")));
             return;
         }
     };

@@ -3014,10 +3014,9 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         .await;
     }
     // Batch scheduling: a metrics gate in both forms, a priority, the null arms and
-    // the positional window. The fixture approves no local endpoint, so a gate's URL
-    // is refused by server state (the handler's METRICS_URL message), and the vector
-    // deployment is not a vLLM route, so a priority hint is refused by route state
-    // (PRIORITY_ROUTE): those 400s are domain refusals, read from the message.
+    // both window forms. The fixture approves no local endpoint, so a gate's URL is
+    // refused by server state (the handler's METRICS_URL message): a domain refusal,
+    // read from the message, that also proves the earlier threshold rules passed.
     {
         let (client, root) = (j.client.clone(), j.base.clone());
         let path = format!("/api/v1/platform/deployments/{vdep}/batch-scheduling");
@@ -3033,13 +3032,27 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
                 (format!("{at}/end"), json!("06:0")),
             ]
         };
-        for (valid, candidates) in [
+        // Rule order (RouteSettings::validate): thresholds, metrics URL, priority
+        // route, priority range, window. A gated body is refused at the URL rule and a
+        // priority on the vector (non-vLLM) deployment at the route rule, so neither
+        // carries a later rule's field: the window runs ungated with no priority, and
+        // the priority range runs on the vLLM deployment, where the handler applies it.
+        let vector_path = path.clone();
+        let vllm_path = schedule.clone();
+        for (path, valid, candidates) in [
             (
-                json!({"max_concurrency":3,"yield_live_threshold":5,"metrics":gate.clone(),"priority":10,"window":null}),
+                &vector_path,
+                json!({"max_concurrency":3,"yield_live_threshold":5,"metrics":gate.clone(),"priority":null,"window":null}),
                 vec![],
             ),
             (
-                json!({"max_concurrency":3,"yield_live_threshold":null,"metrics":["http://127.0.0.1:8000/metrics",null,4,50],"priority":null,"window":["UTC",["mon"],"23:00","06:00"]}),
+                &vector_path,
+                json!({"max_concurrency":3,"yield_live_threshold":null,"metrics":["http://127.0.0.1:8000/metrics",null,4,50],"priority":null,"window":null}),
+                vec![],
+            ),
+            (
+                &vector_path,
+                json!({"max_concurrency":3,"window":["UTC",["mon"],"23:00","06:00"]}),
                 vec![
                     ("/window/2".to_owned(), json!("23:00")),
                     ("/window/2".to_owned(), json!("23:0")),
@@ -3048,24 +3061,54 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
                 ],
             ),
             (
-                json!([3, 5, null, 10, {"timezone":"UTC","days":["mon","fri"],"start":"23:00","end":"06:00"}]),
+                &vector_path,
+                json!([3, 5, null, null, {"timezone":"UTC","days":["mon","fri"],"start":"23:00","end":"06:00"}]),
                 times("/4"),
             ),
-            (json!([3, null, gate, null, null]), vec![]),
+            (
+                &vector_path,
+                json!([3, null, null, null, ["UTC", ["mon"], "23:00", "06:00"]]),
+                vec![
+                    ("/4/2".to_owned(), json!("23:00")),
+                    ("/4/2".to_owned(), json!("23:0")),
+                    ("/4/3".to_owned(), json!("06:00")),
+                    ("/4/3".to_owned(), json!("06:0")),
+                ],
+            ),
+            (
+                &vllm_path,
+                json!({"max_concurrency":3,"priority":10}),
+                vec![],
+            ),
+            (&vllm_path, json!([3, null, null, 10, null]), vec![]),
+            (&vector_path, json!([3, null, gate, null, null]), vec![]),
             // The other threshold arms (running and KV cache set, waiting null), the
             // positional gate with only waiting set, and a null gate, at both roots.
-            // No priority or window: those rules run after the URL rule.
             (
+                &vector_path,
                 json!({"max_concurrency":3,"metrics":gate_running.clone()}),
                 vec![],
             ),
             (
+                &vector_path,
                 json!({"max_concurrency":3,"metrics":gate_positional.clone()}),
                 vec![],
             ),
-            (json!({"max_concurrency":3,"metrics":null}), vec![]),
-            (json!([3, null, gate_running, null, null]), vec![]),
-            (json!([3, null, gate_positional, null, null]), vec![]),
+            (
+                &vector_path,
+                json!({"max_concurrency":3,"metrics":null}),
+                vec![],
+            ),
+            (
+                &vector_path,
+                json!([3, null, gate_running, null, null]),
+                vec![],
+            ),
+            (
+                &vector_path,
+                json!([3, null, gate_positional, null, null]),
+                vec![],
+            ),
         ] {
             let candidates: Vec<(&str, Value)> = candidates
                 .iter()
