@@ -2796,7 +2796,9 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             unknown_line,
             BOTH_ACCEPT,
         ),
-        ("65 valued lines", with_lines(tiers(53), false), BOTH_REFUSE),
+        // The 64-valued-line cap is a handler rule the schema documents but
+        // cannot state (no total item bound): a documented schema-only divergence.
+        ("65 valued lines", with_lines(tiers(53), false), SCHEMA_ONLY),
     ] {
         extra_body(
             &j,
