@@ -208,7 +208,12 @@ impl Vx<'_> {
                 (2, Want::Pinned(Handler::Refuse, false)),
             ] {
                 let mut body = self.base_mapping(&format!("mb-{}", unique()));
-                set(&mut body, mb(limit + extra));
+                // A unique ASCII prefix: a fixed value could equal an account the
+                // generated vectors already created (409, not a byte verdict).
+                set(
+                    &mut body,
+                    format!("{}{}", &unique()[..8], mb(limit + extra - 8)),
+                );
                 self.probe(
                     &format!("{label} at {} bytes", limit + extra),
                     self.admin,

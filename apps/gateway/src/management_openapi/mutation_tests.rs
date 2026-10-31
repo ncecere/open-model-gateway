@@ -91,6 +91,8 @@ fn sample(document: &Value, schema: &Value) -> Value {
                     "1.00".to_owned(),
                     // The holds cursor: `<signed integer>_<uuid>`.
                     format!("0_{}", uuid::Uuid::nil()),
+                    // A schedule's `HH:MM` delivery time.
+                    "00:00".to_owned(),
                 ]
                 .into_iter()
                 .chain((!prefix.is_empty()).then(|| format!("{prefix}fixture")))
