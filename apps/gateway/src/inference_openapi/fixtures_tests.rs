@@ -148,12 +148,29 @@ impl ProviderAdapter for Adapter {
                 }
                 (QuestionKind::Score, Some(Value::Array(levels))) => {
                     let share = 1.0 / levels.len() as f64;
+                    // A real System One answer's legend values are provider JSON
+                    // that parse_answers copies unvalidated: rotate every JSON kind
+                    // across calls (the criterion echoed, null, a boolean, a number,
+                    // an object, an array), so each is observed in a real response.
+                    static CALL: std::sync::atomic::AtomicUsize =
+                        std::sync::atomic::AtomicUsize::new(0);
+                    let call = CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     Answer::Score {
                         score: 1.0,
                         legend: levels
                             .iter()
                             .enumerate()
-                            .map(|(i, v)| (i.to_string(), v.clone()))
+                            .map(|(i, v)| {
+                                let value = match (i + call) % 6 {
+                                    0 => v.clone(),
+                                    1 => Value::Null,
+                                    2 => json!(true),
+                                    3 => json!(1),
+                                    4 => json!({"provider":"note"}),
+                                    _ => json!(["provider"]),
+                                };
+                                (i.to_string(), value)
+                            })
                             .collect(),
                         probabilities: (0..levels.len()).map(|i| (i.to_string(), share)).collect(),
                         confidence: None,
