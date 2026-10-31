@@ -2249,20 +2249,40 @@ fn management_openapi_http_vectors_query_candidates_must_straddle_too() {
 
 #[test]
 fn management_openapi_http_vectors_a_stale_unsendable_boundary_is_refused() {
-    // The boundary CAN be sent, so the reviewed reason is dead weight.
-    let stale = json!({"type":"string","maxLength":9000,"x-omg-unsendable-boundary":REASON});
-    let text = format!("{:#}", unsendable_body(stale, json!("abc")).unwrap_err());
-    assert!(
-        text.contains("stale")
-            && text.contains("/big")
-            && text.contains("x-omg-unsendable-boundary"),
-        "{text}"
+    // The boundary CAN be sent, so the reviewed reason is dead weight: the run
+    // reports it unused, and an operation whose runs never need it is stale
+    // (judged across runs; see `..._unsendable_reason_is_judged_across_runs`).
+    let unused = |schema: Value, valid: Value| {
+        let document = property_document(schema);
+        let used = super::http_vectors::body_plan(
+            &document,
+            &document["paths"][TEMPLATE]["post"],
+            &json!({"big":valid}),
+            &[],
+            &[],
+        )
+        .unwrap_or_else(|e| panic!("{e:#}"))
+        .exempt_used;
+        assert_eq!(
+            used,
+            std::collections::BTreeMap::from([("/big".to_owned(), false)])
+        );
+        let mut fixtures = super::responses::PositiveFixtures::default();
+        fixtures.record_unsendable("POST", TEMPLATE, &used);
+        assert_eq!(
+            fixtures.stale_unsendable(&format!("POST {TEMPLATE}")),
+            vec!["/big".to_owned()]
+        );
+    };
+    unused(
+        json!({"type":"string","maxLength":9000,"x-omg-unsendable-boundary":REASON}),
+        json!("abc"),
     );
     // An array location likewise.
-    let stale = json!({"type":"array","maxItems":3,"items":{"type":"string"},
-        "x-omg-unsendable-boundary":REASON});
-    let text = format!("{:#}", unsendable_body(stale, json!(["a"])).unwrap_err());
-    assert!(text.contains("stale") && text.contains("/big"), "{text}");
+    unused(
+        json!({"type":"array","maxItems":3,"items":{"type":"string"},"x-omg-unsendable-boundary":REASON}),
+        json!(["a"]),
+    );
     // A query parameter likewise.
     let text = format!(
         "{:#}",
