@@ -1030,6 +1030,32 @@ fn management_openapi_http_vectors_an_unsendable_decisive_body_vector_fails() {
     .unwrap();
 }
 
+/// An unsendable-boundary reason is judged in the runs where its location HAS a
+/// decisive bound: a run whose union arm or conditional branch puts no bound
+/// on the location has nothing to excuse (neither used nor stale), while a run
+/// whose bound can be sent still finds the reason stale. (Slice 3: Bedrock-only
+/// length bounds on a property that every provider kind sends.)
+#[test]
+fn management_openapi_http_vectors_unsendable_reason_is_judged_where_a_bound_applies() {
+    let schema = |cap: u64| {
+        json!({"type":"object","required":["kind","big"],"additionalProperties":false,
+            "properties":{"kind":{"enum":["a","b"]},"big":{"type":"string","x-omg-unsendable-boundary":REASON}},
+            "allOf":[{"if":{"properties":{"kind":{"const":"b"}},"required":["kind"]},
+                "then":{"properties":{"big":{"maxLength":cap}}}}]})
+    };
+    let plan = |cap: u64, valid: Value| cases_of(&body_only(schema(cap)), &valid, &[]).map(|_| ());
+    // No bound applies in this run: nothing to excuse, not stale.
+    plan(150_000, json!({"kind":"a","big":"abc"})).unwrap_or_else(|e| panic!("{e:#}"));
+    // The bound applies and cannot be sent: the reason is used.
+    plan(150_000, json!({"kind":"b","big":"abc"})).unwrap_or_else(|e| panic!("{e:#}"));
+    // The bound applies and CAN be sent: the reason is stale.
+    let text = format!(
+        "{:#}",
+        plan(9000, json!({"kind":"b","big":"abc"})).unwrap_err()
+    );
+    assert!(text.contains("stale"), "{text}");
+}
+
 #[test]
 fn management_openapi_http_vectors_non_decisive_drops_are_counted_not_silent() {
     use super::http_vectors::Notes;
