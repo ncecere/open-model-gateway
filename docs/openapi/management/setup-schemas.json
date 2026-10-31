@@ -1306,219 +1306,23 @@
           "type": "object",
           "properties": {
             "meter": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "input_tokens",
-                    "output_tokens",
-                    "cache_read_tokens",
-                    "cache_write_tokens",
-                    "cache_write_5m_tokens",
-                    "cache_write_1h_tokens",
-                    "output_images",
-                    "input_characters",
-                    "input_audio_seconds_ms",
-                    "output_audio_seconds_ms",
-                    "search_units",
-                    "requests",
-                    "input_audio_tokens",
-                    "cache_read_audio_tokens",
-                    "output_audio_tokens",
-                    "output_video_seconds_ms"
-                  ]
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_read_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_read_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_write_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_write_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_write_5m_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_write_5m_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_write_1h_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_write_1h_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_images": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_images"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_characters": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_characters"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_audio_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_audio_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_audio_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_audio_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "search_units": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "search_units"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "requests": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "requests"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_audio_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_audio_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_read_audio_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_read_audio_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_audio_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_audio_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_video_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_video_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                }
+              "enum": [
+                "input_tokens",
+                "output_tokens",
+                "cache_read_tokens",
+                "cache_write_tokens",
+                "cache_write_5m_tokens",
+                "cache_write_1h_tokens",
+                "output_images",
+                "input_characters",
+                "input_audio_seconds_ms",
+                "output_audio_seconds_ms",
+                "search_units",
+                "requests",
+                "input_audio_tokens",
+                "cache_read_audio_tokens",
+                "output_audio_tokens",
+                "output_video_seconds_ms"
               ]
             },
             "microusd_per_batch": {
@@ -1556,219 +1360,23 @@
           "type": "object",
           "properties": {
             "meter": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "input_tokens",
-                    "output_tokens",
-                    "cache_read_tokens",
-                    "cache_write_tokens",
-                    "cache_write_5m_tokens",
-                    "cache_write_1h_tokens",
-                    "output_images",
-                    "input_characters",
-                    "input_audio_seconds_ms",
-                    "output_audio_seconds_ms",
-                    "search_units",
-                    "requests",
-                    "input_audio_tokens",
-                    "cache_read_audio_tokens",
-                    "output_audio_tokens",
-                    "output_video_seconds_ms"
-                  ]
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_read_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_read_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_write_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_write_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_write_5m_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_write_5m_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_write_1h_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_write_1h_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_images": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_images"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_characters": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_characters"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_audio_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_audio_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_audio_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_audio_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "search_units": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "search_units"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "requests": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "requests"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_audio_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_audio_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_read_audio_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_read_audio_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_audio_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_audio_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_video_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_video_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                }
+              "enum": [
+                "input_tokens",
+                "output_tokens",
+                "cache_read_tokens",
+                "cache_write_tokens",
+                "cache_write_5m_tokens",
+                "cache_write_1h_tokens",
+                "output_images",
+                "input_characters",
+                "input_audio_seconds_ms",
+                "output_audio_seconds_ms",
+                "search_units",
+                "requests",
+                "input_audio_tokens",
+                "cache_read_audio_tokens",
+                "output_audio_tokens",
+                "output_video_seconds_ms"
               ]
             },
             "microusd_per_batch": {
@@ -1806,23 +1414,7 @@
           "type": "object",
           "properties": {
             "meter": {
-              "anyOf": [
-                {
-                  "const": "input_tokens"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_tokens"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "input_tokens"
             },
             "microusd_per_batch": {
               "type": "string",
@@ -1876,23 +1468,7 @@
           "type": "object",
           "properties": {
             "meter": {
-              "anyOf": [
-                {
-                  "const": "output_tokens"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_tokens"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "output_tokens"
             },
             "microusd_per_batch": {
               "type": "string",
@@ -1946,23 +1522,7 @@
           "type": "object",
           "properties": {
             "meter": {
-              "anyOf": [
-                {
-                  "const": "cache_read_tokens"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_read_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_read_tokens"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "cache_read_tokens"
             },
             "microusd_per_batch": {
               "type": "string",
@@ -2016,23 +1576,7 @@
           "type": "object",
           "properties": {
             "meter": {
-              "anyOf": [
-                {
-                  "const": "cache_write_tokens"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_write_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_write_tokens"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "cache_write_tokens"
             },
             "microusd_per_batch": {
               "type": "string",
@@ -2086,23 +1630,7 @@
           "type": "object",
           "properties": {
             "meter": {
-              "anyOf": [
-                {
-                  "const": "cache_write_5m_tokens"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_write_5m_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_write_5m_tokens"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "cache_write_5m_tokens"
             },
             "microusd_per_batch": {
               "type": "string",
@@ -2156,23 +1684,7 @@
           "type": "object",
           "properties": {
             "meter": {
-              "anyOf": [
-                {
-                  "const": "cache_write_1h_tokens"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_write_1h_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_write_1h_tokens"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "cache_write_1h_tokens"
             },
             "microusd_per_batch": {
               "type": "string",
@@ -2226,23 +1738,7 @@
           "type": "object",
           "properties": {
             "meter": {
-              "anyOf": [
-                {
-                  "const": "output_images"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_images": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_images"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "output_images"
             },
             "microusd_per_batch": {
               "type": "string",
@@ -2304,23 +1800,7 @@
           "type": "object",
           "properties": {
             "meter": {
-              "anyOf": [
-                {
-                  "const": "input_characters"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_characters": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_characters"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "input_characters"
             },
             "microusd_per_batch": {
               "type": "string",
@@ -2374,23 +1854,7 @@
           "type": "object",
           "properties": {
             "meter": {
-              "anyOf": [
-                {
-                  "const": "input_audio_seconds_ms"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_audio_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_audio_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "input_audio_seconds_ms"
             },
             "microusd_per_batch": {
               "type": "string",
@@ -2444,23 +1908,7 @@
           "type": "object",
           "properties": {
             "meter": {
-              "anyOf": [
-                {
-                  "const": "input_audio_seconds_ms"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_audio_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_audio_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "input_audio_seconds_ms"
             },
             "microusd_per_batch": {
               "type": "string",
@@ -2514,23 +1962,7 @@
           "type": "object",
           "properties": {
             "meter": {
-              "anyOf": [
-                {
-                  "const": "input_audio_seconds_ms"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_audio_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_audio_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "input_audio_seconds_ms"
             },
             "microusd_per_batch": {
               "type": "string",
@@ -2584,23 +2016,7 @@
           "type": "object",
           "properties": {
             "meter": {
-              "anyOf": [
-                {
-                  "const": "output_audio_seconds_ms"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_audio_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_audio_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "output_audio_seconds_ms"
             },
             "microusd_per_batch": {
               "type": "string",
@@ -2654,23 +2070,7 @@
           "type": "object",
           "properties": {
             "meter": {
-              "anyOf": [
-                {
-                  "const": "output_audio_seconds_ms"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_audio_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_audio_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "output_audio_seconds_ms"
             },
             "microusd_per_batch": {
               "type": "string",
@@ -2724,23 +2124,7 @@
           "type": "object",
           "properties": {
             "meter": {
-              "anyOf": [
-                {
-                  "const": "output_audio_seconds_ms"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_audio_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_audio_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "output_audio_seconds_ms"
             },
             "microusd_per_batch": {
               "type": "string",
@@ -2794,23 +2178,7 @@
           "type": "object",
           "properties": {
             "meter": {
-              "anyOf": [
-                {
-                  "const": "search_units"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "search_units": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "search_units"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "search_units"
             },
             "microusd_per_batch": {
               "type": "string",
@@ -2864,23 +2232,7 @@
           "type": "object",
           "properties": {
             "meter": {
-              "anyOf": [
-                {
-                  "const": "requests"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "requests": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "requests"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "requests"
             },
             "microusd_per_batch": {
               "type": "string",
@@ -2934,23 +2286,7 @@
           "type": "object",
           "properties": {
             "meter": {
-              "anyOf": [
-                {
-                  "const": "input_audio_tokens"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_audio_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_audio_tokens"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "input_audio_tokens"
             },
             "microusd_per_batch": {
               "type": "string",
@@ -2995,23 +2331,7 @@
           "type": "object",
           "properties": {
             "meter": {
-              "anyOf": [
-                {
-                  "const": "cache_read_audio_tokens"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_read_audio_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_read_audio_tokens"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "cache_read_audio_tokens"
             },
             "microusd_per_batch": {
               "type": "string",
@@ -3056,23 +2376,7 @@
           "type": "object",
           "properties": {
             "meter": {
-              "anyOf": [
-                {
-                  "const": "output_audio_tokens"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_audio_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_audio_tokens"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "output_audio_tokens"
             },
             "microusd_per_batch": {
               "type": "string",
@@ -3117,23 +2421,7 @@
           "type": "object",
           "properties": {
             "meter": {
-              "anyOf": [
-                {
-                  "const": "output_video_seconds_ms"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_video_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_video_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "output_video_seconds_ms"
             },
             "microusd_per_batch": {
               "type": "string",
@@ -3195,23 +2483,7 @@
           "type": "object",
           "properties": {
             "meter": {
-              "anyOf": [
-                {
-                  "const": "output_video_seconds_ms"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_video_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_video_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "output_video_seconds_ms"
             },
             "microusd_per_batch": {
               "type": "string",
@@ -3273,23 +2545,7 @@
           "type": "object",
           "properties": {
             "meter": {
-              "anyOf": [
-                {
-                  "const": "output_video_seconds_ms"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_video_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_video_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "output_video_seconds_ms"
             },
             "microusd_per_batch": {
               "type": "string",
@@ -3351,219 +2607,23 @@
           "type": "array",
           "prefixItems": [
             {
-              "anyOf": [
-                {
-                  "enum": [
-                    "input_tokens",
-                    "output_tokens",
-                    "cache_read_tokens",
-                    "cache_write_tokens",
-                    "cache_write_5m_tokens",
-                    "cache_write_1h_tokens",
-                    "output_images",
-                    "input_characters",
-                    "input_audio_seconds_ms",
-                    "output_audio_seconds_ms",
-                    "search_units",
-                    "requests",
-                    "input_audio_tokens",
-                    "cache_read_audio_tokens",
-                    "output_audio_tokens",
-                    "output_video_seconds_ms"
-                  ]
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_read_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_read_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_write_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_write_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_write_5m_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_write_5m_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_write_1h_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_write_1h_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_images": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_images"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_characters": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_characters"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_audio_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_audio_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_audio_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_audio_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "search_units": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "search_units"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "requests": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "requests"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_audio_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_audio_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_read_audio_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_read_audio_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_audio_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_audio_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_video_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_video_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                }
+              "enum": [
+                "input_tokens",
+                "output_tokens",
+                "cache_read_tokens",
+                "cache_write_tokens",
+                "cache_write_5m_tokens",
+                "cache_write_1h_tokens",
+                "output_images",
+                "input_characters",
+                "input_audio_seconds_ms",
+                "output_audio_seconds_ms",
+                "search_units",
+                "requests",
+                "input_audio_tokens",
+                "cache_read_audio_tokens",
+                "output_audio_tokens",
+                "output_video_seconds_ms"
               ]
             },
             {
@@ -3599,219 +2659,23 @@
           "type": "array",
           "prefixItems": [
             {
-              "anyOf": [
-                {
-                  "enum": [
-                    "input_tokens",
-                    "output_tokens",
-                    "cache_read_tokens",
-                    "cache_write_tokens",
-                    "cache_write_5m_tokens",
-                    "cache_write_1h_tokens",
-                    "output_images",
-                    "input_characters",
-                    "input_audio_seconds_ms",
-                    "output_audio_seconds_ms",
-                    "search_units",
-                    "requests",
-                    "input_audio_tokens",
-                    "cache_read_audio_tokens",
-                    "output_audio_tokens",
-                    "output_video_seconds_ms"
-                  ]
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_read_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_read_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_write_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_write_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_write_5m_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_write_5m_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_write_1h_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_write_1h_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_images": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_images"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_characters": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_characters"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_audio_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_audio_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_audio_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_audio_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "search_units": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "search_units"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "requests": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "requests"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_audio_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_audio_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_read_audio_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_read_audio_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_audio_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_audio_tokens"
-                  ],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_video_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_video_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                }
+              "enum": [
+                "input_tokens",
+                "output_tokens",
+                "cache_read_tokens",
+                "cache_write_tokens",
+                "cache_write_5m_tokens",
+                "cache_write_1h_tokens",
+                "output_images",
+                "input_characters",
+                "input_audio_seconds_ms",
+                "output_audio_seconds_ms",
+                "search_units",
+                "requests",
+                "input_audio_tokens",
+                "cache_read_audio_tokens",
+                "output_audio_tokens",
+                "output_video_seconds_ms"
               ]
             },
             {
@@ -3847,23 +2711,7 @@
           "type": "array",
           "prefixItems": [
             {
-              "anyOf": [
-                {
-                  "const": "input_tokens"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_tokens"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "input_tokens"
             },
             {
               "type": "string",
@@ -3912,23 +2760,7 @@
           "type": "array",
           "prefixItems": [
             {
-              "anyOf": [
-                {
-                  "const": "output_tokens"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_tokens"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "output_tokens"
             },
             {
               "type": "string",
@@ -3977,23 +2809,7 @@
           "type": "array",
           "prefixItems": [
             {
-              "anyOf": [
-                {
-                  "const": "cache_read_tokens"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_read_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_read_tokens"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "cache_read_tokens"
             },
             {
               "type": "string",
@@ -4042,23 +2858,7 @@
           "type": "array",
           "prefixItems": [
             {
-              "anyOf": [
-                {
-                  "const": "cache_write_tokens"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_write_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_write_tokens"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "cache_write_tokens"
             },
             {
               "type": "string",
@@ -4107,23 +2907,7 @@
           "type": "array",
           "prefixItems": [
             {
-              "anyOf": [
-                {
-                  "const": "cache_write_5m_tokens"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_write_5m_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_write_5m_tokens"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "cache_write_5m_tokens"
             },
             {
               "type": "string",
@@ -4172,23 +2956,7 @@
           "type": "array",
           "prefixItems": [
             {
-              "anyOf": [
-                {
-                  "const": "cache_write_1h_tokens"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_write_1h_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_write_1h_tokens"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "cache_write_1h_tokens"
             },
             {
               "type": "string",
@@ -4237,23 +3005,7 @@
           "type": "array",
           "prefixItems": [
             {
-              "anyOf": [
-                {
-                  "const": "output_images"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_images": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_images"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "output_images"
             },
             {
               "type": "string",
@@ -4310,23 +3062,7 @@
           "type": "array",
           "prefixItems": [
             {
-              "anyOf": [
-                {
-                  "const": "input_characters"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_characters": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_characters"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "input_characters"
             },
             {
               "type": "string",
@@ -4375,23 +3111,7 @@
           "type": "array",
           "prefixItems": [
             {
-              "anyOf": [
-                {
-                  "const": "input_audio_seconds_ms"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_audio_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_audio_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "input_audio_seconds_ms"
             },
             {
               "type": "string",
@@ -4440,23 +3160,7 @@
           "type": "array",
           "prefixItems": [
             {
-              "anyOf": [
-                {
-                  "const": "input_audio_seconds_ms"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_audio_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_audio_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "input_audio_seconds_ms"
             },
             {
               "type": "string",
@@ -4505,23 +3209,7 @@
           "type": "array",
           "prefixItems": [
             {
-              "anyOf": [
-                {
-                  "const": "input_audio_seconds_ms"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_audio_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_audio_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "input_audio_seconds_ms"
             },
             {
               "type": "string",
@@ -4570,23 +3258,7 @@
           "type": "array",
           "prefixItems": [
             {
-              "anyOf": [
-                {
-                  "const": "output_audio_seconds_ms"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_audio_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_audio_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "output_audio_seconds_ms"
             },
             {
               "type": "string",
@@ -4635,23 +3307,7 @@
           "type": "array",
           "prefixItems": [
             {
-              "anyOf": [
-                {
-                  "const": "output_audio_seconds_ms"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_audio_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_audio_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "output_audio_seconds_ms"
             },
             {
               "type": "string",
@@ -4700,23 +3356,7 @@
           "type": "array",
           "prefixItems": [
             {
-              "anyOf": [
-                {
-                  "const": "output_audio_seconds_ms"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_audio_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_audio_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "output_audio_seconds_ms"
             },
             {
               "type": "string",
@@ -4765,23 +3405,7 @@
           "type": "array",
           "prefixItems": [
             {
-              "anyOf": [
-                {
-                  "const": "search_units"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "search_units": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "search_units"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "search_units"
             },
             {
               "type": "string",
@@ -4830,23 +3454,7 @@
           "type": "array",
           "prefixItems": [
             {
-              "anyOf": [
-                {
-                  "const": "requests"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "requests": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "requests"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "requests"
             },
             {
               "type": "string",
@@ -4895,23 +3503,7 @@
           "type": "array",
           "prefixItems": [
             {
-              "anyOf": [
-                {
-                  "const": "input_audio_tokens"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "input_audio_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "input_audio_tokens"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "input_audio_tokens"
             },
             {
               "type": "string",
@@ -4951,23 +3543,7 @@
           "type": "array",
           "prefixItems": [
             {
-              "anyOf": [
-                {
-                  "const": "cache_read_audio_tokens"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "cache_read_audio_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "cache_read_audio_tokens"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "cache_read_audio_tokens"
             },
             {
               "type": "string",
@@ -5007,23 +3583,7 @@
           "type": "array",
           "prefixItems": [
             {
-              "anyOf": [
-                {
-                  "const": "output_audio_tokens"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_audio_tokens": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_audio_tokens"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "output_audio_tokens"
             },
             {
               "type": "string",
@@ -5063,23 +3623,7 @@
           "type": "array",
           "prefixItems": [
             {
-              "anyOf": [
-                {
-                  "const": "output_video_seconds_ms"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_video_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_video_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "output_video_seconds_ms"
             },
             {
               "type": "string",
@@ -5136,23 +3680,7 @@
           "type": "array",
           "prefixItems": [
             {
-              "anyOf": [
-                {
-                  "const": "output_video_seconds_ms"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_video_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_video_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "output_video_seconds_ms"
             },
             {
               "type": "string",
@@ -5209,23 +3737,7 @@
           "type": "array",
           "prefixItems": [
             {
-              "anyOf": [
-                {
-                  "const": "output_video_seconds_ms"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "output_video_seconds_ms": {
-                      "type": "null"
-                    }
-                  },
-                  "required": [
-                    "output_video_seconds_ms"
-                  ],
-                  "additionalProperties": false
-                }
-              ]
+              "const": "output_video_seconds_ms"
             },
             {
               "type": "string",
@@ -5279,7 +3791,7 @@
           "items": false
         }
       ],
-      "description": "Custom PriceLines parser also rejects duplicate meter/variant/tier keys, NA conflicts, all-unknown and audio-only lists. RawLine accepts object or positional struct array; stored canonical lines are separate. The externally tagged unit Meter accepts a name string or a single-key object whose value is null; responses always use strings. sku_label is non-blank text without control characters (C0, DEL or C1) of at most 80 CHARACTERS (label_valid counts chars(), not bytes, so maxLength is exact). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank."
+      "description": "Custom PriceLines parser also rejects duplicate meter/variant/tier keys, NA conflicts, all-unknown and audio-only lists. RawLine accepts object or positional struct array; stored canonical lines are separate. The externally tagged unit Meter accepts a name string or a single-key object whose value is null; responses always use strings. sku_label is non-blank text without control characters (C0, DEL or C1) of at most 80 CHARACTERS (label_valid counts chars(), not bytes, so maxLength is exact). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank. Meters are stated as strings. Stricter than the handler (documented): serde also accepts the object spelling of a unit variant ({\"input_tokens\":null}); setup_openapi_fixture_tests pins it as handler-only."
     },
     "SetupPriceLine": {
       "anyOf": [

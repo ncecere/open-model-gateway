@@ -2557,8 +2557,8 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     )
     .await;
     // The other price shapes: version 1 (rates), version 2 (cache pricing) and a
-    // version 3 list with explicit unknown lines, seven of them in serde's object
-    // spelling of the meter ({"cache_read_tokens":null}) and one as a string.
+    // version 3 list with explicit unknown lines in place of seven not-applicable
+    // lines, plus an unknown audio-token meter.
     let mut unknowns = v3_price();
     let object_meters = [
         "cache_read_tokens",
@@ -2577,7 +2577,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         .cloned()
         .collect();
     for meter in object_meters {
-        lines.push(json!({"meter":{meter:null},"unknown":true}));
+        lines.push(json!({"meter":meter,"unknown":true}));
     }
     lines.push(json!({"meter":"output_audio_tokens","unknown":true}));
     unknowns["price_lines"] = json!(lines);
@@ -2998,6 +2998,17 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         // The 64-valued-line cap is a handler rule the schema documents but
         // cannot state (no total item bound): a documented schema-only divergence.
         ("65 valued lines", with_lines(tiers(53), false), SCHEMA_ONLY),
+        // The schema states meters as strings; serde also takes the object
+        // spelling of a unit variant (documented: stricter than the handler).
+        (
+            "a meter in serde's object spelling",
+            {
+                let mut body = v3_price();
+                body["price_lines"][0]["meter"] = json!({"input_tokens":null});
+                body
+            },
+            HANDLER_ONLY,
+        ),
     ] {
         extra_body(
             &j,
