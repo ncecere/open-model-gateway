@@ -88,9 +88,11 @@ fn sample(document: &Value, schema: &Value) -> Value {
                     "1".to_owned(),
                     "0.00".to_owned(),
                     "1.00".to_owned(),
-                    format!("{prefix}fixture"),
+                    // The holds cursor: `<signed integer>_<uuid>`.
+                    format!("0_{}", uuid::Uuid::nil()),
                 ]
                 .into_iter()
+                .chain((!prefix.is_empty()).then(|| format!("{prefix}fixture")))
                 .find(|candidate| accepts(candidate))
                 .unwrap_or_else(|| "0".to_owned())
             }

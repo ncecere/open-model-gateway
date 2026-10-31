@@ -4418,13 +4418,37 @@
               "maxItems": 31
             },
             "has_more": {
-              "type": "boolean"
+              "const": false
             },
             "next_page": {
-              "type": [
-                "string",
-                "null"
-              ],
+              "type": "null",
+              "description": "The last page carries no continuation cursor."
+            }
+          },
+          "required": [
+            "data",
+            "has_more",
+            "next_page"
+          ],
+          "additionalProperties": false,
+          "description": "The last page: has_more=false and next_page=null."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "data": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/MoneyProviderBucket"
+              },
+              "minItems": 1,
+              "maxItems": 31
+            },
+            "has_more": {
+              "const": true
+            },
+            "next_page": {
+              "type": "string",
               "minLength": 1,
               "maxLength": 4096,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
@@ -4438,35 +4462,7 @@
             "next_page"
           ],
           "additionalProperties": false,
-          "if": {
-            "properties": {
-              "has_more": {
-                "const": false
-              }
-            },
-            "required": [
-              "has_more"
-            ]
-          },
-          "then": {
-            "properties": {
-              "next_page": {
-                "type": "null"
-              }
-            }
-          },
-          "else": {
-            "properties": {
-              "next_page": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 4096,
-                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405)."
-              }
-            }
-          },
-          "description": "has_more=false (the last page) carries next_page=null; every earlier page has has_more=true and a continuation cursor."
+          "description": "An earlier page: has_more=true and a continuation cursor."
         },
         {
           "type": "array",
@@ -7481,7 +7477,7 @@
       "additionalProperties": false
     },
     "MoneyPlatformExploreIdentity": {
-      "description": "Group identity. anyOf, not oneOf: a personal-workspace row (id and \"Personal \u00b7 <owner>\" name; usage totals only, never its keys, request or execution details) also satisfies the generic identified row, and workspace names are free text, so a shared workspace may legally carry the same prefix.",
+      "description": "Group identity. anyOf, not oneOf: a personal-workspace row (id and \"Personal · <owner>\" name; usage totals only, never its keys, request or execution details) also satisfies the generic identified row, and workspace names are free text, so a shared workspace may legally carry the same prefix.",
       "anyOf": [
         {
           "$ref": "#/components/schemas/MoneyPlatformExploreRedactedKey"
@@ -9712,7 +9708,7 @@
                       },
                       "name": {
                         "type": "string",
-                        "pattern": "^Personal \u00b7 "
+                        "pattern": "^Personal · "
                       },
                       "kind": {
                         "const": "personal"
@@ -12539,7 +12535,7 @@
     },
     "MoneyPlatformExplorePersonalWorkspace": {
       "type": "object",
-      "description": "A personal workspace as a group (group_by or then_by = workspace): its workspace id and the \"Personal \u00b7 <owner>\" label that BASE builds for platform scope (reports/usage BASE: 'Personal \u00b7 '||display name, email or 'former user'). Platform Admins and Auditors see this identity with usage and cost totals only; the workspace's keys are collapsed into the redacted key row and its requests, executions, prompts and owner choices are never exposed.",
+      "description": "A personal workspace as a group (group_by or then_by = workspace): its workspace id and the \"Personal · <owner>\" label that BASE builds for platform scope (reports/usage BASE: 'Personal · '||display name, email or 'former user'). Platform Admins and Auditors see this identity with usage and cost totals only; the workspace's keys are collapsed into the redacted key row and its requests, executions, prompts and owner choices are never exposed.",
       "properties": {
         "id": {
           "type": "string",
@@ -12547,7 +12543,7 @@
         },
         "name": {
           "type": "string",
-          "pattern": "^Personal \u00b7 "
+          "pattern": "^Personal · "
         }
       },
       "required": [
