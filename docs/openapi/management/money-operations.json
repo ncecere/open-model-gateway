@@ -383,7 +383,7 @@
             }
           }
         },
-        "description": "Live authorization precedes every aggregate and page. Platform Admins/Auditors read totals; personal keys are never selectable by a platform key filter. Shared members see only their own human-key activity; workspace administrators see workspace-wide activity, and foreign personal details are hidden. Costs are configured-rate estimates, not invoices; known subtotals and retained held floors are not proven upper bounds. Unknown values remain null. Cost-center dimensions use admission snapshots, not current assignments. Platform Admins and Auditors also see personal workspaces by identity (id and \"Personal \u00b7 <owner>\" name) with their usage and cost totals and platform-managed configuration; never their keys, request or execution details, prompts or owner choices.",
+        "description": "Live authorization precedes every aggregate and page. Platform Admins/Auditors read totals; personal keys are never selectable by a platform key filter. Shared members see only their own human-key activity; workspace administrators see workspace-wide activity, and foreign personal details are hidden. Costs are configured-rate estimates, not invoices; known subtotals and retained held floors are not proven upper bounds. Unknown values remain null. Cost-center dimensions use admission snapshots, not current assignments. Platform Admins and Auditors also see personal workspaces by identity (id and \"Personal · <owner>\" name) with their usage and cost totals and platform-managed configuration; never their keys, request or execution details, prompts or owner choices.",
         "parameters": [
           {
             "name": "start_date",
@@ -393,7 +393,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; the range [start_date, end_date) is 1\u201393 days (usage.rs period)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–93 days (governance/reports.rs Filters::parse)."
           },
           {
             "name": "end_date",
@@ -568,7 +568,7 @@
             }
           }
         },
-        "description": "Live authorization precedes every aggregate and page. Platform Admins/Auditors read totals; personal keys are never selectable by a platform key filter. Shared members see only their own human-key activity; workspace administrators see workspace-wide activity, and foreign personal details are hidden. Costs are configured-rate estimates, not invoices; known subtotals and retained held floors are not proven upper bounds. Unknown values remain null. Cost-center dimensions use admission snapshots, not current assignments. Platform Admins and Auditors also see personal workspaces by identity (id and \"Personal \u00b7 <owner>\" name) with their usage and cost totals and platform-managed configuration; never their keys, request or execution details, prompts or owner choices.",
+        "description": "Live authorization precedes every aggregate and page. Platform Admins/Auditors read totals; personal keys are never selectable by a platform key filter. Shared members see only their own human-key activity; workspace administrators see workspace-wide activity, and foreign personal details are hidden. Costs are configured-rate estimates, not invoices; known subtotals and retained held floors are not proven upper bounds. Unknown values remain null. Cost-center dimensions use admission snapshots, not current assignments. Platform Admins and Auditors also see personal workspaces by identity (id and \"Personal · <owner>\" name) with their usage and cost totals and platform-managed configuration; never their keys, request or execution details, prompts or owner choices.",
         "parameters": [
           {
             "name": "start_date",
@@ -578,7 +578,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; the range [start_date, end_date) is 1\u201393 days (usage.rs period)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–93 days (usage.rs period)."
           },
           {
             "name": "end_date",
@@ -769,7 +769,7 @@
             }
           }
         },
-        "description": "Live authorization precedes every aggregate and page. Platform Admins/Auditors read totals; personal keys are never selectable by a platform key filter. Shared members see only their own human-key activity; workspace administrators see workspace-wide activity, and foreign personal details are hidden. Costs are configured-rate estimates, not invoices; known subtotals and retained held floors are not proven upper bounds. Unknown values remain null. Cost-center dimensions use admission snapshots, not current assignments. Platform Admins and Auditors also see personal workspaces by identity (id and \"Personal \u00b7 <owner>\" name) with their usage and cost totals and platform-managed configuration; never their keys, request or execution details, prompts or owner choices.",
+        "description": "Live authorization precedes every aggregate and page. Platform Admins/Auditors read totals; personal keys are never selectable by a platform key filter. Shared members see only their own human-key activity; workspace administrators see workspace-wide activity, and foreign personal details are hidden. Costs are configured-rate estimates, not invoices; known subtotals and retained held floors are not proven upper bounds. Unknown values remain null. Cost-center dimensions use admission snapshots, not current assignments. Platform Admins and Auditors also see personal workspaces by identity (id and \"Personal · <owner>\" name) with their usage and cost totals and platform-managed configuration; never their keys, request or execution details, prompts or owner choices.",
         "parameters": [
           {
             "name": "start_date",
@@ -779,7 +779,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; the range [start_date, end_date) is 1\u201393 days (usage.rs period)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–93 days (usage.rs period)."
           },
           {
             "name": "end_date",
@@ -920,7 +920,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; the range [start_date, end_date) is 1\u201393 days (usage.rs period)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–366 days (storage_usage.rs)."
           },
           {
             "name": "end_date",
@@ -2402,7 +2402,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; the range [start_date, end_date) is 1\u201393 days (usage.rs period)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–93 days (governance/reports.rs Filters::parse)."
           },
           {
             "name": "end_date",
@@ -2633,7 +2633,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; the range [start_date, end_date) is 1\u201393 days (usage.rs period)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–93 days (governance/reports.rs Filters::parse)."
           },
           {
             "name": "end_date",
@@ -2981,7 +2981,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; the range [start_date, end_date) is 1\u201393 days (usage.rs period)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–93 days (usage.rs period)."
           },
           {
             "name": "end_date",
@@ -3182,7 +3182,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; the range [start_date, end_date) is 1\u201393 days (usage.rs period)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–93 days (usage.rs period)."
           },
           {
             "name": "end_date",
@@ -3323,7 +3323,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; the range [start_date, end_date) is 1\u201393 days (usage.rs period)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–366 days (storage_usage.rs)."
           },
           {
             "name": "end_date",
@@ -3434,7 +3434,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Inclusive UTC date; the range [start_date, end_date) is 1\u201393 days (usage.rs period)."
+            "description": "Inclusive UTC date; the range [start_date, end_date) is 1–93 days (governance/reports.rs Filters::parse)."
           },
           {
             "name": "end_date",
