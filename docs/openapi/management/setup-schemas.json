@@ -7828,7 +7828,8 @@
           "type": "object",
           "properties": {
             "url": {
-              "type": "string"
+              "type": "string",
+              "description": "The approved metrics URL: at most 2048 bytes and a parseable URL (metrics_endpoint); a longer or unparseable value is schema-valid and refused with 400 (documented divergence)."
             },
             "max_waiting": {
               "anyOf": [
@@ -11156,7 +11157,7 @@
                       {
                         "type": "string",
                         "pattern": "^https://[a-z0-9.-]+(?::[0-9]{1,5})?/?$",
-                        "description": "A canonical HTTPS origin without credentials, path, query or fragment (canonical_endpoint); Bedrock endpoints must also be allowlisted by the server (GATEWAY_BEDROCK_ENDPOINT_ALLOWLIST, not expressible here)."
+                        "description": "A canonical HTTPS origin without credentials, path, query or fragment (canonical_endpoint); Bedrock endpoints must also be allowlisted by the server (GATEWAY_BEDROCK_ENDPOINT_ALLOWLIST, not expressible here). Only the canonical form is accepted (connection_valid compares the policy's canonical endpoint), so a trailing slash or an explicit default port is schema-valid and refused with 400 (documented divergence)."
                       }
                     ]
                   }
@@ -11232,7 +11233,8 @@
               "then": {
                 "properties": {
                   "credential_ref": {
-                    "pattern": "^(none|env:[A-Z_][A-Z0-9_]*)$"
+                    "pattern": "^(none|env:[A-Z_][A-Z0-9_]*)$",
+                    "description": "none, or an env: reference whose name is at most 200 characters (validate_connection) and allowlisted by the server; a longer name is schema-valid and refused with 400 (documented divergence)."
                   },
                   "endpoint": {
                     "type": "string"
