@@ -2455,11 +2455,12 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             json!({"enabled":true,"credential_ref":null}),
         ),
         (
-            &patch_or,
-            &kind_or,
-            json!([true, "env:CONTRACT_REFERENCE", null, null, null]),
+            // Bedrock: an endpoint item (even null) is refused on any other kind.
+            &patch_bed,
+            &kind_bed,
+            json!([true, "aws:default", null, null, null]),
         ),
-        (&patch_or, &kind_or, json!([true, null, null, null, null])),
+        (&patch_bed, &kind_bed, json!([true, null, null, null, null])),
         (
             &patch_bed,
             &kind_bed,
