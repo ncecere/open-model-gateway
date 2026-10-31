@@ -1956,6 +1956,17 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         &[],
     )
     .await;
+    // The positional wire form of the same body (serde's struct-as-array arm).
+    body_set(
+        &mut j,
+        a,
+        "PATCH",
+        "/api/v1/platform/catalogs/{id}",
+        &format!("/api/v1/platform/catalogs/{vcat}"),
+        json!(["Vector catalog", "A catalog"]),
+        &[],
+    )
+    .await;
     body_set(
         &mut j,
         a,
