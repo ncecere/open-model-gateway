@@ -232,11 +232,33 @@ fn judged_when(
     body: &Value,
     rules: DomainRules<'_>,
 ) -> Probe {
-    if captured.status == StatusCode::BAD_REQUEST && schema_valid && rules.0(body) {
+    // 400 from a handler check, 422 from a validating deserializer (PriceLines).
+    if matches!(
+        captured.status,
+        StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY
+    ) && schema_valid
+        && rules.0(body)
+    {
         Probe::decided(captured, true)
     } else {
         judged(captured, rules.1)
     }
+}
+/// Whether the REAL price-line rules (`billing::v3::PriceLines`, which validates in
+/// its deserializer) refuse a price body's `price_lines` or `batch_price_lines`, in
+/// either wire form: the cross-line rules the contract documents but cannot state
+/// (a not_applicable or unknown line next to another line of its meter, more than
+/// 64 valued lines, duplicate (meter, variant, min_prompt_tokens) keys).
+fn price_lines_refused(body: &Value) -> bool {
+    let lists = if body.is_array() {
+        [&body[6], &body[8]]
+    } else {
+        [&body["price_lines"], &body["batch_price_lines"]]
+    };
+    lists.into_iter().any(|lines| {
+        lines.is_array()
+            && serde_json::from_value::<crate::billing::v3::PriceLines>(lines.clone()).is_err()
+    })
 }
 /// Body boundary vectors with a state-dependent domain refusal (see [`judged_when`]).
 async fn body_set_when(
@@ -2338,7 +2360,9 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         &format!("/api/v1/platform/deployments/{vdep}/prices"),
         v3_price(),
         (
-            &|b| b["pricing_version"] == 3 && b["input_token_limit"] == 0,
+            &|b| {
+                (b["pricing_version"] == 3 && b["input_token_limit"] == 0) || price_lines_refused(b)
+            },
             &["price_meters_incomplete"],
         ),
     )
