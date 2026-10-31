@@ -60,7 +60,7 @@ mod tests {
             "review route additions and update this progress baseline"
         );
         assert_eq!(
-            placeholders, 204,
+            placeholders, 96,
             "review schema completion and update this progress baseline"
         );
     }

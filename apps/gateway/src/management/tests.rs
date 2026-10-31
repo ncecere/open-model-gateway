@@ -58,6 +58,8 @@ mod key_tests;
 mod legal_holds_tests;
 #[path = "list_search_control_tests.rs"]
 mod list_search_control_tests;
+#[path = "mapping_issuer_control_tests.rs"]
+mod mapping_issuer_control_tests;
 #[path = "me_models_tests.rs"]
 mod me_models_tests;
 #[path = "members/tests.rs"]
@@ -68,6 +70,8 @@ mod openapi_fixtures;
 mod openapi_money_fixture_tests;
 #[path = "openapi_settings_fixture_tests.rs"]
 mod openapi_settings_fixture_tests;
+#[path = "openapi_slice2_fixture_tests.rs"]
+mod openapi_slice2_fixtures;
 #[path = "openapi_slice6_fixture_tests.rs"]
 mod openapi_slice6_fixture_tests;
 #[path = "personal_data_tests.rs"]

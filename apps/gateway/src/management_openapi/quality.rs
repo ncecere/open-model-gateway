@@ -18,6 +18,11 @@ pub(super) const ARBITRARY_JSON: &[(&str, &str)] = &[
         "/components/schemas/get_api_v1_me_exportResponse/properties/audit/properties/items/items/properties/metadata",
         "Stored audit_events.metadata is exported verbatim as JSON; its vocabulary depends on the audited action.",
     ),
+    // The platform subject export (slice 2) is the same stored audit value.
+    (
+        "/components/schemas/AccessPlatformExport/properties/audit/properties/items/items/properties/metadata",
+        "Stored audit_events.metadata is exported verbatim as JSON; its vocabulary depends on the audited action.",
+    ),
     (
         "/components/schemas/MoneyProviderReconciliationSnapshot/properties/personal_activity/properties/exclusively_attributed_imported_by_category",
         "Frozen provider_reconciliations.snapshot groups signed imported amounts by provider-supplied cost_type; arbitrary historical category labels map only to integer micro-USD strings.",
