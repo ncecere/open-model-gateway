@@ -2759,7 +2759,10 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
                     {
                         Probe::decided(captured, true)
                     } else {
-                        judged(captured, &["route_unsupported_capability"])
+                        judged(
+                            captured,
+                            &["route_unsupported_capability", "price_meters_incomplete"],
+                        )
                     }
                 },
             )
