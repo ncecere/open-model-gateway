@@ -532,6 +532,8 @@ const THRESHOLD_MISSING: &str = "Set at least one server load threshold.";
 const THRESHOLD_RANGE: &str = "A server load threshold is out of range.";
 const METRICS_URL: &str =
     "The metrics URL must be /metrics on an approved local endpoint's origin.";
+/// A priority hint on a route that is not vLLM-compatible: route state.
+const PRIORITY_ROUTE: &str = "Priority hints need a vLLM-compatible route.";
 /// Did the handler's threshold rules accept the body? `RouteSettings::validate` checks the
 /// thresholds BEFORE the metrics URL and the fixture gateway approves no local endpoint, so
 /// a 400 that is the URL rule proves the thresholds passed, and a 400 that is a threshold
@@ -2875,8 +2877,9 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     .await;
     // Batch scheduling: a metrics gate in both forms, a priority, the null arms and
     // the positional window. The fixture approves no local endpoint, so a gate's URL
-    // is refused by server state (the handler's METRICS_URL message): that 400 is a
-    // domain refusal, read from the message (see thresholds_accepted).
+    // is refused by server state (the handler's METRICS_URL message), and the vector
+    // deployment is not a vLLM route, so a priority hint is refused by route state
+    // (PRIORITY_ROUTE): those 400s are domain refusals, read from the message.
     {
         let (client, root) = (j.client.clone(), j.base.clone());
         let path = format!("/api/v1/platform/deployments/{vdep}/batch-scheduling");
@@ -2931,7 +2934,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
                         .and_then(|v| v["error"]["message"].as_str().map(str::to_owned));
                     if schema_valid
                         && captured.status == StatusCode::BAD_REQUEST
-                        && message.as_deref() == Some(METRICS_URL)
+                        && matches!(message.as_deref(), Some(METRICS_URL | PRIORITY_ROUTE))
                     {
                         Probe::decided(captured, true)
                     } else {
