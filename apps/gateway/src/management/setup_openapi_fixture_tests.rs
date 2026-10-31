@@ -91,8 +91,10 @@ fn full_price(tier: usize, positional: bool, values: bool) -> Value {
         .map(|(meter, (batch, unit))| {
             // The optional members explicitly: null (and false), or a value where the
             // arm takes one (a tier on every meter but the audio-token meters, a
-            // variant on the video meter).
-            let variant = (values && *meter == "output_video_seconds_ms").then_some("standard");
+            // variant on the image and video meters).
+            let variant = (values
+                && matches!(*meter, "output_video_seconds_ms" | "output_images"))
+            .then_some("standard");
             let tier = (values && !meter.ends_with("audio_tokens")).then_some(1000);
             if positional {
                 json!([meter, "1", batch, unit, "Rate", variant, tier, false, false])
@@ -144,6 +146,91 @@ fn positional_baseline() -> Value {
     ]));
     body["price_lines"] = json!(lines);
     body
+}
+/// The positional (struct array) wire form of an object price, in `Price` field
+/// order; an absent member is an explicit null.
+fn positional_price(price: &Value) -> Value {
+    json!(
+        [
+            "input_microusd_per_million",
+            "output_microusd_per_million",
+            "input_token_limit",
+            "output_token_limit",
+            "pricing_version",
+            "cache_pricing",
+            "price_lines",
+            "max_units",
+            "batch_price_lines",
+        ]
+        .map(|field| price.get(field).cloned().unwrap_or(Value::Null))
+    )
+}
+/// Price shapes no variant carries: every optional member an explicit null, a
+/// not-applicable line stating each optional member, an object unknown line,
+/// batch price lines, version 1 with explicit nulls, and the positional form of
+/// the price itself (every slot as a value and as null).
+fn explicit_prices() -> Vec<Value> {
+    let mut nulls = v3_price();
+    for line in nulls["price_lines"].as_array_mut().unwrap() {
+        match line["meter"].as_str() {
+            Some("requests") => {
+                *line = json!({"meter":"requests","microusd_per_batch":null,"batch":null,"unit_label":null,"sku_label":null,"variant":null,"min_prompt_tokens":null,"not_applicable":true,"unknown":false});
+            }
+            Some("search_units") => {
+                *line = json!({"meter":"search_units","microusd_per_batch":null,"batch":null,"unit_label":null,"sku_label":null,"variant":null,"min_prompt_tokens":null,"not_applicable":false,"unknown":true});
+            }
+            _ => {}
+        }
+    }
+    for member in [
+        "input_microusd_per_million",
+        "output_microusd_per_million",
+        "cache_pricing",
+        "max_units",
+        "batch_price_lines",
+    ] {
+        nulls[member] = Value::Null;
+    }
+    let mut batched = v3_price();
+    batched["batch_price_lines"] = batched["price_lines"].clone();
+    let v1 = json!({"pricing_version":1,"input_microusd_per_million":"1","output_microusd_per_million":"2","input_token_limit":100,"output_token_limit":10,"cache_pricing":null,"price_lines":null,"max_units":null,"batch_price_lines":null});
+    let v2 = json!({"pricing_version":2,"input_microusd_per_million":"1","output_microusd_per_million":"2","input_token_limit":100,"output_token_limit":10,"cache_pricing":{"read":{"status":"priced","microusd_per_million":"1"},"write":{"status":"unknown"},"write_5m":{"status":"not_applicable"},"write_1h":{"status":"priced","microusd_per_million":"2"}}});
+    vec![
+        positional_price(&v1),
+        positional_price(&v2),
+        positional_price(&batched),
+        nulls,
+        batched,
+        v1,
+    ]
+}
+/// Replace the shared alias of a model-setup vector body (object or positional,
+/// at the root and in the model) with a fresh one: the model is inserted, and may
+/// conflict on its unique alias, before the route is validated.
+fn fresh_setup_alias(body: &mut Value) {
+    let model = match body {
+        Value::Array(items) => items.get_mut(0),
+        Value::Object(members) => members.get_mut("model"),
+        _ => None,
+    };
+    let alias = match model {
+        Some(Value::Array(items)) => items.get_mut(0),
+        Some(Value::Object(members)) => members.get_mut("public_name"),
+        _ => None,
+    };
+    if let Some(alias) = alias
+        && alias == "vector/setup"
+    {
+        *alias = json!(format!("vector/setup-{}", Uuid::new_v4()));
+    }
+}
+/// The nested price of a model-setup body, object or positional.
+fn setup_price(body: &Value) -> Value {
+    if body.is_array() {
+        body.get(2).cloned().unwrap_or(Value::Null)
+    } else {
+        body["price"].clone()
+    }
 }
 /// Every price shape the vectors walk: the baseline, its positional form, each
 /// arm family of the price-line union (object and positional), version 1 and 2.
@@ -391,7 +478,12 @@ fn price_lines_refused(body: &Value) -> bool {
 /// body: a version 3 zero input ceiling (valid only when every input-family meter
 /// is not applicable) and the cross-line rules of [`price_lines_refused`].
 fn price_refused(b: &Value) -> bool {
-    (b["pricing_version"] == 3 && b["input_token_limit"] == 0) || price_lines_refused(b)
+    // Object or positional (`Price` field order: limits at 2, version at 4).
+    let (version, input_limit) = match b {
+        Value::Array(items) => (items.get(4), items.get(2)),
+        _ => (b.get("pricing_version"), b.get("input_token_limit")),
+    };
+    (version == Some(&json!(3)) && input_limit == Some(&json!(0))) || price_lines_refused(b)
 }
 /// Body boundary vectors with a state-dependent domain refusal (see [`judged_when`]).
 async fn body_set_when(
@@ -2183,6 +2275,74 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         )
         .await;
     }
+    // The positional create form: an OpenRouter connection with every optional
+    // slot null (the same credential boundary candidates), and a local connection
+    // with an endpoint, which the test process never approves (no
+    // GATEWAY_LOCAL_UPSTREAMS): its refusal is that server state.
+    {
+        let (client, root) = (j.client.clone(), j.base.clone());
+        http_vectors::body_vectors_extended(
+            &mut j.observed,
+            "POST",
+            "/api/v1/platform/providers",
+            json!([
+                "Vector positional",
+                "openrouter",
+                "env:CONTRACT_REFERENCE",
+                null,
+                null,
+                false,
+                null,
+                null
+            ]),
+            &[],
+            &[
+                ("/2", json!("env:CONTRACT_REFERENCE")),
+                ("/2", json!("env:CONTRACT_REFERENCE-")),
+            ],
+            async |body: Value| {
+                judged(
+                    send(
+                        &client,
+                        &root,
+                        Some(a),
+                        "POST",
+                        "/api/v1/platform/providers",
+                        Some(body),
+                    )
+                    .await,
+                    &[],
+                )
+            },
+        )
+        .await;
+    }
+    body_set_when(
+        &mut j,
+        a,
+        "POST",
+        "/api/v1/platform/providers",
+        "/api/v1/platform/providers",
+        json!([
+            "Vector positional local",
+            "ollama",
+            "none",
+            "http://127.0.0.1:11434/v1",
+            null,
+            false,
+            null,
+            null
+        ]),
+        (
+            &|b| {
+                b.as_array()
+                    .and_then(|items| items.get(3))
+                    .is_some_and(Value::is_string)
+            },
+            &[],
+        ),
+    )
+    .await;
     // A Bedrock connection: region, role identity and the AWS options it alone takes.
     let bedrock_body = json!({"name":"Vector Bedrock","provider":"bedrock","credential_ref":"aws:role:arn:aws:iam::123456789012:role/gateway/vector","aws_external_id":"tenant-ext-42","aws_session_name":"gateway.vector","endpoint":null,"region":"us-east-1","enabled":false});
     body_set(
@@ -2606,6 +2766,34 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         ],
     )
     .await;
+    // The same endpoint in the positional form ([enabled, credential_ref,
+    // aws_external_id, aws_session_name, endpoint]).
+    body_set_when_candidates(
+        &mut j,
+        a,
+        "PATCH",
+        patch_template,
+        &patch_bed,
+        json!([
+            true,
+            null,
+            null,
+            null,
+            "https://bedrock-runtime.us-east-1.amazonaws.com"
+        ]),
+        (&|b| refused_by_state(&kind_bed, b), &[]),
+        &[
+            (
+                "/4",
+                json!("https://bedrock-runtime.us-east-1.amazonaws.com"),
+            ),
+            (
+                "/4",
+                json!("https://bedrock-runtime.us-east-1.amazonaws.coM"),
+            ),
+        ],
+    )
+    .await;
     // The other request shapes of the provider PATCH: a null reference (keep), an
     // endpoint string, and the positional wire form with each union arm.
     for (path, kind, body) in [
@@ -2683,12 +2871,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         "/api/v1/platform/deployments/{deployment}/prices",
         &format!("/api/v1/platform/deployments/{vdep}/prices"),
         v3_price(),
-        (
-            &|b| {
-                (b["pricing_version"] == 3 && b["input_token_limit"] == 0) || price_lines_refused(b)
-            },
-            &["price_meters_incomplete"],
-        ),
+        (&price_refused, &["price_meters_incomplete"]),
     )
     .await;
     // The other price shapes: version 1 (rates), version 2 (cache pricing) and a
@@ -2720,7 +2903,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         json!({"pricing_version":1,"input_microusd_per_million":"1","output_microusd_per_million":"2","input_token_limit":100,"output_token_limit":10}),
         json!({"pricing_version":2,"input_microusd_per_million":"1","output_microusd_per_million":"2","input_token_limit":100,"output_token_limit":10,"cache_pricing":{"read":{"status":"priced","microusd_per_million":"1"},"write":{"status":"unknown"},"write_5m":{"status":"unknown"},"write_1h":{"status":"unknown"}}}),
         unknowns,
-    ]) {
+    ]).chain(explicit_prices()) {
         body_set_when(
             &mut j,
             a,
@@ -2729,10 +2912,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             &format!("/api/v1/platform/deployments/{vdep}/prices"),
             body,
             (
-                &|b| {
-                    (b["pricing_version"] == 3 && b["input_token_limit"] == 0)
-                        || price_lines_refused(b)
-                },
+                &price_refused,
                 &["price_meters_incomplete"],
             ),
         )
@@ -2885,6 +3065,8 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         let path = format!("/api/v1/platform/deployments/{vdep}/batch-scheduling");
         let template = "/api/v1/platform/deployments/{deployment}/batch-scheduling";
         let gate = json!({"url":"http://127.0.0.1:8000/metrics","max_waiting":5,"max_running":null,"max_kv_cache_percent":null});
+        let gate_running = json!({"url":"http://127.0.0.1:8000/metrics","max_waiting":null,"max_running":5,"max_kv_cache_percent":50});
+        let gate_positional = json!(["http://127.0.0.1:8000/metrics", 5, null, null]);
         let times = |at: &str| -> Vec<(String, Value)> {
             vec![
                 (format!("{at}/start"), json!("23:00")),
@@ -2912,6 +3094,20 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
                 times("/4"),
             ),
             (json!([3, null, gate, null, null]), vec![]),
+            // The other threshold arms (running and KV cache set, waiting null), the
+            // positional gate with only waiting set, and a null gate, at both roots.
+            // No priority or window: those rules run after the URL rule.
+            (
+                json!({"max_concurrency":3,"metrics":gate_running.clone()}),
+                vec![],
+            ),
+            (
+                json!({"max_concurrency":3,"metrics":gate_positional.clone()}),
+                vec![],
+            ),
+            (json!({"max_concurrency":3,"metrics":null}), vec![]),
+            (json!([3, null, gate_running, null, null]), vec![]),
+            (json!([3, null, gate_positional, null, null]), vec![]),
         ] {
             let candidates: Vec<(&str, Value)> = candidates
                 .iter()
@@ -2963,10 +3159,40 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         // is validated, so every request names a fresh alias unless the vector changes it.
         let (client, root) = (j.client.clone(), j.base.clone());
         let base = json!({"model":{"public_name":"vector/setup","display_name":"Vector setup","description":"A model","enabled":true,"supported_protocols":["chat_completions"]},"route":{"provider_connection_id":vprov,"upstream_model":"vector/setup","enabled":false},"price":null,"catalog_ids":[vcat]});
-        // The nested price walks every price shape too (null, then each variant).
-        for price in std::iter::once(Value::Null).chain(price_variants()) {
-            let mut valid = base.clone();
-            valid["price"] = price;
+        // The nested price walks every price shape too (null, then each variant and
+        // explicit shape); then a standalone protocol set, and the positional setup
+        // (model, route and price positional; a null price).
+        let mut embeddings = base.clone();
+        embeddings["model"]["supported_protocols"] = json!(["embeddings"]);
+        let positional_model =
+            |protocol: &str| json!(["vector/setup", "Vector setup", "A model", true, [protocol]]);
+        let positional_route = json!([vprov, "vector/setup", false]);
+        let explicit = explicit_prices();
+        let positional_setups = [
+            json!([
+                positional_model("chat_completions"),
+                positional_route,
+                explicit[2],
+                [vcat]
+            ]),
+            json!([
+                positional_model("embeddings"),
+                positional_route,
+                null,
+                [vcat]
+            ]),
+        ];
+        let bodies = std::iter::once(Value::Null)
+            .chain(price_variants())
+            .chain(explicit.iter().filter(|p| p != &&explicit[2]).cloned())
+            .map(|price| {
+                let mut valid = base.clone();
+                valid["price"] = price;
+                valid
+            })
+            .chain([embeddings])
+            .chain(positional_setups);
+        for valid in bodies {
             let (client, root) = (client.clone(), root.clone());
             http_vectors::body_vectors_http(
                 &mut j.observed,
@@ -2974,14 +3200,11 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
                 "/api/v1/platform/model-setup",
                 valid,
                 async |mut body: Value| {
-                    if body["model"]["public_name"] == "vector/setup" {
-                        body["model"]["public_name"] =
-                            json!(format!("vector/setup-{}", Uuid::new_v4()));
-                    }
+                    fresh_setup_alias(&mut body);
                     // A nested price whose lines the REAL PriceLines rules refuse
                     // is the documented cross-line refusal (see price_lines_refused).
                     let cross_line = schema_accepts("POST", "/api/v1/platform/model-setup", &body)
-                        && price_refused(&body["price"]);
+                        && price_refused(&setup_price(&body));
                     let captured = send(
                         &client,
                         &root,
