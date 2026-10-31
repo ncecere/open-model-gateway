@@ -61,7 +61,7 @@ fn v3_price() -> Value {
 /// the time-based meters at one billing unit (`tier`: per second, minute, hour)
 /// and a ceiling for every capped meter: one price per arm family of the price
 /// line union (a meter takes one line per variant and tier key).
-fn full_price(tier: usize, positional: bool) -> Value {
+fn full_price(tier: usize, positional: bool, values: bool) -> Value {
     let time = [
         (1_000_u64, "/second"),
         (60_000, "/minute"),
@@ -89,10 +89,16 @@ fn full_price(tier: usize, positional: bool) -> Value {
     let lines: Vec<Value> = meters
         .iter()
         .map(|(meter, (batch, unit))| {
+            // The optional members explicitly: null (and false), or a value where the
+            // arm takes one (a tier on every meter but the audio-token meters, a
+            // variant on the video meter).
+            let variant = (values && *meter == "output_video_seconds_ms").then_some("standard");
+            let tier = (values && !meter.ends_with("audio_tokens")).then_some(1000);
             if positional {
-                json!([meter, "1", batch, unit, "Rate", null, null, false, false])
+                json!([meter, "1", batch, unit, "Rate", variant, tier, false, false])
             } else {
-                json!({"meter":meter,"microusd_per_batch":"1","batch":batch,"unit_label":unit,"sku_label":"Rate"})
+                json!({"meter":meter,"microusd_per_batch":"1","batch":batch,"unit_label":unit,"sku_label":"Rate",
+                    "variant":variant,"min_prompt_tokens":tier,"not_applicable":false,"unknown":false})
             }
         })
         .collect();
@@ -145,7 +151,33 @@ fn price_variants() -> Vec<Value> {
     let mut out = vec![v3_price(), positional_baseline()];
     for tier in 0..3 {
         for positional in [false, true] {
-            out.push(full_price(tier, positional));
+            for values in [false, true] {
+                out.push(full_price(tier, positional, values));
+            }
+        }
+    }
+    // Version 2 cache pricing: every status (priced, unknown, not applicable) in
+    // every field, object and positional.
+    let rate = |status: &str| {
+        if status == "priced" {
+            json!({"status":"priced","microusd_per_million":"1"})
+        } else {
+            json!({"status":status})
+        }
+    };
+    for rotation in [
+        ["priced", "unknown", "not_applicable", "priced"],
+        ["unknown", "not_applicable", "priced", "unknown"],
+        ["not_applicable", "priced", "unknown", "not_applicable"],
+    ] {
+        let rates: Vec<Value> = rotation.iter().map(|s| rate(s)).collect();
+        for positional in [false, true] {
+            let cache = if positional {
+                json!(rates)
+            } else {
+                json!({"read":rates[0],"write":rates[1],"write_5m":rates[2],"write_1h":rates[3]})
+            };
+            out.push(json!({"pricing_version":2,"input_microusd_per_million":"1","output_microusd_per_million":"2","input_token_limit":100,"output_token_limit":10,"cache_pricing":cache}));
         }
     }
     out
