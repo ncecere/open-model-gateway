@@ -1030,30 +1030,55 @@ fn management_openapi_http_vectors_an_unsendable_decisive_body_vector_fails() {
     .unwrap();
 }
 
-/// An unsendable-boundary reason is judged in the runs where its location HAS a
-/// decisive bound: a run whose union arm or conditional branch puts no bound
-/// on the location has nothing to excuse (neither used nor stale), while a run
-/// whose bound can be sent still finds the reason stale. (Slice 3: Bedrock-only
-/// length bounds on a property that every provider kind sends.)
+/// An unsendable-boundary reason is judged per OPERATION, across its body runs:
+/// a run reports it only where its location has a decisive bound (and whether
+/// that run needed it), and the reason is stale only when no run needed it. One
+/// body may be able to send a bound another cannot (slice 3: the provider PATCH
+/// reference padded from an env name versus from an aws:role ARN).
 #[test]
-fn management_openapi_http_vectors_unsendable_reason_is_judged_where_a_bound_applies() {
+fn management_openapi_http_vectors_unsendable_reason_is_judged_across_runs() {
     let schema = |cap: u64| {
         json!({"type":"object","required":["kind","big"],"additionalProperties":false,
             "properties":{"kind":{"enum":["a","b"]},"big":{"type":"string","x-omg-unsendable-boundary":REASON}},
             "allOf":[{"if":{"properties":{"kind":{"const":"b"}},"required":["kind"]},
                 "then":{"properties":{"big":{"maxLength":cap}}}}]})
     };
-    let plan = |cap: u64, valid: Value| cases_of(&body_only(schema(cap)), &valid, &[]).map(|_| ());
-    // No bound applies in this run: nothing to excuse, not stale.
-    plan(150_000, json!({"kind":"a","big":"abc"})).unwrap_or_else(|e| panic!("{e:#}"));
-    // The bound applies and cannot be sent: the reason is used.
-    plan(150_000, json!({"kind":"b","big":"abc"})).unwrap_or_else(|e| panic!("{e:#}"));
-    // The bound applies and CAN be sent: the reason is stale.
-    let text = format!(
-        "{:#}",
-        plan(9000, json!({"kind":"b","big":"abc"})).unwrap_err()
+    let used = |cap: u64, valid: Value| {
+        let document = body_only(schema(cap));
+        super::http_vectors::body_plan(
+            &document,
+            &document["paths"][TEMPLATE]["post"],
+            &valid,
+            &[],
+            &[],
+        )
+        .unwrap_or_else(|e| panic!("{e:#}"))
+        .exempt_used
+    };
+    let big = |needed: bool| std::collections::BTreeMap::from([("/big".to_owned(), needed)]);
+    // No bound applies in this run: nothing to judge.
+    assert!(used(150_000, json!({"kind":"a","big":"abc"})).is_empty());
+    // The bound applies and cannot be sent: the reason is needed.
+    assert_eq!(used(150_000, json!({"kind":"b","big":"abc"})), big(true));
+    // The bound applies and CAN be sent: this run does not need it.
+    assert_eq!(used(9000, json!({"kind":"b","big":"abc"})), big(false));
+    // Across runs: needed by one run is used; needed by none is stale.
+    let mut fixtures = super::responses::PositiveFixtures::default();
+    fixtures.record_unsendable("POST", TEMPLATE, &big(false));
+    fixtures.record_unsendable("POST", TEMPLATE, &big(true));
+    fixtures.record_unsendable("POST", TEMPLATE, &big(false));
+    assert!(
+        fixtures
+            .stale_unsendable(&format!("POST {TEMPLATE}"))
+            .is_empty()
     );
-    assert!(text.contains("stale"), "{text}");
+    let mut fixtures = super::responses::PositiveFixtures::default();
+    fixtures.record_unsendable("POST", TEMPLATE, &big(false));
+    fixtures.record_unsendable("POST", TEMPLATE, &big(false));
+    assert_eq!(
+        fixtures.stale_unsendable(&format!("POST {TEMPLATE}")),
+        vec!["/big".to_owned()]
+    );
 }
 
 #[test]

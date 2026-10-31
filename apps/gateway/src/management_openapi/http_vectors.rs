@@ -2159,6 +2159,11 @@ pub(super) struct BodyPlan {
     /// The declared request locations (schema paths) the valid body and the
     /// seeded bases carry; see `request_reach`.
     pub(super) reached: BTreeSet<String>,
+    /// Each [`UNSENDABLE`] location that had a decisive bound in this run, and
+    /// whether its reason excused an unsendable vector. Judged across every run
+    /// of the operation ([`PositiveFixtures`]): a reason is stale only when no
+    /// run needed it (one body may be able to send a bound another cannot).
+    pub(super) exempt_used: std::collections::BTreeMap<String, bool>,
 }
 
 /// Every body vector derived from the operation's request schema and a VALID body.
@@ -2238,13 +2243,6 @@ pub(super) fn body_plan(
             "candidate at {at} names no walked location"
         );
     }
-    for (location, used) in &walk.exempt_used {
-        if !used {
-            walk.notes.problems.push(format!(
-                "{location}: {UNSENDABLE} is stale: every decisive vector of this location can be sent; delete it"
-            ));
-        }
-    }
     walk.notes.check()?;
     // Reach is what the walk MUTATED, base by base: a location the body merely
     // contains (but the walk never generated a vector for) is not reached.
@@ -2258,6 +2256,7 @@ pub(super) fn body_plan(
         cases: walk.out,
         notes: walk.notes,
         reached,
+        exempt_used: walk.exempt_used,
     })
 }
 
@@ -2266,6 +2265,7 @@ pub(super) fn body_plan(
 pub(super) struct BodyRun {
     pub(super) exchanges: Vec<Captured>,
     pub(super) reached: BTreeSet<String>,
+    pub(super) exempt_used: std::collections::BTreeMap<String, bool>,
 }
 
 pub(super) async fn run_body(
@@ -2297,6 +2297,7 @@ pub(super) async fn run_body_with(
         .with_context(|| format!("{method} {template}"))?;
     plan.notes.report(method, template);
     let reached = plan.reached;
+    let exempt_used = plan.exempt_used;
     let cases = plan.cases;
     let mut plan = vec![("valid", "(root)".to_owned(), valid_body.clone(), true)];
     plan.extend(
@@ -2321,7 +2322,11 @@ pub(super) async fn run_body_with(
         exchanges.push(probe.captured);
     }
     ensure!(accepted_seen, "no body vector was accepted by the handler");
-    Ok(BodyRun { exchanges, reached })
+    Ok(BodyRun {
+        exchanges,
+        reached,
+        exempt_used,
+    })
 }
 
 /// Body boundary vectors for one operation over real HTTP: top-level and nested
@@ -2393,6 +2398,7 @@ pub(crate) async fn body_vectors_extended(
     }
     fixtures.record_vectors(method, template, "body");
     fixtures.record_reach(method, template, &run.reached);
+    fixtures.record_unsendable(method, template, &run.exempt_used);
 }
 
 // ---------------------------------------------------------------------------

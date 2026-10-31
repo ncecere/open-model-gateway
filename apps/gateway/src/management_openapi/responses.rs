@@ -669,6 +669,9 @@ pub(crate) struct PositiveFixtures {
     /// Declared request locations (schema paths) each operation's body vector
     /// runs carried, by `METHOD template`; see `request_reach`.
     reach: std::collections::BTreeMap<String, BTreeSet<String>>,
+    /// Per `METHOD template`: each reviewed unsendable-boundary location some
+    /// run bounded, and whether ANY run needed its reason.
+    unsendable: std::collections::BTreeMap<String, std::collections::BTreeMap<String, bool>>,
 }
 impl PositiveFixtures {
     /// Record that every HTTP boundary vector of `kind` (`query` or `body`)
@@ -691,6 +694,32 @@ impl PositiveFixtures {
             .entry(format!("{method} {template}"))
             .or_default()
             .extend(reached.iter().cloned());
+    }
+    /// The unsendable-boundary use of one body vector run; runs of one operation
+    /// accumulate (a reason any run needed is used).
+    pub(super) fn record_unsendable(
+        &mut self,
+        method: &str,
+        template: &str,
+        used: &std::collections::BTreeMap<String, bool>,
+    ) {
+        let entry = self
+            .unsendable
+            .entry(format!("{method} {template}"))
+            .or_default();
+        for (location, needed) in used {
+            *entry.entry(location.clone()).or_insert(false) |= *needed;
+        }
+    }
+    /// Reviewed unsendable-boundary reasons of `key` that no run needed.
+    pub(super) fn stale_unsendable(&self, key: &str) -> Vec<String> {
+        self.unsendable
+            .get(key)
+            .into_iter()
+            .flatten()
+            .filter(|(_, used)| !**used)
+            .map(|(location, _)| location.clone())
+            .collect()
     }
     /// Coverage and vector gaps for the given `METHOD template` operations.
     pub(super) fn check_contract_coverage(
@@ -737,6 +766,12 @@ impl PositiveFixtures {
                         "{key}: the request body has no executed HTTP boundary vectors (call http_vectors::body_vectors_http)"
                     ));
                 }
+            }
+            for location in self.stale_unsendable(key) {
+                failures.push(format!(
+                    "{key}: {location}: {} is stale: every decisive vector of this location could be sent in every run of the operation; delete it",
+                    super::http_vectors::UNSENDABLE
+                ));
             }
             // Every declared request location must have been carried by some
             // valid body or seed of the operation (or be reviewed-exempt).
