@@ -503,7 +503,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                 );
                 h.insert("referrer-policy", "no-referrer".parse().unwrap());
                 let image = crate::management::branding::fixtures::png(16, 16);
-                let csv_body = b"start_date,end_date\n2026-10-28,2026-10-29\n".as_slice();
+                let csv_body = b"dimension,id,name,known_cost_microusd,held_microusd\n".as_slice();
                 let (header, valid_body) = if csv {
                     h.insert("content-type", "text/csv".parse().unwrap());
                     for (name, header) in op["responses"]["200"]["headers"]
