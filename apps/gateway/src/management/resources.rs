@@ -1037,7 +1037,9 @@ pub(super) async fn insert_model(
 ) -> Result<Uuid, ApiError> {
     if !valid_name(&b.display_name)
         || !alias_valid(&b.public_name)
-        || b.description.as_ref().is_some_and(|s| s.len() > 2000)
+        || b.description
+            .as_ref()
+            .is_some_and(|s| !super::description_valid(s))
         || !protocols_valid(&b.supported_protocols)
     {
         return Err(invalid());
@@ -1132,7 +1134,7 @@ async fn update_model(
         || b.description
             .as_ref()
             .and_then(Option::as_ref)
-            .is_some_and(|s| s.len() > 2000)
+            .is_some_and(|s| !super::description_valid(s))
         || b.supported_protocols
             .as_ref()
             .is_some_and(|p| !protocols_valid(p))
