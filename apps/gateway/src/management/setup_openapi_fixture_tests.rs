@@ -2275,74 +2275,6 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         )
         .await;
     }
-    // The positional create form: an OpenRouter connection with every optional
-    // slot null (the same credential boundary candidates), and a local connection
-    // with an endpoint, which the test process never approves (no
-    // GATEWAY_LOCAL_UPSTREAMS): its refusal is that server state.
-    {
-        let (client, root) = (j.client.clone(), j.base.clone());
-        http_vectors::body_vectors_extended(
-            &mut j.observed,
-            "POST",
-            "/api/v1/platform/providers",
-            json!([
-                "Vector positional",
-                "openrouter",
-                "env:CONTRACT_REFERENCE",
-                null,
-                null,
-                false,
-                null,
-                null
-            ]),
-            &[],
-            &[
-                ("/2", json!("env:CONTRACT_REFERENCE")),
-                ("/2", json!("env:CONTRACT_REFERENCE-")),
-            ],
-            async |body: Value| {
-                judged(
-                    send(
-                        &client,
-                        &root,
-                        Some(a),
-                        "POST",
-                        "/api/v1/platform/providers",
-                        Some(body),
-                    )
-                    .await,
-                    &[],
-                )
-            },
-        )
-        .await;
-    }
-    body_set_when(
-        &mut j,
-        a,
-        "POST",
-        "/api/v1/platform/providers",
-        "/api/v1/platform/providers",
-        json!([
-            "Vector positional local",
-            "ollama",
-            "none",
-            "http://127.0.0.1:11434/v1",
-            null,
-            false,
-            null,
-            null
-        ]),
-        (
-            &|b| {
-                b.as_array()
-                    .and_then(|items| items.get(3))
-                    .is_some_and(Value::is_string)
-            },
-            &[],
-        ),
-    )
-    .await;
     // A Bedrock connection: region, role identity and the AWS options it alone takes.
     let bedrock_body = json!({"name":"Vector Bedrock","provider":"bedrock","credential_ref":"aws:role:arn:aws:iam::123456789012:role/gateway/vector","aws_external_id":"tenant-ext-42","aws_session_name":"gateway.vector","endpoint":null,"region":"us-east-1","enabled":false});
     body_set(
@@ -3036,12 +2968,9 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     // object form's per-kind cross-field rules (every per-field bound is still in
     // its item), so a 400 for a schema-valid positional body is that documented
     // divergence.
-    body_set_when(
-        &mut j,
-        a,
-        "POST",
-        "/api/v1/platform/providers",
-        "/api/v1/platform/providers",
+    // Also every optional slot null (OpenRouter), and an endpoint string (a local
+    // connection, which the test process never approves either).
+    for body in [
         json!([
             "Vector Bedrock positional",
             "bedrock",
@@ -3052,9 +2981,38 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             "tenant-ext-42",
             "gateway.vector"
         ]),
-        (&|b| b.is_array(), &[]),
-    )
-    .await;
+        json!([
+            "Vector positional",
+            "openrouter",
+            "env:CONTRACT_REFERENCE",
+            null,
+            null,
+            false,
+            null,
+            null
+        ]),
+        json!([
+            "Vector positional local",
+            "ollama",
+            "none",
+            "http://127.0.0.1:11434/v1",
+            null,
+            false,
+            null,
+            null
+        ]),
+    ] {
+        body_set_when(
+            &mut j,
+            a,
+            "POST",
+            "/api/v1/platform/providers",
+            "/api/v1/platform/providers",
+            body,
+            (&|b| b.is_array(), &[]),
+        )
+        .await;
+    }
     // Batch scheduling: a metrics gate in both forms, a priority, the null arms and
     // the positional window. The fixture approves no local endpoint, so a gate's URL
     // is refused by server state (the handler's METRICS_URL message), and the vector

@@ -7480,7 +7480,8 @@
               },
               "maxItems": 4,
               "uniqueItems": true,
-              "description": "A full replacement set: at most one budget per period. The handler refuses two entries for the same period even when their amounts differ (parse_budgets); uniqueItems can only forbid identical entries, so that case is described, not expressed."
+              "description": "A full replacement set: at most one budget per period. The handler refuses two entries for the same period even when their amounts differ (parse_budgets); uniqueItems can only forbid identical entries, so that case is described, not expressed.",
+              "x-omg-unprobed-location": "No positional array can be a valid request here: index 9 (budgets) always arrives beside monthly_budget_microusd at index 7 (both budget forms), which the handler refuses with 400 (policies.rs `(Some(list), None)` needs monthly absent), so maxItems 9 refuses it and no valid body can carry the item. The fixture seeds it so the 10-item vector past maxItems is still sent and refused."
             }
           ],
           "minItems": 8,
