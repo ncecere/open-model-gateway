@@ -271,11 +271,15 @@ fn closed(properties: Value) -> Value {
 // an amount; every literal that could be a number is still an amount.
 #[test]
 fn management_openapi_coverage_microusd_markers_are_non_numeric_literals_only() {
-    for marker in ["not_in_rollups", "unavailable", "-n/a-"] {
+    for marker in ["not_in_rollups", "unavailable"] {
         check(closed(json!({"cost_microusd":{"const":marker}})))
             .unwrap_or_else(|e| panic!("rejected marker {marker}: {e:#}"));
     }
-    for number in ["", "0", "7", "-1", "-", "007"] {
+    // Only an identifier-like literal is a marker: decimals, signs, exponents
+    // and punctuation could all be read as an amount (review).
+    for number in [
+        "", "0", "7", "-1", "-", "007", "1.5", "+5", "1e3", "-n/a-", "N/A",
+    ] {
         assert!(
             check(closed(json!({"cost_microusd":{"const":number}}))).is_err(),
             "accepted numeric-looking const {number:?} as a marker"
