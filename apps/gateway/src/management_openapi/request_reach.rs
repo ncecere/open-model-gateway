@@ -228,6 +228,7 @@ fn declare(
             out,
             stack,
             depth + 1,
+            scope,
         )?;
     }
     for keyword in ["then", "else"] {
