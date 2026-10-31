@@ -7472,12 +7472,21 @@
                 "month",
                 "lifetime"
               ]
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/SetupBudgetInput"
+              },
+              "maxItems": 4,
+              "uniqueItems": true,
+              "description": "A full replacement set: at most one budget per period. The handler refuses two entries for the same period even when their amounts differ (parse_budgets); uniqueItems can only forbid identical entries, so that case is described, not expressed."
             }
           ],
           "minItems": 8,
           "maxItems": 9,
           "items": false,
-          "description": "The positional form is the single-budget form (Policy::limits): seven limits, the monthly budget and its period; a tenth item (a budget list) is refused."
+          "description": "The positional form is the single-budget form (Policy::limits): seven limits, the monthly budget and its period; a tenth item (the budget list, serde's tenth field) is declared but refused by maxItems and by the handler."
         }
       ],
       "description": "Closed serde object or existing positional struct array in declared field order. Handler semantic validation is additional. nullable rate fields are required even when null. Supplied fields (jobs, storage, issuance, monthly budget): omission retains, null clears subject to tighten-only validation. Present fields (budget_period, budgets): omission is accepted but explicit null is rejected. The handler requires exactly one budget representation: the object form is a oneOf of the two forms (budgets, or monthly_budget_microusd with an optional budget_period). Positional form: serde accepts 3 to 10 elements, but the handler needs exactly one budget form (monthly_budget_microusd at index 7, optionally with budget_period at index 8, or budgets, never both), and a positional array cannot carry budgets without monthly_budget_microusd; only arrays of 8 or 9 elements reach a valid budget form (shorter ones carry none and a 10-element one carries both: the handler answers 400), so the contract's positional arm is exactly those two lengths and has no budgets item."
