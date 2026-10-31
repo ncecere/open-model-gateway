@@ -975,6 +975,12 @@ fn generic_group_claim_is_strict_and_supports_custom_paths() {
         json!(["good", 12]),
         json!({"value":["admin"]}),
         json!([""]),
+        // #428: a control character would reach PostgreSQL as a bound group
+        // value (NUL: SQLSTATE 22021); the whole claim is refused like any other
+        // malformed value, so sign-in fails closed with 403, not a 5xx.
+        json!(["good", "a\u{0}b"]),
+        json!(["\u{7}"]),
+        json!(["a\u{85}"]),
     ] {
         let claims: SignedClaims = serde_json::from_value(json!({"groups":value})).unwrap();
         assert_eq!(claims.groups("groups"), None);
