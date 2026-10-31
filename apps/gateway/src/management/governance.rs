@@ -13,6 +13,8 @@ pub(super) use policies::{
     json_budgets, json_limits, key_limits, key_usage, layers_with, lineage, lineage_budget_windows,
     store_initial_key_limits, workspace_budget_windows,
 };
+#[cfg(test)]
+pub(crate) use prices::batch_meters_refused;
 #[cfg(all(test, feature = "integration-tests"))]
 mod holds_tests;
 pub(super) mod prices;

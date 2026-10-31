@@ -130,6 +130,22 @@ pub(crate) fn add_display(row: &mut Value) {
 /// A batch list covers exactly the standard list's meters (same meter,
 /// variant and tier keys, same not-applicable meters), so switching lists
 /// never turns a priced meter into a missing one.
+/// Test oracle: whether the REAL same-meters rule refuses a batch list beside its
+/// standard list. Both must parse as `PriceLines` (a list that does not parse is
+/// refused by its own rules, decided elsewhere).
+#[cfg(test)]
+pub(crate) fn batch_meters_refused(
+    standard: &serde_json::Value,
+    batch: &serde_json::Value,
+) -> bool {
+    match (
+        serde_json::from_value::<PriceLines>(standard.clone()),
+        serde_json::from_value::<PriceLines>(batch.clone()),
+    ) {
+        (Ok(standard), Ok(batch)) => !same_meters(&standard, &batch),
+        _ => false,
+    }
+}
 fn same_meters(standard: &PriceLines, batch: &PriceLines) -> bool {
     standard.1 == batch.1 && same_valued_meters(standard, batch)
 }

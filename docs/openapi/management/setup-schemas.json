@@ -5535,7 +5535,109 @@
           ],
           "minItems": 4,
           "maxItems": 9,
-          "items": false
+          "items": false,
+          "allOf": [
+            {
+              "if": {
+                "minItems": 5,
+                "prefixItems": [
+                  {},
+                  {},
+                  {},
+                  {},
+                  {
+                    "const": 3
+                  }
+                ]
+              },
+              "then": {
+                "minItems": 7,
+                "prefixItems": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "null"
+                  },
+                  {},
+                  {},
+                  {},
+                  {},
+                  {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/SetupPriceLineInput"
+                    }
+                  }
+                ]
+              },
+              "else": {
+                "prefixItems": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "minimum": 1
+                  },
+                  {},
+                  {},
+                  {},
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            {
+              "if": {
+                "minItems": 5,
+                "prefixItems": [
+                  {},
+                  {},
+                  {},
+                  {},
+                  {
+                    "const": 2
+                  }
+                ]
+              },
+              "then": {
+                "minItems": 6,
+                "prefixItems": [
+                  {},
+                  {},
+                  {},
+                  {},
+                  {},
+                  {
+                    "$ref": "#/components/schemas/SetupCachePricing"
+                  }
+                ]
+              },
+              "else": {
+                "prefixItems": [
+                  {},
+                  {},
+                  {},
+                  {},
+                  {},
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          ],
+          "description": "The positional form follows the same version rules as the object form (validate_price): version 3 (index 4) needs price lines (index 6) and null rates (indexes 0 and 1); any other version, including an absent one (the default is 1), needs both rates, a positive input ceiling and no price lines, max units or batch lines; only version 2 takes cache pricing (index 5)."
         }
       ],
       "description": "Closed serde object or existing positional struct array in declared field order. Handler semantic validation is additional."

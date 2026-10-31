@@ -476,14 +476,24 @@ fn price_lines_refused(body: &Value) -> bool {
 }
 /// The price rules the contract documents but cannot state, decided for a price
 /// body: a version 3 zero input ceiling (valid only when every input-family meter
-/// is not applicable) and the cross-line rules of [`price_lines_refused`].
+/// is not applicable), the cross-line rules of [`price_lines_refused`], and a batch
+/// list that does not price the same meters as the standard list (the REAL
+/// `same_meters`, through `governance::batch_meters_refused`).
 fn price_refused(b: &Value) -> bool {
     // Object or positional (`Price` field order: limits at 2, version at 4).
     let (version, input_limit) = match b {
         Value::Array(items) => (items.get(4), items.get(2)),
         _ => (b.get("pricing_version"), b.get("input_token_limit")),
     };
-    (version == Some(&json!(3)) && input_limit == Some(&json!(0))) || price_lines_refused(b)
+    let (standard, batch) = if b.is_array() {
+        (&b[6], &b[8])
+    } else {
+        (&b["price_lines"], &b["batch_price_lines"])
+    };
+    (version == Some(&json!(3)) && input_limit == Some(&json!(0)))
+        || price_lines_refused(b)
+        || (version == Some(&json!(3))
+            && crate::management::governance::batch_meters_refused(standard, batch))
 }
 /// Body boundary vectors with a state-dependent domain refusal (see [`judged_when`]).
 async fn body_set_when(
