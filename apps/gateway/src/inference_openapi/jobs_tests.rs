@@ -123,6 +123,47 @@ mod fixtures {
         )
         .await
     }
+    async fn upload_content(
+        app: &axum::Router,
+        key: &str,
+        purpose: &str,
+        data: &[u8],
+    ) -> crate::management::openapi::responses::Captured {
+        let mut body=format!("--B\r\nContent-Disposition: form-data; name=\"purpose\"\r\n\r\n{purpose}\r\n--B\r\nContent-Disposition: form-data; name=\"file\"; filename=\"fixture.bin\"\r\nContent-Type: application/octet-stream\r\n\r\n").into_bytes();
+        body.extend_from_slice(data);
+        body.extend_from_slice(b"\r\n--B--\r\n");
+        capture(
+            "POST",
+            "/v1/files",
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/files")
+                        .header("authorization", format!("Bearer {key}"))
+                        .header("content-type", "multipart/form-data; boundary=B")
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await
+    }
+    fn content_refusal(c: &crate::management::openapi::responses::Captured) {
+        assert_eq!(
+            c.status,
+            StatusCode::BAD_REQUEST,
+            "file content refusal status"
+        );
+        let body: Value = serde_json::from_slice(&c.bytes).expect("validated file error JSON kind");
+        assert!(
+            body["error"]["code"] == "invalid_request_error"
+                && body["error"]["type"] == "invalid_request_error"
+                && body["error"]["param"] == "file",
+            "file content refusal kind or parameter pointer"
+        );
+    }
     fn id(c: &crate::management::openapi::responses::Captured) -> String {
         serde_json::from_slice::<Value>(&c.bytes).unwrap()["id"]
             .as_str()
@@ -199,6 +240,55 @@ mod fixtures {
         assert_eq!(file.status, StatusCode::OK, "file upload status");
         fixtures.observe(&file);
         let file_id = id(&file);
+        use base64::Engine as _;
+        let png = base64::engine::general_purpose::STANDARD
+            .decode(crate::inference::images::fixtures::PNG_1X1)
+            .expect("PNG fixture encoding kind");
+        for (purpose, data) in [
+            ("user_data", &b"opaque fixture"[..]),
+            ("vision", png.as_slice()),
+        ] {
+            let c = upload_content(&app, key, purpose, data).await;
+            assert_eq!(c.status, StatusCode::OK, "purpose-specific upload status");
+            let body: Value = serde_json::from_slice(&c.bytes).expect("validated file JSON kind");
+            assert!(body["purpose"] == purpose, "uploaded purpose kind");
+            fixtures.observe(&c);
+            let downloaded = exchange(
+                &app,
+                "GET",
+                &format!("/v1/files/{}/content", id(&c)),
+                key,
+                None,
+            )
+            .await;
+            assert_eq!(
+                downloaded.status,
+                StatusCode::OK,
+                "purpose-specific download status"
+            );
+            assert!(
+                downloaded.bytes.as_ref() == data,
+                "purpose-specific binary round trip"
+            );
+            fixtures.observe(&downloaded);
+        }
+        for (purpose, data) in [
+            ("user_data", &b""[..]),
+            ("batch", &b"[]\n"[..]),
+            ("batch", &b"{\0}\n"[..]),
+            ("vision", &b"not an image"[..]),
+        ] {
+            let c = upload_content(&app, key, purpose, data).await;
+            content_refusal(&c);
+            fixtures.observe(&c);
+        }
+        let bad_cursor = exchange(&app, "GET", "/v1/files?after=invalid", key, None).await;
+        assert_eq!(
+            bad_cursor.status,
+            StatusCode::BAD_REQUEST,
+            "file-list malformed cursor status"
+        );
+
         let second = upload(&app, key, &line, true).await;
         assert_eq!(second.status, StatusCode::OK, "file-first status");
         fixtures.observe(&second);
@@ -243,6 +333,39 @@ mod fixtures {
         assert_eq!(batch.status, StatusCode::OK, "batch create status");
         fixtures.observe(&batch);
         let batch_id = id(&batch);
+        let bad_metadata=exchange(&app,"POST","/v1/batches",key,Some(&json!({"input_file_id":file_id,"endpoint":"/v1/embeddings","completion_window":"24h","metadata":{"omg_retries":"3"}}))).await;
+        assert_eq!(
+            bad_metadata.status,
+            StatusCode::BAD_REQUEST,
+            "invalid batch metadata status"
+        );
+        let body: Value =
+            serde_json::from_slice(&bad_metadata.bytes).expect("validated batch error JSON kind");
+        assert!(
+            body["error"]["code"] == "invalid_metadata",
+            "batch metadata refusal kind"
+        );
+        sqlx::query("UPDATE installation_settings SET file_batch_enabled=false")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let disabled=exchange(&app,"POST","/v1/batches",key,Some(&json!({"input_file_id":file_id,"endpoint":"/v1/embeddings","completion_window":"24h"}))).await;
+        sqlx::query("UPDATE installation_settings SET file_batch_enabled=true")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            disabled.status,
+            StatusCode::BAD_REQUEST,
+            "disabled batch files status"
+        );
+        let body: Value =
+            serde_json::from_slice(&disabled.bytes).expect("validated batch error JSON kind");
+        assert!(
+            body["error"]["code"] == "batch_files_disabled",
+            "batch files refusal kind"
+        );
+
         let initial_list = exchange(&app, "GET", "/v1/batches", key, None).await;
         assert_eq!(
             initial_list.status,
@@ -655,6 +778,32 @@ mod legacy {
                     .await;
             }
         }
+        let form = "--B\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ncompany/smart\r\n--B\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\nfixture\r\n--B\r\nContent-Disposition: form-data; name=\"seconds\"\r\n\r\n8\r\n--B\r\nContent-Disposition: form-data; name=\"size\"\r\n\r\n720x1280\r\n--B--\r\n";
+        let response = refusal_app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/videos")
+                    .header("authorization", &key)
+                    .header("content-type", "multipart/form-data; boundary=B")
+                    .body(Body::from(form))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let c = capture("POST", "/v1/videos", response).await;
+        assert_eq!(
+            c.status,
+            StatusCode::BAD_REQUEST,
+            "multipart video refusal status"
+        );
+        let body: serde_json::Value =
+            serde_json::from_slice(&c.bytes).expect("validated video error JSON kind");
+        assert!(
+            body["error"]["code"] == "unsupported_capability",
+            "multipart video refusal kind"
+        );
+        fixtures.observe(&c);
         fixtures.finish(r::VIDEO_AREAS);
     }
 }
@@ -793,6 +942,23 @@ fn inference_openapi_followup_video_multipart_matches_json_bounds() {
     let doc = generated();
     let schema = &doc["paths"]["/v1/videos"]["post"]["requestBody"]["content"]["multipart/form-data"]
         ["schema"];
+    let fields = &doc["components"]["schemas"]["post_v1_videosRequest"]["oneOf"][0]["properties"];
+    for field in ["model", "prompt"] {
+        for keyword in ["type", "pattern", "maxLength", "x-omg-max-bytes"] {
+            assert!(
+                schema["properties"][field][keyword] == fields[field][keyword],
+                "multipart JSON constraint drift: /properties/{field}/{keyword}"
+            );
+        }
+    }
+    assert!(
+        schema["properties"]["seconds"] == fields["seconds"]["anyOf"][0]["oneOf"][1],
+        "multipart seconds enum drift"
+    );
+    assert!(
+        schema["properties"]["size"] == fields["size"]["anyOf"][0],
+        "multipart size enum drift"
+    );
     let valid = json!({"model":"m","prompt":"p","seconds":"4","size":"720x1280"});
     assert!(
         validate_value(&doc, schema, &valid).is_ok(),

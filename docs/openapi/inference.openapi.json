@@ -2513,7 +2513,9 @@
             "type": "string"
           },
           "file": {
+            "description": "One nonempty binary file part. For batch, inspect only the first 4096 bytes: strip an optional leading UTF-8 BOM, require the first non-ASCII-whitespace byte to be {, and reject NUL in that head. Vision requires PNG, JPEG, GIF87a/GIF89a or RIFF/WEBP signatures; this is header sniffing, not full image decoding. Other accepted purposes store opaque nonempty bytes. Full batch-line validation occurs at Batch creation.",
             "format": "binary",
+            "minLength": 1,
             "type": "string"
           },
           "purpose": {
@@ -3034,7 +3036,7 @@
                 "type": "null"
               },
               "model": {
-                "description": "Public model name: at most 200 UTF-8 BYTES and not blank (providers/embeddings.rs validate, inference/workload_types.rs valid_model, inference/images.rs validate). Any other name, including one with control characters, is simply not a model: 404 model_not_found (inference/types.rs model_name_is_queryable).",
+                "description": "Public video model name: nonblank and at most 200 UTF-8 bytes (jobs/types.rs VideoRequest::validate). With the current provider registry, validated creation returns 400 unsupported_capability before any model lookup.",
                 "maxLength": 200,
                 "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
                 "type": "string",
@@ -3103,7 +3105,7 @@
             "minItems": 5,
             "prefixItems": [
               {
-                "description": "Public model name: at most 200 UTF-8 BYTES and not blank (providers/embeddings.rs validate, inference/workload_types.rs valid_model, inference/images.rs validate). Any other name, including one with control characters, is simply not a model: 404 model_not_found (inference/types.rs model_name_is_queryable).",
+                "description": "Public video model name: nonblank and at most 200 UTF-8 bytes (jobs/types.rs VideoRequest::validate). With the current provider registry, validated creation returns 400 unsupported_capability before any model lookup.",
                 "maxLength": 200,
                 "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
                 "type": "string",
@@ -3808,6 +3810,18 @@
             "envelope": "BatchInvalidInput",
             "status": 400,
             "trigger": "Input file line validation failed; inspect errors.data (at most 20 1-based line reports)"
+          },
+          {
+            "code": "invalid_metadata",
+            "envelope": "JobErrorEnvelope",
+            "status": 400,
+            "trigger": "Metadata exceeds 16 pairs, has empty/over-64-byte keys or non-string/over-512-byte values, or invalid omg_mode/omg_retries values."
+          },
+          {
+            "code": "batch_files_disabled",
+            "envelope": "JobErrorEnvelope",
+            "status": 400,
+            "trigger": "Batch file storage is disabled by installation policy."
           }
         ],
         "x-omg-request-schema": {
@@ -4114,6 +4128,18 @@
             "envelope": "JobErrorEnvelope",
             "status": 404,
             "trigger": "Missing, malformed, foreign or hidden object id"
+          },
+          {
+            "code": "batch_not_owned",
+            "envelope": "JobErrorEnvelope",
+            "status": 403,
+            "trigger": "Caller is neither the creator, a workspace admin nor a service key."
+          },
+          {
+            "code": "batch_not_cancellable",
+            "envelope": "JobErrorEnvelope",
+            "status": 400,
+            "trigger": "The batch is already in a terminal state."
           }
         ],
         "x-omg-request-schema": {
@@ -4353,24 +4379,6 @@
               }
             }
           },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FileErrorEnvelope"
-                }
-              }
-            },
-            "description": "Files API error; param identifies the field, or is null.",
-            "headers": {
-              "cache-control": {
-                "$ref": "#/components/headers/NoStore"
-              },
-              "x-request-id": {
-                "$ref": "#/components/headers/RequestId"
-              }
-            }
-          },
           "413": {
             "content": {
               "application/json": {
@@ -4452,10 +4460,10 @@
             "trigger": "Encrypted file storage is off"
           },
           {
-            "code": "not_found",
+            "code": "invalid_request_error",
             "envelope": "FileErrorEnvelope",
-            "status": 404,
-            "trigger": "Missing, malformed, foreign or hidden object id"
+            "status": 400,
+            "trigger": "Unknown query parameter or invalid purpose, limit, order or malformed after cursor. A malformed after is 400, not 404; a well-formed cursor with no visible match yields an empty page."
           }
         ],
         "x-omg-request-schema": {
@@ -4467,7 +4475,7 @@
         "x-omg-token-policy": "Denied"
       },
       "post": {
-        "description": "Files are inference-key scoped; foreign or hidden ids are indistinguishable from missing objects. The route body cap also rejects declared Content-Length on GET with plain text 413. /v1/files uses the upload cap; id/content routes use 2 MiB.",
+        "description": "Files are inference-key scoped; foreign or hidden ids are indistinguishable from missing objects. The route body cap also rejects declared Content-Length on GET with plain text 413. /v1/files uses the upload cap; id/content routes use 2 MiB. File parts must be nonempty. Batch uploads require a JSON-object-looking head without NUL; vision uploads require a recognized image signature. See the file schema and x-omg-multipart for the precise sniff rules.",
         "operationId": "post_v1_files",
         "parameters": [],
         "requestBody": {
@@ -4536,24 +4544,6 @@
             "$ref": "#/components/responses/OpenAiUnauthorized"
           },
           "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FileErrorEnvelope"
-                }
-              }
-            },
-            "description": "Files API error; param identifies the field, or is null.",
-            "headers": {
-              "cache-control": {
-                "$ref": "#/components/headers/NoStore"
-              },
-              "x-request-id": {
-                "$ref": "#/components/headers/RequestId"
-              }
-            }
-          },
-          "404": {
             "content": {
               "application/json": {
                 "schema": {
@@ -4655,6 +4645,26 @@
           "duplicate_fields": "reject",
           "expiry": "anchor=created_at and seconds must appear together; seconds in 3600..2592000",
           "field_bytes": 64,
+          "file_content_rules": {
+            "batch": {
+              "first_non_whitespace_byte": "{",
+              "reject_nul_in_head": true,
+              "strip_leading_utf8_bom": true,
+              "whitespace": "ASCII"
+            },
+            "non_empty": true,
+            "other_purposes": "Opaque nonempty bytes; no content signature required.",
+            "sniff_bytes": 4096,
+            "vision": {
+              "signatures": [
+                "PNG",
+                "JPEG",
+                "GIF87a",
+                "GIF89a",
+                "RIFF/WEBP"
+              ]
+            }
+          },
           "file_parts": 1,
           "file_requires_filename": true,
           "ordering": "purpose and expiry before or after the file; file-first uploads are provisionally staged, then committed, moved or discarded",
@@ -4666,12 +4676,6 @@
             "envelope": "FileErrorEnvelope",
             "status": 503,
             "trigger": "Encrypted file storage is off"
-          },
-          {
-            "code": "not_found",
-            "envelope": "FileErrorEnvelope",
-            "status": 404,
-            "trigger": "Missing, malformed, foreign or hidden object id"
           },
           {
             "code": "unsupported_capability",
@@ -4696,6 +4700,12 @@
             "envelope": "FileErrorEnvelope",
             "status": 413,
             "trigger": "Workspace storage quota exceeded"
+          },
+          {
+            "code": "invalid_request_error",
+            "envelope": "FileErrorEnvelope",
+            "status": 400,
+            "trigger": "Unknown/duplicate form fields, malformed multipart or bad expiry. Empty file, batch head not beginning with { after optional BOM/ASCII whitespace or containing NUL in its first 4096 bytes, or unrecognized vision signature are refused with param=file."
           }
         ],
         "x-omg-request-schema": {
@@ -6231,15 +6241,33 @@
                 "additionalProperties": false,
                 "properties": {
                   "model": {
-                    "type": "string"
+                    "description": "Public video model name: nonblank and at most 200 UTF-8 bytes (jobs/types.rs VideoRequest::validate). With the current provider registry, validated creation returns 400 unsupported_capability before any model lookup.",
+                    "maxLength": 200,
+                    "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+                    "type": "string",
+                    "x-omg-max-bytes": 200
                   },
                   "prompt": {
-                    "type": "string"
+                    "maxLength": 32768,
+                    "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+                    "type": "string",
+                    "x-omg-max-bytes": 32768
                   },
                   "seconds": {
+                    "enum": [
+                      "4",
+                      "8",
+                      "12"
+                    ],
                     "type": "string"
                   },
                   "size": {
+                    "enum": [
+                      "720x1280",
+                      "1280x720",
+                      "1024x1792",
+                      "1792x1024"
+                    ],
                     "type": "string"
                   }
                 },
