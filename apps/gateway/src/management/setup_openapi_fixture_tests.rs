@@ -490,6 +490,23 @@ fn price_refused(b: &Value) -> bool {
     } else {
         (&b["price_lines"], &b["batch_price_lines"])
     };
+    // PriceLines validates in its deserializer, but raw integer extraction
+    // errors are INPUT refusals, not the documented cross-line domain rules.
+    let integer_encoding_refused = [standard, batch].into_iter().any(|lines| {
+        lines.as_array().into_iter().flatten().any(|line| {
+            let integers = if line.is_array() {
+                [&line[2], &line[6]]
+            } else {
+                [&line["batch"], &line["min_prompt_tokens"]]
+            };
+            integers
+                .into_iter()
+                .any(|value| value.as_number().is_some_and(|n| n.is_f64()))
+        })
+    });
+    if integer_encoding_refused {
+        return false;
+    }
     (version == Some(&json!(3)) && input_limit == Some(&json!(0)))
         || price_lines_refused(b)
         || (version == Some(&json!(3))
@@ -4178,4 +4195,41 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
             .record_failure(&anyhow::anyhow!("pinned probe verdict moved: {moved}"));
     }
     j.observed.finish(SLICE3_AREAS);
+}
+
+#[test]
+fn management_openapi_price_integer_encoding_is_not_a_domain_refusal() {
+    for positional in [false, true] {
+        let price = full_price(0, positional, true);
+        for field in ["batch", "min_prompt_tokens"] {
+            let mut encoded = price.clone();
+            let at = if positional {
+                if field == "batch" { "2" } else { "6" }
+            } else {
+                field
+            };
+            let pointer = format!("/price_lines/0/{at}");
+            let value = encoded.pointer_mut(&pointer).unwrap();
+            *value = json!(value.as_u64().unwrap() as f64);
+            assert!(
+                schema_accepts(
+                    "POST",
+                    "/api/v1/platform/deployments/{deployment}/prices",
+                    &encoded
+                ),
+                "integer encoding must remain schema-valid"
+            );
+            assert!(
+                !price_refused(&encoded),
+                "integer extraction mislabeled as domain refusal"
+            );
+        }
+        let mut duplicate = price;
+        let lines = duplicate["price_lines"].as_array_mut().unwrap();
+        lines.push(lines[0].clone());
+        assert!(
+            price_refused(&duplicate),
+            "duplicate-line domain refusal lost"
+        );
+    }
 }

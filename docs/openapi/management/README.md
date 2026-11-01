@@ -133,3 +133,9 @@ Only these exact stored JSON locations are allowlisted in `quality.rs`; both car
 | `get_api_v1_me_exportResponse/properties/audit/properties/items/items/properties/metadata` | The subject export returns stored `audit_events.metadata` verbatim; keys depend on the audited action. |
 
 Admission-ceiling `details` always uses the closed `IdentityCeilingDetails` producer schema from `alerts::ceiling_conditions`: scope, personal flag, workspace kind, window/count/rate, rate/wait triggers and nullable thresholds/p95; only `workspace_name` may be omitted by redaction. Other notification kinds retain arbitrary stored details. Admin admission-ceiling notifications explicitly suppress personal identities: `personal=true` forces `workspace: null` and null/absent `workspace_name`; `details.workspace_id`, `owner_email`, nested `workspace` and all other unknown fields are forbidden. Shared references can only identify Team/Project workspaces. Auditor variants always remove workspace identities. Runtime validators and completed-operation checks cache only the immutable committed artifact by pointer identity; mutated-document controls always compile and check afresh.
+
+## Integer request encoding
+
+Request integers must be JSON integer literals without a fraction, exponent or -0. Spec-following JSON Schema validators are more permissive than the server for these encodings. The root `x-omg-integer-encoding: "json-integer-literal"` extension declares this document-wide rule. HTTP vectors pin schema acceptance and server refusal (400/422), including integer query parameters and positional JSON items.
+
+Exception: pagination `offset` query parameters accept bare `-0` as zero through signed-integer parsing; fraction and exponent spellings remain refused. The root `x-omg-integer-encoding-query-exceptions` records this reviewed parameter/spelling pair; query vectors separately pin it wherever zero is in range.

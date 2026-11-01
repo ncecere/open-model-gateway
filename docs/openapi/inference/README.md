@@ -77,3 +77,7 @@ Fixed limits that are constants of the handlers (embeddings: 128 inputs, 1 MiB i
 ## Messages beta headers
 
 The decision text said Messages "rejects beta headers". The handler accepts an open list and refuses only a denylist (`protocols/messages.rs`, `docs/protocol-matrix.md`); the artifact documents the handler. The stale in-repo sentence (`docs/guardrails-design.md`, which also said `cache_control` and thinking were rejected) is corrected in the same PR.
+
+## Integer request encoding
+
+Request integers must be JSON integer literals without a fraction, exponent or -0. Spec-following JSON Schema validators are more permissive than the server for these encodings. The root `x-omg-integer-encoding: "json-integer-literal"` extension declares this document-wide rule. HTTP vectors pin schema acceptance and server refusal (400/422), including integer query parameters and positional JSON items.

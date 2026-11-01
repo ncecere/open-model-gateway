@@ -1135,3 +1135,20 @@ fn operation_at(document: &Value, operation: &Value, location: &str) -> Result<(
     }
     discover(document, operation, location, &mut BTreeSet::new())
 }
+
+/// Global lexical convention shared by both request contracts.
+pub(crate) const INTEGER_ENCODING_DESCRIPTION: &str = "Request integers must be JSON integer literals without a fraction, exponent or -0. Spec-following JSON Schema validators are more permissive than the server for these encodings.";
+
+pub(crate) fn integer_encoding(document: &Value) -> Result<()> {
+    ensure!(
+        document["x-omg-integer-encoding"] == "json-integer-literal",
+        "missing or invalid root integer encoding convention"
+    );
+    ensure!(
+        document["info"]["description"]
+            .as_str()
+            .is_some_and(|text| text.contains(INTEGER_ENCODING_DESCRIPTION)),
+        "missing integer encoding description"
+    );
+    Ok(())
+}

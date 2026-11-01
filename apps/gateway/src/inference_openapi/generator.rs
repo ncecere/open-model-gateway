@@ -195,9 +195,10 @@ pub(super) fn generate(fragments: &Fragments) -> Result<Value> {
     }
     Ok(json!({
         "openapi":"3.1.0",
+        "x-omg-integer-encoding":"json-integer-literal",
         "jsonSchemaDialect":"https://spec.openapis.org/oas/3.1/dialect/base",
         "info":{"title":"Open Model Gateway inference API","version":env!("CARGO_PKG_VERSION"),
-            "description":"INCOMPLETE contract (#82 PR1): the operations of areas models, embeddings, rerank, systemone, images and the two realtime refusals are complete and wire-validated against the real handlers; every other operation is an explicit, counted placeholder. Every operation authenticates with an inference key only (Bearer; /v1/messages also accepts x-api-key, GET /v1/realtime also the openai-insecure-api-key.<key> WebSocket subprotocol, never both); inference keys never authorize management and admin tokens never authorize inference. Live key, workspace, catalog and budget checks remain authoritative. The OpenAI-shaped, Anthropic-shaped, job and file error envelopes are distinct schemas and never the management ErrorEnvelope; /v1/messages errors carry no gateway machine code. x-omg-* extensions state what OpenAPI 3.1 cannot express (see docs/openapi/inference/README.md)."},
+            "description":format!("INCOMPLETE contract (#82 PR1): the operations of areas models, embeddings, rerank, systemone, images and the two realtime refusals are complete and wire-validated against the real handlers; every other operation is an explicit, counted placeholder. Every operation authenticates with an inference key only (Bearer; /v1/messages also accepts x-api-key, GET /v1/realtime also the openai-insecure-api-key.<key> WebSocket subprotocol, never both); inference keys never authorize management and admin tokens never authorize inference. Live key, workspace, catalog and budget checks remain authoritative. The OpenAI-shaped, Anthropic-shaped, job and file error envelopes are distinct schemas and never the management ErrorEnvelope; /v1/messages errors carry no gateway machine code. x-omg-* extensions state what OpenAPI 3.1 cannot express (see docs/openapi/inference/README.md). {}", crate::management::openapi::quality::INTEGER_ENCODING_DESCRIPTION)},
         "paths":paths,
         "components":{
             "schemas":schemas,

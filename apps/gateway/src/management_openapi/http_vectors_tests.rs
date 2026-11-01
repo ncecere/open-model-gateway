@@ -35,7 +35,7 @@ fn parameter(name: &str, required: bool, schema: Value) -> Value {
     json!({"in":"query","name":name,"required":required,"schema":schema})
 }
 fn query_document() -> Value {
-    json!({"openapi":"3.1.0","paths":{TEMPLATE:{"get":{"parameters":[
+    json!({"openapi":"3.1.0","x-omg-integer-encoding":"json-integer-literal","paths":{TEMPLATE:{"get":{"parameters":[
         parameter("limit", false, json!({"type":"integer","minimum":1,"maximum":4242})),
         parameter("status", false, json!({"enum":["active","all"]})),
         parameter("day", false, json!({"type":"string","format":"date"})),
@@ -251,7 +251,7 @@ async fn management_openapi_http_vectors_unexpected_statuses_and_other_operation
 // ----- request bodies -------------------------------------------------------
 
 fn body_document() -> Value {
-    json!({"openapi":"3.1.0","paths":{TEMPLATE:{"post":{
+    json!({"openapi":"3.1.0","x-omg-integer-encoding":"json-integer-literal","paths":{TEMPLATE:{"post":{
         "requestBody":{"required":true,"content":{"application/json":{"schema":{
             "type":"object","required":["token","count","mode"],"additionalProperties":false,"properties":{
                 "token":{"type":"string","pattern":"^[0-9a-f]{8}$"},
@@ -407,7 +407,7 @@ async fn management_openapi_http_vectors_body_disagreement_fails_without_values(
 
 #[test]
 fn management_openapi_http_vectors_seeds_cover_parameters_absent_from_the_base() {
-    let document = json!({"openapi":"3.1.0","paths":{TEMPLATE:{"get":{"parameters":[
+    let document = json!({"openapi":"3.1.0","x-omg-integer-encoding":"json-integer-literal","paths":{TEMPLATE:{"get":{"parameters":[
         parameter("state", true, json!({"type":"string","pattern":"^[0-9a-f]{4}$"})),
         parameter("error", false, json!({"type":"string","maxLength":6})),
     ],"responses":{"200":{"description":"ok"}}}}},"components":{"schemas":{}}});
@@ -431,7 +431,7 @@ fn management_openapi_http_vectors_seeds_cover_parameters_absent_from_the_base()
 // ----- engine v2: flips, seeds, pattern boundaries, positional indices, bytes ----
 
 fn body_only(schema: Value) -> Value {
-    json!({"openapi":"3.1.0","paths":{TEMPLATE:{"post":{
+    json!({"openapi":"3.1.0","x-omg-integer-encoding":"json-integer-literal","paths":{TEMPLATE:{"post":{
         "requestBody":{"required":true,"content":{"application/json":{"schema":schema}}},
         "responses":{"200":{"description":"ok"}}}}},"components":{"schemas":{}}})
 }
@@ -899,7 +899,7 @@ fn code_document(schema: Value, exempt: bool) -> Value {
         parameter["x-omg-unsendable-boundary"] =
             json!("The handler caps this value far beyond what one request target can carry.");
     }
-    json!({"openapi":"3.1.0","paths":{TEMPLATE:{"get":{"parameters":[parameter],
+    json!({"openapi":"3.1.0","x-omg-integer-encoding":"json-integer-literal","paths":{TEMPLATE:{"get":{"parameters":[parameter],
         "responses":{"200":{"description":"ok"}}}}},"components":{"schemas":{}}})
 }
 fn code_cases(schema: Value, exempt: bool) -> anyhow::Result<Vec<super::http_vectors::QueryCase>> {
@@ -1144,7 +1144,7 @@ fn unreached_in(document: &Value, reached: &BTreeSet<String>) -> Vec<(String, &'
 /// dropped. Union arms stay distinct, and an arm no path reached stays unreached.
 #[test]
 fn management_openapi_request_reach_shared_definitions_count_once_per_operation() {
-    let document = json!({"openapi":"3.1.0","paths":{TEMPLATE:{"post":{
+    let document = json!({"openapi":"3.1.0","x-omg-integer-encoding":"json-integer-literal","paths":{TEMPLATE:{"post":{
         "requestBody":{"required":true,"content":{"application/json":{"schema":{
             "type":"object","additionalProperties":false,
             "properties":{"kind":{"enum":["a","b"]},"line":{"$ref":"#/components/schemas/Line"}},
@@ -1550,7 +1550,7 @@ fn management_openapi_http_vectors_unbounded_query_patterns_need_candidates_too(
         for (k, v) in extra.as_object().unwrap() {
             schema[k] = v.clone();
         }
-        json!({"openapi":"3.1.0","paths":{TEMPLATE:{"get":{"parameters":[
+        json!({"openapi":"3.1.0","x-omg-integer-encoding":"json-integer-literal","paths":{TEMPLATE:{"get":{"parameters":[
             parameter("n", true, schema)],"responses":{"200":{"description":"ok"}}}}},
             "components":{"schemas":{}}})
     };
@@ -2275,7 +2275,7 @@ fn management_openapi_http_vectors_candidates_must_straddle_the_boundary() {
 fn management_openapi_http_vectors_query_candidates_must_straddle_too() {
     let mut schema = json!({"type":"string","pattern":"^(0|[1-9][0-9]{0,14})$"});
     schema["description"] = json!("a number");
-    let document = json!({"openapi":"3.1.0","paths":{TEMPLATE:{"get":{"parameters":[
+    let document = json!({"openapi":"3.1.0","x-omg-integer-encoding":"json-integer-literal","paths":{TEMPLATE:{"get":{"parameters":[
         parameter("n", true, schema)],"responses":{"200":{"description":"ok"}}}}},
         "components":{"schemas":{}}});
     let plan = |candidates: &[(&str, &str)]| {
@@ -2594,7 +2594,7 @@ fn management_openapi_http_vectors_reach_controls_for_allof_conditionals_arms_an
 
 fn upload_document() -> Value {
     let body = json!({"type":"string","format":"binary","minLength":1,"maxLength":16});
-    json!({"openapi":"3.1.0","paths":{TEMPLATE:{"put":{"requestBody":{"required":true,"content":{
+    json!({"openapi":"3.1.0","x-omg-integer-encoding":"json-integer-literal","paths":{TEMPLATE:{"put":{"requestBody":{"required":true,"content":{
         "image/png":{"schema":body},"image/jpeg":{"schema":body}}},
         "responses":{"200":{"description":"ok"}}}}},"components":{"schemas":{}}})
 }
@@ -2783,7 +2783,9 @@ async fn management_openapi_integer_encoding_wire_spellings() {
         );
     }
     // The real serde extractor refuses schema-valid integer-valued floats.
-    let app = judge::<std::collections::BTreeMap<String, u32>>(|_| true);
+    let app = judge::<std::collections::BTreeMap<String, u32>>(|v| {
+        v.len() == 1 && v.get("n").is_some_and(|n| *n <= 9)
+    });
     run_judged(&app, &document, json!({"n":2}), &[])
         .await
         .unwrap();
