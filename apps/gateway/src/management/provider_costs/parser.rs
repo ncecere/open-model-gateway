@@ -186,6 +186,153 @@ fn bounded_page(raw: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
+#[cfg(test)]
+#[path = "parser_magnitude_tests.rs"]
+mod magnitude_tests;
+#[cfg(test)]
+#[test]
+fn management_openapi_money_raw_upload_request_vectors() {
+    // The real ingestion decoder is two-stage: Upload preserves RawValue,
+    // then parse deserializes each Page without losing duplicate object keys.
+    // Exercise that exact typed decoder, not Value-normalized fake input.
+    // The schema also states the constraints parse() enforces on these shapes
+    // (limit 1..=31, USD currency, bounded decimal amounts). Bind them here.
+    fn item_ok(item: &Item) -> Result<(), String> {
+        let texts = [
+            &item.workspace_id,
+            &item.description,
+            &item.model,
+            &item.service_tier,
+            &item.context_window,
+            &item.cost_type,
+            &item.token_type,
+            &item.inference_geo,
+            &item.speed,
+        ];
+        if item.currency != "USD"
+            || cents(&item.amount).is_err()
+            || texts.into_iter().flatten().any(|text| !bounded(text, 4096))
+        {
+            return Err("item".into());
+        }
+        Ok(())
+    }
+    fn bucket_ok(bucket: &Bucket) -> Result<(), String> {
+        if timestamp(&bucket.starting_at).is_err() || timestamp(&bucket.ending_at).is_err() {
+            return Err("bucket".into());
+        }
+        bucket.results.iter().try_for_each(item_ok)
+    }
+    fn page_ok(page: &Page) -> Result<(), String> {
+        if page.data.is_empty()
+            || page.data.len() > 31
+            || page.next_page.as_ref().is_some_and(|s| !bounded(s, 4096))
+            || page.has_more != page.next_page.is_some()
+        {
+            return Err("page".into());
+        }
+        page.data.iter().try_for_each(bucket_ok)
+    }
+    fn parameters_ok(p: &Parameters) -> bool {
+        let groups: BTreeSet<&str> = p.group_by.iter().map(String::as_str).collect();
+        (1..=31).contains(&p.limit)
+            && p.bucket_width == "1d"
+            && p.group_by.len() == 2
+            && groups == BTreeSet::from(["description", "workspace_id"])
+            && timestamp(&p.starting_at).is_ok()
+            && timestamp(&p.ending_at).is_ok()
+    }
+    struct DecodedParameters;
+    impl<'de> Deserialize<'de> for DecodedParameters {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            let p = Parameters::deserialize(d)?;
+            parameters_ok(&p)
+                .then_some(Self)
+                .ok_or_else(|| serde::de::Error::custom("parameters"))
+        }
+    }
+    struct DecodedItem;
+    impl<'de> Deserialize<'de> for DecodedItem {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            let item = Item::deserialize(d)?;
+            item_ok(&item)
+                .map(|()| Self)
+                .map_err(serde::de::Error::custom)
+        }
+    }
+    struct DecodedBucket;
+    impl<'de> Deserialize<'de> for DecodedBucket {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            let b = Bucket::deserialize(d)?;
+            bucket_ok(&b)
+                .map(|()| Self)
+                .map_err(serde::de::Error::custom)
+        }
+    }
+    struct DecodedPage;
+    impl<'de> Deserialize<'de> for DecodedPage {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            let p = Page::deserialize(d)?;
+            page_ok(&p).map(|()| Self).map_err(serde::de::Error::custom)
+        }
+    }
+    struct DecodedUpload;
+    impl<'de> Deserialize<'de> for DecodedUpload {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            let upload = Upload::deserialize(d)?;
+            (parameters_ok(&upload.request)
+                && bounded(&upload.account_id, 200)
+                && bounded(&upload.evidence_reference, 256)
+                && timestamp(&upload.exported_at).is_ok()
+                && (1..=31).contains(&upload.pages.len()))
+            .then_some(())
+            .ok_or_else(|| serde::de::Error::custom("upload"))?;
+            for raw in upload.pages {
+                let page =
+                    serde_json::from_str::<Page>(raw.get()).map_err(serde::de::Error::custom)?;
+                page_ok(&page).map_err(serde::de::Error::custom)?;
+            }
+            Ok(Self)
+        }
+    }
+    let upload = json!({"account_id":"account","evidence_reference":"receipt:upload","exported_at":"2025-08-03T00:00:00Z","supersedes":null,"request":{"starting_at":"2025-08-01T00:00:00Z","ending_at":"2025-08-02T00:00:00Z","bucket_width":"1d","group_by":["workspace_id","description"],"limit":31},"pages":[{"data":[{"starting_at":"2025-08-01T00:00:00Z","ending_at":"2025-08-02T00:00:00Z","results":[{"amount":"-1","currency":"USD","workspace_id":null,"description":null,"model":null,"service_tier":null,"context_window":null,"cost_type":null,"token_type":null,"inference_geo":null,"speed":null}]}],"has_more":false,"next_page":null}]});
+    super::super::openapi::requests::component_vectors::<DecodedParameters>(
+        "POST",
+        "/api/v1/platform/provider-cost-imports",
+        "MoneyProviderParameters",
+        upload["request"].clone(),
+    );
+    super::super::openapi::requests::component_vectors::<DecodedPage>(
+        "POST",
+        "/api/v1/platform/provider-cost-imports",
+        "MoneyProviderPage",
+        upload["pages"][0].clone(),
+    );
+    super::super::openapi::requests::component_vectors::<DecodedBucket>(
+        "POST",
+        "/api/v1/platform/provider-cost-imports",
+        "MoneyProviderBucket",
+        upload["pages"][0]["data"][0].clone(),
+    );
+    super::super::openapi::requests::component_vectors::<DecodedItem>(
+        "POST",
+        "/api/v1/platform/provider-cost-imports",
+        "MoneyProviderItem",
+        upload["pages"][0]["data"][0]["results"][0].clone(),
+    );
+    super::super::openapi::requests::vectors::<DecodedUpload>(
+        "POST",
+        "/api/v1/platform/provider-cost-imports",
+        upload,
+    );
+}
+/// Test oracle: does the REAL parser (every relation between the elements of an
+/// upload: pages, buckets, windows, limits, duplicate lines) accept this JSON
+/// body, in either wire form? Used to decide which 400 is a domain refusal.
+#[cfg(test)]
+pub(crate) fn upload_parses(input: &serde_json::Value) -> bool {
+    serde_json::from_str::<Upload>(&input.to_string()).is_ok_and(|upload| parse(&upload).is_ok())
+}
 pub(super) fn parse(b: &Upload) -> Result<Parsed, ApiError> {
     let groups: BTreeSet<&str> = b.request.group_by.iter().map(String::as_str).collect();
     if !bounded(&b.account_id, 200)

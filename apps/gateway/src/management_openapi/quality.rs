@@ -24,6 +24,10 @@ pub(super) const ARBITRARY_JSON: &[(&str, &str)] = &[
         "Stored audit_events.metadata is exported verbatim as JSON; its vocabulary depends on the audited action.",
     ),
     (
+        "/components/schemas/MoneyProviderReconciliationSnapshot/properties/personal_activity/properties/exclusively_attributed_imported_by_category",
+        "Frozen provider_reconciliations.snapshot groups signed imported amounts by provider-supplied cost_type; arbitrary historical category labels map only to integer micro-USD strings.",
+    ),
+    (
         "/components/schemas/SettingsWorkspaceAlertEvent/properties/details",
         "Workspace history rows return alert_events.details verbatim as stored producer-specific JSON; monetary refinements apply on this shared base, and every concrete workspace event variant refines it with the closed schema of its kind (Settings*Details).",
     ),
@@ -671,7 +675,17 @@ fn schema(
     // Money wire values: integer micro-USD strings constrained by a pattern
     // that rejects leading zeros and `-0` (request and response alike).
     for (name, child) in node["properties"].as_object().into_iter().flatten() {
-        if money_name(name) && !decimal_rate(name) {
+        // A fixed identifier-like literal (e.g. the `unavailable` status marker
+        // `not_in_rollups`) carries no amount, so it needs no money pattern.
+        // Anything else (digits, signs, decimals, exponents, punctuation) could
+        // be read as an amount and keeps the money rule.
+        let marker = child["const"].as_str().is_some_and(|c| {
+            c.bytes().next().is_some_and(|b| b.is_ascii_lowercase())
+                && c.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+                // Words a numeric parser reads as a number are amounts.
+                && !matches!(c, "nan" | "inf" | "infinity")
+        });
+        if money_name(name) && !decimal_rate(name) && !marker {
             ensure!(
                 money(document, child, 0)? != Money::Other,
                 "money property `{name}` at {location} must be a string constrained by an integer micro-USD pattern (^(0|[1-9][0-9]*)$ or ^(0|-?[1-9][0-9]*)$), or a nullable form of one"

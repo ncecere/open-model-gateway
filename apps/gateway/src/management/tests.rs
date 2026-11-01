@@ -70,6 +70,8 @@ mod member_tests;
 mod openapi_budget_fixture_tests;
 #[path = "openapi_fixture_tests.rs"]
 mod openapi_fixtures;
+#[path = "openapi_money_fixture_tests.rs"]
+mod openapi_money_fixture_tests;
 #[path = "openapi_settings_fixture_tests.rs"]
 mod openapi_settings_fixture_tests;
 #[path = "openapi_slice2_fixture_tests.rs"]

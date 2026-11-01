@@ -27,6 +27,24 @@ pub(crate) const SLICE3_AREAS: &[&str] = &[
     "workspaces/{ws}/models",
     "workspaces/{ws}/policy",
 ];
+pub(crate) const SLICE4_AREAS: &[&str] = &[
+    "platform/cost-centers",
+    "platform/cost-report",
+    "platform/holds",
+    "platform/overview",
+    "platform/provider-cost-imports",
+    "platform/provider-cost-mappings",
+    "platform/provider-reconciliations",
+    "platform/report-schedules",
+    "platform/usage",
+    "workspaces/{ws}/cost-report",
+    "workspaces/{ws}/cost-summary",
+    "workspaces/{ws}/costs",
+    "workspaces/{ws}/holds",
+    "workspaces/{ws}/report-schedules",
+    "workspaces/{ws}/usage",
+    "workspaces/{ws}/usage-export",
+];
 pub(crate) const SLICE2_AREAS: &[&str] = &[
     "platform/access-requests",
     "platform/oidc",
@@ -70,6 +88,7 @@ pub(crate) const SLICE6_AREAS: &[&str] = &[
 pub(crate) const AREA_GROUPS: &[(&str, &[&str])] = &[
     ("IDENTITY_SELF_SERVICE_AREAS", IDENTITY_SELF_SERVICE_AREAS),
     ("SLICE3_AREAS", SLICE3_AREAS),
+    ("SLICE4_AREAS", SLICE4_AREAS),
     ("SLICE2_AREAS", SLICE2_AREAS),
     ("SLICE5_AREAS", SLICE5_AREAS),
     ("SLICE6_AREAS", SLICE6_AREAS),
@@ -1121,7 +1140,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(count, 204);
+        assert_eq!(count, 251);
     }
     #[test]
     fn management_openapi_response_rejects_incomplete_completed_slot() {

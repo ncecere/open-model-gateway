@@ -6,6 +6,7 @@ mod hardening_tests;
 pub(crate) mod http_vectors;
 mod http_vectors_tests;
 mod middleware;
+mod money_tests;
 mod mutation_tests;
 mod quality;
 mod request_reach;
@@ -60,7 +61,7 @@ mod tests {
             "review route additions and update this progress baseline"
         );
         assert_eq!(
-            placeholders, 94,
+            placeholders, 0,
             "review schema completion and update this progress baseline"
         );
     }

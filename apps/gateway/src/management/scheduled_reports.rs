@@ -138,6 +138,80 @@ struct Update {
     #[serde(default, deserialize_with = "present")]
     recipient_user_ids: Option<Vec<Uuid>>,
 }
+#[cfg(test)]
+#[test]
+fn management_openapi_money_schedule_request_vectors() {
+    // The schema states every constraint validate() can express without the
+    // time-zone database or live configuration: cadence/state enums, HH:MM,
+    // timezone length (in bytes here, see #405) and 1..=50 unique recipients.
+    // Bind exactly those.
+    fn expressible(
+        cadence: Option<&str>,
+        timezone: Option<&str>,
+        time: Option<&str>,
+        state: Option<&str>,
+        recipients: Option<&[Uuid]>,
+    ) -> bool {
+        cadence.is_none_or(|v| matches!(v, "weekly" | "monthly"))
+            && state.is_none_or(|v| matches!(v, "active" | "paused"))
+            // validate() counts UTF-8 BYTES (`timezone.len() > 64`); the schema's
+            // maxLength counts characters (#405), so this is the handler's rule.
+            && timezone.is_none_or(|v| (1..=64).contains(&v.len()))
+            && time.is_none_or(|v| crate::jobs::schedule::parse_hhmm(v).is_some())
+            && recipients.is_none_or(|r| {
+                (1..=50).contains(&r.len())
+                    && r.iter().collect::<std::collections::HashSet<_>>().len() == r.len()
+            })
+    }
+    struct DecodedCreate;
+    impl<'de> Deserialize<'de> for DecodedCreate {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            let b = Create::deserialize(d)?;
+            expressible(
+                Some(&b.cadence),
+                Some(&b.timezone),
+                Some(&b.delivery_time),
+                Some(&b.state),
+                Some(&b.recipient_user_ids),
+            )
+            .then_some(Self)
+            .ok_or_else(|| serde::de::Error::custom("constraint"))
+        }
+    }
+    struct DecodedUpdate;
+    impl<'de> Deserialize<'de> for DecodedUpdate {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            let b = Update::deserialize(d)?;
+            // An update that changes nothing is refused (update()).
+            let any = b.cadence.is_some()
+                || b.timezone.is_some()
+                || b.delivery_time.is_some()
+                || b.state.is_some()
+                || b.recipient_user_ids.is_some();
+            (any && expressible(
+                b.cadence.as_deref(),
+                b.timezone.as_deref(),
+                b.delivery_time.as_deref(),
+                b.state.as_deref(),
+                b.recipient_user_ids.as_deref(),
+            ))
+            .then_some(Self)
+            .ok_or_else(|| serde::de::Error::custom("constraint"))
+        }
+    }
+    for scope in ["/api/v1/platform", "/api/v1/workspaces/{ws}"] {
+        super::openapi::requests::vectors::<DecodedCreate>(
+            "POST",
+            &format!("{scope}/report-schedules"),
+            json!({"cadence":"weekly","timezone":"UTC","delivery_time":"00:01","state":"paused","cost_center_id":Uuid::nil(),"recipient_user_ids":[Uuid::nil()]}),
+        );
+        super::openapi::requests::vectors::<DecodedUpdate>(
+            "PATCH",
+            &format!("{scope}/report-schedules/{{id}}"),
+            json!({"cadence":"monthly","timezone":"UTC","delivery_time":"12:01","state":"paused","recipient_user_ids":[Uuid::nil()]}),
+        );
+    }
+}
 fn validate(
     cadence: &str,
     timezone: &str,

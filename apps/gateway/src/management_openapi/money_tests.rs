@@ -1,0 +1,146 @@
+//! Money-specific adversarial schema controls supplement executed fixtures.
+use super::responses::{artifact, validate_value};
+use serde_json::{Value, json};
+fn check(name: &str, value: &Value) -> bool {
+    validate_value(
+        artifact(),
+        &json!({"$ref":format!("#/components/schemas/{name}")}),
+        value,
+    )
+    .is_ok()
+}
+#[test]
+fn management_openapi_money_unknown_is_not_zero_and_floors_are_not_upper_bounds() {
+    let mut estimate = json!({"settled_estimate_microusd":"9007199254740993","held_floor_microusd":"10","holds_upper_bound_microusd":null,"attempts":"2","unresolved_attempts":"1","unbounded_holds":"1","complete":false});
+    assert!(check("MoneyProviderEstimate", &estimate));
+    for wrong in [json!(0), json!("0"), json!("10")] {
+        estimate["holds_upper_bound_microusd"] = wrong;
+        assert!(!check("MoneyProviderEstimate", &estimate));
+    }
+    let summary = json!({"count":"1","known_floor_microusd":null,"unbounded_count":"1","oldest_age_hours":72});
+    assert!(check("MoneyHoldTotals", &summary));
+    for wrong in [json!(0), json!(-1), json!(0.25), json!("-1"), json!("1.25")] {
+        let mut v = summary.clone();
+        v["known_floor_microusd"] = wrong;
+        assert!(!check("MoneyHoldTotals", &v));
+    }
+}
+#[test]
+fn management_openapi_money_personal_totals_cannot_grow_sensitive_fields() {
+    let summary =
+        json!({"count":"1","known_floor_microusd":"7","unbounded_count":"0","oldest_age_hours":72});
+    for name in [
+        "workspace_id",
+        "owner_user_id",
+        "api_key_id",
+        "execution_id",
+        "name",
+        "email",
+    ] {
+        let mut v = summary.clone();
+        v[name] = json!("must-not-leak");
+        assert!(!check("MoneyHoldTotals", &v), "sensitive {name}");
+    }
+    let mut row = json!({"id":null,"name":"Personal workspace keys","spend_microusd":"7","requests":"1","tokens":"2","share":"1","blended_microusd_per_million":null});
+    assert!(check("MoneyPlatformRedactedKeyTotals", &row));
+    row["id"] = json!(uuid::Uuid::nil());
+    assert!(!check("MoneyPlatformRedactedKeyTotals", &row));
+}
+#[test]
+fn management_openapi_money_signed_credits_and_nested_billing_boundaries() {
+    let dimensions = json!({"currency":"USD","workspace_id":null,"description":null,"model":null,"service_tier":null,"context_window":null,"cost_type":"credits","token_type":null,"inference_geo":null,"speed":null});
+    let good = json!({"line_number":1,"source_page":0,"source_pointer":"/data/0/results/0","bucket_start":"2025-08-01T00:00:00Z","bucket_end":"2025-08-02T00:00:00Z","dimensions":dimensions,"original_amount":"-2.00015","amount_microusd":"-20002","conversion_residual_microusd":"0.5"});
+    assert!(check("MoneyProviderLine", &good));
+    for wrong in [json!(-20002), json!("-2.25"), Value::Null] {
+        let mut v = good.clone();
+        v["amount_microusd"] = wrong;
+        assert!(!check("MoneyProviderLine", &v));
+    }
+    let counters = serde_json::to_value(crate::billing::BillingUsage::default()).unwrap();
+    assert!(check("MoneyBillingUsageInput", &counters));
+    for text in [
+        "0",
+        "000",
+        "9223372036854775807",
+        "9007199254740993",
+        "9223372036854775808",
+        "9999999999999999999",
+        "-1",
+        "1.0",
+    ] {
+        let mut v = counters.clone();
+        v["total_input_tokens"] = json!(text);
+        // The contract documents canonical decimals only (the harness money
+        // rule); the handler's counter parser additionally tolerates zero padding.
+        let canonical = text == "0" || !text.starts_with('0');
+        assert_eq!(
+            check("MoneyBillingUsageInput", &v),
+            canonical && serde_json::from_value::<crate::billing::BillingUsage>(v).is_ok(),
+            "{text}"
+        );
+    }
+    // Pinned divergence: zero-padded counters parse in the handler, not in the schema.
+    let mut padded = counters.clone();
+    padded["total_input_tokens"] = json!("007");
+    assert!(serde_json::from_value::<crate::billing::BillingUsage>(padded.clone()).is_ok());
+    assert!(!check("MoneyBillingUsageInput", &padded));
+    let mut omitted = counters.clone();
+    omitted
+        .as_object_mut()
+        .unwrap()
+        .remove("cache_read_input_tokens");
+    assert!(!check("MoneyBillingUsageInput", &omitted));
+}
+#[test]
+fn management_openapi_money_explore_identity_keeps_personal_keys_redacted() {
+    let label = "Personal workspace keys";
+    // The redacted row is its own branch and is not an identified row.
+    let redacted = json!({"id":null,"name":label});
+    assert!(check("MoneyPlatformExploreRedactedKey", &redacted));
+    assert!(check("MoneyPlatformExploreIdentity", &redacted));
+    assert!(!check("MoneyPlatformExploreIdentified", &redacted));
+    assert!(!check("MoneyPlatformExploreUnidentified", &redacted));
+    for extra in ["key_id", "workspace_id", "owner_user_id", "api_key_id"] {
+        let mut v = redacted.clone();
+        v[extra] = json!(uuid::Uuid::nil());
+        assert!(!check("MoneyPlatformExploreRedactedKey", &v), "{extra}");
+        assert!(!check("MoneyPlatformExploreIdentity", &v), "{extra}");
+    }
+    // A redacted row never carries an id.
+    let with_id = json!({"id":uuid::Uuid::nil(),"name":label});
+    assert!(!check("MoneyPlatformExploreRedactedKey", &with_id));
+    // Pinned, deliberately: key names are free text (valid_name accepts any
+    // non-blank text of at most 120 bytes) and the platform key dimension only
+    // redacts personal-workspace keys, so a shared workspace's key may carry
+    // the redacted label with its own id. Excluding the label from the
+    // identified branch would make the schema refuse that real response; key
+    // privacy of personal rows is enforced by the handler and asserted by the
+    // fixture (id and name, both platform actors).
+    assert!(check("MoneyPlatformExploreIdentified", &with_id));
+}
+#[test]
+fn management_openapi_money_cost_row_provider_cost_is_a_canonical_i64() {
+    let schema = &artifact()["components"]["schemas"]["MoneyCostRow"]["properties"]["provider_cost_microusd"];
+    let accepts = |value: Value| validate_value(artifact(), schema, &value).is_ok();
+    // The producer is a bigint column (CHECK >= 0) cast to text.
+    for good in [
+        json!(null),
+        json!("0"),
+        json!("5"),
+        json!("9223372036854775807"),
+    ] {
+        assert!(accepts(good.clone()), "{good}");
+    }
+    for bad in [
+        json!("9223372036854775808"),
+        json!("9999999999999999999"),
+        json!("10000000000000000000"),
+        json!("007"),
+        json!("-1"),
+        json!("1.0"),
+        json!(5),
+        json!(""),
+    ] {
+        assert!(!accepts(bad.clone()), "{bad}");
+    }
+}
