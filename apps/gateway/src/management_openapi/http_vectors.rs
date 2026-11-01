@@ -2324,6 +2324,32 @@ pub(crate) async fn run_body_with(
     candidates: &[(String, Value)],
     send: &impl AsyncFn(Value) -> Probe,
 ) -> Result<BodyRun> {
+    run_body_with_constraints(
+        document,
+        method,
+        template,
+        valid_body,
+        seeds,
+        candidates,
+        (send, &|_| true),
+    )
+    .await
+}
+
+/// Additive inference hook for documented cross-field request constraints that
+/// JSON Schema cannot express (e.g. equality of two non-null token aliases).
+/// Structural schema rejection is never overridden. Management's caller above
+/// retains exactly its existing schema-only verdict and vectors.
+pub(crate) async fn run_body_with_constraints(
+    document: &Value,
+    method: &str,
+    template: &str,
+    valid_body: Value,
+    seeds: &[(String, Value)],
+    candidates: &[(String, Value)],
+    dispatch: (&impl AsyncFn(Value) -> Probe, &impl Fn(&Value) -> bool),
+) -> Result<BodyRun> {
+    let (send, constraints) = dispatch;
     let operation = responses::operation(document, method, template)?;
     let plan = body_plan(document, operation, &valid_body, seeds, candidates)
         .with_context(|| format!("{method} {template}"))?;
@@ -2344,6 +2370,7 @@ pub(crate) async fn run_body_with(
     let mut exchanges = Vec::new();
     let mut accepted_seen = false;
     for (kind, location, body, expected) in plan {
+        let expected = expected && constraints(&body);
         let probe = send(body).await;
         same_operation(&probe.captured, method, template)?;
         let handler = probe

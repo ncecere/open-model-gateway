@@ -333,7 +333,7 @@ fn inference_openapi_completed_areas_have_no_incomplete_references() {
             }
         }
     }
-    assert_eq!(count, 7);
+    assert_eq!(count, 10);
     // Groups are disjoint and every area names real operations.
     let mut seen = BTreeSet::new();
     for (_, group) in AREA_GROUPS {

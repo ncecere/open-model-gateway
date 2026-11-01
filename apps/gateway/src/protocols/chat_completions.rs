@@ -636,3 +636,10 @@ mod tests {
         assert!(usage_json(usage).is_none());
     }
 }
+
+#[cfg(test)]
+pub(crate) fn openapi_normalize(value: Value) -> Result<ChatRequest, InferenceError> {
+    serde_json::from_value::<Request>(value)
+        .map_err(|_| InferenceError::InvalidRequest)?
+        .normalize()
+}

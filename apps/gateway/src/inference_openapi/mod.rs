@@ -29,6 +29,58 @@ const PROVIDER_LEGEND: &str = "Provider-controlled JSON: parse_answers (inferenc
 const LEGEND: &str = "Legend keys are the caller's score level indices.";
 pub(crate) const ARBITRARY_JSON: &[(&str, &str)] = &[
     (
+        "/components/schemas/GenFunction/oneOf/0/properties/parameters",
+        "Function parameter schemas are caller-owned JSON Schema objects; the gateway checks only object kind and forwards their keys and nested JSON unchanged.",
+    ),
+    (
+        "/components/schemas/GenFunction/oneOf/1/prefixItems/2",
+        "Function parameter schemas are caller-owned JSON Schema objects; the gateway checks only object kind and forwards their keys and nested JSON unchanged.",
+    ),
+    (
+        "/components/schemas/GenResponseTool/oneOf/0/properties/parameters",
+        "Function parameter schemas are caller-owned JSON Schema objects; the gateway checks only object kind and forwards their keys and nested JSON unchanged.",
+    ),
+    (
+        "/components/schemas/GenResponseTool/oneOf/1/prefixItems/3",
+        "Function parameter schemas are caller-owned JSON Schema objects; the gateway checks only object kind and forwards their keys and nested JSON unchanged.",
+    ),
+    (
+        "/components/schemas/GenToolUseBlock/properties/input",
+        "Function tool inputs are caller-owned JSON objects; the gateway preserves their keys and arbitrary nested JSON as function arguments.",
+    ),
+    (
+        "/components/schemas/GenMessagesTool/properties/input_schema",
+        "Function parameter schemas are caller-owned JSON Schema objects; the gateway checks only object kind and forwards their keys and nested JSON unchanged.",
+    ),
+    (
+        "/components/schemas/post_v1_chat_completionsRequest/oneOf/0/properties/metadata/oneOf/0",
+        "OpenAI metadata keys are caller-chosen client labels (at most 16); keys are 1 to 64 characters, values at most 512 characters, and the map is never forwarded upstream.",
+    ),
+    (
+        "/components/schemas/post_v1_chat_completionsRequest/oneOf/1/prefixItems/11/oneOf/0",
+        "OpenAI metadata keys are caller-chosen client labels (at most 16); keys are 1 to 64 characters, values at most 512 characters, and the map is never forwarded upstream.",
+    ),
+    (
+        "/components/schemas/post_v1_responsesRequest/oneOf/0/properties/metadata/oneOf/0",
+        "OpenAI metadata keys are caller-chosen client labels (at most 16); keys are 1 to 64 characters, values at most 512 characters, and the map is never forwarded upstream.",
+    ),
+    (
+        "/components/schemas/post_v1_responsesRequest/oneOf/1/prefixItems/11/oneOf/0",
+        "OpenAI metadata keys are caller-chosen client labels (at most 16); keys are 1 to 64 characters, values at most 512 characters, and the map is never forwarded upstream.",
+    ),
+    (
+        "/components/schemas/post_v1_messagesResponse/properties/content/items",
+        "Native Anthropic content blocks are provider-controlled JSON objects: the Messages frontend preserves validated native blocks verbatim, including thinking/signatures and future native block fields, rather than projecting the translated text/tool subset.",
+    ),
+    (
+        "/components/schemas/GenMessagesEventContentBlockStart/properties/content_block",
+        "Native Anthropic content blocks are provider-controlled JSON objects: the Messages frontend preserves validated native blocks verbatim, including thinking/signatures and future native block fields, rather than projecting the translated text/tool subset.",
+    ),
+    (
+        "/components/schemas/GenMessagesEventContentBlockDelta/properties/delta",
+        "Native Anthropic block deltas are provider-controlled JSON objects: the Messages frontend preserves validated native delta payloads verbatim, including thinking and signature deltas.",
+    ),
+    (
         "/components/schemas/post_v1_systemoneRequest/oneOf/0/properties/state/oneOf/1",
         OPEN_CONTENT,
     ),
@@ -151,7 +203,7 @@ mod tests {
             "review route additions and update this baseline"
         );
         assert_eq!(
-            placeholders, 40,
+            placeholders, 34,
             "review schema completion and update this progress baseline"
         );
     }
@@ -185,3 +237,4 @@ mod sse_tests;
 
 #[path = "generation_tests.rs"]
 mod generation_tests;
+

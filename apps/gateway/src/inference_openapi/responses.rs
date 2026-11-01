@@ -29,7 +29,11 @@ pub(super) const SIMPLE_JSON_AREAS: &[&str] = &[
     "realtime/client_secrets",
     "realtime/calls",
 ];
-pub(super) const AREA_GROUPS: &[(&str, &[&str])] = &[("SIMPLE_JSON_AREAS", SIMPLE_JSON_AREAS)];
+pub(super) const GENERATION_AREAS: &[&str] = &["chat", "responses", "messages"];
+pub(super) const AREA_GROUPS: &[(&str, &[&str])] = &[
+    ("SIMPLE_JSON_AREAS", SIMPLE_JSON_AREAS),
+    ("GENERATION_AREAS", GENERATION_AREAS),
+];
 
 /// Area of a template: the first segment after `/v1/`, except `realtime`,
 /// whose two refusals and WebSocket upgrade are separate areas.
@@ -222,6 +226,12 @@ fn validate_exchange(
         let body: Value = serde_json::from_slice(bytes)
             .map_err(|e| anyhow::anyhow!("response is not JSON ({:?})", e.classify()))?;
         validate_value(document, schema, &body)?;
+    } else if media == "text/event-stream" {
+        let outcome = super::generation::validate_sse(document, template, bytes, true)?;
+        ensure!(
+            outcome.positive(),
+            "truncated generation SSE cannot earn positive coverage"
+        );
     } else if media.starts_with("text/") {
         let text = std::str::from_utf8(bytes)
             .map_err(|_| anyhow::anyhow!("text response is not UTF-8"))?;
@@ -409,14 +419,18 @@ impl Fixtures {
                 .map(|(pointer, value)| ((*pointer).to_owned(), value.clone()))
                 .collect()
         };
-        let run = http_vectors::run_body_with(
+        let constraints = |body: &Value| {
+            !GENERATION_AREAS.contains(&area(template))
+                || super::generation::validate_request(artifact(), template, body).is_ok()
+        };
+        let run = http_vectors::run_body_with_constraints(
             artifact(),
             method,
             template,
             valid,
             &own(seeds),
             &own(candidates),
-            &send,
+            (&send, &constraints),
         )
         .await
         .unwrap_or_else(|e| shared::refuse(e));

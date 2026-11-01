@@ -581,3 +581,365 @@ async fn inference_openapi_completed_area_fixtures(pool: PgPool) {
     // coverage and boundary vectors hold.
     fixtures.finish(r::SIMPLE_JSON_AREAS);
 }
+
+/// Generation adapter: deterministic wire shapes and real admission-time
+/// Messages policy, never credentials/network or caller content in an error.
+struct GenerationAdapter;
+#[async_trait]
+impl ProviderAdapter for GenerationAdapter {
+    fn id(&self) -> &'static str {
+        "test_vendor"
+    }
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            text_chat: true,
+            streaming: true,
+            tools: true,
+        }
+    }
+    fn supports_protocol(&self, protocol: ApiProtocol) -> bool {
+        matches!(
+            protocol,
+            ApiProtocol::ChatCompletions | ApiProtocol::Responses | ApiProtocol::Messages
+        )
+    }
+    fn validate_chat_request(&self, request: &ChatRequest) -> Result<(), InferenceError> {
+        let translated = request
+            .messages
+            .iter()
+            .any(|m| m.content.as_deref() == Some("translated"));
+        crate::providers::messages::validate(
+            request,
+            if translated {
+                crate::providers::messages::ProviderClass::Local
+            } else {
+                crate::providers::messages::ProviderClass::Anthropic
+            },
+        )?;
+        if self.supports_chat_request(request) {
+            Ok(())
+        } else {
+            Err(InferenceError::Unsupported)
+        }
+    }
+    async fn execute(
+        &self,
+        _: &Deployment,
+        request: ChatRequest,
+    ) -> Result<ProviderOutput, InferenceError> {
+        let mode = request
+            .messages
+            .last()
+            .and_then(|m| m.content.as_deref())
+            .unwrap_or("tools");
+        let tools = matches!(mode, "tools" | "both" | "native");
+        let content = (mode != "tools").then(|| "hello".to_owned());
+        let calls = if tools {
+            vec![ToolCall {
+                id: "call_0".into(),
+                name: "ping".into(),
+                arguments: "{}".into(),
+            }]
+        } else {
+            vec![]
+        };
+        let finish_reason = match mode {
+            "length" => FinishReason::Length,
+            "refusal" => FinishReason::Refusal,
+            "tools" | "both" | "native" => FinishReason::ToolCalls,
+            _ => FinishReason::Stop,
+        };
+        let usage = if matches!(mode, "unknown" | "error") {
+            Usage::default()
+        } else {
+            Usage {
+                input_tokens: Some(12),
+                output_tokens: Some(2),
+                billing: Some(BillingUsage {
+                    total_input_tokens: Some(12),
+                    uncached_input_tokens: Some(7),
+                    cache_read_input_tokens: Some(2),
+                    cache_write_input_tokens: Some(3),
+                    cache_write_default_input_tokens: Some(0),
+                    cache_write_5m_input_tokens: Some(1),
+                    cache_write_1h_input_tokens: Some(2),
+                }),
+                ..Default::default()
+            }
+        };
+        if !request.stream {
+            let messages_content = (mode == "native" && request.messages_options.is_some()).then(|| vec![
+                json!({"type":"thinking","thinking":"reasoning","signature":"opaque"}),
+                json!({"type":"redacted_thinking","data":"opaque"}),
+                json!({"type":"text","text":"hello"}),
+                json!({"type":"tool_use","id":"call_0","name":"ping","input":{"nested":[null,true,1,"text",{},[]]}}),
+            ]);
+            return Ok(ProviderOutput::Complete(ChatResponse {
+                messages_content,
+                content,
+                tool_calls: calls,
+                finish_reason,
+                usage,
+            }));
+        }
+        let mut events = vec![];
+        if let Some(text) = content {
+            events.push(Ok(ChatEvent::Delta {
+                text: Some(text),
+                tool_calls: vec![],
+            }));
+        }
+        if mode == "error" {
+            events.push(Err(InferenceError::InvalidUpstream));
+        } else {
+            for (index, call) in calls.into_iter().enumerate() {
+                events.push(Ok(ChatEvent::Delta {
+                    text: None,
+                    tool_calls: vec![ToolCallDelta {
+                        index: index as u32,
+                        id: Some(call.id),
+                        name: Some(call.name),
+                        arguments: Some(call.arguments),
+                    }],
+                }));
+            }
+            events.extend([
+                Ok(ChatEvent::Finish(finish_reason)),
+                Ok(ChatEvent::Usage(usage)),
+                Ok(ChatEvent::Done),
+            ]);
+        }
+        Ok(ProviderOutput::Stream(Box::pin(
+            futures_util::stream::iter(events),
+        )))
+    }
+}
+
+async fn generation_gateway(pool: &PgPool) -> (axum::Router, DevelopmentKeys) {
+    let store = Store::new(pool.clone());
+    let keys = bootstrap::seed(&store, Environment::Development)
+        .await
+        .unwrap()
+        .unwrap();
+    sqlx::query("UPDATE provider_connections SET provider='test_vendor', enabled=true")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE deployments SET enabled=true, upstream_model='private-upstream-id'")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE models SET supported_protocols=ARRAY['chat_completions','responses','messages']",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let mut registry = ProviderRegistry::default();
+    registry.register(Arc::new(GenerationAdapter)).unwrap();
+    let engine = Engine::new(Arc::new(store.clone()), registry, EngineLimits::default()).unwrap();
+    (http::router_with_engine(store, None, engine), keys)
+}
+
+fn generation_body(path: &str, mode: &str, stream: bool) -> Value {
+    match path {
+        "/v1/chat/completions" => {
+            json!({"model":"company/smart","messages":[{"role":"user","content":mode}],"stream":stream})
+        }
+        "/v1/responses" => json!({"model":"company/smart","input":mode,"stream":stream}),
+        _ => {
+            json!({"model":"company/smart","max_tokens":32,"messages":[{"role":"user","content":mode}],"stream":stream})
+        }
+    }
+}
+fn generation_http(path: &str, key: &str, body: &Value) -> Request<Body> {
+    let mut req = request("POST", path, Some(key), Some(body));
+    req.headers_mut()
+        .insert("anthropic-version", "2023-06-01".parse().unwrap());
+    req
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn inference_openapi_generation_real_handler_fixtures(pool: PgPool) {
+    let (app, keys) = generation_gateway(&pool).await;
+    let key = keys.personal_key.token;
+    let mut fixtures = Fixtures::default();
+    for path in ["/v1/chat/completions", "/v1/responses", "/v1/messages"] {
+        for stream in [false, true] {
+            for mode in [
+                "text", "tools", "both", "unknown", "length", "refusal", "native", "error",
+            ] {
+                if mode == "error" && !stream {
+                    continue;
+                }
+                let body = generation_body(path, mode, stream);
+                super::generation::validate_request(r::artifact(), path, &body)
+                    .expect("valid generation fixture request");
+                let captured = capture(
+                    "POST",
+                    path,
+                    app.clone()
+                        .oneshot(generation_http(path, &key, &body))
+                        .await
+                        .unwrap(),
+                )
+                .await;
+                assert_eq!(captured.status, StatusCode::OK, "generation fixture status");
+                if stream {
+                    let outcome = super::generation::validate_sse(
+                        r::artifact(),
+                        path,
+                        &captured.bytes,
+                        false,
+                    )
+                    .expect("generation stream contract");
+                    let expected = if mode == "error" {
+                        super::sse::Outcome::Errored
+                    } else if path == "/v1/responses" && matches!(mode, "length" | "refusal") {
+                        super::sse::Outcome::Incomplete
+                    } else {
+                        super::sse::Outcome::Completed
+                    };
+                    assert_eq!(outcome, expected, "generation terminal kind");
+                }
+                fixtures.observe(&captured);
+            }
+        }
+        let body = generation_body(path, "text", false);
+        let send = async |body: Value| {
+            let response = app
+                .clone()
+                .oneshot(generation_http(path, &key, &body))
+                .await
+                .unwrap();
+            probe(capture("POST", path, response).await)
+        };
+        fixtures
+            .body_vectors("POST", path, body, &[], &[], send)
+            .await;
+    }
+    fixtures.finish(r::GENERATION_AREAS);
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn inference_openapi_generation_refusals_and_beta_headers(pool: PgPool) {
+    let (app, keys) = generation_gateway(&pool).await;
+    let key = keys.personal_key.token;
+    for (path, body, status) in [
+        (
+            "/v1/chat/completions",
+            json!({"model":"company/smart","messages":[{"role":"user","content":"hi"}],"max_tokens":1,"max_completion_tokens":2}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "/v1/responses",
+            json!({"model":"company/smart","input":"hi","store":true}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "/v1/responses",
+            json!({"model":"company/smart","input":"hi","previous_response_id":"resp_previous"}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "/v1/messages",
+            json!({"model":"company/smart","max_tokens":32,"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_0","content":"translated","is_error":true}]}]}),
+            StatusCode::NOT_IMPLEMENTED,
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(generation_http(path, &key, &body))
+            .await
+            .unwrap();
+        let captured = capture("POST", path, response).await;
+        assert_eq!(captured.status, status, "generation refusal status");
+    }
+    for path in ["/v1/chat/completions", "/v1/responses", "/v1/messages"] {
+        let mut body = generation_body(path, "text", false);
+        body["invented"] = json!(true);
+        let captured = capture(
+            "POST",
+            path,
+            app.clone()
+                .oneshot(generation_http(path, &key, &body))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            captured.status,
+            StatusCode::BAD_REQUEST,
+            "unknown generation field status"
+        );
+        let body = generation_body(path, "text", false);
+        let captured = capture(
+            "POST",
+            path,
+            app.clone()
+                .oneshot(generation_http(path, "not-an-inference-key", &body))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            captured.status,
+            StatusCode::UNAUTHORIZED,
+            "generation authentication status"
+        );
+        let mut req = oversized(path, &key, false);
+        req.headers_mut()
+            .insert("anthropic-version", "2023-06-01".parse().unwrap());
+        let captured = capture("POST", path, app.clone().oneshot(req).await.unwrap()).await;
+        assert_eq!(
+            captured.status,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "generation declared body cap status"
+        );
+    }
+    let before: i64 = sqlx::query_scalar("SELECT count(*) FROM inference_executions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(before, 0, "refused generation requests must not execute");
+    let body = generation_body("/v1/messages", "text", false);
+    for (beta, status) in [
+        (
+            "future-custom-beta,extended-cache-ttl-2025-04-11",
+            StatusCode::OK,
+        ),
+        ("CoNtExT-1m-2025-08-07", StatusCode::BAD_REQUEST),
+        ("files-api-2025-04-14", StatusCode::BAD_REQUEST),
+        ("one,,two", StatusCode::BAD_REQUEST),
+    ] {
+        let mut req = generation_http("/v1/messages", &key, &body);
+        req.headers_mut()
+            .insert("anthropic-beta", beta.parse().unwrap());
+        let captured = capture(
+            "POST",
+            "/v1/messages",
+            app.clone().oneshot(req).await.unwrap(),
+        )
+        .await;
+        assert_eq!(captured.status, status, "Messages beta header status");
+    }
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM inference_executions")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        1,
+        "only accepted beta request executes"
+    );
+    assert_eq!(
+        crate::providers::messages::DENIED_BETA_PREFIXES,
+        r::artifact()["paths"]["/v1/messages"]["post"]["parameters"][1]["x-omg-denied-prefixes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect::<Vec<_>>()
+            .as_slice(),
+        "Messages beta denylist drift"
+    );
+}

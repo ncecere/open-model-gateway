@@ -27,6 +27,14 @@ impl Outcome {
 /// A missing terminal (including a partially received final frame) never earns
 /// positive coverage. Diagnostics describe kinds/positions, never wire values.
 pub(crate) fn validate(protocol: Protocol, bytes: &[u8]) -> Result<Outcome> {
+    validate_with(protocol, bytes, |_, _| Ok(()))
+}
+
+pub(super) fn validate_with(
+    protocol: Protocol,
+    bytes: &[u8],
+    mut payload: impl FnMut(Option<&str>, &Value) -> Result<()>,
+) -> Result<Outcome> {
     let text = std::str::from_utf8(bytes).context("SSE is not UTF-8")?;
     let text = text.replace("\r\n", "\n").replace('\r', "\n");
     let mut terminal = None;
@@ -69,6 +77,7 @@ pub(crate) fn validate(protocol: Protocol, bytes: &[u8]) -> Result<Outcome> {
         let value: Value = serde_json::from_str(&data)
             .map_err(|e| anyhow::anyhow!("SSE data is not JSON ({:?})", e.classify()))?;
         ensure!(value.is_object(), "SSE data must be an object");
+        payload(event, &value)?;
         match protocol {
             Protocol::Chat { include_usage } => {
                 ensure!(event.is_none(), "Chat has an invented event type");
