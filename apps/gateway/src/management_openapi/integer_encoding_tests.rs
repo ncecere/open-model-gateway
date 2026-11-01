@@ -437,3 +437,52 @@ fn management_openapi_integer_encoding_nullable_union_requires_integer_run() {
         "paired null/integer runs failed to cover union arms"
     );
 }
+
+#[tokio::test]
+async fn management_openapi_integer_encoding_bypasses_only_normalization_oracle() {
+    let schema = json!({"type":"integer","minimum":0,"maximum":9});
+    let document = json!({"x-omg-integer-encoding":"json-integer-literal",
+        "components":{"schemas":{}},"paths":{"/x":{"post":{
+        "requestBody":{"required":true,"content":{"application/json":{"schema":schema}}}}}}});
+    let send = async |body: Value| {
+        let bytes = wire_bytes(&body);
+        let accepted = serde_json::from_slice::<u32>(&bytes).is_ok()
+            && valid(&document, &schema, &body).unwrap();
+        Probe::from(Captured {
+            status: axum::http::StatusCode::from_u16(if accepted { 200 } else { 422 }).unwrap(),
+            headers: axum::http::HeaderMap::new(),
+            bytes: bytes::Bytes::new(),
+            method: "POST".into(),
+            template: Some("/x".into()),
+            query: vec![],
+        })
+    };
+    // Like generation's normalizer, this rejects floating representations even
+    // when the JSON Schema integer accepts their mathematical value.
+    run_body_with_constraints(
+        &document,
+        "POST",
+        "/x",
+        json!(2),
+        &[],
+        &[],
+        (&send, &|body| body.as_u64().is_some()),
+    )
+    .await
+    .unwrap();
+
+    // The same hook still determines the verdict for ordinary valid vectors.
+    let error = run_body_with_constraints(
+        &document,
+        "POST",
+        "/x",
+        json!(2),
+        &[],
+        &[],
+        (&send, &|_| false),
+    )
+    .await
+    .err()
+    .expect("ordinary vector must retain normalization constraints");
+    assert!(format!("{error:#}").contains("schema refuses but handler accepts"));
+}

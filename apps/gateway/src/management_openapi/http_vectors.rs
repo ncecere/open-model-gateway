@@ -2643,7 +2643,9 @@ pub(crate) async fn run_body_with_constraints(
     let mut exchanges = Vec::new();
     let mut accepted_seen = false;
     for (kind, location, body, expected) in plan {
-        let expected = expected && constraints(&body);
+        // Integer-encoding vectors deliberately separate JSON Schema validity
+        // from lexical/normalization refusal by the real handler.
+        let expected = expected && (kind.starts_with("integer encoding ") || constraints(&body));
         let probe = INTEGER_WIRE
             .scope(
                 (location.clone(), kind, std::cell::Cell::new(false)),

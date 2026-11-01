@@ -799,7 +799,9 @@ mod legacy {
                                     .uri("/v1/videos")
                                     .header("authorization", &key)
                                     .header("content-type", "application/json")
-                                    .body(Body::from(body.to_string()))
+                                    .body(Body::from(
+                                        crate::management::openapi::http_vectors::wire_bytes(&body),
+                                    ))
                                     .unwrap(),
                             )
                             .await
