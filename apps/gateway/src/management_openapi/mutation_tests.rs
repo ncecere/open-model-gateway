@@ -337,13 +337,14 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                         .and_then(|r| document.pointer(&r[1..]))
                         .unwrap_or(header);
                     let name = name.to_ascii_lowercase();
-                    if header["required"] == true && !h.contains_key(name.as_str()) {
-                        if let Some(text) = sample(&document, &header["schema"]).as_str() {
-                            h.insert(
-                                axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
-                                text.parse().unwrap(),
-                            );
-                        }
+                    if header["required"] == true
+                        && !h.contains_key(name.as_str())
+                        && let Some(text) = sample(&document, &header["schema"]).as_str()
+                    {
+                        h.insert(
+                            axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                            text.parse().unwrap(),
+                        );
                     }
                 }
                 let mut valid = sample(&document, schema);
@@ -525,13 +526,14 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                             .and_then(|r| document.pointer(&r[1..]))
                             .unwrap_or(header);
                         let name = name.to_ascii_lowercase();
-                        if header["required"] == true && !h.contains_key(name.as_str()) {
-                            if let Some(text) = sample(&document, &header["schema"]).as_str() {
-                                h.insert(
-                                    axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
-                                    text.parse().unwrap(),
-                                );
-                            }
+                        if header["required"] == true
+                            && !h.contains_key(name.as_str())
+                            && let Some(text) = sample(&document, &header["schema"]).as_str()
+                        {
+                            h.insert(
+                                axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                                text.parse().unwrap(),
+                            );
                         }
                     }
                     ("content-disposition", csv_body)

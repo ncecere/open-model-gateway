@@ -960,7 +960,7 @@ fn upload_valid(root: bool, request: bool, run: usize) -> Value {
         // Only the last page has has_more:false, so its wire form alternates
         // between runs: odd runs send it as an object (its `then` arm), even
         // runs positionally (the const-false tuple).
-        "pages":[page(0, false, false), page(1, true, false), page(2, run % 2 == 0, true)]});
+        "pages":[page(0, false, false), page(1, true, false), page(2, run.is_multiple_of(2), true)]});
     if root { seq(&upload, UPLOAD) } else { upload }
 }
 
