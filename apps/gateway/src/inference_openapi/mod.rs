@@ -181,3 +181,6 @@ mod tests {
 pub(crate) mod sse;
 #[path = "sse_tests.rs"]
 mod sse_tests;
+
+#[path = "generation_tests.rs"]
+mod generation_tests;
