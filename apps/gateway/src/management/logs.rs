@@ -715,3 +715,7 @@ mod with_trace_id_tests {
         assert!(result["trace_id"].is_null());
     }
 }
+
+#[cfg(test)]
+#[path = "session_cursor_tests.rs"]
+mod session_cursor_tests;

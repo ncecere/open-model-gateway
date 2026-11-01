@@ -784,3 +784,33 @@ async fn cursor_timestamp_bounds_on_log_routes(pool: PgPool) {
     }
     assert_eq!(failures, 0, "cursor route status failures");
 }
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn session_cursor_timestamp_bounds_on_route(pool: PgPool) {
+    let f = fixture(&pool).await;
+    for (case, micros, expected) in [
+        ("PostgreSQL minimum", "-210866803200000000", StatusCode::OK),
+        (
+            "below PostgreSQL minimum",
+            "-210866803200000001",
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let (status, body) = get(
+            &f,
+            &f.owner,
+            &format!(
+                "/api/v1/workspaces/{}/sessions?cursor={micros}_{}_61",
+                f.team, f.team
+            ),
+        )
+        .await;
+        assert_eq!(status, expected, "{case}: sessions status");
+        if expected == StatusCode::BAD_REQUEST {
+            assert!(
+                body["error"]["message"] == "Invalid request",
+                "{case}: invalid error"
+            );
+        }
+    }
+}
