@@ -165,6 +165,12 @@
             "envelope": "OpenAiErrorEnvelope",
             "code": "invalid_request_error",
             "trigger": "Unknown query parameter, invalid limit or order"
+          },
+          {
+            "status": 404,
+            "envelope": "JobErrorEnvelope",
+            "code": "not_found",
+            "trigger": "Malformed after pagination cursor"
           }
         ]
       }
@@ -761,7 +767,7 @@
             "status": 400,
             "envelope": "JobErrorEnvelope",
             "code": "video_not_ready",
-            "trigger": "Content is requested before completion"
+            "trigger": "Job state is not completed, including failed, cancelled or expired jobs"
           },
           {
             "status": 400,
