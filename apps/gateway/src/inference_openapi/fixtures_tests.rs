@@ -31,7 +31,9 @@ use std::{collections::BTreeMap, sync::Arc};
 use tower::ServiceExt;
 
 /// Deterministic provider: shapes only, never a prompt echo.
-struct Adapter;
+struct Adapter {
+    pool: PgPool,
+}
 #[async_trait]
 impl ProviderAdapter for Adapter {
     fn id(&self) -> &'static str {
@@ -98,6 +100,42 @@ impl ProviderAdapter for Adapter {
         _: ChatRequest,
     ) -> Result<ProviderOutput, InferenceError> {
         Err(InferenceError::Unsupported)
+    }
+    async fn cancel_batch(
+        &self,
+        _: &Deployment,
+        id: &crate::jobs::types::UpstreamId,
+    ) -> Result<crate::jobs::types::UpstreamBatch, InferenceError> {
+        use crate::jobs::types::{BatchStatus, UpstreamBatch};
+        let state = id
+            .as_str()
+            .split('_')
+            .nth(1)
+            .and_then(BatchStatus::parse)
+            .ok_or(InferenceError::InvalidUpstream)?;
+        // Deterministic poller race: while the native cancellation is awaiting
+        // its provider, another observer commits a terminal state. The real
+        // handler must reload it rather than invent a cancelling snapshot.
+        sqlx::query("UPDATE async_jobs SET state=$2,completed_at=clock_timestamp(),in_progress_at=clock_timestamp(),finalizing_at=clock_timestamp() WHERE upstream_id=$1").bind(id.as_str()).bind(state.state().as_str()).execute(&self.pool).await.map_err(|_|InferenceError::Storage)?;
+        Ok(UpstreamBatch {
+            id: id.clone(),
+            status: state,
+            input_file: None,
+            output_file: None,
+            error_file: None,
+            counts: None,
+            usage: None,
+            created_at: None,
+            in_progress_at: None,
+            finalizing_at: None,
+            completed_at: None,
+            failed_at: None,
+            expired_at: None,
+            cancelling_at: None,
+            cancelled_at: None,
+            expires_at: None,
+            metadata: None,
+        })
     }
     async fn execute_embeddings(
         &self,
