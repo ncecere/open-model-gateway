@@ -980,3 +980,26 @@ fn inference_openapi_followup_video_multipart_matches_json_bounds() {
         );
     }
 }
+
+const FILE_UPLOAD_ORDERING: &str = "When purpose precedes file, file must be the last part and all expiry fields must precede it. When file precedes purpose, expiry fields may precede or follow the file; trailing purpose/expiry fields are read before the provisional upload is committed, moved or discarded.";
+
+fn exact_file_ordering(doc: &serde_json::Value) -> bool {
+    doc["paths"]["/v1/files"]["post"]["x-omg-multipart"]["ordering"].as_str()
+        == Some(FILE_UPLOAD_ORDERING)
+}
+
+#[test]
+fn inference_openapi_review_file_upload_ordering_is_conditional() {
+    let doc = generated();
+    assert!(
+        exact_file_ordering(&doc),
+        "file upload ordering must distinguish purpose-first and file-first"
+    );
+    let mut bad = doc;
+    bad["paths"]["/v1/files"]["post"]["x-omg-multipart"]["ordering"] =
+        json!("purpose and expiry before or after the file");
+    assert!(
+        !exact_file_ordering(&bad),
+        "unconditional trailing-expiry wording escaped the pin"
+    );
+}
