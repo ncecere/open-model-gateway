@@ -15,3 +15,7 @@ Notes for changes on `main` after [v0.9.3](v0.9.3.md). They become the next rele
 - Where JSON Schema cannot state a handler rule, the description says so and a probe pins it. Examples: the 510-character Bedrock role path, the server allowlists for env references and Bedrock endpoints, canonical-only endpoints, and byte limits.
 - Test harness: an `x-omg-unsendable-boundary` reason is judged only in runs where its location has a length or item bound.
 - No production behaviour change, migration or runtime-grant change.
+
+## Fixes
+
+- `/v1/embeddings` now returns the shared OpenAI-shaped `payload_too_large` error for oversized streamed request bodies (#432).

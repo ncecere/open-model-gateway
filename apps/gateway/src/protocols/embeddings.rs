@@ -115,10 +115,13 @@ pub async fn handle(
     Extension(request_id): Extension<RequestId>,
     input: Result<Json<Request>, JsonRejection>,
 ) -> Response {
-    let request=match input {
-        Ok(Json(wire))=>match wire.normalize(){Ok(request)=>request,Err(e)=>return super::chat_completions::error_response(e)},
-        Err(e) if e.status()==StatusCode::PAYLOAD_TOO_LARGE=>return (StatusCode::PAYLOAD_TOO_LARGE,Json(json!({"error":{"message":"Invalid inference request","type":"invalid_request","code":"invalid_request","param":null}}))).into_response(),
-        Err(_)=>return super::chat_completions::error_response(InferenceError::InvalidRequest),
+    let request = match input {
+        Ok(Json(wire)) => match wire.normalize() {
+            Ok(request) => request,
+            Err(e) => return super::chat_completions::error_response(e),
+        },
+        Err(e) if e.status() == StatusCode::PAYLOAD_TOO_LARGE => return super::payload_too_large(),
+        Err(_) => return super::chat_completions::error_response(InferenceError::InvalidRequest),
     };
     match engine
         .execute_workload(principal, request, request_id.0)
