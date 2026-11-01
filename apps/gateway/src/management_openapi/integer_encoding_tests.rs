@@ -203,3 +203,59 @@ async fn management_openapi_integer_encoding_large_fraction_wire_spelling() {
         "large fraction spelling lost"
     );
 }
+
+#[test]
+fn management_openapi_integer_encoding_bare_zero_body_is_generated() {
+    let schema = json!({"type":"integer","minimum":0,"maximum":9});
+    let document = json!({"components":{"schemas":{}},"requestBody":{
+        "required":true,"content":{"application/json":{"schema":schema}}}});
+    let cases = body_cases(&document, &document, &json!(2), &[]).unwrap();
+    assert!(
+        cases
+            .iter()
+            .any(|c| c.kind == "integer encoding bare negative zero" && c.accept),
+        "missing schema-accepted bare negative zero body vector"
+    );
+}
+
+#[test]
+fn management_openapi_integer_encoding_bare_zero_query_is_not_dropped() {
+    let operation = json!({"parameters":[{"in":"query","name":"count",
+        "schema":{"type":"integer","minimum":0,"maximum":9}}]});
+    let cases = query_cases(&json!({}), &operation, &[("count".into(), "2".into())], &[]).unwrap();
+    assert!(
+        cases
+            .iter()
+            .any(|c| c.kind == "integer encoding bare negative zero"
+                && c.accept
+                && matches!(&c.edit, Edit::Set(raw) if raw == "-0")),
+        "missing schema-accepted bare negative zero query refusal vector"
+    );
+}
+
+#[tokio::test]
+async fn management_openapi_integer_encoding_bare_zero_wire_spelling() {
+    for (body, target, expected) in [
+        (json!(-0.0), "(root)", "-0"),
+        (json!({"a/b~c":[-0.0]}), "/a~1b~0c/0", "{\"a/b~c\":[-0]}"),
+    ] {
+        let bytes = INTEGER_WIRE
+            .scope(
+                (
+                    target.into(),
+                    "integer encoding bare negative zero",
+                    std::cell::Cell::new(false),
+                ),
+                async { wire_bytes(&body) },
+            )
+            .await;
+        assert!(
+            bytes == expected.as_bytes(),
+            "bare negative zero spelling lost"
+        );
+        assert!(
+            serde_json::from_slice::<u32>(&bytes).is_err(),
+            "unsigned extractor accepted bare negative zero"
+        );
+    }
+}
