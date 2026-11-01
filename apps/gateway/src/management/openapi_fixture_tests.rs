@@ -251,6 +251,12 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
     let (status, lab_key) = key(&f, &f.admin, lab, Value::Null).await;
     assert!(status == StatusCode::OK, "unexpected value: status");
     sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,input_tokens,output_tokens) VALUES($1,$2,$3,$4,'contract-serving','openai',false,'succeeded',$1,1,1)").bind(Uuid::new_v4()).bind(lab).bind(id(&lab_key)).bind(deployment).execute(&pool).await.unwrap();
+    // #434: simulate settlement before midnight and reports on the next UTC day.
+    sqlx::query("UPDATE budget_totals SET period_start=period_start-interval '1 day' WHERE scope_kind='workspace' AND scope_id=$1 AND period='day'")
+        .bind(lab)
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::query("UPDATE budget_totals SET settled_microusd=-1,held_microusd=0 WHERE scope_kind='workspace' AND scope_id=$1 AND period='day'")
         .bind(lab).execute(&pool).await.unwrap();
     // Alert rules: workspace budget (the owner's feed), provider failure, three

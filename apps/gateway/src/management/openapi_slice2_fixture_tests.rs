@@ -1460,6 +1460,12 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             && healthy["budgets"][0]["settled_microusd"] == "7",
         "drift workspace day window starts known"
     );
+    // #434: simulate settlement before midnight and reports on the next UTC day.
+    sqlx::query("UPDATE budget_totals SET period_start=period_start-interval '1 day' WHERE scope_kind='workspace' AND scope_id=$1 AND period='day'")
+        .bind(drift_ws)
+        .execute(&pool)
+        .await
+        .unwrap();
     let saved: (String, String) = sqlx::query_as("SELECT settled_microusd::text,held_microusd::text FROM budget_totals WHERE scope_kind='workspace' AND scope_id=$1 AND period='day'")
         .bind(drift_ws)
         .fetch_one(&pool)
