@@ -177,3 +177,6 @@ mod tests {
         }
     }
 }
+
+#[path = "media_tests.rs"]
+mod media;
