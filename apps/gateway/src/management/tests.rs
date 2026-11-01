@@ -38,6 +38,8 @@ mod deployment_history_atomicity_tests;
 mod deployment_history_tests;
 #[path = "deployment_preview_tests.rs"]
 mod deployment_preview_tests;
+#[path = "description_control_tests.rs"]
+mod description_control_tests;
 #[path = "directory/tests.rs"]
 mod directory_tests;
 #[path = "entropy_tests.rs"]
