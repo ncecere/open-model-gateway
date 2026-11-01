@@ -168,3 +168,38 @@ async fn inference_openapi_chat_response_names_follow_real_upstream_decode(pool:
     r::capture("POST", "/v1/chat/completions", response).await;
 }
 
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn inference_openapi_generation_model_trim_matches_real_handlers(pool: PgPool) {
+    let upstream = Upstream::start().await;
+    let (app, key) = gateway(&pool, &upstream).await;
+    for path in ["/v1/chat/completions", "/v1/responses", "/v1/messages"] {
+        // Rust trim() does not strip U+FEFF. A nonexistent but syntactically
+        // valid model must reach lookup (404), not be rejected by the contract.
+        let body = match path {
+            "/v1/chat/completions" => {
+                json!({"model":"\u{feff}","messages":[{"role":"user","content":"hello"}]})
+            }
+            "/v1/responses" => json!({"model":"\u{feff}","input":"hello"}),
+            _ => {
+                json!({"model":"\u{feff}","max_tokens":32,"messages":[{"role":"user","content":"hello"}]})
+            }
+        };
+        let req = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header("authorization", format!("Bearer {key}"))
+            .header("content-type", "application/json")
+            .header("anthropic-version", "2023-06-01")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "model trim lookup status"
+        );
+        r::capture("POST", path, response).await;
+        super::generation::validate_request(r::artifact(), path, &body)
+            .expect("contract must accept handler model trim boundary");
+    }
+}
