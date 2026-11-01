@@ -180,3 +180,6 @@ mod tests {
 
 #[path = "media_tests.rs"]
 mod media;
+
+#[path = "jobs_tests.rs"]
+mod jobs;
