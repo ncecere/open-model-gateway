@@ -289,7 +289,7 @@
             "status": 400,
             "envelope": "JobErrorEnvelope",
             "code": "unsupported_capability",
-            "trigger": "Validated create; no video provider is supported. input_reference is also unsupported."
+            "trigger": "Validated create; no video provider is supported. input_reference is also unsupported. Decimal seconds strings such as 08 or +8 that parse to an allowed duration also reach this unsupported_capability refusal; they are not invalid_request_error merely for that spelling."
           }
         ],
         "x-omg-limits": {
@@ -1154,7 +1154,7 @@
           "unknown_parts": "reject",
           "duplicate_fields": "reject",
           "field_bytes": 64,
-          "ordering": "purpose and expiry before or after the file; file-first uploads are provisionally staged, then committed, moved or discarded",
+          "ordering": "When purpose precedes file, file must be the last part and all expiry fields must precede it. When file precedes purpose, expiry fields may precede or follow the file; trailing purpose/expiry fields are read before the provisional upload is committed, moved or discarded.",
           "expiry": "anchor=created_at and seconds must appear together; seconds in 3600..2592000",
           "file_content_rules": {
             "non_empty": true,
@@ -1219,7 +1219,7 @@
             "status": 400,
             "envelope": "FileErrorEnvelope",
             "code": "invalid_request_error",
-            "trigger": "Unknown/duplicate form fields, malformed multipart or bad expiry. Empty file, batch head not beginning with { after optional BOM/ASCII whitespace or containing NUL in its first 4096 bytes, or unrecognized vision signature are refused with param=file."
+            "trigger": "Unknown/duplicate form fields, malformed multipart or bad expiry. Empty file, batch head not beginning with { after optional BOM/ASCII whitespace or containing NUL in its first 4096 bytes, or unrecognized vision signature are refused with param=file. A trailing part after file when purpose preceded file is malformed multipart (param=null when the preceding fields were valid)."
           }
         ]
       }

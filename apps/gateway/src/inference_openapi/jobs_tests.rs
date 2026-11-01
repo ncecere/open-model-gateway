@@ -240,6 +240,43 @@ mod fixtures {
         assert_eq!(file.status, StatusCode::OK, "file upload status");
         fixtures.observe(&file);
         let file_id = id(&file);
+        // A known purpose switches receive() to into_last_part: unlike the
+        // file-before-purpose control below, no trailing expiry is accepted.
+        let invalid_order = format!(
+            "--B\r\nContent-Disposition: form-data; name=\"purpose\"\r\n\r\nbatch\r\n--B\r\nContent-Disposition: form-data; name=\"file\"; filename=\"input.jsonl\"\r\n\r\n{line}\r\n--B\r\nContent-Disposition: form-data; name=\"expires_after[anchor]\"\r\n\r\ncreated_at\r\n--B\r\nContent-Disposition: form-data; name=\"expires_after[seconds]\"\r\n\r\n3600\r\n--B--\r\n"
+        );
+        let c = capture(
+            "POST",
+            "/v1/files",
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/files")
+                        .header("authorization", format!("Bearer {key}"))
+                        .header("content-type", "multipart/form-data; boundary=B")
+                        .body(Body::from(invalid_order))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            c.status,
+            StatusCode::BAD_REQUEST,
+            "purpose-first trailing expiry status"
+        );
+        let error: Value =
+            serde_json::from_slice(&c.bytes).expect("validated ordering refusal JSON kind");
+        assert!(
+            error["error"]["code"] == "invalid_request_error"
+                && error["error"]["param"].is_null()
+                && error["error"]["message"] == "Malformed multipart body",
+            "purpose-first trailing expiry refusal kind"
+        );
+        fixtures.observe(&c);
+
         use base64::Engine as _;
         let png = base64::engine::general_purpose::STANDARD
             .decode(crate::inference::images::fixtures::PNG_1X1)
