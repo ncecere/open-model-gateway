@@ -1280,7 +1280,7 @@
     "GET /api/v1/platform/report-schedules/{id}/runs": {
       "access": "PlatformRead",
       "operation": {
-        "description": "Browser-only, live-authorized schedule scope. Foreign personal scopes are hidden with 404. Deleted schedules disappear; expired runs retain metadata and null snapshot; CSV expires with 410. Every run has a delivery envelope: run, snapshot and delivery are written in one transaction (`complete` in src/scheduled_reports.rs, delivery::enqueue) and deliveries are never deleted. snapshot is null exactly when expired is true, except for a clock race tracked in #406.",
+        "description": "Browser-only, live-authorized schedule scope. Foreign personal scopes are hidden with 404. Deleted schedules disappear; expired runs retain metadata and null snapshot; CSV expires with 410. Every run has a delivery envelope: run, snapshot and delivery are written in one transaction (`complete` in src/scheduled_reports.rs, delivery::enqueue) and deliveries are never deleted. snapshot is null exactly when expired is true; both expiry checks use one captured database instant (#406).",
         "x-omg-body-absent": true,
         "responses": {
           "200": {
@@ -1347,7 +1347,7 @@
     "GET /api/v1/platform/report-schedules/{id}/runs/{run}": {
       "access": "PlatformRead",
       "operation": {
-        "description": "Browser-only, live-authorized schedule scope. Foreign personal scopes are hidden with 404. Deleted schedules disappear; expired runs retain metadata and null snapshot; CSV expires with 410. Every run has a delivery envelope: run, snapshot and delivery are written in one transaction (`complete` in src/scheduled_reports.rs, delivery::enqueue) and deliveries are never deleted. snapshot is null exactly when expired is true, except for a clock race tracked in #406.",
+        "description": "Browser-only, live-authorized schedule scope. Foreign personal scopes are hidden with 404. Deleted schedules disappear; expired runs retain metadata and null snapshot; CSV expires with 410. Every run has a delivery envelope: run, snapshot and delivery are written in one transaction (`complete` in src/scheduled_reports.rs, delivery::enqueue) and deliveries are never deleted. snapshot is null exactly when expired is true; both expiry checks use one captured database instant (#406).",
         "x-omg-body-absent": true,
         "responses": {
           "200": {
@@ -4018,7 +4018,7 @@
     "GET /api/v1/workspaces/{ws}/report-schedules/{id}/runs": {
       "access": "WorkspaceReportAdmin",
       "operation": {
-        "description": "Browser-only, live-authorized schedule scope. Foreign personal scopes are hidden with 404. Deleted schedules disappear; expired runs retain metadata and null snapshot; CSV expires with 410. Every run has a delivery envelope: run, snapshot and delivery are written in one transaction (`complete` in src/scheduled_reports.rs, delivery::enqueue) and deliveries are never deleted. snapshot is null exactly when expired is true, except for a clock race tracked in #406.",
+        "description": "Browser-only, live-authorized schedule scope. Foreign personal scopes are hidden with 404. Deleted schedules disappear; expired runs retain metadata and null snapshot; CSV expires with 410. Every run has a delivery envelope: run, snapshot and delivery are written in one transaction (`complete` in src/scheduled_reports.rs, delivery::enqueue) and deliveries are never deleted. snapshot is null exactly when expired is true; both expiry checks use one captured database instant (#406).",
         "x-omg-body-absent": true,
         "responses": {
           "200": {
@@ -4085,7 +4085,7 @@
     "GET /api/v1/workspaces/{ws}/report-schedules/{id}/runs/{run}": {
       "access": "WorkspaceReportAdmin",
       "operation": {
-        "description": "Browser-only, live-authorized schedule scope. Foreign personal scopes are hidden with 404. Deleted schedules disappear; expired runs retain metadata and null snapshot; CSV expires with 410. Every run has a delivery envelope: run, snapshot and delivery are written in one transaction (`complete` in src/scheduled_reports.rs, delivery::enqueue) and deliveries are never deleted. snapshot is null exactly when expired is true, except for a clock race tracked in #406.",
+        "description": "Browser-only, live-authorized schedule scope. Foreign personal scopes are hidden with 404. Deleted schedules disappear; expired runs retain metadata and null snapshot; CSV expires with 410. Every run has a delivery envelope: run, snapshot and delivery are written in one transaction (`complete` in src/scheduled_reports.rs, delivery::enqueue) and deliveries are never deleted. snapshot is null exactly when expired is true; both expiry checks use one captured database instant (#406).",
         "x-omg-body-absent": true,
         "responses": {
           "200": {
