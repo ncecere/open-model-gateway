@@ -177,3 +177,7 @@ mod tests {
         }
     }
 }
+
+mod sse;
+#[path = "sse_tests.rs"]
+mod sse_tests;
