@@ -3452,6 +3452,7 @@
             "Content-Disposition",
             "Content-Type"
           ],
+          "text_validation_precedes_refusals": "Non-file parts, including recognized unsupported include[]/stream fields, must first be UTF-8 and at most 4096 bytes. Failure is 400 invalid_request_error before unsupported-field classification.",
           "unknown_parts": "reject"
         },
         "x-omg-refusals": [
@@ -3459,7 +3460,13 @@
             "code": "unsupported_capability",
             "envelope": "OpenAiErrorEnvelope",
             "status": 400,
-            "trigger": "stream other than false; timestamps, include, chunking, speaker fields; verbose_json, srt, vtt or diarized_json"
+            "trigger": "stream other than false; timestamps, include, chunking, speaker fields; verbose_json, srt, vtt or diarized_json These unsupported-part refusals apply only after the text part passes UTF-8 and 4096-byte validation."
+          },
+          {
+            "code": "invalid_request_error",
+            "envelope": "OpenAiErrorEnvelope",
+            "status": 400,
+            "trigger": "Non-file text part is non-UTF-8 or exceeds 4096 bytes, including include[] or stream: text_field validation precedes unsupported-field matching."
           }
         ],
         "x-omg-request-schema": {
@@ -4667,7 +4674,7 @@
           },
           "file_parts": 1,
           "file_requires_filename": true,
-          "ordering": "purpose and expiry before or after the file; file-first uploads are provisionally staged, then committed, moved or discarded",
+          "ordering": "When purpose precedes file, file must be the last part and all expiry fields must precede it. When file precedes purpose, expiry fields may precede or follow the file; trailing purpose/expiry fields are read before the provisional upload is committed, moved or discarded.",
           "unknown_parts": "reject"
         },
         "x-omg-refusals": [
@@ -4705,7 +4712,7 @@
             "code": "invalid_request_error",
             "envelope": "FileErrorEnvelope",
             "status": 400,
-            "trigger": "Unknown/duplicate form fields, malformed multipart or bad expiry. Empty file, batch head not beginning with { after optional BOM/ASCII whitespace or containing NUL in its first 4096 bytes, or unrecognized vision signature are refused with param=file."
+            "trigger": "Unknown/duplicate form fields, malformed multipart or bad expiry. Empty file, batch head not beginning with { after optional BOM/ASCII whitespace or containing NUL in its first 4096 bytes, or unrecognized vision signature are refused with param=file. A trailing part after file when purpose preceded file is malformed multipart (param=null when the preceding fields were valid)."
           }
         ],
         "x-omg-request-schema": {
@@ -5694,8 +5701,18 @@
             "response.cancel",
             "response.create"
           ],
+          "close_code_triggers": {
+            "1000": "Idle timeout or maximum session duration, with or without an in-flight response.",
+            "1003": "A binary client frame is not supported; send JSON text events.",
+            "1008": "Rejected client event, event-rate limit, or live authorization/admission denial.",
+            "1009": "The client WebSocket frame or assembled message exceeds the configured transport size cap (message_too_big).",
+            "1011": "Fatal upstream/server failure, including invalid or unaccounted upstream events."
+          },
           "close_codes": [
+            1000,
+            1003,
             1008,
+            1009,
             1011
           ],
           "description": "GA only; beta realtime header, unknown subprotocols and unknown/duplicate model query parameters are refused. Frames are validated by a strict event allowlist, never modeled as HTTP bodies. Unknown events produce an error, not a silent drop. Frame payloads and limits are specified in docs/realtime.md.",
@@ -6335,7 +6352,7 @@
             "code": "unsupported_capability",
             "envelope": "JobErrorEnvelope",
             "status": 400,
-            "trigger": "Validated create; no video provider is supported. input_reference is also unsupported."
+            "trigger": "Validated create; no video provider is supported. input_reference is also unsupported. Decimal seconds strings such as 08 or +8 that parse to an allowed duration also reach this unsupported_capability refusal; they are not invalid_request_error merely for that spelling."
           }
         ],
         "x-omg-request-schema": {

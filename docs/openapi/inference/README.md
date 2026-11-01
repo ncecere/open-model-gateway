@@ -90,15 +90,19 @@ extensions are part of this contract, **not covered by SDK generation**:
 - `x-omg-multipart` specifies part headers, duplicates, filenames, ordering,
   byte limits and framing that JSON Schema cannot check. Transcriptions use
   the bounded buffered audio parser; Files use a different streaming parser.
-  Files accept purpose/expiry before **or after** the file, staging file-first
-  uploads before committing, moving or discarding them.
+  When purpose precedes file, file must be last and expiry fields must already
+  be complete. When file precedes purpose, expiry fields may be before or after
+  file; remaining fields are read before the provisional upload is committed,
+  moved or discarded.
 - `x-omg-binary-stream` requires clean transport EOF; `x-omg-binary-variants` lists the legacy video MIME allowlists per asset variant. A late speech, file-store
   or video-provider failure truncates the body; HTTP 200 and a valid prefix are
   not proof of a successful download. `x-omg-cancellation` names the executed
   drop test; cancellation itself cannot be inferred from response bytes.
 - `x-omg-websocket` describes the 101 handshake, mutually exclusive Bearer or
   key-subprotocol authentication, the client-event allowlist and close codes
-  1008/1011. Frames are not HTTP bodies. See [Realtime](../../realtime.md).
+  1000 (idle/session expiry), 1003 (binary client frames), 1008 (event/policy/rate
+  denials), 1009 (transport size cap), and 1011 (fatal upstream/server failure).
+  Frames are not HTTP bodies. See [Realtime](../../realtime.md).
 - `x-omg-refusals` records status, native envelope, code and trigger. Video
   creation currently refuses after validation; the read/delete routes remain
   for legacy jobs. Batch invalid-input reports are a separate `errors.data[]`

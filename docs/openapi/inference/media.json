@@ -223,7 +223,8 @@
             "Content-Type"
           ],
           "framing": "CRLF; no preamble or epilogue except final CRLF; no nested or encoded parts",
-          "file": "Nonempty; extension, optional MIME and container magic must agree; flac/mp3/mp4/mpeg/mpga/m4a/ogg/wav/webm. Only file may have a filename. filename* takes precedence."
+          "file": "Nonempty; extension, optional MIME and container magic must agree; flac/mp3/mp4/mpeg/mpga/m4a/ogg/wav/webm. Only file may have a filename. filename* takes precedence.",
+          "text_validation_precedes_refusals": "Non-file parts, including recognized unsupported include[]/stream fields, must first be UTF-8 and at most 4096 bytes. Failure is 400 invalid_request_error before unsupported-field classification."
         },
         "x-omg-limits": {
           "body_bytes": {
@@ -240,7 +241,13 @@
             "status": 400,
             "envelope": "OpenAiErrorEnvelope",
             "code": "unsupported_capability",
-            "trigger": "stream other than false; timestamps, include, chunking, speaker fields; verbose_json, srt, vtt or diarized_json"
+            "trigger": "stream other than false; timestamps, include, chunking, speaker fields; verbose_json, srt, vtt or diarized_json These unsupported-part refusals apply only after the text part passes UTF-8 and 4096-byte validation."
+          },
+          {
+            "status": 400,
+            "envelope": "OpenAiErrorEnvelope",
+            "code": "invalid_request_error",
+            "trigger": "Non-file text part is non-UTF-8 or exceeds 4096 bytes, including include[] or stream: text_field validation precedes unsupported-field matching."
           }
         ]
       }
