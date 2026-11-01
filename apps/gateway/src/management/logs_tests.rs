@@ -743,7 +743,8 @@ async fn cursor_timestamp_bounds_on_log_routes(pool: PgPool) {
     let f = fixture(&pool).await;
     let id = "00000000-0000-0000-0000-000000000001";
     let mut failures = 0;
-    for list in ["generations", "sessions", "requests"] {
+    // Sessions use a different, three-part cursor; these lists share cursor_parts.
+    for list in ["generations", "requests"] {
         for (case, micros, expected) in [
             (
                 "below PostgreSQL minimum",

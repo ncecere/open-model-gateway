@@ -306,9 +306,20 @@ where
         .bind(f.streamed)
         .bind(f.session.as_deref())
 }
+// PostgreSQL 17 src/include/datatype/timestamp.h: MIN_TIMESTAMP (inclusive)
+// and END_TIMESTAMP (exclusive), shifted from the 2000 epoch to Unix micros.
+// Finite UTC bounds: -4713-11-24 00:00:00 (4714 BC) through
+// 294276-12-31 23:59:59.999999. The maximum needs i128 in Unix micros;
+// parsing i64 and chrono below impose the existing, narrower upper bound.
+const PG_MIN_UNIX_MICROS: i128 = -210_866_803_200_000_000;
+const PG_MAX_UNIX_MICROS: i128 = 9_224_318_015_999_999_999;
+
 pub(super) fn cursor_parts(c: &str) -> Result<(DateTime<Utc>, Uuid), ApiError> {
     let (micros, id) = c.split_once('_').ok_or_else(invalid)?;
     let micros: i64 = micros.parse().map_err(|_| invalid())?;
+    if !(PG_MIN_UNIX_MICROS..=PG_MAX_UNIX_MICROS).contains(&i128::from(micros)) {
+        return Err(invalid());
+    }
     Ok((
         DateTime::from_timestamp_micros(micros).ok_or_else(invalid)?,
         Uuid::parse_str(id).map_err(|_| invalid())?,
