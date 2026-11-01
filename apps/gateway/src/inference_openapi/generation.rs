@@ -14,3 +14,12 @@ pub(super) const CANCELLATION_TESTS: &[(&str, &str)] = &[
         "dropping_messages_http_stream_cancels_transport_and_retains_unknown_hold",
     ),
 ];
+
+pub(super) fn validate_request(
+    document: &serde_json::Value,
+    path: &str,
+    body: &serde_json::Value,
+) -> anyhow::Result<()> {
+    let schema = &document["paths"][path]["post"]["x-omg-request-schema"];
+    super::responses::validate_value(document, schema, body)
+}

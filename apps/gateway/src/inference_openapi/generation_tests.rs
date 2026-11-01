@@ -78,3 +78,76 @@ fn inference_openapi_generation_cancellation_tests_exist() {
         );
     }
 }
+
+#[test]
+fn inference_openapi_generation_aliases_and_stateless_refusals() {
+    let doc = generated();
+    for (case, path, body) in [
+        (
+            "unequal token aliases",
+            "/v1/chat/completions",
+            json!({"model":"m","messages":[{"role":"user","content":"hi"}],"max_tokens":1,"max_completion_tokens":2}),
+        ),
+        (
+            "store true",
+            "/v1/responses",
+            json!({"model":"m","input":"hi","store":true}),
+        ),
+        (
+            "previous response",
+            "/v1/responses",
+            json!({"model":"m","input":"hi","previous_response_id":"resp_previous"}),
+        ),
+    ] {
+        assert!(
+            super::generation::validate_request(&doc, path, &body).is_err(),
+            "accepted {case}"
+        );
+    }
+}
+#[test]
+fn inference_openapi_generation_operations_are_complete() {
+    let doc = generated();
+    for (path, _) in EXPECTED {
+        super::responses::require_complete(&doc, &doc["paths"][path]["post"])
+            .unwrap_or_else(|_| panic!("incomplete generation operation {path}"));
+    }
+}
+#[test]
+fn inference_openapi_generation_translated_error_results_are_refused() {
+    let doc = generated();
+    let rows = doc["paths"]["/v1/messages"]["post"]["x-omg-refusals"]
+        .as_array()
+        .expect("missing Messages refusal rows");
+    assert!(
+        rows.iter().any(|row| row["status"] == 501
+            && row["trigger"] == "tool_result.is_error:true on translated routes"
+            && row["envelope"] == "AnthropicErrorEnvelope"),
+        "missing translated error-result refusal"
+    );
+}
+
+#[test]
+fn inference_openapi_generation_store_true_is_not_accepted() {
+    assert!(
+        super::generation::validate_request(
+            &generated(),
+            "/v1/responses",
+            &json!({"model":"m","input":"hi","store":true})
+        )
+        .is_err(),
+        "accepted store true"
+    );
+}
+#[test]
+fn inference_openapi_generation_previous_response_is_not_accepted() {
+    assert!(
+        super::generation::validate_request(
+            &generated(),
+            "/v1/responses",
+            &json!({"model":"m","input":"hi","previous_response_id":"resp_previous"})
+        )
+        .is_err(),
+        "accepted previous_response_id"
+    );
+}
