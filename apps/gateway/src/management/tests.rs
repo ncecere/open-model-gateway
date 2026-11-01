@@ -70,6 +70,8 @@ mod member_tests;
 mod openapi_budget_fixture_tests;
 #[path = "openapi_fixture_tests.rs"]
 mod openapi_fixtures;
+#[path = "openapi_money_fixture_tests.rs"]
+mod openapi_money_fixture_tests;
 #[path = "openapi_settings_fixture_tests.rs"]
 mod openapi_settings_fixture_tests;
 #[path = "openapi_slice2_fixture_tests.rs"]
@@ -493,3 +495,6 @@ async fn sanitized_audit_failure_rolls_back_resource_creation(pool: PgPool) {
             .unwrap();
     assert_eq!(metadata, json!({"role":"admin","enabled":true}));
 }
+
+#[path = "settings/url_length_tests.rs"]
+mod settings_url_length_tests;

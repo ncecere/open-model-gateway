@@ -118,11 +118,12 @@ fn https_url(value: Option<String>) -> Result<Option<String>, ApiError> {
     let Some(value) = text(value) else {
         return Ok(None);
     };
-    if value.len() > 2048 || value.chars().any(|c| c.is_control() || c.is_whitespace()) {
+    if value.chars().any(|c| c.is_control() || c.is_whitespace()) {
         return Err(invalid());
     }
     let url = reqwest::Url::parse(&value).map_err(|_| invalid())?;
-    if url.scheme() != "https"
+    if url.as_str().len() > 2048
+        || url.scheme() != "https"
         || url.host_str().is_none_or(str::is_empty)
         || !url.username().is_empty()
         || url.password().is_some()

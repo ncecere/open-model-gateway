@@ -27,6 +27,24 @@ pub(crate) const SLICE3_AREAS: &[&str] = &[
     "workspaces/{ws}/models",
     "workspaces/{ws}/policy",
 ];
+pub(crate) const SLICE4_AREAS: &[&str] = &[
+    "platform/cost-centers",
+    "platform/cost-report",
+    "platform/holds",
+    "platform/overview",
+    "platform/provider-cost-imports",
+    "platform/provider-cost-mappings",
+    "platform/provider-reconciliations",
+    "platform/report-schedules",
+    "platform/usage",
+    "workspaces/{ws}/cost-report",
+    "workspaces/{ws}/cost-summary",
+    "workspaces/{ws}/costs",
+    "workspaces/{ws}/holds",
+    "workspaces/{ws}/report-schedules",
+    "workspaces/{ws}/usage",
+    "workspaces/{ws}/usage-export",
+];
 pub(crate) const SLICE2_AREAS: &[&str] = &[
     "platform/access-requests",
     "platform/oidc",
@@ -70,6 +88,7 @@ pub(crate) const SLICE6_AREAS: &[&str] = &[
 pub(crate) const AREA_GROUPS: &[(&str, &[&str])] = &[
     ("IDENTITY_SELF_SERVICE_AREAS", IDENTITY_SELF_SERVICE_AREAS),
     ("SLICE3_AREAS", SLICE3_AREAS),
+    ("SLICE4_AREAS", SLICE4_AREAS),
     ("SLICE2_AREAS", SLICE2_AREAS),
     ("SLICE5_AREAS", SLICE5_AREAS),
     ("SLICE6_AREAS", SLICE6_AREAS),
@@ -90,7 +109,7 @@ pub(crate) fn artifact() -> &'static Value {
     })
 }
 
-pub(super) fn operation<'a>(
+pub(crate) fn operation<'a>(
     document: &'a Value,
     method: &str,
     template: &str,
@@ -113,7 +132,7 @@ fn resolved<'a>(document: &'a Value, value: &'a Value) -> Result<&'a Value> {
     Ok(value)
 }
 
-pub(super) fn validator(
+pub(crate) fn validator(
     document: &Value,
     schema: &Value,
 ) -> Result<std::sync::Arc<jsonschema::Validator>> {
@@ -490,10 +509,10 @@ pub(crate) struct Captured {
     pub status: StatusCode,
     pub headers: HeaderMap,
     pub bytes: axum::body::Bytes,
-    pub(super) method: String,
-    pub(super) template: Option<String>,
+    pub(crate) method: String,
+    pub(crate) template: Option<String>,
     /// Query parameter NAMES of the request (never their values).
-    pub(super) query: Vec<String>,
+    pub(crate) query: Vec<String>,
 }
 
 /// Names (not values) of the query parameters in a request target.
@@ -596,7 +615,12 @@ fn positive(response: &Value, status: StatusCode, headers: &HeaderMap, bytes: &[
         || (status == StatusCode::SEE_OTHER
             && bytes.is_empty()
             && response["x-omg-positive-kind"] == "redirect")
-        || (status == StatusCode::GONE && represented && response["x-omg-positive"] == true);
+        || (status == StatusCode::GONE && represented && response["x-omg-positive"] == true)
+        // An operation that exists only to refuse (the inference contract's two
+        // realtime companions, #82) is covered by its reviewed 400 refusal.
+        || (status == StatusCode::BAD_REQUEST
+            && represented
+            && response["x-omg-positive-kind"] == "refusal");
     let cookie = response["x-omg-positive-cookie"]
         .as_str()
         .is_none_or(|name| {
@@ -687,7 +711,7 @@ pub(crate) struct PositiveFixtures {
 impl PositiveFixtures {
     /// Record that every HTTP boundary vector of `kind` (`query` or `body`)
     /// for the exact operation ran and matched the handler.
-    pub(super) fn record_vectors(&mut self, method: &str, template: &str, kind: &'static str) {
+    pub(crate) fn record_vectors(&mut self, method: &str, template: &str, kind: &'static str) {
         self.vectors
             .entry(format!("{method} {template}"))
             .or_default()
@@ -695,7 +719,7 @@ impl PositiveFixtures {
     }
     /// The declared request locations one body vector run carried (its valid body
     /// and seeded bases); runs of one operation accumulate.
-    pub(super) fn record_reach(
+    pub(crate) fn record_reach(
         &mut self,
         method: &str,
         template: &str,
@@ -742,7 +766,7 @@ impl PositiveFixtures {
             .collect()
     }
     /// Coverage and vector gaps for the given `METHOD template` operations.
-    pub(super) fn check_contract_coverage(
+    pub(crate) fn check_contract_coverage(
         &self,
         document: &Value,
         expected: &BTreeSet<String>,
@@ -823,6 +847,17 @@ impl PositiveFixtures {
     }
     /// `observe` against an explicit document (synthetic documents in controls).
     pub(super) fn observe_in(&mut self, document: &Value, captured: &Captured) {
+        self.observe_with(document, captured, validate);
+    }
+    /// [`PositiveFixtures::observe_in`] with the contract's own wire validator
+    /// (the inference contract has different error envelopes, #82); the
+    /// credit rules are the same.
+    pub(crate) fn observe_with(
+        &mut self,
+        document: &Value,
+        captured: &Captured,
+        validate: impl Fn(&Value, &str, &str, StatusCode, &HeaderMap, &[u8]) -> Result<()>,
+    ) {
         let template = captured
             .template
             .as_deref()
@@ -865,6 +900,11 @@ impl PositiveFixtures {
                     .unwrap_or_else(|e| refuse(e.context(key.clone())));
             }
         }
+    }
+    /// The `METHOD template` operations that earned positive credit.
+    #[cfg(feature = "integration-tests")]
+    pub(crate) fn observed_operations(&self) -> &BTreeSet<String> {
+        &self.operations
     }
     pub(crate) fn finish(&self, areas: &[&str]) {
         require_known_areas(areas).unwrap();
@@ -1121,7 +1161,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(count, 204);
+        assert_eq!(count, 251);
     }
     #[test]
     fn management_openapi_response_rejects_incomplete_completed_slot() {

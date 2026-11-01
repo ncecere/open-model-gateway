@@ -466,7 +466,7 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
 
 /// [`vectors`] against an explicit document and reviewed refined pointers.
 /// Failures name method, template, vector label and field names, never values.
-pub(super) fn vectors_in<T: DeserializeOwned>(
+pub(crate) fn vectors_in<T: DeserializeOwned>(
     document: &Value,
     method: &str,
     template: &str,
@@ -645,7 +645,11 @@ fn schema_vectors<T: DeserializeOwned>(
         // array-item boundary so a future nested shape cannot be silently loose.
         let mut nested = valid.clone();
         if let Some(items) = nested[field].as_array_mut() {
-            items[0] = json!({"unexpected_configuration":true});
+            if items.is_empty() {
+                items.push(json!({"unexpected_configuration":true}));
+            } else {
+                items[0] = json!({"unexpected_configuration":true});
+            }
         } else {
             nested[field] = json!({"unexpected_configuration":true});
         }
@@ -659,6 +663,15 @@ fn schema_vectors<T: DeserializeOwned>(
         json!([]),
     ] {
         compare("wrong root type / JSON null is not omission", value);
+    }
+    // Probe every recursively reachable object of the valid body: an unknown
+    // field, each field omitted, and each field replaced by a wrong type.
+    let mut nested = Vec::new();
+    nested_probes(&valid, "", &mut nested);
+    for (pointer, value) in nested {
+        let mut probe = valid.clone();
+        *probe.pointer_mut(&pointer).context("nested pointer")? = value;
+        compare(&format!("recursive DTO boundary {pointer}"), probe);
     }
     // UUID serde deliberately accepts all these spellings. JSON Schema format
     // assertions must match that parser rather than only canonical output.
@@ -684,6 +697,50 @@ fn schema_vectors<T: DeserializeOwned>(
     }
     ensure!(failures.is_empty(), "{}", failures.join("\n"));
     Ok(())
+}
+
+/// Variants of every NESTED object (never the root, which the top-level probes
+/// cover): an unknown field, each field removed, each field made a wrong type.
+fn nested_probes(value: &Value, pointer: &str, out: &mut Vec<(String, Value)>) {
+    match value {
+        Value::Object(map) => {
+            if !pointer.is_empty() {
+                let mut v = value.clone();
+                v["unexpected_configuration"] = json!(true);
+                out.push((pointer.to_owned(), v));
+                for name in map.keys() {
+                    let mut v = value.clone();
+                    v.as_object_mut().unwrap().remove(name);
+                    out.push((pointer.to_owned(), v));
+                    for wrong in [
+                        Value::Null,
+                        json!(true),
+                        json!(1),
+                        json!("wrong"),
+                        json!([]),
+                        json!({}),
+                    ] {
+                        let mut v = value.clone();
+                        v[name] = wrong;
+                        out.push((pointer.to_owned(), v));
+                    }
+                }
+            }
+            for (name, child) in map {
+                nested_probes(
+                    child,
+                    &format!("{pointer}/{}", name.replace('~', "~0").replace('/', "~1")),
+                    out,
+                );
+            }
+        }
+        Value::Array(items) => {
+            for (i, child) in items.iter().enumerate() {
+                nested_probes(child, &format!("{pointer}/{i}"), out);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Top-level fields (named `/field`, `(extra)` or `(root)`) a vector changes
@@ -965,4 +1022,63 @@ fn management_openapi_component_vectors_bind_a_nested_dto_to_its_own_component()
         text.contains("component Nested") && text.contains("missing"),
         "{text}"
     );
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct NestedInner {
+    x: String,
+}
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct NestedOuter {
+    inner: NestedInner,
+    list: Vec<NestedInner>,
+}
+
+/// `component_vectors` binds a component that is not a request root, and its
+/// recursive probes reach NESTED objects (top-level probes never do).
+#[test]
+fn management_openapi_component_vectors_probe_nested_dto_fields() {
+    let inner = |loose: bool, required: bool| {
+        json!({"type":"object","required": if required { json!(["x"]) } else { json!([]) },
+            "additionalProperties": loose,"properties":{"x":{"type":"string"}}})
+    };
+    let document = |loose: bool, required: bool| {
+        json!({"components":{"schemas":{
+            "Outer":{"oneOf":[
+                {"type":"object","required":["inner","list"],"additionalProperties":false,
+                    "properties":{"inner":{"$ref":"#/components/schemas/Inner"},
+                        "list":{"type":"array","items":{"$ref":"#/components/schemas/Inner"}}}},
+                {"type":"array","minItems":2,"maxItems":2,"items":false,
+                    "prefixItems":[{"$ref":"#/components/schemas/Inner"},
+                        {"type":"array","items":{"$ref":"#/components/schemas/Inner"}}]}]},
+            "Inner":inner(loose, required)}}})
+    };
+    let run = |document: &Value, valid: Value| {
+        schema_vectors::<NestedOuter>(
+            document,
+            "component Outer",
+            &json!({"$ref":"#/components/schemas/Outer"}),
+            valid,
+            &[],
+        )
+    };
+    let valid = || json!({"inner":{"x":"a"},"list":[{"x":"b"}]});
+    run(&document(false, true), valid()).unwrap();
+    // An EMPTY array in the valid body is a supported base (no items[0] panic).
+    run(&document(false, true), json!({"inner":{"x":"a"},"list":[]})).unwrap();
+    // RED: a nested object the schema leaves open, or whose required field the
+    // schema forgets, is caught only by the recursive probes.
+    let text = format!("{:#}", run(&document(true, true), valid()).unwrap_err());
+    assert!(
+        text.contains("recursive DTO boundary /inner") && text.contains("component Outer"),
+        "{text}"
+    );
+    assert!(run(&document(false, false), valid()).is_err());
+    let text = format!("{:#}", run(&document(true, true), valid()).unwrap_err());
+    assert!(text.contains("recursive DTO boundary /list/0"), "{text}");
+    assert!(!text.contains("\"a\"") && !text.contains("\"b\""), "{text}");
 }

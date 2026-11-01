@@ -5,6 +5,9 @@ use super::*;
 use openapi::responses::{Captured, PositiveFixtures, capture_http};
 use sha2::{Digest, Sha256};
 
+#[path = "settings/email_host_tests.rs"]
+mod email_host_tests;
+
 #[path = "openapi_alerts_states_tests.rs"]
 mod alerts_states;
 #[path = "openapi_settings_states_tests.rs"]
@@ -28,7 +31,7 @@ struct Browser {
 async fn browser(pool: &PgPool, user: &BrowserPrincipal) -> Browser {
     let cookie = crate::entropy::hex_token().unwrap();
     let csrf = crate::entropy::hex_token().unwrap();
-    sqlx::query("INSERT INTO browser_sessions(token_hash,user_id,csrf_hash,expires_at,verified_email,last_seen_at) VALUES($1,$2,$3,now()+interval '1 hour',$4,now())")
+    sqlx::query("INSERT INTO browser_sessions(token_hash,user_id,csrf_hash,expires_at,verified_email,last_seen_at) VALUES($1,$2,$3,now()+interval '12 hours',$4,now())")
         .bind(Sha256::digest(cookie.as_bytes()).as_slice()).bind(user.user_id)
         .bind(Sha256::digest(csrf.as_bytes()).as_slice()).bind(&user.email).execute(pool).await.unwrap();
     Browser { cookie, csrf }

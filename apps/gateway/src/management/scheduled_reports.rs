@@ -138,6 +138,80 @@ struct Update {
     #[serde(default, deserialize_with = "present")]
     recipient_user_ids: Option<Vec<Uuid>>,
 }
+#[cfg(test)]
+#[test]
+fn management_openapi_money_schedule_request_vectors() {
+    // The schema states every constraint validate() can express without the
+    // time-zone database or live configuration: cadence/state enums, HH:MM,
+    // timezone length (in bytes here, see #405) and 1..=50 unique recipients.
+    // Bind exactly those.
+    fn expressible(
+        cadence: Option<&str>,
+        timezone: Option<&str>,
+        time: Option<&str>,
+        state: Option<&str>,
+        recipients: Option<&[Uuid]>,
+    ) -> bool {
+        cadence.is_none_or(|v| matches!(v, "weekly" | "monthly"))
+            && state.is_none_or(|v| matches!(v, "active" | "paused"))
+            // validate() counts UTF-8 BYTES (`timezone.len() > 64`); the schema's
+            // maxLength counts characters (#405), so this is the handler's rule.
+            && timezone.is_none_or(|v| (1..=64).contains(&v.len()))
+            && time.is_none_or(|v| crate::jobs::schedule::parse_hhmm(v).is_some())
+            && recipients.is_none_or(|r| {
+                (1..=50).contains(&r.len())
+                    && r.iter().collect::<std::collections::HashSet<_>>().len() == r.len()
+            })
+    }
+    struct DecodedCreate;
+    impl<'de> Deserialize<'de> for DecodedCreate {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            let b = Create::deserialize(d)?;
+            expressible(
+                Some(&b.cadence),
+                Some(&b.timezone),
+                Some(&b.delivery_time),
+                Some(&b.state),
+                Some(&b.recipient_user_ids),
+            )
+            .then_some(Self)
+            .ok_or_else(|| serde::de::Error::custom("constraint"))
+        }
+    }
+    struct DecodedUpdate;
+    impl<'de> Deserialize<'de> for DecodedUpdate {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            let b = Update::deserialize(d)?;
+            // An update that changes nothing is refused (update()).
+            let any = b.cadence.is_some()
+                || b.timezone.is_some()
+                || b.delivery_time.is_some()
+                || b.state.is_some()
+                || b.recipient_user_ids.is_some();
+            (any && expressible(
+                b.cadence.as_deref(),
+                b.timezone.as_deref(),
+                b.delivery_time.as_deref(),
+                b.state.as_deref(),
+                b.recipient_user_ids.as_deref(),
+            ))
+            .then_some(Self)
+            .ok_or_else(|| serde::de::Error::custom("constraint"))
+        }
+    }
+    for scope in ["/api/v1/platform", "/api/v1/workspaces/{ws}"] {
+        super::openapi::requests::vectors::<DecodedCreate>(
+            "POST",
+            &format!("{scope}/report-schedules"),
+            json!({"cadence":"weekly","timezone":"UTC","delivery_time":"00:01","state":"paused","cost_center_id":Uuid::nil(),"recipient_user_ids":[Uuid::nil()]}),
+        );
+        super::openapi::requests::vectors::<DecodedUpdate>(
+            "PATCH",
+            &format!("{scope}/report-schedules/{{id}}"),
+            json!({"cadence":"monthly","timezone":"UTC","delivery_time":"12:01","state":"paused","recipient_user_ids":[Uuid::nil()]}),
+        );
+    }
+}
 fn validate(
     cadence: &str,
     timezone: &str,
@@ -457,7 +531,8 @@ async fn run_value(
     // enqueue/send time. A link is an identifier, not a capability.
     let mut tx = resources::read_snapshot(&s).await?;
     authority(&mut tx, &u, ws, false).await?;
-    let value: Value = sqlx::query_scalar("SELECT jsonb_build_object('id',r.id,'schedule_id',r.schedule_id,'period_start',r.period_start,'period_end',r.period_end,'configuration_revision',r.configuration_revision::text,'observed_at',r.observed_at,'expires_at',r.expires_at,'expired',r.expires_at<=clock_timestamp() OR p.run_id IS NULL OR p.expires_at<=clock_timestamp(),'snapshot',CASE WHEN r.expires_at>clock_timestamp() AND p.expires_at>clock_timestamp() THEN p.body END,'delivery', (SELECT jsonb_build_object('status',d.status,'recipients',d.recipients,'sent',d.sent,'failed',d.failed,'waiting',d.waiting) FROM alert_deliveries d WHERE d.report_run_id=r.id)) FROM report_runs r JOIN report_schedules s ON s.id=r.schedule_id LEFT JOIN report_snapshots p ON p.run_id=r.id WHERE r.id=$1 AND s.id=$2 AND s.workspace_id IS NOT DISTINCT FROM $3 AND s.deleted_at IS NULL")
+    // A volatile clock must be captured once so expiry and payload agree.
+    let value: Value = sqlx::query_scalar("WITH report_now AS MATERIALIZED (SELECT clock_timestamp() AS t) SELECT jsonb_build_object('id',r.id,'schedule_id',r.schedule_id,'period_start',r.period_start,'period_end',r.period_end,'configuration_revision',r.configuration_revision::text,'observed_at',r.observed_at,'expires_at',r.expires_at,'expired',r.expires_at<=report_now.t OR p.run_id IS NULL OR p.expires_at<=report_now.t,'snapshot',CASE WHEN r.expires_at>report_now.t AND p.expires_at>report_now.t THEN p.body END,'delivery', (SELECT jsonb_build_object('status',d.status,'recipients',d.recipients,'sent',d.sent,'failed',d.failed,'waiting',d.waiting) FROM alert_deliveries d WHERE d.report_run_id=r.id)) FROM report_runs r CROSS JOIN report_now JOIN report_schedules s ON s.id=r.schedule_id LEFT JOIN report_snapshots p ON p.run_id=r.id WHERE r.id=$1 AND s.id=$2 AND s.workspace_id IS NOT DISTINCT FROM $3 AND s.deleted_at IS NULL")
         .bind(run).bind(id).bind(ws).fetch_optional(&mut *tx).await?.ok_or_else(missing)?;
     tx.commit().await?;
     Ok(value)
@@ -532,7 +607,8 @@ async fn recent_runs(
     let mut tx = resources::read_snapshot(&s).await?;
     authority(&mut tx, &u, ws, false).await?;
     row(&mut tx, ws, id).await?;
-    let data: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('id',r.id,'schedule_id',r.schedule_id,'period_start',r.period_start,'period_end',r.period_end,'observed_at',r.observed_at,'expires_at',r.expires_at,'expired',r.expires_at<=clock_timestamp(),'skipped_intervals',r.skipped_intervals::text,'delivery',(SELECT jsonb_build_object('status',d.status,'recipients',d.recipients,'sent',d.sent,'failed',d.failed,'waiting',d.waiting) FROM alert_deliveries d WHERE d.report_run_id=r.id)) FROM report_runs r WHERE r.schedule_id=$1 ORDER BY r.period_end DESC,r.id LIMIT $2").bind(id).bind(q.limit).fetch_all(&mut *tx).await?;
+    // Use one instant for every row in this page, not one clock read per run.
+    let data: Vec<Value> = sqlx::query_scalar("WITH report_now AS MATERIALIZED (SELECT clock_timestamp() AS t) SELECT jsonb_build_object('id',r.id,'schedule_id',r.schedule_id,'period_start',r.period_start,'period_end',r.period_end,'observed_at',r.observed_at,'expires_at',r.expires_at,'expired',r.expires_at<=report_now.t,'skipped_intervals',r.skipped_intervals::text,'delivery',(SELECT jsonb_build_object('status',d.status,'recipients',d.recipients,'sent',d.sent,'failed',d.failed,'waiting',d.waiting) FROM alert_deliveries d WHERE d.report_run_id=r.id)) FROM report_runs r CROSS JOIN report_now WHERE r.schedule_id=$1 ORDER BY r.period_end DESC,r.id LIMIT $2").bind(id).bind(q.limit).fetch_all(&mut *tx).await?;
     // The append-only outcomes include failed generations, which have no run.
     let outcomes: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('category',category,'created_at',created_at,'period_start',period_start,'period_end',period_end) FROM report_generation_outcomes WHERE schedule_id=$1 ORDER BY created_at DESC,id LIMIT $2").bind(id).bind(q.limit).fetch_all(&mut *tx).await?;
     tx.commit().await?;

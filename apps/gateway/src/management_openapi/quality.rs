@@ -24,6 +24,10 @@ pub(super) const ARBITRARY_JSON: &[(&str, &str)] = &[
         "Stored audit_events.metadata is exported verbatim as JSON; its vocabulary depends on the audited action.",
     ),
     (
+        "/components/schemas/MoneyProviderReconciliationSnapshot/properties/personal_activity/properties/exclusively_attributed_imported_by_category",
+        "Frozen provider_reconciliations.snapshot groups signed imported amounts by provider-supplied cost_type; arbitrary historical category labels map only to integer micro-USD strings.",
+    ),
+    (
         "/components/schemas/SettingsWorkspaceAlertEvent/properties/details",
         "Workspace history rows return alert_events.details verbatim as stored producer-specific JSON; monetary refinements apply on this shared base, and every concrete workspace event variant refines it with the closed schema of its kind (Settings*Details).",
     ),
@@ -334,10 +338,17 @@ fn direct_body_property(document: &Value, location: &str) -> bool {
         || request_schemas(document).0.contains(parent)
 }
 
-fn arbitrary(location: &str, node: &Value) -> bool {
+/// The reviewed open-JSON pointers of every contract this checker serves: the
+/// management list above and the inference contract's own list (#82), whose
+/// pointers name components that never exist in the management document.
+fn reviewed() -> impl Iterator<Item = &'static (&'static str, &'static str)> {
     ARBITRARY_JSON
         .iter()
-        .any(|(pointer, reason)| *pointer == location && node["$comment"] == *reason)
+        .chain(crate::inference_openapi::ARBITRARY_JSON.iter())
+}
+
+fn arbitrary(location: &str, node: &Value) -> bool {
+    reviewed().any(|(pointer, reason)| *pointer == location && node["$comment"] == *reason)
 }
 fn segment(s: &str) -> String {
     s.replace('~', "~0").replace('/', "~1")
@@ -348,9 +359,7 @@ fn reference<'a>(document: &'a Value, node: &Value) -> Result<(&'a Value, String
         .context("schema reference must be a string")?;
     ensure!(r.starts_with("#/"), "external completed schema reference");
     ensure!(
-        !ARBITRARY_JSON
-            .iter()
-            .any(|(pointer, _)| *pointer == &r[1..]),
+        !reviewed().any(|(pointer, _)| *pointer == &r[1..]),
         "arbitrary stored JSON may not be aliased as a standalone schema"
     );
     Ok((
@@ -671,7 +680,17 @@ fn schema(
     // Money wire values: integer micro-USD strings constrained by a pattern
     // that rejects leading zeros and `-0` (request and response alike).
     for (name, child) in node["properties"].as_object().into_iter().flatten() {
-        if money_name(name) && !decimal_rate(name) {
+        // A fixed identifier-like literal (e.g. the `unavailable` status marker
+        // `not_in_rollups`) carries no amount, so it needs no money pattern.
+        // Anything else (digits, signs, decimals, exponents, punctuation) could
+        // be read as an amount and keeps the money rule.
+        let marker = child["const"].as_str().is_some_and(|c| {
+            c.bytes().next().is_some_and(|b| b.is_ascii_lowercase())
+                && c.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+                // Words a numeric parser reads as a number are amounts.
+                && !matches!(c, "nan" | "inf" | "infinity")
+        });
+        if money_name(name) && !decimal_rate(name) && !marker {
             ensure!(
                 money(document, child, 0)? != Money::Other,
                 "money property `{name}` at {location} must be a string constrained by an integer micro-USD pattern (^(0|[1-9][0-9]*)$ or ^(0|-?[1-9][0-9]*)$), or a nullable form of one"
@@ -993,6 +1012,13 @@ fn bytes_placements(document: &Value) -> Result<()> {
 }
 
 pub(super) fn completed(document: &Value) -> Result<()> {
+    completed_with(document, &|path| {
+        super::responses::completed(super::responses::area(path))
+    })
+}
+
+/// [`completed`] with the predicate that names the completed path templates.
+pub(crate) fn completed_with(document: &Value, is_completed: &dyn Fn(&str) -> bool) -> Result<()> {
     bytes_placements(document)?;
     for (name, node) in document["components"]["schemas"]
         .as_object()
@@ -1026,7 +1052,7 @@ pub(super) fn completed(document: &Value) -> Result<()> {
         }
     }
     for (path, item) in document["paths"].as_object().context("paths missing")? {
-        if super::responses::completed(super::responses::area(path)) {
+        if is_completed(path) {
             for op in item.as_object().context("operation map missing")?.values() {
                 operation(document, op)?;
             }
@@ -1035,7 +1061,7 @@ pub(super) fn completed(document: &Value) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn operation(document: &Value, operation: &Value) -> Result<()> {
+pub(crate) fn operation(document: &Value, operation: &Value) -> Result<()> {
     operation_at(document, operation, "/operation")
 }
 

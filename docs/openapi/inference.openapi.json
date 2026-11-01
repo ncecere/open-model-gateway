@@ -1,0 +1,2911 @@
+{
+  "components": {
+    "headers": {
+      "NoStore": {
+        "description": "Everything is uncacheable.",
+        "required": true,
+        "schema": {
+          "const": "no-store"
+        }
+      },
+      "RequestId": {
+        "description": "The gateway's request ID (UUIDv7), also the attempt ID of a root request.",
+        "required": true,
+        "schema": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "RetryAfter": {
+        "description": "Seconds to wait; only a cooling-down route sends it.",
+        "required": false,
+        "schema": {
+          "pattern": "^[1-9][0-9]*$",
+          "type": "string"
+        }
+      },
+      "ShouldRetryFalse": {
+        "description": "Permanent refusals (unsupported capability, budget, price or token-reservation denials) tell SDKs not to retry.",
+        "required": false,
+        "schema": {
+          "const": "false"
+        }
+      },
+      "WwwAuthenticate": {
+        "description": "Always `Bearer` on a 401.",
+        "required": true,
+        "schema": {
+          "const": "Bearer"
+        }
+      }
+    },
+    "responses": {
+      "OpenAiBadGateway": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+            }
+          }
+        },
+        "description": "The provider was unavailable or returned an invalid or incomplete response",
+        "headers": {
+          "cache-control": {
+            "$ref": "#/components/headers/NoStore"
+          },
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        }
+      },
+      "OpenAiBadRequest": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+            }
+          }
+        },
+        "description": "Invalid request (the closed field set, a bound, a type) or, for the non-generation workloads, an explicit unsupported_capability; error.code tells them apart",
+        "headers": {
+          "cache-control": {
+            "$ref": "#/components/headers/NoStore"
+          },
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          },
+          "x-should-retry": {
+            "$ref": "#/components/headers/ShouldRetryFalse"
+          }
+        }
+      },
+      "OpenAiGatewayTimeout": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+            }
+          }
+        },
+        "description": "The inference deadline was exceeded",
+        "headers": {
+          "cache-control": {
+            "$ref": "#/components/headers/NoStore"
+          },
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        }
+      },
+      "OpenAiNotFound": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+            }
+          }
+        },
+        "description": "The model does not exist or is not available to this key and workspace (model_not_found)",
+        "headers": {
+          "cache-control": {
+            "$ref": "#/components/headers/NoStore"
+          },
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        }
+      },
+      "OpenAiNotImplemented": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+            }
+          }
+        },
+        "description": "A capability no registered deployment supports (unsupported_capability); permanent",
+        "headers": {
+          "cache-control": {
+            "$ref": "#/components/headers/NoStore"
+          },
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          },
+          "x-should-retry": {
+            "$ref": "#/components/headers/ShouldRetryFalse"
+          }
+        }
+      },
+      "OpenAiOverloaded": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+            }
+          }
+        },
+        "description": "The provider reported an overload (HTTP 529)",
+        "headers": {
+          "cache-control": {
+            "$ref": "#/components/headers/NoStore"
+          },
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        }
+      },
+      "OpenAiPayloadTooLarge": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+            }
+          },
+          "text/plain": {
+            "schema": {
+              "const": "length limit exceeded"
+            }
+          }
+        },
+        "description": "The request body exceeds the route's cap. A declared Content-Length over the cap is refused by the body-limit layer with the plain text `length limit exceeded`, before any handler runs; a streamed body is refused by the handler with this JSON error (a different type/code on /v1/embeddings).",
+        "headers": {
+          "cache-control": {
+            "$ref": "#/components/headers/NoStore"
+          },
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        }
+      },
+      "OpenAiTooManyRequests": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+            }
+          }
+        },
+        "description": "Rate or concurrency limit (rate_limit_error), or a permanent budget, unresolved-usage or token-reservation denial (x-should-retry: false)",
+        "headers": {
+          "cache-control": {
+            "$ref": "#/components/headers/NoStore"
+          },
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          },
+          "x-should-retry": {
+            "$ref": "#/components/headers/ShouldRetryFalse"
+          }
+        }
+      },
+      "OpenAiUnauthorized": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+            }
+          }
+        },
+        "description": "Missing, malformed, duplicate, unknown, revoked or no-longer-valid inference key (always authentication_error)",
+        "headers": {
+          "cache-control": {
+            "$ref": "#/components/headers/NoStore"
+          },
+          "www-authenticate": {
+            "$ref": "#/components/headers/WwwAuthenticate"
+          },
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        }
+      },
+      "OpenAiUnavailable": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+            }
+          }
+        },
+        "description": "Authentication, catalog or accounting storage unavailable, provider configuration unavailable, an unbounded price, or every route cooling down (Retry-After)",
+        "headers": {
+          "cache-control": {
+            "$ref": "#/components/headers/NoStore"
+          },
+          "retry-after": {
+            "$ref": "#/components/headers/RetryAfter"
+          },
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          },
+          "x-should-retry": {
+            "$ref": "#/components/headers/ShouldRetryFalse"
+          }
+        }
+      }
+    },
+    "schemas": {
+      "AnthropicErrorEnvelope": {
+        "additionalProperties": false,
+        "description": "Anthropic-shaped /v1/messages error (protocols/messages.rs). It carries NO gateway machine code: unsupported_capability, budget_exceeded and the rest cannot be told apart except by their message.",
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "type": {
+                "$ref": "#/components/schemas/AnthropicErrorType"
+              }
+            },
+            "required": [
+              "type",
+              "message"
+            ],
+            "type": "object"
+          },
+          "type": {
+            "const": "error"
+          }
+        },
+        "required": [
+          "type",
+          "error"
+        ],
+        "type": "object"
+      },
+      "AnthropicErrorType": {
+        "description": "Anthropic error.type. Anthropic's shape has no machine code, so a budget denial is a rate_limit_error distinguishable only by its message.",
+        "enum": [
+          "api_error",
+          "authentication_error",
+          "invalid_request_error",
+          "not_found_error",
+          "overloaded_error",
+          "rate_limit_error",
+          "request_too_large"
+        ],
+        "type": "string"
+      },
+      "EmbeddingItem": {
+        "additionalProperties": false,
+        "properties": {
+          "embedding": {
+            "oneOf": [
+              {
+                "description": "encoding_format float (or omitted/null): finite numbers.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 16384,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "description": "encoding_format base64: padded standard base64 of little-endian float32 values (four bytes per dimension).",
+                "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+                "type": "string"
+              }
+            ]
+          },
+          "index": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "object": {
+            "const": "embedding"
+          }
+        },
+        "required": [
+          "object",
+          "index",
+          "embedding"
+        ],
+        "type": "object"
+      },
+      "EmbeddingUsage": {
+        "additionalProperties": false,
+        "description": "Input tokens only (total equals prompt); there are no completion tokens and no monetary field.",
+        "properties": {
+          "prompt_tokens": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_tokens": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "prompt_tokens",
+          "total_tokens"
+        ],
+        "type": "object"
+      },
+      "FileErrorEnvelope": {
+        "additionalProperties": false,
+        "description": "Files API error (protocols/files.rs): param names the offending field, or is null. The exhaustive code list is documented with the Files operations.",
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "pattern": "^[a-z][a-z0-9_]*$",
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "param": {
+                "pattern": "^[a-z_]+$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "enum": [
+                  "invalid_request_error",
+                  "permission_error",
+                  "insufficient_quota",
+                  "service_unavailable"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "message",
+              "type",
+              "code",
+              "param"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "GeneratedImage": {
+        "additionalProperties": false,
+        "properties": {
+          "b64_json": {
+            "description": "A complete PNG, JPEG or WebP image, base64-validated by the gateway.",
+            "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+            "type": "string"
+          },
+          "revised_prompt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "b64_json"
+        ],
+        "type": "object"
+      },
+      "ImageUsage": {
+        "additionalProperties": false,
+        "description": "Observed counters only; total_tokens only when both are known.",
+        "properties": {
+          "input_tokens": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output_tokens": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_tokens": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "InferenceModel": {
+        "additionalProperties": false,
+        "properties": {
+          "created": {
+            "description": "Seconds since the Unix epoch the catalog entry was created.",
+            "type": "integer"
+          },
+          "id": {
+            "description": "The public model name to send as `model`.",
+            "type": "string"
+          },
+          "object": {
+            "const": "model"
+          },
+          "owned_by": {
+            "const": "platform"
+          }
+        },
+        "required": [
+          "id",
+          "created",
+          "owned_by",
+          "object"
+        ],
+        "type": "object"
+      },
+      "JobErrorCode": {
+        "description": "Code of a job error: not_found plus the JobError::{Conflict,Invalid,Forbidden} literals scanned from src/jobs.",
+        "enum": [
+          "batch_files_disabled",
+          "batch_not_cancellable",
+          "batch_not_owned",
+          "invalid_completion_window",
+          "invalid_input_file",
+          "invalid_metadata",
+          "not_found",
+          "unsupported_capability",
+          "video_in_progress",
+          "video_not_owned",
+          "video_not_ready"
+        ],
+        "type": "string"
+      },
+      "JobErrorEnvelope": {
+        "additionalProperties": false,
+        "description": "Job (video and batch) error: 404 and 400 are invalid_request_error, 403 permission_error (protocols/videos.rs job_error). Inference errors of a job route use OpenAiErrorEnvelope.",
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "$ref": "#/components/schemas/JobErrorCode"
+              },
+              "message": {
+                "type": "string"
+              },
+              "param": {
+                "type": "null"
+              },
+              "type": {
+                "enum": [
+                  "invalid_request_error",
+                  "permission_error"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "message",
+              "type",
+              "code",
+              "param"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "OpenAiErrorCode": {
+        "description": "Gateway machine code, generated from InferenceError::code over every variant plus the transport codes of OPENAI_TRANSPORT. Clients branch on this, never on the message.",
+        "enum": [
+          "accounting_unavailable",
+          "api_error",
+          "authentication_error",
+          "budget_exceeded",
+          "context_length_exceeded",
+          "invalid_request",
+          "invalid_request_error",
+          "invalid_upstream_response",
+          "job_limit_exceeded",
+          "model_not_found",
+          "model_temporarily_unavailable",
+          "not_found_error",
+          "overloaded_error",
+          "payload_too_large",
+          "price_unbounded",
+          "provider_configuration_error",
+          "rate_limit_error",
+          "timeout_error",
+          "token_reservation_exceeds_limit",
+          "unresolved_usage",
+          "unsupported_capability",
+          "upstream_rejected",
+          "upstream_unavailable"
+        ],
+        "type": "string"
+      },
+      "OpenAiErrorEnvelope": {
+        "additionalProperties": false,
+        "description": "OpenAI-shaped inference error. Never the management ErrorEnvelope: error.code is a gateway machine code, not the HTTP status, and there is no error.reason.",
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "$ref": "#/components/schemas/OpenAiErrorCode"
+              },
+              "message": {
+                "type": "string"
+              },
+              "param": {
+                "type": "null"
+              },
+              "type": {
+                "$ref": "#/components/schemas/OpenAiErrorType"
+              }
+            },
+            "required": [
+              "message",
+              "type",
+              "code",
+              "param"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "OpenAiErrorType": {
+        "description": "OpenAI error.type. Generated from the renderers: budget denials are insufficient_quota, token-reservation and job-limit denials rate_limit_error, a cooling route server_error, every other InferenceError uses its code as its type, plus the transport kinds of OPENAI_TRANSPORT.",
+        "enum": [
+          "accounting_unavailable",
+          "api_error",
+          "authentication_error",
+          "context_length_exceeded",
+          "insufficient_quota",
+          "invalid_request",
+          "invalid_request_error",
+          "invalid_upstream_response",
+          "model_not_found",
+          "not_found_error",
+          "overloaded_error",
+          "price_unbounded",
+          "provider_configuration_error",
+          "rate_limit_error",
+          "server_error",
+          "timeout_error",
+          "unsupported_capability",
+          "upstream_rejected",
+          "upstream_unavailable"
+        ],
+        "type": "string"
+      },
+      "RealtimeUnsupportedRefusal": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "const": "unsupported_capability"
+              },
+              "message": {
+                "const": "Ephemeral client secrets and WebRTC/SIP calls are not supported; connect to GET /v1/realtime over WebSocket with an inference key"
+              },
+              "param": {
+                "type": "null"
+              },
+              "type": {
+                "const": "invalid_request_error"
+              }
+            },
+            "required": [
+              "message",
+              "type",
+              "code",
+              "param"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "RerankResult": {
+        "additionalProperties": false,
+        "properties": {
+          "index": {
+            "description": "Index into the request documents; unique per response.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "relevance_score": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "index",
+          "relevance_score"
+        ],
+        "type": "object"
+      },
+      "RerankUsage": {
+        "additionalProperties": false,
+        "description": "Observed counters only; an unknown counter is omitted, never zero.",
+        "properties": {
+          "search_units": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_tokens": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "SystemoneAnswer": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/SystemoneNoulAnswer"
+          },
+          {
+            "$ref": "#/components/schemas/SystemoneChoiceAnswer"
+          },
+          {
+            "$ref": "#/components/schemas/SystemoneScoreAnswer"
+          }
+        ]
+      },
+      "SystemoneChoiceAnswer": {
+        "additionalProperties": false,
+        "description": "choice is one of the option keys; probabilities has one entry per option and sums to 1 within a rounding tolerance.",
+        "properties": {
+          "choice": {
+            "type": "string"
+          },
+          "confidence": {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "probabilities": {
+            "$comment": "Probability keys are the caller's option keys or score level indices.",
+            "additionalProperties": {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            "description": "Map of option key to probability.",
+            "type": "object"
+          },
+          "type": {
+            "const": "choice"
+          }
+        },
+        "required": [
+          "type",
+          "choice",
+          "probabilities"
+        ],
+        "type": "object"
+      },
+      "SystemoneChoiceQuestion": {
+        "additionalProperties": false,
+        "properties": {
+          "criteria": {
+            "$comment": "Option keys are caller chosen: 2 to 255 options, each key 1 to 256 bytes without control characters, each value non-blank text or JSON (or null).",
+            "additionalProperties": {
+              "$comment": "Open JSON by design: System One forwards content parts verbatim (TypeSafe), so the gateway fixes only the JSON kind here.",
+              "description": "Non-blank text, or JSON content parts (inference/workload_types.rs text_or_json); null is allowed here.",
+              "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+              "type": [
+                "string",
+                "object",
+                "array",
+                "null"
+              ]
+            },
+            "description": "Map of option key to its meaning: 2 to 255 options.",
+            "type": "object"
+          },
+          "instructions": {
+            "$comment": "Open JSON by design: System One forwards content parts verbatim (TypeSafe), so the gateway fixes only the JSON kind here.",
+            "description": "Non-blank text, or JSON content parts (inference/workload_types.rs text_or_json).",
+            "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+            "type": [
+              "string",
+              "object",
+              "array"
+            ]
+          },
+          "type": {
+            "const": "choice"
+          }
+        },
+        "required": [
+          "type",
+          "instructions",
+          "criteria"
+        ],
+        "type": "object"
+      },
+      "SystemoneNoulAnswer": {
+        "additionalProperties": false,
+        "properties": {
+          "noul": {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "type": {
+            "const": "noul"
+          }
+        },
+        "required": [
+          "type",
+          "noul"
+        ],
+        "type": "object"
+      },
+      "SystemoneNoulQuestion": {
+        "additionalProperties": false,
+        "description": "A yes/no question.",
+        "properties": {
+          "criteria": {
+            "additionalProperties": false,
+            "description": "Optional or null; when present exactly the two keys true and false.",
+            "properties": {
+              "false": {
+                "$comment": "Open JSON by design: System One forwards content parts verbatim (TypeSafe), so the gateway fixes only the JSON kind here.",
+                "description": "Non-blank text, or JSON content parts (inference/workload_types.rs text_or_json).",
+                "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+                "type": [
+                  "string",
+                  "object",
+                  "array"
+                ]
+              },
+              "true": {
+                "$comment": "Open JSON by design: System One forwards content parts verbatim (TypeSafe), so the gateway fixes only the JSON kind here.",
+                "description": "Non-blank text, or JSON content parts (inference/workload_types.rs text_or_json).",
+                "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+                "type": [
+                  "string",
+                  "object",
+                  "array"
+                ]
+              }
+            },
+            "required": [
+              "true",
+              "false"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "instructions": {
+            "$comment": "Open JSON by design: System One forwards content parts verbatim (TypeSafe), so the gateway fixes only the JSON kind here.",
+            "description": "Non-blank text, or JSON content parts (inference/workload_types.rs text_or_json).",
+            "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+            "type": [
+              "string",
+              "object",
+              "array"
+            ]
+          },
+          "type": {
+            "const": "noul"
+          }
+        },
+        "required": [
+          "type",
+          "instructions"
+        ],
+        "type": "object"
+      },
+      "SystemoneQuestion": {
+        "description": "Discriminated by type; the criteria must fit the kind (inference/workload_types.rs Question::validate).",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/SystemoneNoulQuestion"
+          },
+          {
+            "$ref": "#/components/schemas/SystemoneChoiceQuestion"
+          },
+          {
+            "$ref": "#/components/schemas/SystemoneScoreQuestion"
+          }
+        ]
+      },
+      "SystemoneScoreAnswer": {
+        "additionalProperties": false,
+        "description": "score is between 0 and the highest level index; legend and probabilities are keyed by the level indices 0, 1, ...",
+        "properties": {
+          "confidence": {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "legend": {
+            "$comment": "Legend keys are the caller's score level indices.",
+            "additionalProperties": {
+              "$comment": "Provider-controlled JSON: parse_answers (inference/workload_types.rs, Score) copies each legend value from the System One answer unvalidated (only the keys are checked against the level indices), so any JSON value, including null, a number or blank text, can be returned.",
+              "description": "The level's description as System One returned it (normally the caller's criterion text or content parts; not validated by the gateway).",
+              "type": [
+                "null",
+                "boolean",
+                "number",
+                "string",
+                "array",
+                "object"
+              ]
+            },
+            "description": "Map of level index to the caller's description of that level.",
+            "type": "object"
+          },
+          "probabilities": {
+            "$comment": "Probability keys are the caller's option keys or score level indices.",
+            "additionalProperties": {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            "description": "Map of option key to probability.",
+            "type": "object"
+          },
+          "score": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "type": {
+            "const": "score"
+          }
+        },
+        "required": [
+          "type",
+          "score",
+          "legend",
+          "probabilities"
+        ],
+        "type": "object"
+      },
+      "SystemoneScoreQuestion": {
+        "additionalProperties": false,
+        "description": "A graded question: 2 to 10 level descriptions.",
+        "properties": {
+          "criteria": {
+            "items": {
+              "$comment": "Open JSON by design: System One forwards content parts verbatim (TypeSafe), so the gateway fixes only the JSON kind here.",
+              "description": "Non-blank text, or JSON content parts (inference/workload_types.rs text_or_json).",
+              "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+              "type": [
+                "string",
+                "object",
+                "array"
+              ]
+            },
+            "maxItems": 10,
+            "minItems": 2,
+            "type": "array"
+          },
+          "instructions": {
+            "$comment": "Open JSON by design: System One forwards content parts verbatim (TypeSafe), so the gateway fixes only the JSON kind here.",
+            "description": "Non-blank text, or JSON content parts (inference/workload_types.rs text_or_json).",
+            "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+            "type": [
+              "string",
+              "object",
+              "array"
+            ]
+          },
+          "type": {
+            "const": "score"
+          }
+        },
+        "required": [
+          "type",
+          "instructions",
+          "criteria"
+        ],
+        "type": "object"
+      },
+      "delete_v1_files_by_idRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "delete_v1_files_by_idResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "delete_v1_videos_by_idRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "delete_v1_videos_by_idResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_batchesRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_batchesResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_batches_by_idRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_batches_by_idResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_filesRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_filesResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_files_by_idRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_files_by_idResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_files_by_id_contentRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_files_by_id_contentResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_modelsRequest": false,
+      "get_v1_modelsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/InferenceModel"
+            },
+            "type": "array"
+          },
+          "object": {
+            "const": "list"
+          }
+        },
+        "required": [
+          "object",
+          "data"
+        ],
+        "type": "object"
+      },
+      "get_v1_realtimeRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_realtimeResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_videosRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_videosResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_videos_by_idRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_videos_by_idResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_videos_by_id_contentRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_v1_videos_by_id_contentResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_audio_speechRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_audio_speechResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_audio_transcriptionsRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_audio_transcriptionsResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_batchesRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_batchesResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_batches_by_id_cancelRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_batches_by_id_cancelResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_chat_completionsRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_chat_completionsResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_embeddingsRequest": {
+        "description": "Closed object {model, input, encoding_format?, dimensions?} (protocols/embeddings.rs Request). Serde also accepts the positional struct array of the same fields (every field, null for an omitted optional one), which this schema lists as the second arm; official SDKs send the object. Unknown fields are refused with 400 invalid_request_error.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "dimensions": {
+                "description": "Requested dimensions (providers/embeddings.rs MAX_DIMENSIONS); a deployment that cannot honor them is refused with 501 unsupported_capability.",
+                "maximum": 16384,
+                "minimum": 1,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "encoding_format": {
+                "description": "float (default, also for null) or base64: padded little-endian float32 bytes.",
+                "enum": [
+                  "float",
+                  "base64",
+                  null
+                ],
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "input": {
+                "description": "One string or up to 128 strings, none empty; at most 1 MiB of UTF-8 in total (providers/embeddings.rs MAX_BATCH, MAX_INPUT_BYTES). Token arrays are not supported.",
+                "oneOf": [
+                  {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "items": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 128,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                ]
+              },
+              "model": {
+                "description": "Public model name: at most 200 UTF-8 BYTES and not blank (providers/embeddings.rs validate, inference/workload_types.rs valid_model, inference/images.rs validate). Any other name, including one with control characters, is simply not a model: 404 model_not_found (inference/types.rs model_name_is_queryable).",
+                "maxLength": 200,
+                "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+                "type": "string",
+                "x-omg-max-bytes": 200
+              }
+            },
+            "required": [
+              "model",
+              "input"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 4,
+            "minItems": 4,
+            "prefixItems": [
+              {
+                "description": "Public model name: at most 200 UTF-8 BYTES and not blank (providers/embeddings.rs validate, inference/workload_types.rs valid_model, inference/images.rs validate). Any other name, including one with control characters, is simply not a model: 404 model_not_found (inference/types.rs model_name_is_queryable).",
+                "maxLength": 200,
+                "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+                "type": "string",
+                "x-omg-max-bytes": 200
+              },
+              {
+                "description": "One string or up to 128 strings, none empty; at most 1 MiB of UTF-8 in total (providers/embeddings.rs MAX_BATCH, MAX_INPUT_BYTES). Token arrays are not supported.",
+                "oneOf": [
+                  {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "items": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 128,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                ]
+              },
+              {
+                "description": "float (default, also for null) or base64: padded little-endian float32 bytes.",
+                "enum": [
+                  "float",
+                  "base64",
+                  null
+                ],
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              {
+                "description": "Requested dimensions (providers/embeddings.rs MAX_DIMENSIONS); a deployment that cannot honor them is refused with 501 unsupported_capability.",
+                "maximum": 16384,
+                "minimum": 1,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            ],
+            "type": "array"
+          }
+        ]
+      },
+      "post_v1_embeddingsResponse": {
+        "additionalProperties": false,
+        "description": "usage is omitted when the provider reported none: unknown is never a fabricated zero.",
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/EmbeddingItem"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "model": {
+            "description": "The public model name, never the upstream model.",
+            "type": "string"
+          },
+          "object": {
+            "const": "list"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/EmbeddingUsage"
+          }
+        },
+        "required": [
+          "object",
+          "model",
+          "data"
+        ],
+        "type": "object"
+      },
+      "post_v1_filesRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_filesResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_images_generationsRequest": {
+        "description": "Closed object {model, prompt, n?, size?, quality?, response_format?, seed?} (protocols/images.rs Request). Serde also accepts the positional struct array of the same fields (every field, null for an omitted optional one), which this schema lists as the second arm; official SDKs send the object. Unknown fields are refused with 400 invalid_request_error.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "model": {
+                "description": "Public model name: at most 200 UTF-8 BYTES and not blank (providers/embeddings.rs validate, inference/workload_types.rs valid_model, inference/images.rs validate). Any other name, including one with control characters, is simply not a model: 404 model_not_found (inference/types.rs model_name_is_queryable).",
+                "maxLength": 200,
+                "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+                "type": "string",
+                "x-omg-max-bytes": 200
+              },
+              "n": {
+                "description": "Images to generate, 1 to 4 (default 1); exactly this many are returned.",
+                "maximum": 4,
+                "minimum": 1,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "prompt": {
+                "description": "Non-blank, at most 32000 Unicode scalar values (inference/images.rs IMAGE_MAX_PROMPT_CHARS). Never logged.",
+                "maxLength": 32000,
+                "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+                "type": "string",
+                "x-omg-unsendable-boundary": "The multibyte variants of maxLength 32000 exceed the vector harness's 20000-character multibyte cap; the ASCII boundary (32000 and 32001 characters) is sent and the check is unit-tested (protocols/images.rs strict_request_shape_and_bounds)."
+              },
+              "quality": {
+                "enum": [
+                  "auto",
+                  "low",
+                  "medium",
+                  "high",
+                  null
+                ],
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "response_format": {
+                "description": "Only b64_json exists. `url` is refused as 400 unsupported_capability because the gateway never hosts files; any other value is a 400 invalid_request_error.",
+                "enum": [
+                  "b64_json",
+                  null
+                ],
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "seed": {
+                "description": "Largest JSON-safe integer is the maximum (IMAGE_MAX_SEED). A deployment that cannot honor a seed is refused with 400 unsupported_capability.",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "size": {
+                "description": "auto, a tier (512, 768, 1K, 1.5K, 2K, 4K; K case-insensitive) or WxH with each side 1 to 16384 and no leading zero (inference/images.rs ImageSize::parse). Whether a deployment serves it is decided per deployment.",
+                "pattern": "^(auto|512|768|1[kK]|1\\.5[kK]|2[kK]|4[kK]|([1-9][0-9]{0,3}|1[0-5][0-9]{3}|16[0-2][0-9]{2}|163[0-7][0-9]|1638[0-4])x([1-9][0-9]{0,3}|1[0-5][0-9]{3}|16[0-2][0-9]{2}|163[0-7][0-9]|1638[0-4]))$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "model",
+              "prompt"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 7,
+            "minItems": 7,
+            "prefixItems": [
+              {
+                "description": "Public model name: at most 200 UTF-8 BYTES and not blank (providers/embeddings.rs validate, inference/workload_types.rs valid_model, inference/images.rs validate). Any other name, including one with control characters, is simply not a model: 404 model_not_found (inference/types.rs model_name_is_queryable).",
+                "maxLength": 200,
+                "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+                "type": "string",
+                "x-omg-max-bytes": 200
+              },
+              {
+                "description": "Non-blank, at most 32000 Unicode scalar values (inference/images.rs IMAGE_MAX_PROMPT_CHARS). Never logged.",
+                "maxLength": 32000,
+                "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+                "type": "string",
+                "x-omg-unsendable-boundary": "The multibyte variants of maxLength 32000 exceed the vector harness's 20000-character multibyte cap; the ASCII boundary (32000 and 32001 characters) is sent and the check is unit-tested (protocols/images.rs strict_request_shape_and_bounds)."
+              },
+              {
+                "description": "Images to generate, 1 to 4 (default 1); exactly this many are returned.",
+                "maximum": 4,
+                "minimum": 1,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              {
+                "description": "auto, a tier (512, 768, 1K, 1.5K, 2K, 4K; K case-insensitive) or WxH with each side 1 to 16384 and no leading zero (inference/images.rs ImageSize::parse). Whether a deployment serves it is decided per deployment.",
+                "pattern": "^(auto|512|768|1[kK]|1\\.5[kK]|2[kK]|4[kK]|([1-9][0-9]{0,3}|1[0-5][0-9]{3}|16[0-2][0-9]{2}|163[0-7][0-9]|1638[0-4])x([1-9][0-9]{0,3}|1[0-5][0-9]{3}|16[0-2][0-9]{2}|163[0-7][0-9]|1638[0-4]))$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              {
+                "enum": [
+                  "auto",
+                  "low",
+                  "medium",
+                  "high",
+                  null
+                ],
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              {
+                "description": "Only b64_json exists. `url` is refused as 400 unsupported_capability because the gateway never hosts files; any other value is a 400 invalid_request_error.",
+                "enum": [
+                  "b64_json",
+                  null
+                ],
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              {
+                "description": "Largest JSON-safe integer is the maximum (IMAGE_MAX_SEED). A deployment that cannot honor a seed is refused with 400 unsupported_capability.",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            ],
+            "type": "array"
+          }
+        ]
+      },
+      "post_v1_images_generationsResponse": {
+        "additionalProperties": false,
+        "description": "Exactly n images. usage is omitted when the provider reported no counter.",
+        "properties": {
+          "created": {
+            "description": "Seconds since the Unix epoch.",
+            "type": "integer"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/GeneratedImage"
+            },
+            "maxItems": 4,
+            "minItems": 1,
+            "type": "array"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/ImageUsage"
+          }
+        },
+        "required": [
+          "created",
+          "data"
+        ],
+        "type": "object"
+      },
+      "post_v1_messagesRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_messagesResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_realtime_callsRequest": false,
+      "post_v1_realtime_callsResponse": {
+        "$ref": "#/components/schemas/RealtimeUnsupportedRefusal"
+      },
+      "post_v1_realtime_client_secretsRequest": false,
+      "post_v1_realtime_client_secretsResponse": {
+        "$ref": "#/components/schemas/RealtimeUnsupportedRefusal"
+      },
+      "post_v1_rerankRequest": {
+        "description": "Closed object {model, query, documents, top_n?} (protocols/rerank.rs Request). Serde also accepts the positional struct array of the same fields (every field, null for an omitted optional one), which this schema lists as the second arm; official SDKs send the object. Unknown fields are refused with 400 invalid_request_error.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "documents": {
+                "description": "1 to 1000 non-blank strings of at most 64 KiB each; query plus documents at most 1 MiB in total (RERANK_MAX_*). Objects are not supported. Documents are never echoed back.",
+                "items": {
+                  "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+                  "type": "string",
+                  "x-omg-max-bytes": 65536
+                },
+                "maxItems": 1000,
+                "minItems": 1,
+                "type": "array",
+                "x-omg-unsendable-boundary": "maxItems+1 is 1001 elements, over the vector harness's 1000-item cap; the 1000-element boundary itself is sent and the handler's RERANK_MAX_DOCUMENTS check is unit-tested (protocols/rerank.rs strict_request_shape_and_bounds)."
+              },
+              "model": {
+                "description": "Public model name: at most 200 UTF-8 BYTES and not blank (providers/embeddings.rs validate, inference/workload_types.rs valid_model, inference/images.rs validate). Any other name, including one with control characters, is simply not a model: 404 model_not_found (inference/types.rs model_name_is_queryable).",
+                "maxLength": 200,
+                "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+                "type": "string",
+                "x-omg-max-bytes": 200
+              },
+              "query": {
+                "description": "Non-blank, at most 32768 UTF-8 BYTES (inference/workload_types.rs RERANK_MAX_QUERY_BYTES); maxLength is omitted because the handler counts bytes, not characters.",
+                "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+                "type": "string",
+                "x-omg-max-bytes": 32768
+              },
+              "top_n": {
+                "description": "At most this many results (never more than the documents); 0 is refused.",
+                "maximum": 4294967295,
+                "minimum": 1,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "model",
+              "query",
+              "documents"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 4,
+            "minItems": 4,
+            "prefixItems": [
+              {
+                "description": "Public model name: at most 200 UTF-8 BYTES and not blank (providers/embeddings.rs validate, inference/workload_types.rs valid_model, inference/images.rs validate). Any other name, including one with control characters, is simply not a model: 404 model_not_found (inference/types.rs model_name_is_queryable).",
+                "maxLength": 200,
+                "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+                "type": "string",
+                "x-omg-max-bytes": 200
+              },
+              {
+                "description": "Non-blank, at most 32768 UTF-8 BYTES (inference/workload_types.rs RERANK_MAX_QUERY_BYTES); maxLength is omitted because the handler counts bytes, not characters.",
+                "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+                "type": "string",
+                "x-omg-max-bytes": 32768
+              },
+              {
+                "description": "1 to 1000 non-blank strings of at most 64 KiB each; query plus documents at most 1 MiB in total (RERANK_MAX_*). Objects are not supported. Documents are never echoed back.",
+                "items": {
+                  "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+                  "type": "string",
+                  "x-omg-max-bytes": 65536
+                },
+                "maxItems": 1000,
+                "minItems": 1,
+                "type": "array",
+                "x-omg-unsendable-boundary": "maxItems+1 is 1001 elements, over the vector harness's 1000-item cap; the 1000-element boundary itself is sent and the handler's RERANK_MAX_DOCUMENTS check is unit-tested (protocols/rerank.rs strict_request_shape_and_bounds)."
+              },
+              {
+                "description": "At most this many results (never more than the documents); 0 is refused.",
+                "maximum": 4294967295,
+                "minimum": 1,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            ],
+            "type": "array"
+          }
+        ]
+      },
+      "post_v1_rerankResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The request ID (equals the x-request-id header).",
+            "format": "uuid",
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "object": {
+            "const": "list"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/RerankResult"
+            },
+            "maxItems": 1000,
+            "minItems": 1,
+            "type": "array"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/RerankUsage"
+          }
+        },
+        "required": [
+          "object",
+          "id",
+          "model",
+          "results",
+          "usage"
+        ],
+        "type": "object"
+      },
+      "post_v1_responsesRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_responsesResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_systemoneRequest": {
+        "description": "Closed object {model, state, questions} (protocols/systemone.rs Request). Serde also accepts the positional struct array of the same fields (every field, null for an omitted optional one), which this schema lists as the second arm; official SDKs send the object. Unknown fields are refused with 400 invalid_request_error. Each question is documented in its object form only (serde also accepts its positional array).",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "model": {
+                "description": "Public model name: at most 200 UTF-8 BYTES and not blank (providers/embeddings.rs validate, inference/workload_types.rs valid_model, inference/images.rs validate). Any other name, including one with control characters, is simply not a model: 404 model_not_found (inference/types.rs model_name_is_queryable).",
+                "maxLength": 200,
+                "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+                "type": "string",
+                "x-omg-max-bytes": 200
+              },
+              "questions": {
+                "$comment": "Question keys are caller chosen names: 1 to 64 questions, each key 1 to 128 bytes without control characters. The key is never sent to the model.",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/SystemoneQuestion"
+                },
+                "description": "Map of question key to question. The handler requires 1 to 64 entries and keys of 1 to 128 bytes without control characters; OpenAPI request schemas here cannot express property counts or key shapes.",
+                "type": "object"
+              },
+              "state": {
+                "description": "The text, or a JSON state, the questions are asked about.",
+                "oneOf": [
+                  {
+                    "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+                    "type": "string"
+                  },
+                  {
+                    "$comment": "Open JSON by design: System One forwards content parts verbatim (TypeSafe), so the gateway fixes only the JSON kind here.",
+                    "description": "A JSON state: any object, or a non-empty array of content parts (image_url parts are refused as 400 unsupported_capability).",
+                    "items": {
+                      "$comment": "Open JSON by design: System One forwards content parts verbatim (TypeSafe), so the gateway fixes only the JSON kind here.",
+                      "description": "Any JSON value: the handler only requires the array to be non-empty and refuses an image_url part.",
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "object",
+                        "array",
+                        "null"
+                      ]
+                    },
+                    "minItems": 1,
+                    "type": [
+                      "object",
+                      "array"
+                    ]
+                  }
+                ]
+              }
+            },
+            "required": [
+              "model",
+              "state",
+              "questions"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "description": "Public model name: at most 200 UTF-8 BYTES and not blank (providers/embeddings.rs validate, inference/workload_types.rs valid_model, inference/images.rs validate). Any other name, including one with control characters, is simply not a model: 404 model_not_found (inference/types.rs model_name_is_queryable).",
+                "maxLength": 200,
+                "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+                "type": "string",
+                "x-omg-max-bytes": 200
+              },
+              {
+                "description": "The text, or a JSON state, the questions are asked about.",
+                "oneOf": [
+                  {
+                    "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+                    "type": "string"
+                  },
+                  {
+                    "$comment": "Open JSON by design: System One forwards content parts verbatim (TypeSafe), so the gateway fixes only the JSON kind here.",
+                    "description": "A JSON state: any object, or a non-empty array of content parts (image_url parts are refused as 400 unsupported_capability).",
+                    "items": {
+                      "$comment": "Open JSON by design: System One forwards content parts verbatim (TypeSafe), so the gateway fixes only the JSON kind here.",
+                      "description": "Any JSON value: the handler only requires the array to be non-empty and refuses an image_url part.",
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "object",
+                        "array",
+                        "null"
+                      ]
+                    },
+                    "minItems": 1,
+                    "type": [
+                      "object",
+                      "array"
+                    ]
+                  }
+                ]
+              },
+              {
+                "$comment": "Question keys are caller chosen names: 1 to 64 questions, each key 1 to 128 bytes without control characters. The key is never sent to the model.",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/SystemoneQuestion"
+                },
+                "description": "Map of question key to question. The handler requires 1 to 64 entries and keys of 1 to 128 bytes without control characters; OpenAPI request schemas here cannot express property counts or key shapes.",
+                "type": "object"
+              }
+            ],
+            "type": "array"
+          }
+        ]
+      },
+      "post_v1_systemoneResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "answers": {
+            "$comment": "Answer keys are the caller's question keys: exactly one answer per question.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SystemoneAnswer"
+            },
+            "description": "Map of question key to its answer, of the question's kind.",
+            "type": "object"
+          },
+          "id": {
+            "description": "The request ID (equals the x-request-id header).",
+            "format": "uuid",
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "usage": {
+            "additionalProperties": false,
+            "description": "Both counters are observed: the engine returns no response without them.",
+            "properties": {
+              "input_tokens": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "output_tokens": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "input_tokens",
+              "output_tokens"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "model",
+          "answers",
+          "usage"
+        ],
+        "type": "object"
+      },
+      "post_v1_videosRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_v1_videosResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      }
+    },
+    "securitySchemes": {
+      "anthropicApiKey": {
+        "description": "POST /v1/messages only: the inference key in `x-api-key`, as an alternative to Bearer. Sending both, or two of either, is refused with 401.",
+        "in": "header",
+        "name": "x-api-key",
+        "type": "apiKey"
+      },
+      "inferenceKey": {
+        "description": "Inference API key (omg_...) as `Authorization: Bearer`. Belongs to one workspace; tenant and workspace are derived from it, never from the request. Never a management credential.",
+        "scheme": "bearer",
+        "type": "http"
+      },
+      "realtimeSubprotocol": {
+        "description": "GET /v1/realtime only: the inference key as the `openai-insecure-api-key.<key>` WebSocket subprotocol (beside `realtime`), as an alternative to Bearer, never together with it. x-api-key is not accepted.",
+        "in": "header",
+        "name": "Sec-WebSocket-Protocol",
+        "type": "apiKey"
+      }
+    }
+  },
+  "info": {
+    "description": "INCOMPLETE contract (#82 PR1): the operations of areas models, embeddings, rerank, systemone, images and the two realtime refusals are complete and wire-validated against the real handlers; every other operation is an explicit, counted placeholder. Every operation authenticates with an inference key only (Bearer; /v1/messages also accepts x-api-key, GET /v1/realtime also the openai-insecure-api-key.<key> WebSocket subprotocol, never both); inference keys never authorize management and admin tokens never authorize inference. Live key, workspace, catalog and budget checks remain authoritative. The OpenAI-shaped, Anthropic-shaped, job and file error envelopes are distinct schemas and never the management ErrorEnvelope; /v1/messages errors carry no gateway machine code. x-omg-* extensions state what OpenAPI 3.1 cannot express (see docs/openapi/inference/README.md).",
+    "title": "Open Model Gateway inference API",
+    "version": "0.9.3"
+  },
+  "jsonSchemaDialect": "https://spec.openapis.org/oas/3.1/dialect/base",
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/audio/speech": {
+      "post": {
+        "operationId": "post_v1_audio_speech",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_audio_speechRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_audio_speechResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/audio/transcriptions": {
+      "post": {
+        "operationId": "post_v1_audio_transcriptions",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_audio_transcriptionsRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_audio_transcriptionsResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/batches": {
+      "get": {
+        "operationId": "get_v1_batches",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_v1_batchesRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_v1_batchesResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      },
+      "post": {
+        "operationId": "post_v1_batches",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_batchesRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_batchesResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/batches/{id}": {
+      "get": {
+        "operationId": "get_v1_batches_by_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_v1_batches_by_idRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_v1_batches_by_idResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/batches/{id}/cancel": {
+      "post": {
+        "operationId": "post_v1_batches_by_id_cancel",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_batches_by_id_cancelRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_batches_by_id_cancelResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/chat/completions": {
+      "post": {
+        "operationId": "post_v1_chat_completions",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_chat_completionsRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_chat_completionsResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/embeddings": {
+      "post": {
+        "description": "String-only, non-streaming embeddings (protocols/embeddings.rs). Embeddings are an input-only workload: usage never has completion tokens. A capability no deployment supports is 501 unsupported_capability (not the 400 of the other workloads). Oversized bodies: the shared 2 MiB cap.",
+        "operationId": "post_v1_embeddings",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_v1_embeddingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_v1_embeddingsResponse"
+                }
+              }
+            },
+            "description": "The embeddings, one per input, in input order",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/OpenAiBadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/OpenAiUnauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/OpenAiNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/OpenAiPayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/OpenAiTooManyRequests"
+          },
+          "501": {
+            "$ref": "#/components/responses/OpenAiNotImplemented"
+          },
+          "502": {
+            "$ref": "#/components/responses/OpenAiBadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/OpenAiUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/OpenAiGatewayTimeout"
+          },
+          "529": {
+            "$ref": "#/components/responses/OpenAiOverloaded"
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "summary": "Create embeddings",
+        "x-omg-access": "InferenceKey",
+        "x-omg-limits": {
+          "body_bytes": {
+            "default": 2097152,
+            "env": null,
+            "source": "apps/gateway/src/http.rs request body cap (fixed, not configurable)"
+          },
+          "inputs": {
+            "max_dimensions": 16384,
+            "max_items": 128,
+            "max_total_bytes": 1048576
+          }
+        },
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_embeddingsRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_embeddingsResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/files": {
+      "get": {
+        "operationId": "get_v1_files",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_v1_filesRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_v1_filesResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      },
+      "post": {
+        "operationId": "post_v1_files",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_filesRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_filesResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/files/{id}": {
+      "delete": {
+        "operationId": "delete_v1_files_by_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/delete_v1_files_by_idRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/delete_v1_files_by_idResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      },
+      "get": {
+        "operationId": "get_v1_files_by_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_v1_files_by_idRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_v1_files_by_idResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/files/{id}/content": {
+      "get": {
+        "operationId": "get_v1_files_by_id_content",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_v1_files_by_id_contentRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_v1_files_by_id_contentResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/images/generations": {
+      "post": {
+        "description": "OpenAI-compatible subset (protocols/images.rs): base64 images only, never URLs. Unknown fields (output_format, background, style, user, ...) are refused with 400 invalid_request_error.",
+        "operationId": "post_v1_images_generations",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_v1_images_generationsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_v1_images_generationsResponse"
+                }
+              }
+            },
+            "description": "The generated images and observed usage",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/OpenAiBadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/OpenAiUnauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/OpenAiNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/OpenAiPayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/OpenAiTooManyRequests"
+          },
+          "502": {
+            "$ref": "#/components/responses/OpenAiBadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/OpenAiUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/OpenAiGatewayTimeout"
+          },
+          "529": {
+            "$ref": "#/components/responses/OpenAiOverloaded"
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "summary": "Generate images",
+        "x-omg-access": "InferenceKey",
+        "x-omg-limits": {
+          "body_bytes": {
+            "default": 2097152,
+            "env": "GATEWAY_MAX_BODY_BYTES_IMAGES",
+            "max": 67108864,
+            "min": 1024,
+            "source": "apps/gateway/src/inference/workload.rs WorkloadLimits"
+          },
+          "response_bytes": {
+            "default": 20971520,
+            "env": "GATEWAY_MAX_RESPONSE_BYTES_IMAGES",
+            "max": 67108864,
+            "min": 1048576,
+            "source": "apps/gateway/src/inference/workload.rs WorkloadLimits"
+          }
+        },
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_images_generationsRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_images_generationsResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/messages": {
+      "post": {
+        "description": "Incomplete: the request, the success and the SSE contracts arrive with the generation protocols. Documented already because they differ from every other route: errors are Anthropic-shaped with NO gateway machine code, and the outer transport layer rewrites 405 and 413 into the same shape on this path (http.rs request_context; protocols/messages.rs http_error). Authentication is Authorization: Bearer or x-api-key, never both.",
+        "operationId": "post_v1_messages",
+        "parameters": [],
+        "responses": {
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnthropicErrorEnvelope"
+                }
+              }
+            },
+            "description": "Missing, malformed, duplicate, mixed or unknown credential",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "www-authenticate": {
+                "$ref": "#/components/headers/WwwAuthenticate"
+              },
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnthropicErrorEnvelope"
+                }
+              }
+            },
+            "description": "Another method on /v1/messages, after authentication: an Anthropic-shaped invalid_request_error 'Method not allowed' that keeps the Allow header (http.rs request_context). Not an operation of this path: only POST is served.",
+            "headers": {
+              "allow": {
+                "description": "The served method.",
+                "required": true,
+                "schema": {
+                  "const": "POST"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnthropicErrorEnvelope"
+                }
+              }
+            },
+            "description": "The body exceeds the shared 2 MiB cap, whether the body-limit layer or the handler refuses it: always request_too_large, never the OpenAI payload_too_large",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          },
+          {
+            "anthropicApiKey": []
+          }
+        ],
+        "summary": "Anthropic Messages (incomplete in this document)",
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_messagesRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_messagesResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "description": "Live-revalidated, catalog-eligible models of the key's workspace (http.rs models; catalog.rs key_models). Advisory: admission re-checks everything. No query parameter is read; unknown ones are ignored. A key invalidated since authentication is refused exactly like an unknown key.",
+        "operationId": "get_v1_models",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_v1_modelsResponse"
+                }
+              }
+            },
+            "description": "The models, ordered by public name",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/OpenAiUnauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/OpenAiUnavailable"
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "summary": "List the models this key may call now",
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_v1_modelsRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_v1_modelsResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/realtime": {
+      "get": {
+        "operationId": "get_v1_realtime",
+        "parameters": [
+          {
+            "description": "The public model name (percent-decoded, at most 200 bytes, no control characters). The only query parameter read.",
+            "in": "query",
+            "name": "model",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          },
+          {
+            "realtimeSubprotocol": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_v1_realtimeRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_v1_realtimeResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/realtime/calls": {
+      "post": {
+        "description": "Explicitly unsupported and never minted upstream (protocols/realtime.rs unsupported_route; routed at http.rs). Any body is ignored; the answer is always the 400 below once the key authenticates. Use GET /v1/realtime over WebSocket instead.",
+        "operationId": "post_v1_realtime_calls",
+        "parameters": [],
+        "responses": {
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RealtimeUnsupportedRefusal"
+                }
+              }
+            },
+            "description": "Always: unsupported_capability",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            },
+            "x-omg-positive-kind": "refusal"
+          },
+          "401": {
+            "$ref": "#/components/responses/OpenAiUnauthorized"
+          },
+          "413": {
+            "$ref": "#/components/responses/OpenAiPayloadTooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/OpenAiUnavailable"
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "summary": "Refused: WebRTC/SIP calls",
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_realtime_callsRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_realtime_callsResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/realtime/client_secrets": {
+      "post": {
+        "description": "Explicitly unsupported and never minted upstream (protocols/realtime.rs unsupported_route; routed at http.rs). Any body is ignored; the answer is always the 400 below once the key authenticates. Use GET /v1/realtime over WebSocket instead.",
+        "operationId": "post_v1_realtime_client_secrets",
+        "parameters": [],
+        "responses": {
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RealtimeUnsupportedRefusal"
+                }
+              }
+            },
+            "description": "Always: unsupported_capability",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            },
+            "x-omg-positive-kind": "refusal"
+          },
+          "401": {
+            "$ref": "#/components/responses/OpenAiUnauthorized"
+          },
+          "413": {
+            "$ref": "#/components/responses/OpenAiPayloadTooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/OpenAiUnavailable"
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "summary": "Refused: ephemeral client secrets",
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_realtime_client_secretsRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_realtime_client_secretsResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/rerank": {
+      "post": {
+        "description": "Cohere v2 / Jina-style subset (protocols/rerank.rs). Request validation and an unsupported model/protocol pair are both 400, told apart by error.code.",
+        "operationId": "post_v1_rerank",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_v1_rerankRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_v1_rerankResponse"
+                }
+              }
+            },
+            "description": "Relevance scores of at most top_n documents, in provider order",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/OpenAiBadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/OpenAiUnauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/OpenAiNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/OpenAiPayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/OpenAiTooManyRequests"
+          },
+          "502": {
+            "$ref": "#/components/responses/OpenAiBadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/OpenAiUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/OpenAiGatewayTimeout"
+          },
+          "529": {
+            "$ref": "#/components/responses/OpenAiOverloaded"
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "summary": "Rerank documents against a query",
+        "x-omg-access": "InferenceKey",
+        "x-omg-limits": {
+          "body_bytes": {
+            "default": 2097152,
+            "env": "GATEWAY_MAX_BODY_BYTES_RERANK",
+            "max": 67108864,
+            "min": 1024,
+            "source": "apps/gateway/src/inference/workload.rs WorkloadLimits"
+          }
+        },
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_rerankRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_rerankResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/responses": {
+      "post": {
+        "operationId": "post_v1_responses",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_responsesRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_responsesResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/systemone": {
+      "post": {
+        "description": "TypeSafe System One contract (protocols/systemone.rs). Validation failures are 422 invalid_request_error like TypeSafe; an unsupported model/protocol pair or image state parts are 400 unsupported_capability. Gateway billing never appears in the body.",
+        "operationId": "post_v1_systemone",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_v1_systemoneRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_v1_systemoneResponse"
+                }
+              }
+            },
+            "description": "One answer per question, with observed input and output tokens",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/OpenAiBadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/OpenAiUnauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/OpenAiNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/OpenAiPayloadTooLarge"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                }
+              }
+            },
+            "description": "Request validation failure (TypeSafe-compatible): the closed field set, a bound, a type, the question criteria of its kind",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/OpenAiTooManyRequests"
+          },
+          "502": {
+            "$ref": "#/components/responses/OpenAiBadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/OpenAiUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/OpenAiGatewayTimeout"
+          },
+          "529": {
+            "$ref": "#/components/responses/OpenAiOverloaded"
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "summary": "Answer typed System One questions about a state",
+        "x-omg-access": "InferenceKey",
+        "x-omg-limits": {
+          "body_bytes": {
+            "default": 2097152,
+            "env": "GATEWAY_MAX_BODY_BYTES_SYSTEMONE",
+            "max": 67108864,
+            "min": 1024,
+            "source": "apps/gateway/src/inference/workload.rs WorkloadLimits"
+          }
+        },
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_systemoneRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_systemoneResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/videos": {
+      "get": {
+        "operationId": "get_v1_videos",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_v1_videosRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_v1_videosResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      },
+      "post": {
+        "operationId": "post_v1_videos",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_v1_videosRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_v1_videosResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/videos/{id}": {
+      "delete": {
+        "operationId": "delete_v1_videos_by_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/delete_v1_videos_by_idRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/delete_v1_videos_by_idResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      },
+      "get": {
+        "operationId": "get_v1_videos_by_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_v1_videos_by_idRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_v1_videos_by_idResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/v1/videos/{id}/content": {
+      "get": {
+        "operationId": "get_v1_videos_by_id_content",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema."
+          }
+        },
+        "security": [
+          {
+            "inferenceKey": []
+          }
+        ],
+        "x-omg-access": "InferenceKey",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_v1_videos_by_id_contentRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_v1_videos_by_id_contentResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    }
+  }
+}

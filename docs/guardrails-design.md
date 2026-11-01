@@ -312,7 +312,7 @@ The modes:
 
 Agents and harnesses such as Claude Code resend the whole conversation on every turn. They rely on the history staying byte-identical.
 
-**Today**, `ChatRequest` carries no cache markers, thinking blocks or signatures. `/v1/messages` rejects `cache_control`, thinking and `anthropic-beta` ([protocol matrix](protocol-matrix.md#messages)). The design still has to hold once those are supported.
+**Today**, the shared `ChatRequest` carries no cache markers, thinking blocks or signatures, but native Anthropic Messages preserves `cache_control` hints and thinking blocks with their signatures, and forwards `anthropic-beta` as an open list that refuses only a denylist ([protocol matrix](protocol-matrix.md#messages)). The design has to hold for those histories.
 
 Ways redaction can break agents:
 - **Prompt caching.** Provider caches match exact prefixes. If an earlier turn changes, cache reads become cache writes, and the prefix hash that the proposed cache-aware routing would key on changes too.

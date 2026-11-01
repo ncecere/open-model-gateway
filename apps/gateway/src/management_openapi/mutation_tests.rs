@@ -27,6 +27,10 @@ fn sample(document: &Value, schema: &Value) -> Value {
                         .map(|s| sample(document, s))
                         .collect::<Vec<_>>()
                 )
+            } else if schema["maxItems"] == json!(0) || schema["items"] == json!(false) {
+                // A reviewed always-empty array (for example the platform cost
+                // report's service accounts) has no element to sample.
+                json!([])
             } else {
                 json!([sample(document, &schema["items"])])
             }
@@ -69,11 +73,31 @@ fn sample(document: &Value, schema: &Value) -> Value {
                     super::validation::compile_schema(&json!({"type":"string","pattern":pattern}))
                         .is_ok_and(|v| v.is_valid(&json!(candidate)))
                 };
-                ["0", "1", "0.00", "1.00"]
-                    .into_iter()
-                    .find(|candidate| accepts(candidate))
-                    .unwrap_or("0")
-                    .into()
+                // Also the pattern's literal prefix (`^Personal · ` gives
+                // `Personal · fixture`), for named-row patterns.
+                let prefix: String = pattern
+                    .as_str()
+                    .and_then(|p| p.strip_prefix('^'))
+                    .map(|p| {
+                        p.chars()
+                            .take_while(|c| !"\\.[](){}*+?|$^".contains(*c))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                [
+                    "0".to_owned(),
+                    "1".to_owned(),
+                    "0.00".to_owned(),
+                    "1.00".to_owned(),
+                    // The holds cursor: `<signed integer>_<uuid>`.
+                    format!("0_{}", uuid::Uuid::nil()),
+                    // A schedule's `HH:MM` delivery time.
+                    "00:00".to_owned(),
+                ]
+                .into_iter()
+                .chain((!prefix.is_empty()).then(|| format!("{prefix}fixture")))
+                .find(|candidate| accepts(candidate))
+                .unwrap_or_else(|| "0".to_owned())
             }
             _ => "fixture".into(),
         }),
@@ -301,6 +325,28 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                     );
                     h.insert("x-omg-export-sha256", "a".repeat(64).parse().unwrap());
                 }
+                // Every other header the success response requires, sampled from
+                // its own schema (a const, an enum member or a pattern candidate).
+                for (name, header) in op["responses"][success]["headers"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                {
+                    let header = header["$ref"]
+                        .as_str()
+                        .and_then(|r| document.pointer(&r[1..]))
+                        .unwrap_or(header);
+                    let name = name.to_ascii_lowercase();
+                    if header["required"] == true
+                        && !h.contains_key(name.as_str())
+                        && let Some(text) = sample(&document, &header["schema"]).as_str()
+                    {
+                        h.insert(
+                            axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                            text.parse().unwrap(),
+                        );
+                    }
+                }
                 let mut valid = sample(&document, schema);
                 if valid["error"].is_object() {
                     valid["error"]["code"] = json!(status.as_str());
@@ -436,7 +482,10 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                 // These operations have no JSON representation: remove a
                 // required wire header, corrupt its type/format, and inject
                 // an unexpected sensitive JSON body. Each must fail too.
-                let status = if path == "/api/v1/branding/logo" {
+                // A CSV download (report-run CSV): 200 text/csv with its own
+                // required headers, sampled from their schemas.
+                let csv = op["responses"]["200"]["content"].get("text/csv").is_some();
+                let status = if path == "/api/v1/branding/logo" || csv {
                     StatusCode::OK
                 } else if method == "POST" {
                     StatusCode::NO_CONTENT
@@ -445,7 +494,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                 };
                 h.insert(
                     "cache-control",
-                    if status == StatusCode::OK {
+                    if status == StatusCode::OK && !csv {
                         "public, max-age=300"
                     } else {
                         "no-store"
@@ -455,7 +504,40 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
                 );
                 h.insert("referrer-policy", "no-referrer".parse().unwrap());
                 let image = crate::management::branding::fixtures::png(16, 16);
-                let (header, valid_body) = if status == StatusCode::OK {
+                // The CSV sample is the route's documented header-row prefix (its
+                // pattern's literal part) plus one column.
+                let csv_text = format!(
+                    "{}x\n",
+                    op["responses"]["200"]["content"]["text/csv"]["schema"]["pattern"]
+                        .as_str()
+                        .unwrap_or("^")
+                        .trim_start_matches('^')
+                );
+                let csv_body = csv_text.as_bytes();
+                let (header, valid_body) = if csv {
+                    h.insert("content-type", "text/csv".parse().unwrap());
+                    for (name, header) in op["responses"]["200"]["headers"]
+                        .as_object()
+                        .into_iter()
+                        .flatten()
+                    {
+                        let header = header["$ref"]
+                            .as_str()
+                            .and_then(|r| document.pointer(&r[1..]))
+                            .unwrap_or(header);
+                        let name = name.to_ascii_lowercase();
+                        if header["required"] == true
+                            && !h.contains_key(name.as_str())
+                            && let Some(text) = sample(&document, &header["schema"]).as_str()
+                        {
+                            h.insert(
+                                axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                                text.parse().unwrap(),
+                            );
+                        }
+                    }
+                    ("content-disposition", csv_body)
+                } else if status == StatusCode::OK {
                     h.insert("content-type", "image/png".parse().unwrap());
                     h.insert("etag", format!("\"{}\"", "a".repeat(64)).parse().unwrap());
                     h.insert("x-content-type-options", "nosniff".parse().unwrap());
@@ -573,7 +655,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
             }
         }
     }
-    assert_eq!((operations, json_operations), (204, 199));
+    assert_eq!((operations, json_operations), (251, 243));
 }
 
 #[test]

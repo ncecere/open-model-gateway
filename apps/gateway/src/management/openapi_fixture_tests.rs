@@ -35,9 +35,9 @@ async fn browser(pool: &PgPool, user: &BrowserPrincipal, legacy: bool) -> Browse
     let token = crate::entropy::hex_token().unwrap();
     let csrf = crate::entropy::hex_token().unwrap();
     let sql = if legacy {
-        "INSERT INTO browser_sessions(token_hash,user_id,csrf_hash,expires_at,verified_email) VALUES($1,$2,$3,now()+interval '1 hour',$4) RETURNING id"
+        "INSERT INTO browser_sessions(token_hash,user_id,csrf_hash,expires_at,verified_email) VALUES($1,$2,$3,now()+interval '12 hours',$4) RETURNING id"
     } else {
-        "INSERT INTO browser_sessions(token_hash,user_id,csrf_hash,expires_at,verified_email,client_label,last_seen_at) VALUES($1,$2,$3,now()+interval '1 hour',$4,'Firefox on Linux',now()) RETURNING id"
+        "INSERT INTO browser_sessions(token_hash,user_id,csrf_hash,expires_at,verified_email,client_label,last_seen_at) VALUES($1,$2,$3,now()+interval '12 hours',$4,'Firefox on Linux',now()) RETURNING id"
     };
     let id = sqlx::query_scalar(sql)
         .bind(Sha256::digest(token.as_bytes()).as_slice())

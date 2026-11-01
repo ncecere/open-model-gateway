@@ -4067,10 +4067,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         )
         .await;
     }
-    // Before the PostgreSQL minimum the cursor still parses (cursor_parts only asks chrono),
-    // so the query fails in the database and the route answers 503 rather than 400. That
-    // is a suspected product bug (logs.rs cursor_parts, tracked in #409); the contract documents the working
-    // range only, and this pins the current behaviour so a fix is noticed.
+    // #409: reject before the PostgreSQL minimum as invalid input, not a storage outage.
     let early = format!("-210866803200000001_{row}");
     assert!(!param_accepts(history_template, "cursor", &early));
     let r = send(
@@ -4082,7 +4079,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         None,
     )
     .await;
-    assert_eq!(r.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
     // Compare ids: every uuid spelling and Unicode padding the handler parses.
     let compare_template = "/api/v1/platform/models/compare";
     let (m1, m2) = (model.to_string(), second.to_string());

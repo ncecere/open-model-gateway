@@ -38,6 +38,8 @@ fn holds_exact_route_and_token_policies() {
 }
 #[cfg(feature = "integration-tests")]
 mod db {
+    #[path = "reconcile_usage_tests.rs"]
+    mod reconcile_usage_tests;
     use super::*;
     use crate::{
         auth::NewApiKey,
