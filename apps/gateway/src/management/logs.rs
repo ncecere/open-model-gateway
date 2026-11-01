@@ -314,14 +314,18 @@ where
 const PG_MIN_UNIX_MICROS: i128 = -210_866_803_200_000_000;
 const PG_MAX_UNIX_MICROS: i128 = 9_224_318_015_999_999_999;
 
-pub(super) fn cursor_parts(c: &str) -> Result<(DateTime<Utc>, Uuid), ApiError> {
-    let (micros, id) = c.split_once('_').ok_or_else(invalid)?;
+fn cursor_timestamp(micros: &str) -> Result<DateTime<Utc>, ApiError> {
     let micros: i64 = micros.parse().map_err(|_| invalid())?;
     if !(PG_MIN_UNIX_MICROS..=PG_MAX_UNIX_MICROS).contains(&i128::from(micros)) {
         return Err(invalid());
     }
+    DateTime::from_timestamp_micros(micros).ok_or_else(invalid)
+}
+
+pub(super) fn cursor_parts(c: &str) -> Result<(DateTime<Utc>, Uuid), ApiError> {
+    let (micros, id) = c.split_once('_').ok_or_else(invalid)?;
     Ok((
-        DateTime::from_timestamp_micros(micros).ok_or_else(invalid)?,
+        cursor_timestamp(micros)?,
         Uuid::parse_str(id).map_err(|_| invalid())?,
     ))
 }
@@ -430,7 +434,7 @@ fn session_cursor(c: &str) -> Result<(DateTime<Utc>, Uuid, String), ApiError> {
     let (Some(micros), Some(ws), Some(session)) = (parts.next(), parts.next(), parts.next()) else {
         return Err(invalid());
     };
-    let micros: i64 = micros.parse().map_err(|_| invalid())?;
+    let timestamp = cursor_timestamp(micros)?;
     if session.len() % 2 != 0 || session.len() > 4 * 128 * 2 {
         return Err(invalid());
     }
@@ -446,7 +450,7 @@ fn session_cursor(c: &str) -> Result<(DateTime<Utc>, Uuid, String), ApiError> {
         return Err(invalid());
     }
     Ok((
-        DateTime::from_timestamp_micros(micros).ok_or_else(invalid)?,
+        timestamp,
         Uuid::parse_str(ws).map_err(|_| invalid())?,
         session,
     ))

@@ -18,4 +18,4 @@ Notes for changes on `main` after [v0.9.3](v0.9.3.md). They become the next rele
 
 ## Fixes
 
-- List cursors before PostgreSQL’s minimum timestamp now return 400 invalid input instead of 503 (#409).
+- List cursors, including sessions, before PostgreSQL’s minimum timestamp now return 400 invalid input instead of 503 (#409).
