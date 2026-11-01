@@ -322,7 +322,9 @@ async fn run_bodies(app: &Router, document: &Value) -> anyhow::Result<Vec<Captur
                 .method("POST")
                 .uri(TEMPLATE)
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .body(Body::from(
+                    crate::management::openapi::http_vectors::wire_bytes(&body),
+                ))
                 .unwrap();
             Probe::from(exchange(app, "POST", request).await)
         },
@@ -480,7 +482,9 @@ async fn run_judged(
                 .method("POST")
                 .uri(TEMPLATE)
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .body(Body::from(
+                    crate::management::openapi::http_vectors::wire_bytes(&body),
+                ))
                 .unwrap();
             Probe::from(exchange(app, "POST", request).await)
         },
@@ -1423,7 +1427,9 @@ async fn run_with_candidates(
                 .method("POST")
                 .uri(TEMPLATE)
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .body(Body::from(
+                    crate::management::openapi::http_vectors::wire_bytes(&body),
+                ))
                 .unwrap();
             Probe::from(exchange(app, "POST", request).await)
         },
@@ -2758,4 +2764,27 @@ async fn management_openapi_http_vectors_failures_are_collected_across_operation
         failures[1].contains("PUT /api/v1/platform/models/{id}/catalogs"),
         "{failures:?}"
     );
+}
+
+#[tokio::test]
+async fn management_openapi_integer_encoding_wire_spellings() {
+    let document = body_only(json!({"type":"object","properties":{
+        "n":{"type":"integer","minimum":0,"maximum":9}},
+        "required":["n"],"additionalProperties":false}));
+    let cases = cases_of(&document, &json!({"n":2}), &[]).unwrap();
+    for kind in [
+        "integer encoding fraction",
+        "integer encoding exponent",
+        "integer encoding negative zero",
+    ] {
+        assert!(
+            cases.iter().any(|c| c.kind == kind && c.accept),
+            "missing schema-accepted integer encoding vector"
+        );
+    }
+    // The real serde extractor refuses schema-valid integer-valued floats.
+    let app = judge::<std::collections::BTreeMap<String, u32>>(|_| true);
+    run_judged(&app, &document, json!({"n":2}), &[])
+        .await
+        .unwrap();
 }

@@ -117,7 +117,9 @@ impl Client {
             request = request.header(*name, *value);
         }
         if let Some(input) = input {
-            request = request.json(&input);
+            request = request
+                .header("content-type", "application/json")
+                .body(crate::management::openapi::http_vectors::wire_bytes(&input));
         }
         capture_http(method, path, request.send().await.unwrap()).await
     }
