@@ -9,6 +9,16 @@
 //!   (`GATEWAY_LOCAL_UPSTREAMS`); priority hints need a vLLM-compatible route.
 //!   Audited as `batch_scheduling.updated`.
 use super::*;
+
+#[test]
+fn management_openapi_slice3_scheduling_request_vectors() {
+    openapi::requests::vectors::<crate::jobs::schedule::RouteSettings>(
+        "PUT",
+        "/api/v1/platform/deployments/{deployment}/batch-scheduling",
+        json!({"max_concurrency":2,"yield_live_threshold":1,"metrics":{"url":"http://127.0.0.1:9999/metrics","max_waiting":0,"max_running":1,"max_kv_cache_percent":10},"priority":1,"window":{"timezone":"UTC","days":["mon"],"start":"23:00","end":"06:00"}}),
+    );
+}
+
 use crate::jobs::schedule::{self, RouteSettings};
 
 pub(super) fn routes() -> Router<Store> {

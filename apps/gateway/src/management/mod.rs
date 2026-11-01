@@ -573,6 +573,15 @@ fn ok() -> Json<Value> {
 fn identifier(id: Uuid) -> Json<Value> {
     Json(json!({"id":id}))
 }
+/// A model or catalog description: at most 2000 bytes of text without control
+/// characters, except the tab, line feed and carriage return of multi-line text
+/// (#428: NUL would reach PostgreSQL and surface as 503).
+pub(super) fn description_valid(s: &str) -> bool {
+    s.len() <= 2000
+        && !s
+            .chars()
+            .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
+}
 fn valid_name(s: &str) -> bool {
     !s.trim().is_empty() && s.len() <= 120 && !s.chars().any(char::is_control)
 }

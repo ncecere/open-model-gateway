@@ -1497,8 +1497,14 @@ pub(crate) async fn query_vectors_extended<C>(
         &fresh,
         &send,
     )
-    .await
-    .unwrap_or_else(|e| responses::refuse(e));
+    .await;
+    let exchanges = match exchanges {
+        Ok(exchanges) => exchanges,
+        Err(e) => {
+            fixtures.record_failure(&e.context(format!("{method} {template}")));
+            return;
+        }
+    };
     for exchange in &exchanges {
         fixtures.observe(exchange);
     }
@@ -1679,10 +1685,20 @@ impl Walk<'_> {
     /// [`Notes::settle`] that also records whether a reviewed
     /// [`UNSENDABLE`] reason was actually USED at this location (a decisive
     /// vector really was unsendable): an unused one is stale.
-    fn settle_at(&mut self, here: &str, dropped: &[String], sent: &[&str], exempt: bool) {
+    /// A reason is judged only in a run where the location HAS a decisive bound
+    /// (`bounded`): a union arm or conditional branch that bounds nothing there
+    /// has nothing to excuse, so it neither uses nor stales the reason.
+    fn settle_at(
+        &mut self,
+        here: &str,
+        dropped: &[String],
+        sent: &[&str],
+        exempt: bool,
+        bounded: bool,
+    ) {
         let before = self.notes.exempt;
         self.notes.settle(here, dropped, sent, exempt);
-        if exempt {
+        if exempt && bounded {
             let used = self.exempt_used.entry(here.to_owned()).or_insert(false);
             *used |= self.notes.exempt > before;
         }
@@ -1831,7 +1847,13 @@ impl Walk<'_> {
             .collect();
         let exempt = nodes.iter().any(|node| node.get(UNSENDABLE).is_some());
         let here = pointer(path);
-        self.settle_at(&here, &evidence.dropped, &sent, exempt);
+        self.settle_at(
+            &here,
+            &evidence.dropped,
+            &sent,
+            exempt,
+            decisively_bounded(nodes),
+        );
         for (_, kind, value) in evidence.labelled {
             self.push(path, kind, Some(value))?;
         }
@@ -1867,10 +1889,11 @@ impl Walk<'_> {
             .chain(mutations.labelled.iter().map(|(label, ..)| label.as_str()))
             .collect();
         let exempt = nodes.iter().any(|node| node.get(UNSENDABLE).is_some());
-        if exempt {
+        let bounded = decisively_bounded(&nodes);
+        if exempt && bounded {
             self.exempt_used.entry(here.clone()).or_insert(false);
         }
-        self.settle_at(&here, &mutations.dropped, &sent, exempt);
+        self.settle_at(&here, &mutations.dropped, &sent, exempt, bounded);
         // Decisive kinds first: a body sent twice keeps the first kind's name.
         for (_, kind, new) in mutations.labelled {
             self.push(path, kind, Some(new))?;
@@ -2142,6 +2165,11 @@ pub(super) struct BodyPlan {
     /// The declared request locations (schema paths) the valid body and the
     /// seeded bases carry; see `request_reach`.
     pub(super) reached: BTreeSet<String>,
+    /// Each [`UNSENDABLE`] location that had a decisive bound in this run, and
+    /// whether its reason excused an unsendable vector. Judged across every run
+    /// of the operation ([`PositiveFixtures`]): a reason is stale only when no
+    /// run needed it (one body may be able to send a bound another cannot).
+    pub(super) exempt_used: std::collections::BTreeMap<String, bool>,
 }
 
 /// Every body vector derived from the operation's request schema and a VALID body.
@@ -2152,6 +2180,22 @@ pub(super) fn body_cases(
     seeds: &[(String, Value)],
 ) -> Result<Vec<BodyCase>> {
     Ok(body_plan(document, operation, valid_body, seeds, &[])?.cases)
+}
+
+/// Whether any applicable node bounds the location's length, bytes or items:
+/// the bounds whose vectors [`UNSENDABLE`] may excuse.
+fn decisively_bounded(nodes: &[&Value]) -> bool {
+    nodes.iter().any(|node| {
+        [
+            "minLength",
+            "maxLength",
+            "x-omg-max-bytes",
+            "minItems",
+            "maxItems",
+        ]
+        .iter()
+        .any(|keyword| node.get(*keyword).is_some())
+    })
 }
 
 /// [`body_cases`] with the account of what could not be sent. Fails when a
@@ -2205,13 +2249,6 @@ pub(super) fn body_plan(
             "candidate at {at} names no walked location"
         );
     }
-    for (location, used) in &walk.exempt_used {
-        if !used {
-            walk.notes.problems.push(format!(
-                "{location}: {UNSENDABLE} is stale: every decisive vector of this location can be sent; delete it"
-            ));
-        }
-    }
     walk.notes.check()?;
     // Reach is what the walk MUTATED, base by base: a location the body merely
     // contains (but the walk never generated a vector for) is not reached.
@@ -2225,6 +2262,7 @@ pub(super) fn body_plan(
         cases: walk.out,
         notes: walk.notes,
         reached,
+        exempt_used: walk.exempt_used,
     })
 }
 
@@ -2233,6 +2271,7 @@ pub(super) fn body_plan(
 pub(super) struct BodyRun {
     pub(super) exchanges: Vec<Captured>,
     pub(super) reached: BTreeSet<String>,
+    pub(super) exempt_used: std::collections::BTreeMap<String, bool>,
 }
 
 pub(super) async fn run_body(
@@ -2250,6 +2289,15 @@ pub(super) async fn run_body(
     )
 }
 
+/// `OMG_OPENAPI_PLAN_ONLY=1`: a fast development run. Body vector runs are
+/// planned (reach, seeds, candidates and decisive boundaries are all checked) but
+/// only each valid body is sent, so a fixture's request-location coverage is known
+/// in minutes rather than after every vector. `finish` always FAILS such a run
+/// (it is never a contract check); the full run without it is the gate.
+pub(crate) fn plan_only() -> bool {
+    std::env::var_os("OMG_OPENAPI_PLAN_ONLY").is_some_and(|v| v == "1")
+}
+
 pub(super) async fn run_body_with(
     document: &Value,
     method: &str,
@@ -2264,13 +2312,18 @@ pub(super) async fn run_body_with(
         .with_context(|| format!("{method} {template}"))?;
     plan.notes.report(method, template);
     let reached = plan.reached;
+    let exempt_used = plan.exempt_used;
     let cases = plan.cases;
     let mut plan = vec![("valid", "(root)".to_owned(), valid_body.clone(), true)];
-    plan.extend(
-        cases
-            .into_iter()
-            .map(|case| (case.kind, case.pointer, case.body, case.accept)),
-    );
+    // Plan-only (a development aid, see [`plan_only`]): the walk above is planned
+    // and its reach recorded, but only the valid body is sent.
+    if !plan_only() {
+        plan.extend(
+            cases
+                .into_iter()
+                .map(|case| (case.kind, case.pointer, case.body, case.accept)),
+        );
+    }
     let mut exchanges = Vec::new();
     let mut accepted_seen = false;
     for (kind, location, body, expected) in plan {
@@ -2288,7 +2341,11 @@ pub(super) async fn run_body_with(
         exchanges.push(probe.captured);
     }
     ensure!(accepted_seen, "no body vector was accepted by the handler");
-    Ok(BodyRun { exchanges, reached })
+    Ok(BodyRun {
+        exchanges,
+        reached,
+        exempt_used,
+    })
 }
 
 /// Body boundary vectors for one operation over real HTTP: top-level and nested
@@ -2353,13 +2410,27 @@ pub(crate) async fn body_vectors_extended(
         &own_values(candidates),
         &send,
     )
-    .await
-    .unwrap_or_else(|e| responses::refuse(e));
+    .await;
+    let run = match run {
+        Ok(run) => run,
+        Err(e) => {
+            // Name the operation once (most run errors already lead with it).
+            let operation = format!("{method} {template}");
+            let e = if format!("{e:#}").starts_with(&operation) {
+                e
+            } else {
+                e.context(operation)
+            };
+            fixtures.record_failure(&e);
+            return;
+        }
+    };
     for exchange in &run.exchanges {
         fixtures.observe(exchange);
     }
     fixtures.record_vectors(method, template, "body");
     fixtures.record_reach(method, template, &run.reached);
+    fixtures.record_unsendable(method, template, &run.exempt_used);
 }
 
 // ---------------------------------------------------------------------------
@@ -2517,8 +2588,14 @@ pub(crate) async fn binary_body_vectors_http(
         &extra,
         &send,
     )
-    .await
-    .unwrap_or_else(|e| responses::refuse(e));
+    .await;
+    let exchanges = match exchanges {
+        Ok(exchanges) => exchanges,
+        Err(e) => {
+            fixtures.record_failure(&e.context(format!("{method} {template}")));
+            return;
+        }
+    };
     for exchange in &exchanges {
         fixtures.observe(exchange);
     }
