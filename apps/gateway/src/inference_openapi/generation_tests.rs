@@ -151,3 +151,60 @@ fn inference_openapi_generation_previous_response_is_not_accepted() {
         "accepted previous_response_id"
     );
 }
+
+#[test]
+fn inference_openapi_generation_named_chat_choice_serde_forms() {
+    let doc = generated();
+    for choice in [
+        json!(["function", ["ping"]]),
+        json!({"type":"function","function":["ping"]}),
+    ] {
+        let body = json!({"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"ping"}}],"tool_choice":choice});
+        assert!(
+            crate::protocols::chat_completions::openapi_normalize(body.clone()).is_ok(),
+            "named choice serde fixture"
+        );
+        super::generation::validate_request(&doc, "/v1/chat/completions", &body)
+            .expect("accepted named choice form missing from contract");
+    }
+}
+#[test]
+fn inference_openapi_generation_chat_output_calls_are_objects() {
+    let doc = generated();
+    let mut body = doc["paths"]["/v1/chat/completions"]["post"]["responses"]["200"]["content"]["application/json"]["example"].clone();
+    body["choices"][0]["message"]["tool_calls"] = json!([["call_0", "function", ["ping", "{}"]]]);
+    assert!(
+        super::responses::validate_body(
+            &doc,
+            "POST",
+            "/v1/chat/completions",
+            axum::http::StatusCode::OK,
+            &serde_json::to_vec(&body).unwrap()
+        )
+        .is_err(),
+        "accepted request tuple in response"
+    );
+}
+#[test]
+fn inference_openapi_generation_responses_event_matches_snapshot_status() {
+    let doc = generated();
+    let snapshot = doc["paths"]["/v1/responses"]["post"]["responses"]["200"]["content"]["application/json"]["example"].clone();
+    let mut wire = String::new();
+    for (seq, kind) in [
+        "response.created",
+        "response.in_progress",
+        "response.completed",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let mut response = snapshot.clone();
+        response["status"] = json!("in_progress");
+        let payload = json!({"type":kind,"sequence_number":seq,"response":response});
+        wire.push_str(&format!("event: {kind}\ndata: {payload}\n\n"));
+    }
+    assert!(
+        super::generation::validate_sse(&doc, "/v1/responses", wire.as_bytes(), false).is_err(),
+        "completed event accepted non-completed snapshot"
+    );
+}
