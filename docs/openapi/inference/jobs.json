@@ -2960,8 +2960,7 @@
               "type": "string",
               "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
               "maxLength": 32768,
-              "x-omg-max-bytes": 32768,
-              "x-omg-unsendable-boundary": "Multibyte maxLength 32768 exceeds the HTTP vector harness 20000-character multibyte cap; ASCII byte boundaries are sent, and VideoRequest::validate pins the UTF-8 byte limit."
+              "x-omg-max-bytes": 32768
             },
             {
               "anyOf": [
