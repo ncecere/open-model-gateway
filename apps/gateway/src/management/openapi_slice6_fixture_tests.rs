@@ -4,7 +4,9 @@
 //! API; request, accounting, realtime and job rows are written as their
 //! producers write them (`seed`). Failure messages name only the method, a
 //! static label and the status, never a path, id, header or body.
+use super::openapi_budget_fixture_tests::CorruptedDayBudget;
 use super::*;
+use crate::governance::totals::Scope;
 use futures::FutureExt;
 use openapi::http_vectors::{
     Probe, body_vectors_extended, body_vectors_seeded, query_vectors_extended,
@@ -1474,18 +1476,20 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
     // reports show unavailable windows (`read_budget_report` returns None); the
     // row is restored right after, because the key list and detail report the
     // raw figure, which a corrupt row cannot honestly satisfy.
-    let (settled, held): (String, String) = sqlx::query_as("SELECT settled_microusd::text,held_microusd::text FROM budget_totals WHERE scope_kind='key' AND period='day' AND scope_id=(SELECT governance_key_id FROM api_keys WHERE id=$1)")
-        .bind(corrupt_key).fetch_one(&pool).await.unwrap();
-    let set_totals = "UPDATE budget_totals SET settled_microusd=$2::numeric,held_microusd=$3::numeric WHERE scope_kind='key' AND period='day' AND scope_id=(SELECT governance_key_id FROM api_keys WHERE id=$1)";
-    let corrupted = sqlx::query(set_totals)
+    // #434: the row was written by the settlement above, the reports read the
+    // window at `bucket_start(now)`. A run that crosses midnight UTC between the
+    // two puts the row in yesterday's window; simulate that here every time.
+    sqlx::query("UPDATE budget_totals SET period_start=period_start-interval '1 day' WHERE scope_kind='key' AND period='day' AND scope_id=(SELECT governance_key_id FROM api_keys WHERE id=$1)")
         .bind(corrupt_key)
-        .bind("-1")
-        .bind("0")
         .execute(&pool)
         .await
-        .unwrap()
-        .rows_affected();
-    assert_eq!(corrupted, 1, "the throwaway key has one day totals row");
+        .unwrap();
+    let lineage = sqlx::query_scalar("SELECT governance_key_id FROM api_keys WHERE id=$1")
+        .bind(corrupt_key)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let corruption = CorruptedDayBudget::new(&pool, Scope::KeyLineage(lineage)).await;
     for suffix in ["/policy", "/stats"] {
         w.json(
             &owner,
@@ -1495,13 +1499,7 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
         )
         .await;
     }
-    sqlx::query(set_totals)
-        .bind(corrupt_key)
-        .bind(&settled)
-        .bind(&held)
-        .execute(&pool)
-        .await
-        .unwrap();
+    corruption.restore(&pool).await;
     for suffix in ["", "/policy", "/stats", "/access"] {
         w.json(
             &owner,

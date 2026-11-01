@@ -1,6 +1,8 @@
 //! Executed coverage, not a list of claimed fixture names. Every observation
 //! comes from a real handler; this suite also runs the gateway over loopback.
+use super::openapi_budget_fixture_tests::CorruptedDayBudget;
 use super::*;
+use crate::governance::totals::Scope;
 use openapi::{
     http_vectors::{
         Probe, body_vectors_http, body_vectors_seeded, query_vectors, query_vectors_fixed,
@@ -254,8 +256,12 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
     let (status, lab_key) = key(&f, &f.admin, lab, Value::Null).await;
     assert!(status == StatusCode::OK, "unexpected value: status");
     sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,input_tokens,output_tokens) VALUES($1,$2,$3,$4,'contract-serving','openai',false,'succeeded',$1,1,1)").bind(Uuid::new_v4()).bind(lab).bind(id(&lab_key)).bind(deployment).execute(&pool).await.unwrap();
-    sqlx::query("UPDATE budget_totals SET settled_microusd=-1,held_microusd=0 WHERE scope_kind='workspace' AND scope_id=$1 AND period='day'")
-        .bind(lab).execute(&pool).await.unwrap();
+    // #434: simulate settlement before midnight and reports on the next UTC day.
+    sqlx::query("UPDATE budget_totals SET period_start=period_start-interval '1 day' WHERE scope_kind='workspace' AND scope_id=$1 AND period='day'")
+        .bind(lab)
+        .execute(&pool)
+        .await
+        .unwrap();
     // Alert rules: workspace budget (the owner's feed), provider failure, three
     // admission-ceiling shapes (rate and lock wait, rate only, lock wait only).
     let (status, workspace_rule) = call(&f.s, &f.owner, "POST", &format!("/api/v1/workspaces/{}/alerts/rules", f.team), json!({"name":"Generation","kind":"budget_threshold","budget_layers":["local"],"thresholds":[100],"notify_workspace_admins":true})).await;
@@ -999,6 +1005,7 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
     let member_summary = body(&r);
     assert!(member_summary["workspaces"][0]["budgets"].is_null());
     observed.observe(&r);
+    let corruption = CorruptedDayBudget::new(&pool, Scope::Workspace(lab)).await;
     let r = send(
         &client,
         base,
@@ -1015,6 +1022,7 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
             .contains("\"headroom_status\":\"unknown\"")
     );
     observed.observe(&r);
+    corruption.restore(&pool).await;
     // Admins and Auditors export too; the Admin's own audit trail has events with no resource.
     for who in [&admin, &requester] {
         let r = send(&client, base, Some(who), "GET", "/api/v1/me/export", None).await;
