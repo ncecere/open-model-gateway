@@ -238,3 +238,5 @@ mod sse_tests;
 #[path = "generation_tests.rs"]
 mod generation_tests;
 
+#[path = "generation_sdk_tests.rs"]
+mod generation_sdk_tests;
