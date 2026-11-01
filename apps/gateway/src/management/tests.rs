@@ -495,3 +495,6 @@ async fn sanitized_audit_failure_rolls_back_resource_creation(pool: PgPool) {
             .unwrap();
     assert_eq!(metadata, json!({"role":"admin","enabled":true}));
 }
+
+#[path = "settings/url_length_tests.rs"]
+mod settings_url_length_tests;

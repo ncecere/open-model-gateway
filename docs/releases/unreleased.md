@@ -25,3 +25,6 @@ Notes for changes on `main` after [v0.9.3](v0.9.3.md). They become the next rele
 - Money values are integer micro-USD strings bounded to i64 (i128 for imported amounts, matching `cents()`). Rules JSON Schema cannot state are documented and pinned by probes: upload page and bucket relations, mapping windows and overlaps, one budget per period, recipient uniqueness, workspace report filters equal to the route's workspace, and byte limits. Where the schema is stricter than the handler (canonical date and date-time spellings, canonical integers), the description says so.
 - Test harness: recursive nested-DTO probes, a stricter `*_microusd` status-marker rule, and response samples for CSV downloads and required headers.
 - No production behaviour change, migration or runtime-grant change.
+## Fixes
+
+- General settings validate support and logo URL length after percent-encoding, returning 400 instead of 409 when the stored form exceeds 2048 characters (#419).

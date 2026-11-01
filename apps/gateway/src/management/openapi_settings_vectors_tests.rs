@@ -201,11 +201,13 @@ pub(super) async fn settings(
 ) {
     let admin = fresh_admin(pool, "vector-settings").await;
     let general = format!("{SETTINGS}/general");
+    // Start URL fills in the path, not the host, so ASCII length vectors probe
+    // the stored length rather than host normalization (#419).
     both(
         observed,
         "PUT",
         &general,
-        json!({"display_name":"Contract Gateway","support_url":"https://support.example.test","logo_url":"https://cdn.example.test/logo.png","human_key_max_lifetime_days":30}),
+        json!({"display_name":"Contract Gateway","support_url":"https://support.example.test/","logo_url":"https://cdn.example.test/logo.png","human_key_max_lifetime_days":30}),
         &["display_name","support_url","logo_url","human_key_max_lifetime_days"],
         names("/display_name"),
         async |body| json(g, &admin, "PUT", &general, body).await,
@@ -909,8 +911,8 @@ pub(super) async fn pinned(g: &Gateway, pool: &PgPool, mail_port: u16) {
             (false, true),
         ),
     ];
-    // The handler trims BEFORE the 2048 cap (settings.rs `https_url`: `text()` then
-    // `value.len()`); the schema's maxLength counts the padding. Same for both URLs.
+    // The handler trims and normalizes BEFORE the stored-form 2048 cap; the
+    // schema's maxLength counts the raw padding. Same for both URLs.
     let padded = format!(" https://support.example.test/{} ", "a".repeat(2048 - 29));
     let mut rows = rows.to_vec();
     rows.extend([
@@ -930,23 +932,23 @@ pub(super) async fn pinned(g: &Gateway, pool: &PgPool, mail_port: u16) {
     // characters; the schema's pattern caps a label at 63, so it refuses it.
     // Pinned as a documented divergence, for both URL fields.
     let long_label = format!("https://{}.example.test", "a".repeat(64));
-    // Non-ASCII in the PATH (`https://support.example.test/` is 29 bytes). The
-    // handler stores the NORMALISED URL (`url.to_string()`, each two-byte character
-    // percent-encoded to six), and the column CHECK limits that form to 2048
-    // characters: a value within the 2048-byte cap whose stored form is longer
-    // passes the input checks and is refused by the store with 409 (not pinnable
-    // here: 409 is undocumented for this operation). So the byte cap is pinned one
-    // byte over (1009 two-byte characters and `aa`: 2049 bytes, refused by the
-    // handler's byte cap, accepted by the schema, which counts characters), and
-    // the accepted side at the largest stored form: 336 two-byte characters and
-    // `aaa` store as exactly 2048 characters.
+    // Non-ASCII path characters are percent-encoded before the handler's length
+    // check (#419). Pin adjacent stored-form boundaries: 2048 is accepted,
+    // 2049 is 400 invalid (never the store's undocumented 409). The schema counts
+    // raw characters, so it accepts both.
     let multibyte_path = |count: usize, tail: &str| {
         format!(
             "https://support.example.test/{}{tail}",
             "\u{e9}".repeat(count)
         )
     };
-    assert_eq!(multibyte_path(1009, "aa").len(), 2049);
+    assert_eq!(
+        reqwest::Url::parse(&multibyte_path(336, "aaaa"))
+            .unwrap()
+            .as_str()
+            .len(),
+        2049
+    );
     assert_eq!(
         reqwest::Url::parse(&multibyte_path(336, "aaa"))
             .unwrap()
@@ -971,8 +973,8 @@ pub(super) async fn pinned(g: &Gateway, pool: &PgPool, mail_port: u16) {
             (true, true),
         ),
         (
-            "support URL of 2049 bytes with non-ASCII in the path",
-            with("support_url", json!(multibyte_path(1009, "aa"))),
+            "support URL with non-ASCII in the path stored as 2049 characters",
+            with("support_url", json!(multibyte_path(336, "aaaa"))),
             (false, true),
         ),
         (
@@ -981,8 +983,8 @@ pub(super) async fn pinned(g: &Gateway, pool: &PgPool, mail_port: u16) {
             (true, true),
         ),
         (
-            "logo URL of 2049 bytes with non-ASCII in the path",
-            with("logo_url", json!(multibyte_path(1009, "aa"))),
+            "logo URL with non-ASCII in the path stored as 2049 characters",
+            with("logo_url", json!(multibyte_path(336, "aaaa"))),
             (false, true),
         ),
     ]);
