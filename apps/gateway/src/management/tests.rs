@@ -66,6 +66,8 @@ mod mapping_issuer_control_tests;
 mod me_models_tests;
 #[path = "members/tests.rs"]
 mod member_tests;
+#[path = "openapi_budget_fixture_tests.rs"]
+mod openapi_budget_fixture_tests;
 #[path = "openapi_fixture_tests.rs"]
 mod openapi_fixtures;
 #[path = "openapi_settings_fixture_tests.rs"]

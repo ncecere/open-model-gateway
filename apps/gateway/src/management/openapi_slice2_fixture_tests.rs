@@ -6,7 +6,9 @@
 //! (`lifecycle::apply_group_grants`, `disable_for_entitlement_loss`, the
 //! engine's execution and reservation rows, an accepted invitation). Boundary
 //! vectors run last because their accepted variants change state.
+use super::openapi_budget_fixture_tests::CorruptedDayBudget;
 use super::*;
+use crate::governance::totals::Scope;
 use futures::FutureExt;
 use openapi::http_vectors::{
     Probe, body_vectors_http, query_vectors, query_vectors_extended, query_vectors_fixed,
@@ -1466,18 +1468,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         .execute(&pool)
         .await
         .unwrap();
-    let saved: (String, String) = sqlx::query_as("SELECT settled_microusd::text,held_microusd::text FROM budget_totals WHERE scope_kind='workspace' AND scope_id=$1 AND period='day'")
-        .bind(drift_ws)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    let corrupted = sqlx::query("UPDATE budget_totals SET settled_microusd=-1,held_microusd=0 WHERE scope_kind='workspace' AND scope_id=$1 AND period='day'")
-        .bind(drift_ws)
-        .execute(&pool)
-        .await
-        .unwrap()
-        .rows_affected();
-    assert_eq!(corrupted, 1);
+    let corruption = CorruptedDayBudget::new(&pool, Scope::Workspace(drift_ws)).await;
     let drifted = c.ok(&auditor, "GET", &drift_policy, None).await;
     assert!(
         drifted["budgets"][0]["headroom_status"] == "unknown",
@@ -1500,13 +1491,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         drifted["budgets"][1]["headroom_status"] == "known",
         "neighbouring window stays known"
     );
-    sqlx::query("UPDATE budget_totals SET settled_microusd=$2::numeric,held_microusd=$3::numeric WHERE scope_kind='workspace' AND scope_id=$1 AND period='day'")
-        .bind(drift_ws)
-        .bind(&saved.0)
-        .bind(&saved.1)
-        .execute(&pool)
-        .await
-        .unwrap();
+    corruption.restore(&pool).await;
     assert!(
         c.ok(&auditor, "GET", &drift_policy, None).await["budgets"][0]["headroom_status"]
             == "known",
