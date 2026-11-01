@@ -165,3 +165,87 @@ async fn scheduled_reports_read_authority_personal_privacy_auditor_and_live_revo
         ));
     }
 }
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn scheduled_reports_read_uses_one_clock_at_expiry(pool: PgPool) {
+    let mut f = fixture(&pool).await;
+    let (_, _, detail) = occurrence(&f, &pool, &f.admin, None).await;
+    // Shadow only this test database's unqualified clock reads. The first two
+    // reads precede expiry; subsequent reads cross it, without sleeps or races.
+    // Session settings work even in the handler's read-only transaction.
+    sqlx::raw_sql(
+        "CREATE SCHEMA test_clock;
+         CREATE FUNCTION test_clock.clock_timestamp() RETURNS timestamptz
+         LANGUAGE plpgsql VOLATILE AS $$
+         DECLARE n int; expiry timestamptz; mode text;
+         BEGIN
+           n := coalesce(nullif(current_setting('test_clock.reads',true),''),'0')::int + 1;
+           PERFORM set_config('test_clock.reads',n::text,false);
+           mode := current_setting('test_clock.mode',true);
+           SELECT expires_at INTO STRICT expiry FROM public.report_runs;
+           IF mode = 'boundary' THEN RETURN expiry; END IF;
+           IF mode = 'expired' OR (mode = 'moving' AND n > 2) THEN
+             RETURN expiry + interval '1 second';
+           END IF;
+           RETURN expiry - interval '1 second';
+         END $$;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let clock_pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            (*pool.connect_options())
+                .clone()
+                .options([("search_path", "test_clock,public,pg_catalog")]),
+        )
+        .await
+        .unwrap();
+    f.s.pool = clock_pool.clone();
+    for (mode, expired) in [
+        ("moving", false),
+        ("live", false),
+        ("boundary", true),
+        ("expired", true),
+    ] {
+        sqlx::query("SELECT set_config('test_clock.reads','0',false), set_config('test_clock.mode',$1,false)")
+            .bind(mode).execute(&clock_pool).await.unwrap();
+        let (status, body) = call(&f.s, &f.admin, "GET", &detail, Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "run detail status");
+        assert!(
+            body["expired"].as_bool() == Some(expired),
+            "run expiry classification"
+        );
+        assert!(
+            body["snapshot"].is_null() == expired,
+            "run snapshot expiry consistency"
+        );
+        let reads: String = sqlx::query_scalar("SELECT current_setting('test_clock.reads')")
+            .fetch_one(&clock_pool)
+            .await
+            .unwrap();
+        assert!(reads == "1", "run detail must evaluate the clock once");
+    }
+    let list = detail.rsplit_once('/').unwrap().0;
+    for (mode, expired) in [("live", false), ("boundary", true), ("expired", true)] {
+        sqlx::query("SELECT set_config('test_clock.reads','0',false), set_config('test_clock.mode',$1,false)")
+            .bind(mode).execute(&clock_pool).await.unwrap();
+        let (status, body) = call(&f.s, &f.admin, "GET", list, Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "run list status");
+        assert!(
+            body["data"].as_array().is_some_and(|rows| rows.len() == 1),
+            "run list count"
+        );
+        assert!(
+            body["data"][0]["expired"].as_bool() == Some(expired),
+            "run list expiry classification"
+        );
+        let reads: String = sqlx::query_scalar("SELECT current_setting('test_clock.reads')")
+            .fetch_one(&clock_pool)
+            .await
+            .unwrap();
+        assert!(reads == "1", "run list must evaluate the clock once");
+    }
+    clock_pool.close().await;
+}
