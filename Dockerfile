@@ -2,7 +2,7 @@
 # not pull docker/dockerfile from Docker Hub. The node and rust build stages
 # come from mirror.gcr.io, Google's Docker Hub mirror (same image digests),
 # because Docker Hub's anonymous pull limit and outages failed CI builds.
-FROM mirror.gcr.io/library/node:22.23.3-bookworm-slim@sha256:3ed98443660ff48413b5af19ecefce3b9d50845a901a43420d47cc63a9fddbe9 AS web
+FROM mirror.gcr.io/library/node:22.23.4-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da AS web
 WORKDIR /build
 COPY package.json package-lock.json ./
 COPY apps/web/package.json apps/web/package.json
@@ -14,7 +14,7 @@ RUN npm run build:web
 # compiler also supports edition 2024; do not use the manifest MSRV blindly when
 # updating Cargo.lock. Bookworm sets the build's glibc baseline; compatibility
 # with the supported Debian 13 runtime must pass native build/runtime gates.
-FROM mirror.gcr.io/library/rust:1.99.1-bookworm@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8 AS build
+FROM mirror.gcr.io/library/rust:1.99.1-bookworm@sha256:9181b56c2a21ab1d5e73cffe04fc762426d30aa7fac3c91141dd033f49a7fc8b AS build
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY apps/gateway/ apps/gateway/
