@@ -46,7 +46,20 @@ const EXTRA_CREDENTIALS: &[(&str, &str)] = &[
 ];
 /// Non-path parameters a route reads (`protocols/realtime.rs` `model_param`).
 /// Everything else is ignored by the real handlers, so none may be invented.
-pub(super) const QUERY_PARAMETERS: &[(&str, &str, &str)] = &[("GET", "/v1/realtime", "model")];
+pub(super) const QUERY_PARAMETERS: &[(&str, &str, &str)] = &[
+    ("GET", "/v1/realtime", "model"),
+    ("GET", "/v1/files", "purpose"),
+    ("GET", "/v1/files", "limit"),
+    ("GET", "/v1/files", "after"),
+    ("GET", "/v1/files", "order"),
+    ("GET", "/v1/batches", "limit"),
+    ("GET", "/v1/batches", "after"),
+    ("GET", "/v1/batches", "order"),
+    ("GET", "/v1/videos", "limit"),
+    ("GET", "/v1/videos", "after"),
+    ("GET", "/v1/videos", "order"),
+    ("GET", "/v1/videos/{id}/content", "variant"),
+];
 
 struct Declaration {
     method: String,
@@ -197,7 +210,7 @@ pub(super) fn generate(fragments: &Fragments) -> Result<Value> {
         "openapi":"3.1.0",
         "jsonSchemaDialect":"https://spec.openapis.org/oas/3.1/dialect/base",
         "info":{"title":"Open Model Gateway inference API","version":env!("CARGO_PKG_VERSION"),
-            "description":"INCOMPLETE contract (#82 PR1): the operations of areas models, embeddings, rerank, systemone, images and the two realtime refusals are complete and wire-validated against the real handlers; every other operation is an explicit, counted placeholder. Every operation authenticates with an inference key only (Bearer; /v1/messages also accepts x-api-key, GET /v1/realtime also the openai-insecure-api-key.<key> WebSocket subprotocol, never both); inference keys never authorize management and admin tokens never authorize inference. Live key, workspace, catalog and budget checks remain authoritative. The OpenAI-shaped, Anthropic-shaped, job and file error envelopes are distinct schemas and never the management ErrorEnvelope; /v1/messages errors carry no gateway machine code. x-omg-* extensions state what OpenAPI 3.1 cannot express (see docs/openapi/inference/README.md)."},
+            "description":"INCOMPLETE contract (#82 PR3): Chat, Responses and Messages retain six schema placeholders for PR2. All other areas document their real HTTP and media contracts; zero placeholders is required once PR2 lands. Every operation authenticates with an inference key only (Bearer; /v1/messages also accepts x-api-key, GET /v1/realtime also the openai-insecure-api-key.<key> WebSocket subprotocol, never both); inference keys never authorize management and admin tokens never authorize inference. Live key, workspace, catalog and budget checks remain authoritative. The OpenAI-shaped, Anthropic-shaped, job and file error envelopes are distinct schemas and never the management ErrorEnvelope; /v1/messages errors carry no gateway machine code. x-omg-* extensions state what OpenAPI 3.1 cannot express (see docs/openapi/inference/README.md)."},
         "paths":paths,
         "components":{
             "schemas":schemas,
@@ -298,7 +311,8 @@ pub(super) fn verify(document: &Value) -> Result<()> {
 /// Anthropic's shape in the outer layer (`http.rs` request_context,
 /// `protocols/messages.rs` http_error), unlike every other route. They must be
 /// IN the document, with the Anthropic envelope.
-const TRANSPORT_EXCEPTIONS: &[(&str, &str, &[&str])] = &[("/v1/messages", "post", &["405", "413"])];
+const TRANSPORT_EXCEPTIONS: &[(&str, &str, &[&str])] =
+    &[("/v1/messages", "post", &["401", "405", "413"])];
 
 fn verify_transport_exceptions(document: &Value) -> Result<()> {
     for (path, method, statuses) in TRANSPORT_EXCEPTIONS {

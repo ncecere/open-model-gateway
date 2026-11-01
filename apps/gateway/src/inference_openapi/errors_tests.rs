@@ -178,6 +178,8 @@ fn inference_openapi_documents_every_status_the_renderers_produce() {
         ("/v1/rerank", 400),
         ("/v1/images/generations", 400),
         ("/v1/systemone", 422),
+        ("/v1/audio/transcriptions", 400),
+        ("/v1/audio/speech", 400),
     ] {
         let documented: BTreeSet<u16> = doc["paths"][path]["post"]["responses"]
             .as_object()
@@ -391,5 +393,84 @@ fn inference_openapi_rejects_a_document_without_the_messages_exception() {
             g::verify(&bad).is_err(),
             "accepted a document without the /v1/messages {status} exception"
         );
+    }
+}
+
+/// Extend renderer inventory beyond PR1's four POST workloads. This checks
+/// raw renderer bytes, not just a handwritten set of HTTP statuses.
+#[tokio::test]
+async fn inference_openapi_media_jobs_realtime_renderer_statuses_and_envelopes() {
+    use crate::{
+        filestore::upload::UploadError, inference::error::InferenceError as E, jobs::JobError,
+    };
+    let doc = generated();
+    for (path, item) in doc["paths"].as_object().unwrap() {
+        if !(path.starts_with("/v1/audio/")
+            || path.starts_with("/v1/videos")
+            || path.starts_with("/v1/batches")
+            || path == "/v1/realtime")
+        {
+            continue;
+        }
+        for method in item.as_object().unwrap().keys() {
+            for error in e::all() {
+                // No registered video provider: create returns before selection
+                // or admission. Legacy reads still use the complete renderer.
+                if path == "/v1/videos"
+                    && method == "post"
+                    && !matches!(error, E::InvalidRequest | E::Unsupported | E::Storage)
+                {
+                    continue;
+                }
+                let response = crate::protocols::videos::job_error(JobError::Inference(error));
+                let status = response.status();
+                let bytes = axum::body::to_bytes(response.into_body(), 65536)
+                    .await
+                    .unwrap();
+                super::responses::validate_body(
+                    &doc,
+                    &method.to_ascii_uppercase(),
+                    path,
+                    status,
+                    &bytes,
+                )
+                .unwrap_or_else(|e| panic!("renderer {method} {path}: {e:#}"));
+            }
+        }
+    }
+    for (path, item) in doc["paths"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(p, _)| p.starts_with("/v1/files"))
+    {
+        for method in item.as_object().unwrap().keys() {
+            for error in [
+                UploadError::StoreOff,
+                UploadError::PurposeOff,
+                UploadError::UnsupportedPurpose,
+                UploadError::TooLarge,
+                UploadError::QuotaExceeded,
+                UploadError::Unavailable,
+                UploadError::Invalid {
+                    message: "fixture",
+                    param: Some("purpose"),
+                },
+            ] {
+                let response = crate::protocols::files::upload_error(error);
+                let status = response.status();
+                let bytes = axum::body::to_bytes(response.into_body(), 65536)
+                    .await
+                    .unwrap();
+                super::responses::validate_body(
+                    &doc,
+                    &method.to_ascii_uppercase(),
+                    path,
+                    status,
+                    &bytes,
+                )
+                .unwrap_or_else(|e| panic!("renderer {method} {path}: {e:#}"));
+            }
+        }
     }
 }

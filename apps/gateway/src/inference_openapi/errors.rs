@@ -343,7 +343,7 @@ pub(super) fn components() -> Result<Value> {
         json!({"description":description,"headers":header(extra),"content":{"application/json":{"schema":{"$ref":"#/components/schemas/OpenAiErrorEnvelope"}}}})
     };
     let responses = json!({
-        "OpenAiBadRequest":openai("Invalid request (the closed field set, a bound, a type) or, for the non-generation workloads, an explicit unsupported_capability; error.code tells them apart", &["should-retry"]),
+        "OpenAiBadRequest":openai("HTTP 400 invalid_request_error for a closed-field, bound or type violation, or an explicit unsupported_capability on non-generation workloads; error.code distinguishes them. System One uses its separate HTTP 422 response for validation.", &["should-retry"]),
         "OpenAiUnauthorized":openai("Missing, malformed, duplicate, unknown, revoked or no-longer-valid inference key (always authentication_error)", &["www-authenticate"]),
         "OpenAiNotFound":openai("The model does not exist or is not available to this key and workspace (model_not_found)", &[]),
         "OpenAiPayloadTooLarge":json!({"description":"The request body exceeds the route's cap. A declared Content-Length over the cap is refused by the body-limit layer with the plain text `length limit exceeded`, before any handler runs; a streamed body is refused by the handler with this JSON error (a different type/code on /v1/embeddings).","headers":header(&[]),"content":{"text/plain":{"schema":{"const":"length limit exceeded"}},"application/json":{"schema":{"$ref":"#/components/schemas/OpenAiErrorEnvelope"}}}}),
