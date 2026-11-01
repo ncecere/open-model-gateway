@@ -1,20 +1,20 @@
 //! Test-only management contract: no runtime endpoint or production dependency.
 pub(crate) mod coverage;
 mod coverage_tests;
-mod generator;
+pub(crate) mod generator;
 mod hardening_tests;
 pub(crate) mod http_vectors;
 mod http_vectors_tests;
 mod middleware;
 mod money_tests;
 mod mutation_tests;
-mod quality;
+pub(crate) mod quality;
 mod request_reach;
 pub(crate) mod requests;
 pub(crate) mod responses;
 mod settings_tests;
 mod setup_review_tests;
-mod validation;
+pub(crate) mod validation;
 mod wiring_tests;
 
 #[cfg(test)]

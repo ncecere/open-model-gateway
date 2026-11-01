@@ -466,7 +466,7 @@ pub(crate) fn vectors<T: DeserializeOwned>(method: &str, template: &str, valid: 
 
 /// [`vectors`] against an explicit document and reviewed refined pointers.
 /// Failures name method, template, vector label and field names, never values.
-pub(super) fn vectors_in<T: DeserializeOwned>(
+pub(crate) fn vectors_in<T: DeserializeOwned>(
     document: &Value,
     method: &str,
     template: &str,

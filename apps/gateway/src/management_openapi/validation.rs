@@ -29,7 +29,7 @@ fn manifest() -> Result<Manifest> {
         root().join("docs/openapi/vendor/manifest.json"),
     )?)?)
 }
-pub(super) fn vendor_files() -> Result<BTreeMap<String, Vec<u8>>> {
+pub(crate) fn vendor_files() -> Result<BTreeMap<String, Vec<u8>>> {
     let mut files = BTreeMap::new();
     for entry in std::fs::read_dir(root().join("docs/openapi/vendor"))? {
         let path = entry?.path();
@@ -45,7 +45,7 @@ pub(super) fn vendor_files() -> Result<BTreeMap<String, Vec<u8>>> {
     verify_vendor(&files)?;
     Ok(files)
 }
-pub(super) fn verify_vendor(files: &BTreeMap<String, Vec<u8>>) -> Result<()> {
+pub(crate) fn verify_vendor(files: &BTreeMap<String, Vec<u8>>) -> Result<()> {
     let entries = manifest()?.files;
     let expected = entries
         .iter()
@@ -101,7 +101,7 @@ fn local_schemas() -> Result<LocalSchemas> {
     Ok(LocalSchemas(schemas))
 }
 
-pub(super) fn compile_schema(schema: &Value) -> Result<Validator> {
+pub(crate) fn compile_schema(schema: &Value) -> Result<Validator> {
     // No runtime backtracking: look-around/backreferences, malformed patterns and
     // compilation exhaustion fail at construction. The RED tests cover both regex
     // keywords, including underneath `not` (where treating errors as false is unsafe).
@@ -215,7 +215,18 @@ fn no_links(document: &Value) -> Result<()> {
     }
     Ok(())
 }
-pub(super) fn validate_document(document: &Value) -> Result<()> {
+pub(crate) fn validate_document(document: &Value) -> Result<()> {
+    validate_document_with(document, &|path| {
+        super::responses::completed(super::responses::area(path))
+    })
+}
+/// [`validate_document`] for another contract: `completed` says which path
+/// templates are completed operations (the management contract gates them by
+/// area; the inference contract by its own areas). Nothing else differs.
+pub(crate) fn validate_document_with(
+    document: &Value,
+    completed: &dyn Fn(&str) -> bool,
+) -> Result<()> {
     local_references(document, document)?;
     no_links(document)?;
     let validator = compile_schema(&json!({"$ref":OPENAPI_META}))?;
@@ -252,7 +263,7 @@ pub(super) fn validate_document(document: &Value) -> Result<()> {
         schema["$ref"] = json!(format!("#{}", fragment(&pointer)));
         compile_schema(&schema).with_context(|| format!("compile contract schema at {pointer}"))?;
     }
-    super::quality::completed(document)?;
+    super::quality::completed_with(document, completed)?;
     Ok(())
 }
 
