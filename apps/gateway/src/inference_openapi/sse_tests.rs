@@ -255,3 +255,25 @@ fn inference_openapi_sse_parser_comments_multiline_and_trailing_bytes() {
         "accepted malformed JSON"
     );
 }
+
+#[test]
+fn inference_openapi_sse_chat_error_requires_openai_type() {
+    for kind in [None, Some(json!(7))] {
+        let mut error =
+            json!({"message":"unavailable","code":"invalid_upstream_response","param":null});
+        if let Some(kind) = kind {
+            error["type"] = kind;
+        }
+        let wire = role() + &frame(None, json!({"error":error}));
+        assert!(
+            validate(
+                Protocol::Chat {
+                    include_usage: false
+                },
+                wire.as_bytes()
+            )
+            .is_err(),
+            "accepted malformed OpenAI error type"
+        );
+    }
+}
