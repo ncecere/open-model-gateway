@@ -336,8 +336,8 @@ fn management_openapi_settings_every_incident_has_its_fired_email() {
 
 #[test]
 fn management_openapi_settings_email_test_error_is_a_delivery_category() {
-    // A concurrent configuration change can return host_not_allowed in a 200 body
-    // (#411); an unknown category is still refused.
+    // Disallowed relays return a recorded host_not_allowed failure (#411);
+    // an unknown category is still refused.
     let schema = json!({"$ref":"#/components/schemas/SettingsEmailTest"});
     let mut body = json!({"ok":false,"error":"host_not_allowed","recipient":"admin@example.test"});
     assert!(validate_value(artifact(), &schema, &body).is_ok());

@@ -12663,7 +12663,7 @@
                     "$ref": "#/components/schemas/IdentityTime"
                   },
                   "error": {
-                    "description": "Delivery category of the last failed test; null when it succeeded. host_not_allowed is never recorded here: the column's CHECK (migration 0010) lists only the other categories, so a test against a relay host the operator has not listed is usually answered 409 and records nothing (see #411).",
+                    "description": "Delivery category of the last failed test; null when it succeeded. Disallowed relay hosts record host_not_allowed (migration 0068, #411).",
                     "enum": [
                       "credential",
                       "address",
@@ -12672,6 +12672,7 @@
                       "authentication",
                       "rejected",
                       "timeout",
+                      "host_not_allowed",
                       null
                     ],
                     "type": [
@@ -13326,7 +13327,7 @@
             "additionalProperties": false,
             "properties": {
               "error": {
-                "description": "A delivery category (email.rs DeliveryError). A test against a relay host the operator has not listed is refused with host_not_allowed, but recording it violates the last-test CHECK (migration 0010), so the request is usually answered 409 (see #411); a concurrent configuration change makes the recording UPDATE match no row and can instead return it in a 200 body.",
+                "description": "A delivery category (email.rs DeliveryError). A test against a relay host the operator has not listed returns ok:false with host_not_allowed and records the failure against the saved configuration (migration 0068, #411).",
                 "enum": [
                   "credential",
                   "address",
@@ -36483,7 +36484,7 @@
     },
     "/api/v1/platform/settings/email/test": {
       "post": {
-        "description": "Tests saved server configuration only. Accepts absent bytes or an empty JSON object, not JSON null; no Content-Type requirement. A saved relay host the operator has not listed is refused with 409, because its host_not_allowed outcome cannot be recorded (last-test CHECK, migration 0010; see #411); only a concurrent configuration change can instead return host_not_allowed in a 200 body. Handler test throttles return 429 envelope with a retry instruction in the message (no numeric retry field or Retry-After header); serving authentication throttles are separate.",
+        "description": "Tests saved server configuration only. Accepts absent bytes or an empty JSON object, not JSON null; no Content-Type requirement. A saved relay host the operator has not listed returns 200 with ok:false and error:host_not_allowed, recorded in last_test against the saved configuration (migration 0068, #411). Handler test throttles return 429 envelope with a retry instruction in the message (no numeric retry field or Retry-After header); serving authentication throttles are separate.",
         "operationId": "post_api_v1_platform_settings_email_test",
         "parameters": [],
         "requestBody": {
