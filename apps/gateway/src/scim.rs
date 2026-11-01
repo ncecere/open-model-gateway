@@ -373,6 +373,12 @@ fn parse_filter(filter: &str) -> Result<(String, String), ScimError> {
         return Err(invalid_filter());
     }
     let value: String = serde_json::from_str(value.trim()).map_err(|_| invalid_filter())?;
+    // A JSON escape (`\u0000`) decodes to a real control character; NUL would reach
+    // PostgreSQL and fail as 500 (#414). No stored attribute we filter on can hold
+    // one: every one is written through `text()`, which refuses them.
+    if value.chars().any(char::is_control) {
+        return Err(invalid_filter());
+    }
     Ok((strip_schema(attribute).to_ascii_lowercase(), value))
 }
 
