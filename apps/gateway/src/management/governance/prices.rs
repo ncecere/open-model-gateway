@@ -1,4 +1,55 @@
 use super::*;
+
+#[test]
+fn management_openapi_slice3_price_and_routing_request_vectors() {
+    use openapi::requests::vectors;
+    vectors::<Price>(
+        "POST",
+        "/api/v1/platform/deployments/{deployment}/prices",
+        json!({"input_microusd_per_million":"1","output_microusd_per_million":"2","input_token_limit":100,"output_token_limit":10,"pricing_version":1,"cache_pricing":null,"price_lines":null,"max_units":null,"batch_price_lines":null}),
+    );
+    vectors::<Price>(
+        "POST",
+        "/api/v1/platform/deployments/{deployment}/prices",
+        json!({"input_microusd_per_million":null,"output_microusd_per_million":null,"input_token_limit":100,"output_token_limit":10,"pricing_version":3,"cache_pricing":null,"price_lines":[{"meter":"input_tokens","microusd_per_batch":"123","batch":1000000,"unit_label":"/M tokens","sku_label":"Input"}],"max_units":{"requests":"1"},"batch_price_lines":null}),
+    );
+    vectors::<Price>(
+        "POST",
+        "/api/v1/platform/deployments/{deployment}/prices",
+        json!({"input_microusd_per_million":"1","output_microusd_per_million":"2","input_token_limit":100,"output_token_limit":10,"pricing_version":2,"cache_pricing":{"read":{"status":"priced","microusd_per_million":"1"},"write":{"status":"unknown"},"write_5m":{"status":"not_applicable"},"write_1h":{"status":"priced","microusd_per_million":"2"}},"price_lines":null,"max_units":null,"batch_price_lines":null}),
+    );
+    // Externally tagged unit enums can also arrive as a one-key JSON map.
+    // Compare the real nested custom parser rather than assuming string-only.
+    let mapped_meter = json!({"pricing_version":3,"input_token_limit":100,"output_token_limit":10,"price_lines":[{"meter":{"input_tokens":null},"microusd_per_batch":"123","batch":1000000,"unit_label":"/M tokens","sku_label":"Input"}]});
+    // The contract states meters as strings, stricter than serde, which also takes
+    // the externally tagged object spelling of a unit variant (documented; the
+    // fixture pins it handler-only).
+    let schema = json!({"$ref":"#/components/schemas/SetupPrice"});
+    assert_eq!(
+        (
+            openapi::responses::validate_value(
+                openapi::responses::artifact(),
+                &schema,
+                &mapped_meter
+            )
+            .is_ok(),
+            serde_json::from_value::<Price>(mapped_meter).is_ok(),
+        ),
+        (false, true),
+        "externally tagged Meter representation: schema refuses, serde accepts"
+    );
+    vectors::<ModelRouting>(
+        "PUT",
+        "/api/v1/platform/models/{model}/routing",
+        json!({"strategy":"priority","max_attempts":2,"allow_ambiguous_failover":false,"required_residency":null}),
+    );
+    vectors::<DeploymentRouting>(
+        "PUT",
+        "/api/v1/platform/deployments/{deployment}/routing",
+        json!({"priority":0,"weight":1,"residency":null,"failure_threshold":3,"cooldown_seconds":30}),
+    );
+}
+
 use crate::billing::v3::{MaxUnits, PriceLines, display_lines, display_summary};
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -79,6 +130,22 @@ pub(crate) fn add_display(row: &mut Value) {
 /// A batch list covers exactly the standard list's meters (same meter,
 /// variant and tier keys, same not-applicable meters), so switching lists
 /// never turns a priced meter into a missing one.
+/// Test oracle: whether the REAL same-meters rule refuses a batch list beside its
+/// standard list. Both must parse as `PriceLines` (a list that does not parse is
+/// refused by its own rules, decided elsewhere).
+#[cfg(test)]
+pub(crate) fn batch_meters_refused(
+    standard: &serde_json::Value,
+    batch: &serde_json::Value,
+) -> bool {
+    match (
+        serde_json::from_value::<PriceLines>(standard.clone()),
+        serde_json::from_value::<PriceLines>(batch.clone()),
+    ) {
+        (Ok(standard), Ok(batch)) => !same_meters(&standard, &batch),
+        _ => false,
+    }
+}
 fn same_meters(standard: &PriceLines, batch: &PriceLines) -> bool {
     standard.1 == batch.1 && same_valued_meters(standard, batch)
 }

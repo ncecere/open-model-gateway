@@ -27,6 +27,42 @@ pub(super) const UNPROBED: &str = "x-omg-unprobed-location";
 pub(super) struct Declared {
     pub(super) kind: &'static str,
     pub(super) exempt: bool,
+    /// The location's identity within the operation: the component it lives in
+    /// (the innermost `$ref` it is reached through) plus its path inside that
+    /// component, with `allOf`/`then`/`else` segments dropped. One shared
+    /// definition reached through several paths (a `then` branch restating a
+    /// property, a second reference) has one identity.
+    pub(super) identity: String,
+}
+
+/// Where identities are measured from: the innermost referenced component and
+/// the length of the path at which it was entered.
+type Scope<'a> = Option<(&'a str, usize)>;
+
+fn identity(key: &str, scope: Scope) -> String {
+    let (base, relative) = match scope {
+        Some((component, at)) => (component, &key[at..]),
+        None => ("", key),
+    };
+    let mut out = String::from(base);
+    let mut parts = relative.split('/').skip(1).peekable();
+    while let Some(part) = parts.next() {
+        match part {
+            "allOf"
+                if parts
+                    .peek()
+                    .is_some_and(|n| n.bytes().all(|b| b.is_ascii_digit())) =>
+            {
+                parts.next();
+            }
+            "then" | "else" => {}
+            _ => {
+                out.push('/');
+                out.push_str(part);
+            }
+        }
+    }
+    out
 }
 
 fn segment(name: &str) -> String {
@@ -59,6 +95,7 @@ fn pattern_matches(pattern: &str, name: &str) -> Result<bool> {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn declare_child(
     document: &Value,
     child: &Value,
@@ -67,6 +104,7 @@ fn declare_child(
     out: &mut BTreeMap<String, Declared>,
     stack: &mut Vec<String>,
     depth: usize,
+    scope: Scope,
 ) -> Result<()> {
     if !child.is_object() {
         return Ok(());
@@ -80,10 +118,11 @@ fn declare_child(
         .or_insert(Declared {
             kind,
             exempt: excused,
+            identity: identity(&key, scope),
         });
     // The contents are declared too: an exemption excuses a location that is
     // never carried, not the contents of one that is (see `unreached`).
-    declare(document, child, &key, out, stack, depth + 1)
+    declare(document, child, &key, out, stack, depth + 1, scope)
 }
 
 fn declare(
@@ -93,22 +132,36 @@ fn declare(
     out: &mut BTreeMap<String, Declared>,
     stack: &mut Vec<String>,
     depth: usize,
+    scope: Scope,
 ) -> Result<()> {
     ensure!(depth < 48, "request schema nesting too deep");
     if let Some((target, pointer)) = follow(document, node)?
         && !stack.contains(&pointer)
     {
-        stack.push(pointer);
-        declare(document, target, key, out, stack, depth + 1)?;
+        stack.push(pointer.clone());
+        let entered = Some((pointer.as_str(), key.len()));
+        let declared = declare(document, target, key, out, stack, depth + 1, entered);
         stack.pop();
+        declared?;
     }
     for (name, child) in node["properties"].as_object().into_iter().flatten() {
         let child_key = format!("{key}/properties/{}", segment(name));
-        declare_child(document, child, child_key, "property", out, stack, depth)?;
+        declare_child(
+            document, child, child_key, "property", out, stack, depth, scope,
+        )?;
     }
     for (pattern, child) in node["patternProperties"].as_object().into_iter().flatten() {
         let child_key = format!("{key}/patternProperties/{}", segment(pattern));
-        declare_child(document, child, child_key, "map value", out, stack, depth)?;
+        declare_child(
+            document,
+            child,
+            child_key,
+            "map value",
+            out,
+            stack,
+            depth,
+            scope,
+        )?;
     }
     if let Some(child) = node.get("additionalProperties") {
         declare_child(
@@ -119,6 +172,7 @@ fn declare(
             out,
             stack,
             depth,
+            scope,
         )?;
     }
     for (i, child) in node["prefixItems"]
@@ -136,6 +190,7 @@ fn declare(
             out,
             stack,
             depth,
+            scope,
         )?;
     }
     if let Some(child) = node.get("items") {
@@ -147,12 +202,22 @@ fn declare(
             out,
             stack,
             depth,
+            scope,
         )?;
     }
     for keyword in ["oneOf", "anyOf"] {
         for (i, child) in node[keyword].as_array().into_iter().flatten().enumerate() {
             let child_key = format!("{key}/{keyword}/{i}");
-            declare_child(document, child, child_key, "union arm", out, stack, depth)?;
+            declare_child(
+                document,
+                child,
+                child_key,
+                "union arm",
+                out,
+                stack,
+                depth,
+                scope,
+            )?;
         }
     }
     for (i, child) in node["allOf"].as_array().into_iter().flatten().enumerate() {
@@ -163,6 +228,7 @@ fn declare(
             out,
             stack,
             depth + 1,
+            scope,
         )?;
     }
     for keyword in ["then", "else"] {
@@ -174,6 +240,7 @@ fn declare(
                 out,
                 stack,
                 depth + 1,
+                scope,
             )?;
         }
     }
@@ -183,7 +250,7 @@ fn declare(
 /// Every declared request location of a request schema, by schema path.
 pub(super) fn declared(document: &Value, schema: &Value) -> Result<BTreeMap<String, Declared>> {
     let mut out = BTreeMap::new();
-    declare(document, schema, "", &mut out, &mut Vec::new(), 0)?;
+    declare(document, schema, "", &mut out, &mut Vec::new(), 0, None)?;
     Ok(out)
 }
 
@@ -426,9 +493,19 @@ pub(super) fn unreached(
     reached: &BTreeSet<String>,
 ) -> Result<Vec<(String, &'static str)>> {
     let declared = declared(document, schema)?;
+    // A shared definition reached through any path of the operation counts on
+    // every path to it (see [`Declared::identity`]); union arms stay distinct.
+    let reached_identities: BTreeSet<&str> = reached
+        .iter()
+        .filter_map(|key| declared.get(key).map(|d| d.identity.as_str()))
+        .collect();
     Ok(declared
         .iter()
-        .filter(|(key, _)| !reached.contains(*key) && !excused(key, &declared, reached))
+        .filter(|(key, location)| {
+            !reached.contains(*key)
+                && !reached_identities.contains(location.identity.as_str())
+                && !excused(key, &declared, reached)
+        })
         .map(|(key, location)| (key.clone(), location.kind))
         .collect())
 }

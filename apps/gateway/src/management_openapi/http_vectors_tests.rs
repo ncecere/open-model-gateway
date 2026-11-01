@@ -1030,6 +1030,57 @@ fn management_openapi_http_vectors_an_unsendable_decisive_body_vector_fails() {
     .unwrap();
 }
 
+/// An unsendable-boundary reason is judged per OPERATION, across its body runs:
+/// a run reports it only where its location has a decisive bound (and whether
+/// that run needed it), and the reason is stale only when no run needed it. One
+/// body may be able to send a bound another cannot (slice 3: the provider PATCH
+/// reference padded from an env name versus from an aws:role ARN).
+#[test]
+fn management_openapi_http_vectors_unsendable_reason_is_judged_across_runs() {
+    let schema = |cap: u64| {
+        json!({"type":"object","required":["kind","big"],"additionalProperties":false,
+            "properties":{"kind":{"enum":["a","b"]},"big":{"type":"string","x-omg-unsendable-boundary":REASON}},
+            "allOf":[{"if":{"properties":{"kind":{"const":"b"}},"required":["kind"]},
+                "then":{"properties":{"big":{"maxLength":cap}}}}]})
+    };
+    let used = |cap: u64, valid: Value| {
+        let document = body_only(schema(cap));
+        super::http_vectors::body_plan(
+            &document,
+            &document["paths"][TEMPLATE]["post"],
+            &valid,
+            &[],
+            &[],
+        )
+        .unwrap_or_else(|e| panic!("{e:#}"))
+        .exempt_used
+    };
+    let big = |needed: bool| std::collections::BTreeMap::from([("/big".to_owned(), needed)]);
+    // No bound applies in this run: nothing to judge.
+    assert!(used(150_000, json!({"kind":"a","big":"abc"})).is_empty());
+    // The bound applies and cannot be sent: the reason is needed.
+    assert_eq!(used(150_000, json!({"kind":"b","big":"abc"})), big(true));
+    // The bound applies and CAN be sent: this run does not need it.
+    assert_eq!(used(9000, json!({"kind":"b","big":"abc"})), big(false));
+    // Across runs: needed by one run is used; needed by none is stale.
+    let mut fixtures = super::responses::PositiveFixtures::default();
+    fixtures.record_unsendable("POST", TEMPLATE, &big(false));
+    fixtures.record_unsendable("POST", TEMPLATE, &big(true));
+    fixtures.record_unsendable("POST", TEMPLATE, &big(false));
+    assert!(
+        fixtures
+            .stale_unsendable(&format!("POST {TEMPLATE}"))
+            .is_empty()
+    );
+    let mut fixtures = super::responses::PositiveFixtures::default();
+    fixtures.record_unsendable("POST", TEMPLATE, &big(false));
+    fixtures.record_unsendable("POST", TEMPLATE, &big(false));
+    assert_eq!(
+        fixtures.stale_unsendable(&format!("POST {TEMPLATE}")),
+        vec!["/big".to_owned()]
+    );
+}
+
 #[test]
 fn management_openapi_http_vectors_non_decisive_drops_are_counted_not_silent() {
     use super::http_vectors::Notes;
@@ -1081,6 +1132,56 @@ fn reach_of(document: &Value, valid: &Value, seeds: &[(&str, Value)]) -> BTreeSe
 }
 fn unreached_in(document: &Value, reached: &BTreeSet<String>) -> Vec<(String, &'static str)> {
     request_reach::unreached(document, body_schema_of(document), reached).unwrap()
+}
+/// A shared definition reached through one path is reached through every other
+/// path of the same operation (a `then` branch that restates the property, a
+/// second reference): the identity of a location is the component it lives in,
+/// plus its path inside the component, with `allOf`/`then`/`else` segments
+/// dropped. Union arms stay distinct, and an arm no path reached stays unreached.
+#[test]
+fn management_openapi_request_reach_shared_definitions_count_once_per_operation() {
+    let document = json!({"openapi":"3.1.0","paths":{TEMPLATE:{"post":{
+        "requestBody":{"required":true,"content":{"application/json":{"schema":{
+            "type":"object","additionalProperties":false,
+            "properties":{"kind":{"enum":["a","b"]},"line":{"$ref":"#/components/schemas/Line"}},
+            "allOf":[{"if":{"properties":{"kind":{"const":"b"}},"required":["kind"]},
+                "then":{"properties":{"line":{"$ref":"#/components/schemas/Line"}}}}]}}}},
+        "responses":{"200":{"description":"ok"}}}}},
+        "components":{"schemas":{"Line":{"oneOf":[
+            {"type":"object","properties":{"x":{"type":"string"}},"required":["x"],"additionalProperties":false},
+            {"type":"object","properties":{"y":{"type":"string"}},"required":["y"],"additionalProperties":false}]}}}});
+    // Both arms reached through the base property.
+    let reached: BTreeSet<String> = [
+        "/properties/kind",
+        "/properties/line",
+        "/properties/line/oneOf/0",
+        "/properties/line/oneOf/0/properties/x",
+        "/properties/line/oneOf/1",
+        "/properties/line/oneOf/1/properties/y",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    assert_eq!(unreached_paths(&document, &reached), Vec::<String>::new());
+    // Only arm 0 reached: arm 1 stays unreached on every path.
+    let partial: BTreeSet<String> = reached
+        .iter()
+        .filter(|path| !path.contains("oneOf/1"))
+        .cloned()
+        .collect();
+    let left = unreached_paths(&document, &partial);
+    assert!(
+        left.contains(&"/properties/line/oneOf/1".to_owned()),
+        "{left:?}"
+    );
+    assert!(
+        left.contains(&"/allOf/0/then/properties/line/oneOf/1".to_owned()),
+        "{left:?}"
+    );
+    assert!(
+        !left.iter().any(|path| path.contains("oneOf/0")),
+        "{left:?}"
+    );
 }
 fn unreached_paths(document: &Value, reached: &BTreeSet<String>) -> Vec<String> {
     unreached_in(document, reached)
@@ -2198,20 +2299,40 @@ fn management_openapi_http_vectors_query_candidates_must_straddle_too() {
 
 #[test]
 fn management_openapi_http_vectors_a_stale_unsendable_boundary_is_refused() {
-    // The boundary CAN be sent, so the reviewed reason is dead weight.
-    let stale = json!({"type":"string","maxLength":9000,"x-omg-unsendable-boundary":REASON});
-    let text = format!("{:#}", unsendable_body(stale, json!("abc")).unwrap_err());
-    assert!(
-        text.contains("stale")
-            && text.contains("/big")
-            && text.contains("x-omg-unsendable-boundary"),
-        "{text}"
+    // The boundary CAN be sent, so the reviewed reason is dead weight: the run
+    // reports it unused, and an operation whose runs never need it is stale
+    // (judged across runs; see `..._unsendable_reason_is_judged_across_runs`).
+    let unused = |schema: Value, valid: Value| {
+        let document = property_document(schema);
+        let used = super::http_vectors::body_plan(
+            &document,
+            &document["paths"][TEMPLATE]["post"],
+            &json!({"big":valid}),
+            &[],
+            &[],
+        )
+        .unwrap_or_else(|e| panic!("{e:#}"))
+        .exempt_used;
+        assert_eq!(
+            used,
+            std::collections::BTreeMap::from([("/big".to_owned(), false)])
+        );
+        let mut fixtures = super::responses::PositiveFixtures::default();
+        fixtures.record_unsendable("POST", TEMPLATE, &used);
+        assert_eq!(
+            fixtures.stale_unsendable(&format!("POST {TEMPLATE}")),
+            vec!["/big".to_owned()]
+        );
+    };
+    unused(
+        json!({"type":"string","maxLength":9000,"x-omg-unsendable-boundary":REASON}),
+        json!("abc"),
     );
     // An array location likewise.
-    let stale = json!({"type":"array","maxItems":3,"items":{"type":"string"},
-        "x-omg-unsendable-boundary":REASON});
-    let text = format!("{:#}", unsendable_body(stale, json!(["a"])).unwrap_err());
-    assert!(text.contains("stale") && text.contains("/big"), "{text}");
+    unused(
+        json!({"type":"array","maxItems":3,"items":{"type":"string"},"x-omg-unsendable-boundary":REASON}),
+        json!(["a"]),
+    );
     // A query parameter likewise.
     let text = format!(
         "{:#}",
@@ -2595,4 +2716,46 @@ async fn management_openapi_http_vectors_binary_only_size_and_media_statuses_are
         }),
     );
     run_uploads(&app, &upload_document()).await.unwrap();
+}
+
+/// One run reports EVERY operation's contract failure: a failing vector run is
+/// recorded (sanitised: method, template, kind, pointers) and the next operation
+/// still runs; `finish` then fails once, naming them all (a run used to stop at
+/// the first disagreement, so each fix revealed only the next one).
+#[tokio::test]
+async fn management_openapi_http_vectors_failures_are_collected_across_operations() {
+    use axum::http::{HeaderMap, StatusCode};
+    let mut fixtures = super::responses::PositiveFixtures::default();
+    for (template, body) in [
+        (
+            "/api/v1/platform/catalogs/{id}/models",
+            json!({"model_ids":[uuid::Uuid::nil()]}),
+        ),
+        (
+            "/api/v1/platform/models/{id}/catalogs",
+            json!({"catalog_ids":[uuid::Uuid::nil()]}),
+        ),
+    ] {
+        super::http_vectors::body_vectors_http(&mut fixtures, "PUT", template, body, async |_| {
+            super::http_vectors::Probe::from(Captured {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                headers: HeaderMap::new(),
+                bytes: Default::default(),
+                method: "PUT".into(),
+                template: Some(template.into()),
+                query: vec![],
+            })
+        })
+        .await;
+    }
+    let failures = fixtures.failures();
+    assert_eq!(failures.len(), 2, "{failures:?}");
+    assert!(
+        failures[0].contains("PUT /api/v1/platform/catalogs/{id}/models"),
+        "{failures:?}"
+    );
+    assert!(
+        failures[1].contains("PUT /api/v1/platform/models/{id}/catalogs"),
+        "{failures:?}"
+    );
 }
