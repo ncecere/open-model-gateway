@@ -208,3 +208,32 @@ fn inference_openapi_generation_responses_event_matches_snapshot_status() {
         "completed event accepted non-completed snapshot"
     );
 }
+
+#[test]
+fn inference_openapi_generation_protocol_profiles_are_source_derived() {
+    use crate::{inference::types::ApiProtocol as P, providers::capabilities::PROFILES};
+    let good = generated();
+    for (path, protocol) in [
+        ("/v1/chat/completions", P::ChatCompletions),
+        ("/v1/responses", P::Responses),
+        ("/v1/messages", P::Messages),
+    ] {
+        let expected = PROFILES
+            .iter()
+            .filter(|(_, protocols)| protocols.contains(&protocol))
+            .map(|(name, _)| json!(name))
+            .collect::<Vec<_>>();
+        let actual = good["paths"][path]["post"]["x-omg-protocol-profiles"]
+            .as_array()
+            .expect("missing generation protocol profiles");
+        assert!(actual == &expected, "generation protocol-profile drift");
+        for profiles in [serde_json::Value::Null, json!(["invented-profile"])] {
+            let mut bad = good.clone();
+            bad["paths"][path]["post"]["x-omg-protocol-profiles"] = profiles;
+            assert!(
+                super::generator::verify(&bad).is_err(),
+                "accepted protocol-profile drift"
+            );
+        }
+    }
+}
