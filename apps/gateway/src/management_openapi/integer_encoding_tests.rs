@@ -337,3 +337,47 @@ async fn management_openapi_integer_encoding_bare_zero_query_refusal_and_excepti
         "wrong query failure kind"
     );
 }
+
+#[test]
+fn management_openapi_integer_encoding_untyped_finite_domains() {
+    for (schema, value, zero_valid) in [
+        (json!({"const":3}), json!(3), false),
+        (json!({"enum":[1,2]}), json!(2), false),
+        (json!({"const":0}), json!(0), true),
+        (json!({"enum":[0,2]}), json!(2), true),
+    ] {
+        let document = json!({"components":{"schemas":{}},"requestBody":{
+            "required":true,"content":{"application/json":{"schema":schema}}}});
+        let cases = body_cases(&document, &document, &value, &[]).unwrap();
+        for kind in ["integer encoding fraction", "integer encoding exponent"] {
+            assert!(
+                cases.iter().any(|c| c.kind == kind && c.accept),
+                "missing untyped finite-domain integer encoding"
+            );
+        }
+        for kind in [
+            "integer encoding negative zero",
+            "integer encoding bare negative zero",
+        ] {
+            assert!(
+                cases.iter().any(|c| c.kind == kind && c.accept) == zero_valid,
+                "incorrect finite-domain zero encoding coverage"
+            );
+        }
+        let operation =
+            json!({"parameters":[{"in":"query","name":"count","required":true,"schema":schema}]});
+        let cases = query_cases(
+            &json!({}),
+            &operation,
+            &[("count".into(), value.to_string())],
+            &[],
+        )
+        .unwrap();
+        assert!(
+            cases
+                .iter()
+                .any(|c| c.kind == "integer encoding fraction" && c.accept),
+            "missing untyped finite-domain query encoding"
+        );
+    }
+}
