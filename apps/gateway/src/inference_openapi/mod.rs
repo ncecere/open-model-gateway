@@ -183,3 +183,6 @@ mod media;
 
 #[path = "jobs_tests.rs"]
 mod jobs;
+
+#[path = "realtime_tests.rs"]
+mod realtime;
