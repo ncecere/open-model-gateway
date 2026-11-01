@@ -201,5 +201,26 @@ async fn inference_openapi_generation_model_trim_matches_real_handlers(pool: PgP
         r::capture("POST", path, response).await;
         super::generation::validate_request(r::artifact(), path, &body)
             .expect("contract must accept handler model trim boundary");
+        let mut blank = body;
+        blank["model"] = json!(" \t\n\u{85}\u{a0}\u{2003}\u{3000}");
+        assert!(
+            super::generation::validate_request(r::artifact(), path, &blank).is_err(),
+            "Rust whitespace-only model remains refused"
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header("authorization", format!("Bearer {key}"))
+            .header("content-type", "application/json")
+            .header("anthropic-version", "2023-06-01")
+            .body(Body::from(blank.to_string()))
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "whitespace-only model refusal status"
+        );
+        r::capture("POST", path, response).await;
     }
 }

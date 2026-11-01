@@ -1891,8 +1891,9 @@
           "properties": {
             "model": {
               "type": "string",
-              "pattern": "\\S",
-              "x-omg-max-bytes": 200
+              "x-omg-max-bytes": 200,
+              "minLength": 1,
+              "description": "Nonempty after Rust str::trim(), enforced by generation-normalization; ECMA regex whitespace differs (notably U+FEFF). UTF-8 byte limit remains enforced."
             },
             "messages": {
               "type": "array",
@@ -2125,8 +2126,9 @@
           "prefixItems": [
             {
               "type": "string",
-              "pattern": "\\S",
-              "x-omg-max-bytes": 200
+              "x-omg-max-bytes": 200,
+              "minLength": 1,
+              "description": "Nonempty after Rust str::trim(), enforced by generation-normalization; ECMA regex whitespace differs (notably U+FEFF). UTF-8 byte limit remains enforced."
             },
             {
               "type": "array",
@@ -2363,8 +2365,9 @@
           "properties": {
             "model": {
               "type": "string",
-              "pattern": "\\S",
-              "x-omg-max-bytes": 200
+              "x-omg-max-bytes": 200,
+              "minLength": 1,
+              "description": "Nonempty after Rust str::trim(), enforced by generation-normalization; ECMA regex whitespace differs (notably U+FEFF). UTF-8 byte limit remains enforced."
             },
             "input": {
               "oneOf": [
@@ -2543,8 +2546,9 @@
           "prefixItems": [
             {
               "type": "string",
-              "pattern": "\\S",
-              "x-omg-max-bytes": 200
+              "x-omg-max-bytes": 200,
+              "minLength": 1,
+              "description": "Nonempty after Rust str::trim(), enforced by generation-normalization; ECMA regex whitespace differs (notably U+FEFF). UTF-8 byte limit remains enforced."
             },
             {
               "oneOf": [
@@ -2727,8 +2731,9 @@
           "properties": {
             "model": {
               "type": "string",
-              "pattern": "\\S",
-              "x-omg-max-bytes": 200
+              "x-omg-max-bytes": 200,
+              "minLength": 1,
+              "description": "Nonempty after Rust str::trim(), enforced by generation-normalization; ECMA regex whitespace differs (notably U+FEFF). UTF-8 byte limit remains enforced."
             },
             "messages": {
               "type": "array",
@@ -3072,8 +3077,9 @@
           "prefixItems": [
             {
               "type": "string",
-              "pattern": "\\S",
-              "x-omg-max-bytes": 200
+              "x-omg-max-bytes": 200,
+              "minLength": 1,
+              "description": "Nonempty after Rust str::trim(), enforced by generation-normalization; ECMA regex whitespace differs (notably U+FEFF). UTF-8 byte limit remains enforced."
             },
             {
               "type": "array",
@@ -4701,7 +4707,7 @@
           "properties": {
             "name": {
               "type": "string",
-              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+              "minLength": 1
             },
             "arguments": {
               "type": "string"

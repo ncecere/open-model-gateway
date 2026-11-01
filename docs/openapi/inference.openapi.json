@@ -1475,7 +1475,7 @@
                 "type": "string"
               },
               "name": {
-                "pattern": "^[A-Za-z0-9_-]{1,64}$",
+                "minLength": 1,
                 "type": "string"
               }
             },
@@ -3523,7 +3523,8 @@
                 ]
               },
               "model": {
-                "pattern": "\\S",
+                "description": "Nonempty after Rust str::trim(), enforced by generation-normalization; ECMA regex whitespace differs (notably U+FEFF). UTF-8 byte limit remains enforced.",
+                "minLength": 1,
                 "type": "string",
                 "x-omg-max-bytes": 200
               },
@@ -3705,7 +3706,8 @@
             "minItems": 12,
             "prefixItems": [
               {
-                "pattern": "\\S",
+                "description": "Nonempty after Rust str::trim(), enforced by generation-normalization; ECMA regex whitespace differs (notably U+FEFF). UTF-8 byte limit remains enforced.",
+                "minLength": 1,
                 "type": "string",
                 "x-omg-max-bytes": 200
               },
@@ -4501,7 +4503,8 @@
                 ]
               },
               "model": {
-                "pattern": "\\S",
+                "description": "Nonempty after Rust str::trim(), enforced by generation-normalization; ECMA regex whitespace differs (notably U+FEFF). UTF-8 byte limit remains enforced.",
+                "minLength": 1,
                 "type": "string",
                 "x-omg-max-bytes": 200
               },
@@ -4704,7 +4707,8 @@
             "minItems": 15,
             "prefixItems": [
               {
-                "pattern": "\\S",
+                "description": "Nonempty after Rust str::trim(), enforced by generation-normalization; ECMA regex whitespace differs (notably U+FEFF). UTF-8 byte limit remains enforced.",
+                "minLength": 1,
                 "type": "string",
                 "x-omg-max-bytes": 200
               },
@@ -5306,7 +5310,8 @@
                 ]
               },
               "model": {
-                "pattern": "\\S",
+                "description": "Nonempty after Rust str::trim(), enforced by generation-normalization; ECMA regex whitespace differs (notably U+FEFF). UTF-8 byte limit remains enforced.",
+                "minLength": 1,
                 "type": "string",
                 "x-omg-max-bytes": 200
               },
@@ -5419,7 +5424,8 @@
             "minItems": 12,
             "prefixItems": [
               {
-                "pattern": "\\S",
+                "description": "Nonempty after Rust str::trim(), enforced by generation-normalization; ECMA regex whitespace differs (notably U+FEFF). UTF-8 byte limit remains enforced.",
+                "minLength": 1,
                 "type": "string",
                 "x-omg-max-bytes": 200
               },
