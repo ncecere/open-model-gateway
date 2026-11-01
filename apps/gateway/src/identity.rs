@@ -133,7 +133,11 @@ impl SignedClaims {
             .map(|value| {
                 value
                     .as_str()
-                    .filter(|s| !s.is_empty() && s.len() <= 1024)
+                    // #428: a control character would reach PostgreSQL as a
+                    // bound group value; refuse the claim like any malformed one.
+                    .filter(|s| {
+                        !s.is_empty() && s.len() <= 1024 && !s.chars().any(char::is_control)
+                    })
                     .map(str::to_owned)
             })
             .collect()

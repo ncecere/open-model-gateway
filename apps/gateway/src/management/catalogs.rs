@@ -1,6 +1,38 @@
 //! Multiple live catalogs, replacement overrides, and independent authorization sources.
 use super::*;
 
+#[test]
+fn management_openapi_slice3_catalog_request_vectors() {
+    use openapi::requests::vectors;
+    let nil = Uuid::nil();
+    for (method, path) in [
+        ("POST", "/api/v1/platform/catalogs"),
+        ("PATCH", "/api/v1/platform/catalogs/{id}"),
+    ] {
+        vectors::<CatalogInput>(method, path, json!({"name":"Catalog","description":null}));
+    }
+    vectors::<Models>(
+        "PUT",
+        "/api/v1/platform/catalogs/{id}/models",
+        json!({"model_ids":[nil]}),
+    );
+    vectors::<CatalogIds>(
+        "PUT",
+        "/api/v1/platform/models/{id}/catalogs",
+        json!({"catalog_ids":[nil]}),
+    );
+    vectors::<DefaultsMatrix>(
+        "PUT",
+        "/api/v1/platform/catalog-defaults",
+        json!({"personal":[nil],"team":[nil],"project":[nil]}),
+    );
+    vectors::<Grant>(
+        "POST",
+        "/api/v1/workspaces/{ws}/models",
+        json!({"model_id":nil}),
+    );
+}
+
 #[cfg(test)]
 #[test]
 fn management_openapi_slice2_catalog_assignment_request_vectors() {
@@ -188,7 +220,10 @@ struct CatalogInput {
     description: Option<String>,
 }
 fn catalog_valid(b: &CatalogInput) -> bool {
-    valid_name(&b.name) && b.description.as_ref().is_none_or(|s| s.len() <= 2000)
+    valid_name(&b.name)
+        && b.description
+            .as_deref()
+            .is_none_or(super::description_valid)
 }
 async fn create_catalog(
     State(s): State<Store>,

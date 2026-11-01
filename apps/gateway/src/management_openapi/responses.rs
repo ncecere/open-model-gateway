@@ -15,6 +15,18 @@ pub(crate) const IDENTITY_SELF_SERVICE_AREAS: &[&str] = &[
     "me",
     "access-request-targets",
 ];
+pub(crate) const SLICE3_AREAS: &[&str] = &[
+    "platform/catalog-defaults",
+    "platform/catalogs",
+    "platform/deployments",
+    "platform/model-setup",
+    "platform/models",
+    "platform/providers",
+    "workspaces/{ws}/available-models",
+    "workspaces/{ws}/catalog",
+    "workspaces/{ws}/models",
+    "workspaces/{ws}/policy",
+];
 pub(crate) const SLICE2_AREAS: &[&str] = &[
     "platform/access-requests",
     "platform/oidc",
@@ -57,6 +69,7 @@ pub(crate) const SLICE6_AREAS: &[&str] = &[
 ];
 pub(crate) const AREA_GROUPS: &[(&str, &[&str])] = &[
     ("IDENTITY_SELF_SERVICE_AREAS", IDENTITY_SELF_SERVICE_AREAS),
+    ("SLICE3_AREAS", SLICE3_AREAS),
     ("SLICE2_AREAS", SLICE2_AREAS),
     ("SLICE5_AREAS", SLICE5_AREAS),
     ("SLICE6_AREAS", SLICE6_AREAS),
@@ -124,6 +137,14 @@ pub(crate) fn validator(
     let mut cache = CACHE.get_or_init(Default::default).lock().unwrap();
     if let Some(validator) = cache.get(&key) {
         return Ok(validator.clone());
+    }
+    // Bounded: every entry carries its own copy of the whole artifact, and the
+    // vector walks validate many distinct combined fragments (union arms,
+    // conditionals, positional items), so an unbounded cache grew to the size of
+    // the CI runner's memory. A full cache is flushed; hot fragments recompile.
+    const CAPACITY: usize = 128;
+    if cache.len() >= CAPACITY {
+        cache.clear();
     }
     let validator = compile(document, schema)?;
     cache.insert(key, validator.clone());
@@ -661,6 +682,12 @@ pub(crate) struct PositiveFixtures {
     /// Declared request locations (schema paths) each operation's body vector
     /// runs carried, by `METHOD template`; see `request_reach`.
     reach: std::collections::BTreeMap<String, BTreeSet<String>>,
+    /// Per `METHOD template`: each reviewed unsendable-boundary location some
+    /// run bounded, and whether ANY run needed its reason.
+    unsendable: std::collections::BTreeMap<String, std::collections::BTreeMap<String, bool>>,
+    /// Sanitised contract failures of vector runs (method, template, kind,
+    /// pointers; never a captured value), reported together by `finish`.
+    failures: Vec<String>,
 }
 impl PositiveFixtures {
     /// Record that every HTTP boundary vector of `kind` (`query` or `body`)
@@ -683,6 +710,41 @@ impl PositiveFixtures {
             .entry(format!("{method} {template}"))
             .or_default()
             .extend(reached.iter().cloned());
+    }
+    /// A vector run's contract failure: recorded so the remaining operations
+    /// still run, and reported with every other failure by `finish`.
+    pub(crate) fn record_failure(&mut self, error: &anyhow::Error) {
+        self.failures.push(format!("{error:#}"));
+    }
+    /// The recorded contract failures, in run order.
+    pub(crate) fn failures(&self) -> &[String] {
+        &self.failures
+    }
+    /// The unsendable-boundary use of one body vector run; runs of one operation
+    /// accumulate (a reason any run needed is used).
+    pub(super) fn record_unsendable(
+        &mut self,
+        method: &str,
+        template: &str,
+        used: &std::collections::BTreeMap<String, bool>,
+    ) {
+        let entry = self
+            .unsendable
+            .entry(format!("{method} {template}"))
+            .or_default();
+        for (location, needed) in used {
+            *entry.entry(location.clone()).or_insert(false) |= *needed;
+        }
+    }
+    /// Reviewed unsendable-boundary reasons of `key` that no run needed.
+    pub(super) fn stale_unsendable(&self, key: &str) -> Vec<String> {
+        self.unsendable
+            .get(key)
+            .into_iter()
+            .flatten()
+            .filter(|(_, used)| !**used)
+            .map(|(location, _)| location.clone())
+            .collect()
     }
     /// Coverage and vector gaps for the given `METHOD template` operations.
     pub(crate) fn check_contract_coverage(
@@ -729,6 +791,12 @@ impl PositiveFixtures {
                         "{key}: the request body has no executed HTTP boundary vectors (call http_vectors::body_vectors_http)"
                     ));
                 }
+            }
+            for location in self.stale_unsendable(key) {
+                failures.push(format!(
+                    "{key}: {location}: {} is stale: every decisive vector of this location could be sent in every run of the operation; delete it",
+                    super::http_vectors::UNSENDABLE
+                ));
             }
             // Every declared request location must have been carried by some
             // valid body or seed of the operation (or be reviewed-exempt).
@@ -837,9 +905,32 @@ impl PositiveFixtures {
             .filter(|key| areas.contains(&area(key.split_once(' ').unwrap().1)))
             .cloned()
             .collect();
-        require_positives(&expected, &observed).unwrap_or_else(|e| refuse(e));
-        self.check_contract_coverage(artifact(), &expected)
-            .unwrap_or_else(|e| refuse(e));
+        // Every problem of the run at once: vector failures, missing positives
+        // and coverage gaps (one run lists everything that is left).
+        let mut problems = self.failures.clone();
+        if let Err(e) = require_positives(&expected, &observed) {
+            problems.push(format!("{e:#}"));
+        }
+        if let Err(e) = self.check_contract_coverage(artifact(), &expected) {
+            problems.push(format!("{e:#}"));
+        }
+        if super::http_vectors::plan_only() {
+            // Vectors were not sent: only request-location gaps and vector-plan
+            // failures are meaningful (response coverage needs the vectors), and
+            // the run can never pass.
+            refuse(anyhow::anyhow!(
+                "PLAN-ONLY run (OMG_OPENAPI_PLAN_ONLY=1, vectors not sent; never a pass): {} problem(s):\n{}",
+                problems.len(),
+                problems.join("\n")
+            ));
+        }
+        if !problems.is_empty() {
+            refuse(anyhow::anyhow!(
+                "{} problem(s):\n{}",
+                problems.len(),
+                problems.join("\n")
+            ));
+        }
     }
 }
 
@@ -1051,7 +1142,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(count, 156);
+        assert_eq!(count, 204);
     }
     #[test]
     fn management_openapi_response_rejects_incomplete_completed_slot() {
