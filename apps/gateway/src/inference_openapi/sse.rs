@@ -74,6 +74,10 @@ pub(crate) fn validate(protocol: Protocol, bytes: &[u8]) -> Result<Outcome> {
                 ensure!(event.is_none(), "Chat has an invented event type");
                 if value.get("error").is_some() {
                     ensure!(count > 0, "Chat error before role chunk");
+                    ensure!(
+                        value["error"]["type"].is_string(),
+                        "OpenAI SSE error type missing"
+                    );
                     error(&value["error"], true)?;
                     terminal = Some(Outcome::Errored);
                 } else {
