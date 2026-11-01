@@ -5,6 +5,7 @@
 //! Documentation: `docs/openapi/inference/README.md`.
 mod errors;
 mod errors_tests;
+mod generation;
 mod generator;
 mod responses;
 mod wiring_tests;

@@ -54,6 +54,8 @@ impl ProviderAdapter for FixtureAdapter {
         matches!(
             protocol,
             ApiProtocol::ChatCompletions
+                | ApiProtocol::Responses
+                | ApiProtocol::Messages
                 | ApiProtocol::Embeddings
                 | ApiProtocol::Rerank
                 | ApiProtocol::Systemone

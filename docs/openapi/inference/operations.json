@@ -4,13 +4,17 @@
       "access": "InferenceKey",
       "token_policy": "Denied",
       "scope": null,
-      "operation": {}
+      "operation": {
+        "x-omg-cancellation": "dropping_http_stream_cancels_transport_and_retains_unknown_hold"
+      }
     },
     "POST /v1/responses": {
       "access": "InferenceKey",
       "token_policy": "Denied",
       "scope": null,
-      "operation": {}
+      "operation": {
+        "x-omg-cancellation": "dropping_responses_http_stream_cancels_transport_and_retains_unknown_hold"
+      }
     },
     "POST /v1/audio/transcriptions": {
       "access": "InferenceKey",
@@ -201,7 +205,8 @@
               }
             }
           }
-        }
+        },
+        "x-omg-cancellation": "dropping_messages_http_stream_cancels_transport_and_retains_unknown_hold"
       }
     }
   },
