@@ -1149,6 +1149,28 @@ pub(crate) async fn inference_openapi_handshake_fixtures(
     let c = send("?model=company%2Fsmart".into()).await;
     assert_eq!(c.status.as_u16(), 101, "real upgrade status");
     fixtures.observe(&c);
+    // Browser authentication alternative: the inference key is offered only
+    // in the key subprotocol, never alongside a Bearer header or upstream.
+    let mut request = g.request("company/smart");
+    request.headers_mut().insert(
+        "sec-websocket-protocol",
+        format!("realtime, openai-insecure-api-key.{}", g.key())
+            .parse()
+            .unwrap(),
+    );
+    let (mut socket, response) = match connect_async(request).await {
+        Ok(exchange) => exchange,
+        Err(_) => panic!("key-subprotocol fixture handshake failed"),
+    };
+    let _ = socket.close(None).await;
+    let c = capture(
+        "GET",
+        "/v1/realtime?model=company%2Fsmart",
+        response.map(|body| axum::body::Body::from(body.unwrap_or_default())),
+    )
+    .await;
+    assert_eq!(c.status.as_u16(), 101, "key-subprotocol upgrade status");
+    fixtures.observe(&c);
     fixtures
         .query_vectors(
             "GET",
