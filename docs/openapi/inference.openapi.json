@@ -167,7 +167,7 @@
             }
           }
         },
-        "description": "The request body exceeds the route's cap. A declared Content-Length over the cap is refused by the body-limit layer with the plain text `length limit exceeded`, before any handler runs; a streamed body is refused by the handler with this JSON error (a different type/code on /v1/embeddings).",
+        "description": "The request body exceeds the route's cap. A declared Content-Length over the cap is refused by the body-limit layer with the plain text `length limit exceeded`, before any handler runs; a streamed body is refused by the handler with an OpenAI-shaped JSON error of type invalid_request_error: code payload_too_large (message Request body too large) on every route except Chat Completions and Responses, which answer code invalid_request_error with their invalid-request message (a follow-up issue tracks unifying the code).",
         "headers": {
           "cache-control": {
             "$ref": "#/components/headers/NoStore"
@@ -514,7 +514,6 @@
           "authentication_error",
           "budget_exceeded",
           "context_length_exceeded",
-          "invalid_request",
           "invalid_request_error",
           "invalid_upstream_response",
           "job_limit_exceeded",
@@ -577,7 +576,6 @@
           "authentication_error",
           "context_length_exceeded",
           "insufficient_quota",
-          "invalid_request",
           "invalid_request_error",
           "invalid_upstream_response",
           "model_not_found",
@@ -1941,7 +1939,7 @@
     },
     "/v1/embeddings": {
       "post": {
-        "description": "String-only, non-streaming embeddings (protocols/embeddings.rs). Embeddings are an input-only workload: usage never has completion tokens. A capability no deployment supports is 501 unsupported_capability (not the 400 of the other workloads). Oversized bodies: the shared 2 MiB cap.",
+        "description": "String-only, non-streaming embeddings (protocols/embeddings.rs). Embeddings are an input-only workload: usage never has completion tokens. A capability no deployment supports is 501 unsupported_capability (not the 400 of the other workloads). Oversized bodies: the shared 2 MiB cap. Streamed oversized bodies return the shared 413 JSON envelope: type invalid_request_error, code payload_too_large, message Request body too large (#432).",
         "operationId": "post_v1_embeddings",
         "parameters": [],
         "requestBody": {

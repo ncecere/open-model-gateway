@@ -41,7 +41,7 @@
       "scope": null,
       "operation": {
         "summary": "Create embeddings",
-        "description": "String-only, non-streaming embeddings (protocols/embeddings.rs). Embeddings are an input-only workload: usage never has completion tokens. A capability no deployment supports is 501 unsupported_capability (not the 400 of the other workloads). Oversized bodies: the shared 2 MiB cap.",
+        "description": "String-only, non-streaming embeddings (protocols/embeddings.rs). Embeddings are an input-only workload: usage never has completion tokens. A capability no deployment supports is 501 unsupported_capability (not the 400 of the other workloads). Oversized bodies: the shared 2 MiB cap. Streamed oversized bodies return the shared 413 JSON envelope: type invalid_request_error, code payload_too_large, message Request body too large (#432).",
         "x-omg-limits": {
           "body_bytes": {
             "default": 2097152,

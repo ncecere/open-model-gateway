@@ -41,3 +41,6 @@ Notes for changes on `main` after [v0.9.3](v0.9.3.md). They become the next rele
 - Rust: hyper 1.12.0, tokio 1.54.1, webpki-roots 1.0.11, jsonschema 0.60.2, syn 3.0.9.
 - Web: openai 7.45.0, lucide-react 1.62.0, @tanstack/react-query 5.105.0.
 - Images: node 22.23.4-bookworm-slim and a refreshed rust image digest; CI: taiki-e/install-action 2.87.32.
+## Fixes
+
+- `/v1/embeddings` now returns the shared OpenAI-shaped `payload_too_large` error for oversized streamed request bodies (#432).

@@ -95,13 +95,6 @@ pub(super) const OPENAI_TRANSPORT: &[(&str, &str, &str)] = &[
         "payload_too_large",
         "src/protocols/mod.rs",
     ),
-    // `POST /v1/embeddings` answers an oversized streamed body with this
-    // type/code, unlike every other route (src/protocols/embeddings.rs).
-    (
-        "invalid_request",
-        "invalid_request",
-        "src/protocols/embeddings.rs",
-    ),
 ];
 /// Anthropic `error.type` values rendered outside `error_body`.
 pub(super) const ANTHROPIC_TRANSPORT: &[(&str, &str)] = &[
@@ -346,7 +339,7 @@ pub(super) fn components() -> Result<Value> {
         "OpenAiBadRequest":openai("Invalid request (the closed field set, a bound, a type) or, for the non-generation workloads, an explicit unsupported_capability; error.code tells them apart", &["should-retry"]),
         "OpenAiUnauthorized":openai("Missing, malformed, duplicate, unknown, revoked or no-longer-valid inference key (always authentication_error)", &["www-authenticate"]),
         "OpenAiNotFound":openai("The model does not exist or is not available to this key and workspace (model_not_found)", &[]),
-        "OpenAiPayloadTooLarge":json!({"description":"The request body exceeds the route's cap. A declared Content-Length over the cap is refused by the body-limit layer with the plain text `length limit exceeded`, before any handler runs; a streamed body is refused by the handler with this JSON error (a different type/code on /v1/embeddings).","headers":header(&[]),"content":{"text/plain":{"schema":{"const":"length limit exceeded"}},"application/json":{"schema":{"$ref":"#/components/schemas/OpenAiErrorEnvelope"}}}}),
+        "OpenAiPayloadTooLarge":json!({"description":"The request body exceeds the route's cap. A declared Content-Length over the cap is refused by the body-limit layer with the plain text `length limit exceeded`, before any handler runs; a streamed body is refused by the handler with an OpenAI-shaped JSON error of type invalid_request_error: code payload_too_large (message Request body too large) on every route except Chat Completions and Responses, which answer code invalid_request_error with their invalid-request message (a follow-up issue tracks unifying the code).","headers":header(&[]),"content":{"text/plain":{"schema":{"const":"length limit exceeded"}},"application/json":{"schema":{"$ref":"#/components/schemas/OpenAiErrorEnvelope"}}}}),
         "OpenAiTooManyRequests":openai("Rate or concurrency limit (rate_limit_error), or a permanent budget, unresolved-usage or token-reservation denial (x-should-retry: false)", &["should-retry"]),
         "OpenAiNotImplemented":openai("A capability no registered deployment supports (unsupported_capability); permanent", &["should-retry"]),
         "OpenAiBadGateway":openai("The provider was unavailable or returned an invalid or incomplete response", &[]),
