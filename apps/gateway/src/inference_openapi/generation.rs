@@ -20,6 +20,10 @@ pub(super) fn validate_request(
     path: &str,
     body: &serde_json::Value,
 ) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        serde_json::to_vec(body)?.len() <= 2 * 1024 * 1024,
+        "generation JSON body cap"
+    );
     let schema = &document["paths"][path]["post"]["x-omg-request-schema"];
     super::responses::validate_value(document, schema, body)?;
     anyhow::ensure!(
@@ -88,4 +92,58 @@ pub(super) fn validate_sse(
             .ok_or_else(|| anyhow::anyhow!("undocumented SSE event kind"))?;
         super::responses::validate_value(document, schema, body)
     })
+}
+
+/// Header constraints accompany, rather than close, the HTTP header map:
+/// unrelated headers are ignored. Beta names are deliberately an open list.
+pub(super) fn validate_request_headers(
+    document: &serde_json::Value,
+    path: &str,
+    headers: &axum::http::HeaderMap,
+) -> anyhow::Result<()> {
+    use anyhow::{Context, ensure};
+    if path != "/v1/messages" {
+        return Ok(());
+    }
+    for parameter in document["paths"][path]["post"]["parameters"]
+        .as_array()
+        .context("protocol header declarations")?
+    {
+        if parameter["in"] != "header" {
+            continue;
+        }
+        let name = parameter["name"].as_str().context("protocol header name")?;
+        let values = headers.get_all(name).iter().collect::<Vec<_>>();
+        ensure!(
+            parameter["required"] != true || !values.is_empty(),
+            "required protocol header missing"
+        );
+        let maximum = parameter["x-omg-max-occurrences"]
+            .as_u64()
+            .context("protocol header occurrence bound")?;
+        ensure!(
+            values.len() as u64 <= maximum,
+            "protocol header occurrence bound"
+        );
+        for value in values {
+            let value = value
+                .to_str()
+                .map_err(|_| anyhow::anyhow!("protocol header is not visible ASCII"))?;
+            super::responses::validate_value(
+                document,
+                &parameter["schema"],
+                &serde_json::json!(value),
+            )?;
+        }
+    }
+    let betas = headers
+        .get_all("anthropic-beta")
+        .iter()
+        .map(|v| {
+            v.to_str()
+                .map_err(|_| anyhow::anyhow!("beta header is not visible ASCII"))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    crate::providers::messages::validate_beta_headers(betas)
+        .map_err(|_| anyhow::anyhow!("beta token count, format or denied prefix"))
 }

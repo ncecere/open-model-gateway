@@ -414,6 +414,13 @@ pub(super) fn error_response(error: InferenceError) -> Response {
 }
 
 #[cfg(test)]
+pub(crate) fn openapi_normalize(value: Value) -> Result<ChatRequest, InferenceError> {
+    serde_json::from_value::<Request>(value)
+        .map_err(|_| InferenceError::InvalidRequest)?
+        .normalize()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     fn parse(value: Value) -> Result<ChatRequest, InferenceError> {
@@ -635,11 +642,4 @@ mod tests {
         };
         assert!(usage_json(usage).is_none());
     }
-}
-
-#[cfg(test)]
-pub(crate) fn openapi_normalize(value: Value) -> Result<ChatRequest, InferenceError> {
-    serde_json::from_value::<Request>(value)
-        .map_err(|_| InferenceError::InvalidRequest)?
-        .normalize()
 }

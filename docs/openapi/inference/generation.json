@@ -44,9 +44,19 @@
                       "index": 0,
                       "message": {
                         "role": "assistant",
-                        "content": "hello"
+                        "content": "hello",
+                        "tool_calls": [
+                          {
+                            "id": "call_example",
+                            "type": "function",
+                            "function": {
+                              "name": "ping",
+                              "arguments": "{}"
+                            }
+                          }
+                        ]
                       },
-                      "finish_reason": "stop"
+                      "finish_reason": "tool_calls"
                     }
                   ]
                 }
@@ -56,7 +66,7 @@
                   "type": "string",
                   "contentMediaType": "text/event-stream"
                 },
-                "example": "data: {\"id\":\"chatcmpl_example\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"company/smart\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl_example\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"company/smart\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl_example\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"company/smart\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+                "example": "data: {\"id\":\"chatcmpl_example\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"company/smart\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl_example\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"company/smart\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl_example\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"company/smart\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_example\",\"type\":\"function\",\"function\":{\"name\":\"ping\",\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl_example\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"company/smart\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n",
                 "x-omg-sse": {
                   "events": {
                     "message": {
@@ -75,7 +85,9 @@
                     "[DONE]"
                   ],
                   "error_event": "error",
-                  "truncated_is_positive": false
+                  "truncated_is_positive": false,
+                  "event_field": "absent; message/error classify JSON data, not named events",
+                  "usage": "Only with stream_options.include_usage:true; absent or null until all required counters are known."
                 }
               }
             }
@@ -131,7 +143,14 @@
             "trigger": "no configured deployment supports requested capability"
           }
         ],
-        "x-omg-request-constraints": "generation-normalization"
+        "x-omg-request-constraints": "generation-normalization",
+        "x-omg-limits": {
+          "body_bytes": {
+            "default": 2097152,
+            "env": null,
+            "source": "Fixed root RequestBodyLimitLayer in apps/gateway/src/http.rs"
+          }
+        }
       }
     },
     "POST /v1/responses": {
@@ -189,6 +208,14 @@
                           "annotations": []
                         }
                       ]
+                    },
+                    {
+                      "id": "fc_example",
+                      "type": "function_call",
+                      "status": "completed",
+                      "call_id": "call_example",
+                      "name": "ping",
+                      "arguments": "{}"
                     }
                   ],
                   "store": false,
@@ -200,7 +227,7 @@
                   "type": "string",
                   "contentMediaType": "text/event-stream"
                 },
-                "example": "event: response.created\ndata: {\"response\":{\"id\":\"resp_example\",\"object\":\"response\",\"created_at\":1,\"model\":\"company/smart\",\"status\":\"in_progress\",\"error\":null,\"incomplete_details\":null,\"output\":[],\"store\":false,\"usage\":null},\"type\":\"response.created\",\"sequence_number\":0}\n\nevent: response.in_progress\ndata: {\"response\":{\"id\":\"resp_example\",\"object\":\"response\",\"created_at\":1,\"model\":\"company/smart\",\"status\":\"in_progress\",\"error\":null,\"incomplete_details\":null,\"output\":[],\"store\":false,\"usage\":null},\"type\":\"response.in_progress\",\"sequence_number\":1}\n\nevent: response.output_item.added\ndata: {\"output_index\":0,\"item\":{\"id\":\"msg_example\",\"type\":\"message\",\"role\":\"assistant\",\"status\":\"in_progress\",\"content\":[]},\"type\":\"response.output_item.added\",\"sequence_number\":2}\n\nevent: response.content_part.added\ndata: {\"output_index\":0,\"item_id\":\"msg_example\",\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]},\"type\":\"response.content_part.added\",\"sequence_number\":3}\n\nevent: response.output_text.delta\ndata: {\"output_index\":0,\"item_id\":\"msg_example\",\"content_index\":0,\"delta\":\"hello\",\"type\":\"response.output_text.delta\",\"sequence_number\":4}\n\nevent: response.output_text.done\ndata: {\"output_index\":0,\"item_id\":\"msg_example\",\"content_index\":0,\"text\":\"hello\",\"type\":\"response.output_text.done\",\"sequence_number\":5}\n\nevent: response.content_part.done\ndata: {\"output_index\":0,\"item_id\":\"msg_example\",\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"hello\",\"annotations\":[]},\"type\":\"response.content_part.done\",\"sequence_number\":6}\n\nevent: response.output_item.done\ndata: {\"output_index\":0,\"item\":{\"id\":\"msg_example\",\"type\":\"message\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\",\"annotations\":[]}]},\"type\":\"response.output_item.done\",\"sequence_number\":7}\n\nevent: response.completed\ndata: {\"response\":{\"id\":\"resp_example\",\"object\":\"response\",\"created_at\":1,\"model\":\"company/smart\",\"status\":\"completed\",\"error\":null,\"incomplete_details\":null,\"output\":[{\"id\":\"msg_example\",\"type\":\"message\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\",\"annotations\":[]}]}],\"store\":false,\"usage\":null},\"type\":\"response.completed\",\"sequence_number\":8}\n\n",
+                "example": "event: response.created\ndata: {\"response\":{\"id\":\"resp_example\",\"object\":\"response\",\"created_at\":1,\"model\":\"company/smart\",\"status\":\"in_progress\",\"error\":null,\"incomplete_details\":null,\"output\":[],\"store\":false,\"usage\":null},\"type\":\"response.created\",\"sequence_number\":0}\n\nevent: response.in_progress\ndata: {\"response\":{\"id\":\"resp_example\",\"object\":\"response\",\"created_at\":1,\"model\":\"company/smart\",\"status\":\"in_progress\",\"error\":null,\"incomplete_details\":null,\"output\":[],\"store\":false,\"usage\":null},\"type\":\"response.in_progress\",\"sequence_number\":1}\n\nevent: response.output_item.added\ndata: {\"output_index\":0,\"item\":{\"id\":\"msg_example\",\"type\":\"message\",\"role\":\"assistant\",\"status\":\"in_progress\",\"content\":[]},\"type\":\"response.output_item.added\",\"sequence_number\":2}\n\nevent: response.content_part.added\ndata: {\"output_index\":0,\"item_id\":\"msg_example\",\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]},\"type\":\"response.content_part.added\",\"sequence_number\":3}\n\nevent: response.output_text.delta\ndata: {\"output_index\":0,\"item_id\":\"msg_example\",\"content_index\":0,\"delta\":\"hello\",\"type\":\"response.output_text.delta\",\"sequence_number\":4}\n\nevent: response.output_text.done\ndata: {\"output_index\":0,\"item_id\":\"msg_example\",\"content_index\":0,\"text\":\"hello\",\"type\":\"response.output_text.done\",\"sequence_number\":5}\n\nevent: response.content_part.done\ndata: {\"output_index\":0,\"item_id\":\"msg_example\",\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"hello\",\"annotations\":[]},\"type\":\"response.content_part.done\",\"sequence_number\":6}\n\nevent: response.output_item.done\ndata: {\"output_index\":0,\"item\":{\"id\":\"msg_example\",\"type\":\"message\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\",\"annotations\":[]}]},\"type\":\"response.output_item.done\",\"sequence_number\":7}\n\nevent: response.output_item.added\ndata: {\"output_index\":1,\"item\":{\"id\":\"fc_example\",\"type\":\"function_call\",\"status\":\"in_progress\",\"call_id\":\"call_example\",\"name\":\"ping\",\"arguments\":\"\"},\"type\":\"response.output_item.added\",\"sequence_number\":8}\n\nevent: response.function_call_arguments.delta\ndata: {\"output_index\":1,\"item_id\":\"fc_example\",\"delta\":\"{}\",\"type\":\"response.function_call_arguments.delta\",\"sequence_number\":9}\n\nevent: response.function_call_arguments.done\ndata: {\"output_index\":1,\"item_id\":\"fc_example\",\"arguments\":\"{}\",\"name\":\"ping\",\"type\":\"response.function_call_arguments.done\",\"sequence_number\":10}\n\nevent: response.output_item.done\ndata: {\"output_index\":1,\"item\":{\"id\":\"fc_example\",\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"call_example\",\"name\":\"ping\",\"arguments\":\"{}\"},\"type\":\"response.output_item.done\",\"sequence_number\":11}\n\nevent: response.completed\ndata: {\"response\":{\"id\":\"resp_example\",\"object\":\"response\",\"created_at\":1,\"model\":\"company/smart\",\"status\":\"completed\",\"error\":null,\"incomplete_details\":null,\"output\":[{\"id\":\"msg_example\",\"type\":\"message\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\",\"annotations\":[]}]},{\"id\":\"fc_example\",\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"call_example\",\"name\":\"ping\",\"arguments\":\"{}\"}],\"store\":false,\"usage\":null},\"type\":\"response.completed\",\"sequence_number\":12}\n\n",
                 "x-omg-sse": {
                   "events": {
                     "response.created": {
@@ -254,7 +281,8 @@
                     "response.incomplete"
                   ],
                   "error_event": "error",
-                  "truncated_is_positive": false
+                  "truncated_is_positive": false,
+                  "event_field": "required; identical to data.type"
                 }
               }
             }
@@ -310,7 +338,19 @@
             "trigger": "no configured deployment supports requested capability"
           }
         ],
-        "x-omg-request-constraints": "generation-normalization"
+        "x-omg-request-constraints": "generation-normalization",
+        "x-omg-limits": {
+          "body_bytes": {
+            "default": 2097152,
+            "env": null,
+            "source": "Fixed root RequestBodyLimitLayer in apps/gateway/src/http.rs"
+          },
+          "output_buffer_bytes": {
+            "default": 4194304,
+            "env": null,
+            "source": "protocols/responses.rs OUTPUT_LIMIT; aggregate content/tool buffer"
+          }
+        }
       }
     },
     "POST /v1/messages": {
@@ -345,9 +385,15 @@
                     {
                       "type": "text",
                       "text": "hello"
+                    },
+                    {
+                      "type": "tool_use",
+                      "id": "call_example",
+                      "name": "ping",
+                      "input": {}
                     }
                   ],
-                  "stop_reason": "end_turn",
+                  "stop_reason": "tool_use",
                   "stop_sequence": null,
                   "usage": {
                     "input_tokens": 1,
@@ -360,7 +406,7 @@
                   "type": "string",
                   "contentMediaType": "text/event-stream"
                 },
-                "example": "event: message_start\ndata: {\"message\":{\"id\":\"msg_example\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"company/smart\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0}},\"type\":\"message_start\"}\n\nevent: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"},\"type\":\"content_block_start\"}\n\nevent: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"},\"type\":\"content_block_delta\"}\n\nevent: content_block_stop\ndata: {\"index\":0,\"type\":\"content_block_stop\"}\n\nevent: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":1,\"output_tokens\":1},\"type\":\"message_delta\"}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+                "example": "event: message_start\ndata: {\"message\":{\"id\":\"msg_example\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"company/smart\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0}},\"type\":\"message_start\"}\n\nevent: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"},\"type\":\"content_block_start\"}\n\nevent: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"},\"type\":\"content_block_delta\"}\n\nevent: content_block_stop\ndata: {\"index\":0,\"type\":\"content_block_stop\"}\n\nevent: content_block_start\ndata: {\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"call_example\",\"name\":\"ping\",\"input\":{}},\"type\":\"content_block_start\"}\n\nevent: content_block_delta\ndata: {\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{}\"},\"type\":\"content_block_delta\"}\n\nevent: content_block_stop\ndata: {\"index\":1,\"type\":\"content_block_stop\"}\n\nevent: message_delta\ndata: {\"delta\":{\"stop_reason\":\"tool_use\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":1,\"output_tokens\":1},\"type\":\"message_delta\"}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
                 "x-omg-sse": {
                   "events": {
                     "message_start": {
@@ -395,7 +441,8 @@
                     "message_stop"
                   ],
                   "error_event": "error",
-                  "truncated_is_positive": false
+                  "truncated_is_positive": false,
+                  "event_field": "required; identical to data.type"
                 }
               }
             }
@@ -641,7 +688,9 @@
             "required": true,
             "schema": {
               "const": "2023-06-01"
-            }
+            },
+            "description": "Exactly one occurrence with the literal version 2023-06-01.",
+            "x-omg-max-occurrences": 1
           },
           {
             "name": "anthropic-beta",
@@ -650,7 +699,8 @@
             "schema": {
               "type": "string",
               "minLength": 1,
-              "maxLength": 1024
+              "maxLength": 1024,
+              "pattern": "^[\\x09\\x20-\\x7E]+$"
             },
             "description": "Open comma-separated list, not an allowlist. At most 16 header occurrences, 32 total nonempty tokens; ASCII graphical characters plus space/tab. Tokens are trimmed for case-insensitive deny-prefix checks.",
             "x-omg-denied-prefixes": [
@@ -661,7 +711,9 @@
               "files-api-",
               "mcp-client-",
               "computer-use-"
-            ]
+            ],
+            "x-omg-max-occurrences": 16,
+            "x-omg-max-tokens": 32
           }
         ],
         "x-omg-refusals": [
@@ -694,9 +746,33 @@
             "envelope": "AnthropicErrorEnvelope",
             "code": null,
             "trigger": "no configured deployment supports requested capability"
+          },
+          {
+            "status": 501,
+            "envelope": "AnthropicErrorEnvelope",
+            "code": null,
+            "trigger": "content_filter finish cannot be represented as a Messages terminal; streaming emits a final error without message_stop"
           }
         ],
-        "x-omg-request-constraints": "generation-normalization"
+        "x-omg-request-constraints": "generation-normalization",
+        "x-omg-limits": {
+          "body_bytes": {
+            "default": 2097152,
+            "env": null,
+            "source": "Fixed root RequestBodyLimitLayer in apps/gateway/src/http.rs"
+          },
+          "output_buffer_bytes": {
+            "default": 16777216,
+            "env": null,
+            "source": "protocols/messages.rs OUTPUT_LIMIT; aggregate native/canonical buffers"
+          },
+          "images": {
+            "maximum": 20,
+            "decoded_bytes_per_image": 5242880,
+            "encoded_bytes_per_image": 6990508,
+            "scope": "All message and tool-result images combined; the aggregate HTTP body cap applies first."
+          }
+        }
       }
     }
   },
@@ -772,7 +848,7 @@
               ]
             }
           ],
-          "minItems": 1,
+          "minItems": 4,
           "maxItems": 4,
           "items": false
         }
@@ -964,12 +1040,7 @@
                     "minLength": 1
                   },
                   "tool_calls": {
-                    "type": "array",
-                    "items": {
-                      "$ref": "#/components/schemas/GenToolCall"
-                    },
-                    "minItems": 0,
-                    "maxItems": 0
+                    "const": []
                   }
                 }
               }
@@ -999,12 +1070,7 @@
                   },
                   "refusal": false,
                   "tool_calls": {
-                    "type": "array",
-                    "items": {
-                      "$ref": "#/components/schemas/GenToolCall"
-                    },
-                    "minItems": 0,
-                    "maxItems": 0
+                    "const": []
                   }
                 }
               }
@@ -1015,14 +1081,7 @@
           "type": "array",
           "prefixItems": [
             {
-              "type": "string",
-              "enum": [
-                "system",
-                "developer",
-                "user",
-                "assistant",
-                "tool"
-              ]
+              "const": "assistant"
             },
             {
               "oneOf": [
@@ -1042,22 +1101,60 @@
               "minItems": 0
             },
             {
-              "oneOf": [
-                {
-                  "type": "string",
-                  "minLength": 1
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "type": "null"
             },
             {
               "type": "null"
             }
           ],
-          "minItems": 1,
+          "minItems": 4,
           "maxItems": 5,
+          "items": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string",
+              "enum": [
+                "system",
+                "developer",
+                "user"
+              ]
+            },
+            {
+              "type": "string"
+            },
+            {
+              "const": []
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "minItems": 4,
+          "maxItems": 4,
+          "items": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": "tool"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "const": []
+            },
+            {
+              "type": "string",
+              "minLength": 1
+            }
+          ],
+          "minItems": 4,
+          "maxItems": 4,
           "items": false
         }
       ]
@@ -1146,10 +1243,7 @@
                         "type": "string"
                       },
                       "annotations": {
-                        "type": "array",
-                        "items": false,
-                        "minItems": 0,
-                        "maxItems": 0
+                        "const": []
                       }
                     },
                     "required": [
@@ -1344,7 +1438,7 @@
               ]
             }
           ],
-          "minItems": 4,
+          "minItems": 5,
           "maxItems": 5,
           "items": false
         }
@@ -1412,7 +1506,9 @@
             "data": {
               "type": "string",
               "minLength": 1,
-              "maxLength": 6990508
+              "x-omg-max-encoded-bytes": 6990508,
+              "x-omg-max-decoded-bytes": 5242880,
+              "description": "Nonempty base64 with matching PNG/JPEG/GIF/WebP magic, validated by generation-normalization. The 2 MiB aggregate HTTP JSON cap dominates the normalizer's 5 MiB decoded-image cap; an individual 6990508-byte boundary cannot ride an accepted HTTP body."
             }
           },
           "required": [
@@ -1804,7 +1900,8 @@
                 "$ref": "#/components/schemas/GenChatMessage"
               },
               "minItems": 1,
-              "maxItems": 4096
+              "maxItems": 4096,
+              "x-omg-unsendable-boundary": "The shared automatic vector planner is capped at 1000 array items; generation accepts 4096. inference_openapi_generation_large_message_boundaries executes the real 4096/4097 HTTP straddle separately with compact text messages, without raising the planner memory bound."
             },
             "stream": {
               "oneOf": [
@@ -1893,30 +1990,90 @@
                       ]
                     },
                     {
-                      "type": "object",
-                      "properties": {
-                        "type": {
-                          "const": "function"
-                        },
-                        "function": {
+                      "oneOf": [
+                        {
                           "type": "object",
-                          "properties": {
-                            "name": {
-                              "type": "string",
-                              "pattern": "^[A-Za-z0-9_-]{1,64}$"
-                            }
-                          },
                           "required": [
-                            "name"
+                            "type",
+                            "function"
                           ],
-                          "additionalProperties": false
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "function"
+                            },
+                            "function": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "name"
+                                  ],
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "name": {
+                                      "type": "string",
+                                      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "array",
+                                  "prefixItems": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                                    }
+                                  ],
+                                  "minItems": 1,
+                                  "maxItems": 1,
+                                  "items": false
+                                }
+                              ]
+                            }
+                          }
+                        },
+                        {
+                          "type": "array",
+                          "prefixItems": [
+                            {
+                              "const": "function"
+                            },
+                            {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "name"
+                                  ],
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "name": {
+                                      "type": "string",
+                                      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "array",
+                                  "prefixItems": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                                    }
+                                  ],
+                                  "minItems": 1,
+                                  "maxItems": 1,
+                                  "items": false
+                                }
+                              ]
+                            }
+                          ],
+                          "minItems": 2,
+                          "maxItems": 2,
+                          "items": false
                         }
-                      },
-                      "required": [
-                        "type",
-                        "function"
-                      ],
-                      "additionalProperties": false
+                      ]
                     }
                   ]
                 },
@@ -1977,7 +2134,8 @@
                 "$ref": "#/components/schemas/GenChatMessage"
               },
               "minItems": 1,
-              "maxItems": 4096
+              "maxItems": 4096,
+              "x-omg-unsendable-boundary": "The shared automatic vector planner is capped at 1000 array items; generation accepts 4096. inference_openapi_generation_large_message_boundaries executes the real 4096/4097 HTTP straddle separately with compact text messages, without raising the planner memory bound."
             },
             {
               "oneOf": [
@@ -2066,30 +2224,90 @@
                       ]
                     },
                     {
-                      "type": "object",
-                      "properties": {
-                        "type": {
-                          "const": "function"
-                        },
-                        "function": {
+                      "oneOf": [
+                        {
                           "type": "object",
-                          "properties": {
-                            "name": {
-                              "type": "string",
-                              "pattern": "^[A-Za-z0-9_-]{1,64}$"
-                            }
-                          },
                           "required": [
-                            "name"
+                            "type",
+                            "function"
                           ],
-                          "additionalProperties": false
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "function"
+                            },
+                            "function": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "name"
+                                  ],
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "name": {
+                                      "type": "string",
+                                      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "array",
+                                  "prefixItems": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                                    }
+                                  ],
+                                  "minItems": 1,
+                                  "maxItems": 1,
+                                  "items": false
+                                }
+                              ]
+                            }
+                          }
+                        },
+                        {
+                          "type": "array",
+                          "prefixItems": [
+                            {
+                              "const": "function"
+                            },
+                            {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "name"
+                                  ],
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "name": {
+                                      "type": "string",
+                                      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "array",
+                                  "prefixItems": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                                    }
+                                  ],
+                                  "minItems": 1,
+                                  "maxItems": 1,
+                                  "items": false
+                                }
+                              ]
+                            }
+                          ],
+                          "minItems": 2,
+                          "maxItems": 2,
+                          "items": false
                         }
-                      },
-                      "required": [
-                        "type",
-                        "function"
-                      ],
-                      "additionalProperties": false
+                      ]
                     }
                   ]
                 },
@@ -2131,12 +2349,12 @@
             }
           ],
           "items": false,
-          "minItems": 2,
+          "minItems": 12,
           "maxItems": 12
         }
       ],
       "x-omg-request-constraints": "generation-normalization",
-      "description": "JSON Schema validates structure. x-omg-request-constraints additionally enforces serde integer wire representation, UTF-8 byte limits, token alias equality, role/content rules, tool-name uniqueness and correlation, and conditional provider capability checks. No store or conversation persistence."
+      "description": "JSON Schema validates structure. x-omg-request-constraints additionally enforces serde integer wire representation, UTF-8 byte limits, token alias equality, role/content rules, tool-name uniqueness and conditional field rules; provider-specific capability refusals are listed separately. No store or conversation persistence. The semantic extension also enforces the 2 MiB serialized JSON body cap and image encoding, signature, decoded-size and aggregate image-count rules."
     },
     "post_v1_responsesRequest": {
       "oneOf": [
@@ -2171,7 +2389,8 @@
                   "minItems": 1,
                   "maxItems": 4096
                 }
-              ]
+              ],
+              "x-omg-unsendable-boundary": "The shared automatic vector planner is capped at 1000 array items; generation accepts 4096. inference_openapi_generation_large_message_boundaries executes the real 4096/4097 HTTP straddle separately with compact text messages, without raising the planner memory bound."
             },
             "instructions": {
               "oneOf": [
@@ -2350,7 +2569,8 @@
                   "minItems": 1,
                   "maxItems": 4096
                 }
-              ]
+              ],
+              "x-omg-unsendable-boundary": "The shared automatic vector planner is capped at 1000 array items; generation accepts 4096. inference_openapi_generation_large_message_boundaries executes the real 4096/4097 HTTP straddle separately with compact text messages, without raising the planner memory bound."
             },
             {
               "oneOf": [
@@ -2493,12 +2713,12 @@
             }
           ],
           "items": false,
-          "minItems": 2,
+          "minItems": 12,
           "maxItems": 12
         }
       ],
       "x-omg-request-constraints": "generation-normalization",
-      "description": "JSON Schema validates structure. x-omg-request-constraints additionally enforces serde integer wire representation, UTF-8 byte limits, token alias equality, role/content rules, tool-name uniqueness and correlation, and conditional provider capability checks. No store or conversation persistence."
+      "description": "JSON Schema validates structure. x-omg-request-constraints additionally enforces serde integer wire representation, UTF-8 byte limits, token alias equality, role/content rules, tool-name uniqueness and conditional field rules; provider-specific capability refusals are listed separately. No store or conversation persistence. The semantic extension also enforces the 2 MiB serialized JSON body cap and image encoding, signature, decoded-size and aggregate image-count rules."
     },
     "post_v1_messagesRequest": {
       "oneOf": [
@@ -2516,7 +2736,8 @@
                 "$ref": "#/components/schemas/GenMessagesTurn"
               },
               "minItems": 1,
-              "maxItems": 4096
+              "maxItems": 4096,
+              "x-omg-unsendable-boundary": "The shared automatic vector planner is capped at 1000 array items; generation accepts 4096. inference_openapi_generation_large_message_boundaries executes the real 4096/4097 HTTP straddle separately with compact text messages, without raising the planner memory bound."
             },
             "system": {
               "oneOf": [
@@ -2860,7 +3081,8 @@
                 "$ref": "#/components/schemas/GenMessagesTurn"
               },
               "minItems": 1,
-              "maxItems": 4096
+              "maxItems": 4096,
+              "x-omg-unsendable-boundary": "The shared automatic vector planner is capped at 1000 array items; generation accepts 4096. inference_openapi_generation_large_message_boundaries executes the real 4096/4097 HTTP straddle separately with compact text messages, without raising the planner memory bound."
             },
             {
               "oneOf": [
@@ -3184,12 +3406,12 @@
             }
           ],
           "items": false,
-          "minItems": 4,
+          "minItems": 15,
           "maxItems": 15
         }
       ],
       "x-omg-request-constraints": "generation-normalization",
-      "description": "JSON Schema validates structure. x-omg-request-constraints additionally enforces serde integer wire representation, UTF-8 byte limits, token alias equality, role/content rules, tool-name uniqueness and correlation, and conditional provider capability checks. No store or conversation persistence."
+      "description": "JSON Schema validates structure. x-omg-request-constraints additionally enforces serde integer wire representation, UTF-8 byte limits, token alias equality, role/content rules, tool-name uniqueness and conditional field rules; provider-specific capability refusals are listed separately. No store or conversation persistence. The semantic extension also enforces the 2 MiB serialized JSON body cap and image encoding, signature, decoded-size and aggregate image-count rules."
     },
     "GenChatUsage": {
       "type": "object",
@@ -3348,7 +3570,7 @@
                   "tool_calls": {
                     "type": "array",
                     "items": {
-                      "$ref": "#/components/schemas/GenToolCall"
+                      "$ref": "#/components/schemas/GenOutputToolCall"
                     },
                     "minItems": 1
                   }
@@ -3522,10 +3744,7 @@
           "type": "string"
         },
         "annotations": {
-          "type": "array",
-          "items": false,
-          "minItems": 0,
-          "maxItems": 0
+          "const": []
         }
       },
       "required": [
@@ -3611,96 +3830,26 @@
       "additionalProperties": false
     },
     "post_v1_responsesResponse": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/GenResponseSnapshot"
         },
-        "object": {
-          "const": "response"
-        },
-        "created_at": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "model": {
-          "type": "string"
-        },
-        "status": {
-          "type": "string",
-          "enum": [
-            "in_progress",
-            "completed",
-            "incomplete"
-          ]
-        },
-        "error": {
-          "type": "null"
-        },
-        "incomplete_details": {
-          "oneOf": [
-            {
-              "type": "object",
-              "properties": {
-                "reason": {
-                  "type": "string",
-                  "enum": [
-                    "max_output_tokens",
-                    "content_filter"
-                  ]
-                }
-              },
-              "required": [
-                "reason"
-              ],
-              "additionalProperties": false
-            },
-            {
-              "type": "null"
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "completed",
+                "incomplete"
+              ]
             }
-          ]
-        },
-        "output": {
-          "type": "array",
-          "items": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/GenOutputMessage"
-              },
-              {
-                "$ref": "#/components/schemas/GenOutputCall"
-              }
-            ]
           },
-          "minItems": 0
-        },
-        "store": {
-          "const": false
-        },
-        "usage": {
-          "oneOf": [
-            {
-              "$ref": "#/components/schemas/GenResponseUsage"
-            },
-            {
-              "type": "null"
-            }
+          "required": [
+            "status"
           ]
         }
-      },
-      "required": [
-        "id",
-        "object",
-        "created_at",
-        "model",
-        "status",
-        "error",
-        "incomplete_details",
-        "output",
-        "store",
-        "usage"
-      ],
-      "additionalProperties": false
+      ]
     },
     "post_v1_messagesResponse": {
       "type": "object",
@@ -3794,7 +3943,32 @@
           "minimum": 0
         },
         "response": {
-          "$ref": "#/components/schemas/post_v1_responsesResponse"
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/GenResponseSnapshot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "const": "in_progress"
+                },
+                "incomplete_details": {
+                  "type": "null"
+                },
+                "output": {
+                  "const": []
+                },
+                "usage": {
+                  "type": "null"
+                }
+              },
+              "required": [
+                "status",
+                "incomplete_details"
+              ]
+            }
+          ]
         }
       },
       "required": [
@@ -3815,7 +3989,32 @@
           "minimum": 0
         },
         "response": {
-          "$ref": "#/components/schemas/post_v1_responsesResponse"
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/GenResponseSnapshot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "const": "in_progress"
+                },
+                "incomplete_details": {
+                  "type": "null"
+                },
+                "output": {
+                  "const": []
+                },
+                "usage": {
+                  "type": "null"
+                }
+              },
+              "required": [
+                "status",
+                "incomplete_details"
+              ]
+            }
+          ]
         }
       },
       "required": [
@@ -3836,7 +4035,26 @@
           "minimum": 0
         },
         "response": {
-          "$ref": "#/components/schemas/post_v1_responsesResponse"
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/GenResponseSnapshot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "const": "completed"
+                },
+                "incomplete_details": {
+                  "type": "null"
+                }
+              },
+              "required": [
+                "status",
+                "incomplete_details"
+              ]
+            }
+          ]
         }
       },
       "required": [
@@ -3857,7 +4075,39 @@
           "minimum": 0
         },
         "response": {
-          "$ref": "#/components/schemas/post_v1_responsesResponse"
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/GenResponseSnapshot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "const": "incomplete"
+                },
+                "incomplete_details": {
+                  "type": "object",
+                  "required": [
+                    "reason"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "max_output_tokens",
+                        "content_filter"
+                      ]
+                    }
+                  }
+                }
+              },
+              "required": [
+                "status",
+                "incomplete_details"
+              ]
+            }
+          ]
         }
       },
       "required": [
@@ -4282,9 +4532,7 @@
           "type": "string"
         },
         "content": {
-          "type": "array",
-          "items": false,
-          "maxItems": 0
+          "const": []
         },
         "stop_reason": {
           "type": "null"
@@ -4432,9 +4680,183 @@
               ]
             }
           ],
-          "minItems": 0,
+          "minItems": 1,
           "maxItems": 1,
           "items": false
+        }
+      ]
+    },
+    "GenOutputToolCall": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "const": "function"
+        },
+        "function": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            },
+            "arguments": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "arguments"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "function"
+      ],
+      "additionalProperties": false
+    },
+    "GenResponseSnapshot": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "object": {
+          "const": "response"
+        },
+        "created_at": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "model": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "in_progress",
+            "completed",
+            "incomplete"
+          ]
+        },
+        "error": {
+          "type": "null"
+        },
+        "incomplete_details": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "reason": {
+                  "type": "string",
+                  "enum": [
+                    "max_output_tokens",
+                    "content_filter"
+                  ]
+                }
+              },
+              "required": [
+                "reason"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "output": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GenOutputMessage"
+              },
+              {
+                "$ref": "#/components/schemas/GenOutputCall"
+              }
+            ]
+          },
+          "minItems": 0
+        },
+        "store": {
+          "const": false
+        },
+        "usage": {
+          "oneOf": [
+            {
+              "$ref": "#/components/schemas/GenResponseUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "object",
+        "created_at",
+        "model",
+        "status",
+        "error",
+        "incomplete_details",
+        "output",
+        "store",
+        "usage"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "incomplete"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "incomplete_details": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "enum": [
+                      "max_output_tokens",
+                      "content_filter"
+                    ]
+                  }
+                },
+                "required": [
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "incomplete_details"
+            ]
+          },
+          "else": {
+            "properties": {
+              "incomplete_details": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "incomplete_details"
+            ]
+          }
         }
       ]
     }
