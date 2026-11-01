@@ -818,7 +818,17 @@ fn unprobed_request_keywords(document: &Value, node: &Value, location: &str) -> 
         .or_else(|| {
             NUMERIC_BOUNDS
                 .iter()
-                .find(|keyword| node.get(**keyword).is_some_and(|v| v.as_i64().is_none()))
+                .find(|keyword| {
+                    node.get(**keyword).is_some_and(|v| {
+                        v.as_i64().is_none()
+                            && !(v.as_f64().is_some_and(|n| {
+                                n.is_finite() && n.fract() != 0.0 && n.abs() < (1u64 << 52) as f64
+                            }) && (node["type"] == "number"
+                                || node["type"].as_array().is_some_and(|types| {
+                                    types.contains(&serde_json::json!("number"))
+                                })))
+                    })
+                })
                 .copied()
         });
     if let Some(keyword) = keyword

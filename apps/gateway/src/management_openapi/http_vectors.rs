@@ -31,6 +31,7 @@ use std::collections::BTreeSet;
 pub(crate) struct Probe {
     pub(crate) captured: Captured,
     accepted: Option<bool>,
+    upgraded: bool,
     /// Statuses beyond 400/422 that this contract uses to refuse INPUT (the
     /// inference contract refuses unsupported capabilities with 501 and an
     /// oversized body with 413). Empty for the management contract.
@@ -42,6 +43,7 @@ impl From<Captured> for Probe {
         Self {
             captured,
             accepted: None,
+            upgraded: false,
             refusals: &[],
         }
     }
@@ -55,6 +57,7 @@ impl Probe {
         Self {
             captured,
             accepted: Some(accepted),
+            upgraded: false,
             refusals: &[],
         }
     }
@@ -65,13 +68,26 @@ impl Probe {
         Self {
             captured,
             accepted: None,
+            upgraded: false,
             refusals,
+        }
+    }
+    /// Explicit opt-in after validating an inference WebSocket handshake.
+    /// Ordinary management probes still refuse 101 as an input verdict.
+    #[cfg(feature = "integration-tests")]
+    pub(crate) fn upgrade(captured: Captured) -> Self {
+        Self {
+            captured,
+            accepted: Some(true),
+            upgraded: true,
+            refusals: &[],
         }
     }
     /// The status must always be one an input verdict can rest on, even when the
     /// fixture decides: 401/403/413/415/429/5xx are never "refused input".
     fn verdict(&self) -> Result<bool> {
         let by_status = match self.captured.status.as_u16() {
+            101 if self.upgraded => true,
             400 | 422 => false,
             other if self.refusals.contains(&other) => false,
             200..=399 | 404 | 409 => true,
@@ -1036,6 +1052,20 @@ fn scalar_mutations(
         for max in distinct_i64(nodes, "exclusiveMaximum") {
             push("exclusiveMaximum", max);
             push("exclusiveMaximum-1", max.saturating_sub(1));
+        }
+        // Number fields require adjacent representable neighbours, including
+        // integer-valued bounds: +/- 1 alone misses slightly wrong handlers.
+        // Keep every existing integer vector unchanged.
+        if kinds.contains("number") {
+            for keyword in ["minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"] {
+                for node in nodes {
+                    if let Some(bound) = node.get(keyword).and_then(Value::as_f64) {
+                        out.push(("number bound", json!(bound)));
+                        out.push(("number next_down", json!(bound.next_down())));
+                        out.push(("number next_up", json!(bound.next_up())));
+                    }
+                }
+            }
         }
         if !query && kinds.contains("integer") {
             out.push(("non-integer", json!(1.5)));
