@@ -6,7 +6,7 @@
 mod errors;
 mod errors_tests;
 mod generator;
-mod responses;
+pub(crate) mod responses;
 mod wiring_tests;
 mod workload_tests;
 
@@ -27,6 +27,10 @@ const PROBABILITIES: &str = "Probability keys are the caller's option keys or sc
 const PROVIDER_LEGEND: &str = "Provider-controlled JSON: parse_answers (inference/workload_types.rs, Score) copies each legend value from the System One answer unvalidated (only the keys are checked against the level indices), so any JSON value, including null, a number or blank text, can be returned.";
 const LEGEND: &str = "Legend keys are the caller's score level indices.";
 pub(crate) const ARBITRARY_JSON: &[(&str, &str)] = &[
+    (
+        "/components/schemas/post_v1_batchesRequest/oneOf/0/properties/metadata/anyOf/0",
+        "Batch metadata is a caller-keyed map of at most 16 strings; omg_mode and omg_retries have further rules.",
+    ),
     (
         "/components/schemas/post_v1_systemoneRequest/oneOf/0/properties/state/oneOf/1",
         OPEN_CONTENT,
@@ -150,7 +154,7 @@ mod tests {
             "review route additions and update this baseline"
         );
         assert_eq!(
-            placeholders, 40,
+            placeholders, 6,
             "review schema completion and update this progress baseline"
         );
     }
@@ -177,3 +181,12 @@ mod tests {
         }
     }
 }
+
+#[path = "media_tests.rs"]
+mod media;
+
+#[path = "jobs_tests.rs"]
+mod jobs;
+
+#[path = "realtime_tests.rs"]
+mod realtime;

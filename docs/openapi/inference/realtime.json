@@ -1,0 +1,186 @@
+{
+  "operations": {
+    "GET /v1/realtime": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {
+        "responses": {
+          "400": {
+            "$ref": "#/components/responses/OpenAiBadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/OpenAiUnauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/OpenAiNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/OpenAiPayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/OpenAiTooManyRequests"
+          },
+          "502": {
+            "$ref": "#/components/responses/OpenAiBadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/OpenAiUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/OpenAiGatewayTimeout"
+          },
+          "529": {
+            "$ref": "#/components/responses/OpenAiOverloaded"
+          },
+          "101": {
+            "description": "WebSocket upgrade, after live authentication, admission and upstream connection. Sec-WebSocket-Protocol is realtime only when offered; credentials are never reflected.",
+            "headers": {
+              "upgrade": {
+                "required": true,
+                "schema": {
+                  "const": "websocket"
+                }
+              },
+              "connection": {
+                "required": true,
+                "schema": {
+                  "const": "upgrade"
+                }
+              },
+              "sec-websocket-accept": {
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "sec-websocket-protocol": {
+                "required": false,
+                "schema": {
+                  "const": "realtime"
+                }
+              }
+            },
+            "x-omg-positive-kind": "websocket"
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "model",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "allOf": [
+                {
+                  "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]"
+                },
+                {
+                  "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*$"
+                }
+              ],
+              "x-omg-max-bytes": 200
+            }
+          }
+        ],
+        "x-omg-websocket": {
+          "auth": [
+            "Bearer",
+            "openai-insecure-api-key.<key>"
+          ],
+          "auth_exclusive": true,
+          "rejected_auth": [
+            "x-api-key",
+            "ephemeral client secret",
+            "WebRTC/SIP"
+          ],
+          "client_events": [
+            "session.update",
+            "input_audio_buffer.append",
+            "input_audio_buffer.commit",
+            "input_audio_buffer.clear",
+            "output_audio_buffer.clear",
+            "conversation.item.create",
+            "conversation.item.delete",
+            "conversation.item.retrieve",
+            "conversation.item.truncate",
+            "response.cancel",
+            "response.create"
+          ],
+          "close_codes": [
+            1000,
+            1003,
+            1008,
+            1009,
+            1011
+          ],
+          "documentation": "../../realtime.md",
+          "description": "GA only; beta realtime header, unknown subprotocols and unknown/duplicate model query parameters are refused. Frames are validated by a strict event allowlist, never modeled as HTTP bodies. Unknown events produce an error, not a silent drop. Frame payloads and limits are specified in docs/realtime.md.",
+          "close_code_triggers": {
+            "1000": "Idle timeout or maximum session duration, with or without an in-flight response.",
+            "1003": "A binary client frame is not supported; send JSON text events.",
+            "1008": "Rejected client event, event-rate limit, or live authorization/admission denial.",
+            "1009": "The client WebSocket frame or assembled message exceeds the configured transport size cap (message_too_big).",
+            "1011": "Fatal upstream/server failure, including invalid or unaccounted upstream events."
+          }
+        },
+        "description": "OpenAI GA Realtime WebSocket. HTTP errors precede upgrade; errors after upgrade are events and closes, not HTTP responses. Declared Content-Length above the fixed 2 MiB root limit is refused with plain text 413, including GET.",
+        "x-omg-limits": {
+          "session_seconds": {
+            "default": 900,
+            "env": "GATEWAY_REALTIME_MAX_SESSION_SECONDS"
+          },
+          "idle_seconds": {
+            "default": 120,
+            "env": "GATEWAY_REALTIME_IDLE_SECONDS"
+          },
+          "output_tokens": {
+            "default": 4096,
+            "env": "GATEWAY_REALTIME_MAX_OUTPUT_TOKENS"
+          },
+          "message_bytes": {
+            "default": 1048576,
+            "env": "GATEWAY_REALTIME_MAX_MESSAGE_BYTES"
+          },
+          "events_per_second": {
+            "default": 50,
+            "env": "GATEWAY_REALTIME_MAX_EVENTS_PER_SECOND"
+          }
+        },
+        "x-omg-refusals": [
+          {
+            "status": 401,
+            "envelope": "OpenAiErrorEnvelope",
+            "code": "authentication_error",
+            "trigger": "Missing, invalid, ambiguous credentials or x-api-key"
+          },
+          {
+            "status": 400,
+            "envelope": "OpenAiErrorEnvelope",
+            "code": "unsupported_capability",
+            "trigger": "Realtime beta header or unsupported subprotocol"
+          },
+          {
+            "status": 400,
+            "envelope": "OpenAiErrorEnvelope",
+            "code": "invalid_request_error",
+            "trigger": "Invalid model query, unknown query parameter or missing WebSocket upgrade"
+          }
+        ]
+      }
+    }
+  },
+  "schemas": {
+    "get_v1_realtimeRequest": {
+      "type": "null",
+      "description": "WebSocket upgrade has no body."
+    },
+    "get_v1_realtimeResponse": {
+      "type": "null",
+      "description": "101 has no HTTP representation; frames are not HTTP."
+    }
+  }
+}

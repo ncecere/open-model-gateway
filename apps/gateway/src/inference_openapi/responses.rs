@@ -29,7 +29,17 @@ pub(super) const SIMPLE_JSON_AREAS: &[&str] = &[
     "realtime/client_secrets",
     "realtime/calls",
 ];
-pub(super) const AREA_GROUPS: &[(&str, &[&str])] = &[("SIMPLE_JSON_AREAS", SIMPLE_JSON_AREAS)];
+pub(super) const MEDIA_AREAS: &[&str] = &["audio"];
+pub(super) const FILE_BATCH_AREAS: &[&str] = &["files", "batches"];
+pub(super) const VIDEO_AREAS: &[&str] = &["videos"];
+pub(super) const REALTIME_AREAS: &[&str] = &["realtime"];
+pub(super) const AREA_GROUPS: &[(&str, &[&str])] = &[
+    ("SIMPLE_JSON_AREAS", SIMPLE_JSON_AREAS),
+    ("MEDIA_AREAS", MEDIA_AREAS),
+    ("FILE_BATCH_AREAS", FILE_BATCH_AREAS),
+    ("VIDEO_AREAS", VIDEO_AREAS),
+    ("REALTIME_AREAS", REALTIME_AREAS),
+];
 
 /// Area of a template: the first segment after `/v1/`, except `realtime`,
 /// whose two refusals and WebSocket upgrade are separate areas.
@@ -208,7 +218,6 @@ fn validate_exchange(
         );
         return Ok(());
     }
-    ensure!(!bytes.is_empty(), "documented representation is empty");
     let (media, schema) = match headers {
         Some(headers) => media_schema(response, headers)?,
         None => (
@@ -227,7 +236,15 @@ fn validate_exchange(
             .map_err(|_| anyhow::anyhow!("text response is not UTF-8"))?;
         validate_value(document, schema, &json!(text))?;
     } else {
-        anyhow::bail!("media type {media} is not supported by the simple-JSON areas");
+        ensure!(
+            schema["type"] == "string" && schema["format"] == "binary",
+            "non-binary schema for binary media"
+        );
+        ensure!(
+            schema["contentMediaType"] == media,
+            "binary contentMediaType differs from response media"
+        );
+        // capture collects the transport before credit: a late body error fails.
     }
     Ok(())
 }
@@ -355,13 +372,17 @@ pub(super) fn check(
 /// Status, headers and raw bytes BEFORE any JSON decoding; a mismatch panics
 /// with the already-sanitized contract error and nothing captured.
 #[cfg(feature = "integration-tests")]
-pub(super) async fn capture(
+pub(crate) async fn capture(
     method: &str,
     path: &str,
     response: axum::response::Response,
 ) -> Captured {
     let (parts, body) = response.into_parts();
-    let bytes = axum::body::to_bytes(body, 64 * 1024 * 1024).await.unwrap();
+    let bytes = axum::body::to_bytes(body, 64 * 1024 * 1024)
+        .await
+        .unwrap_or_else(|_| {
+            shared::refuse(anyhow::anyhow!("response body failed before clean EOF"))
+        });
     check(method, path, parts.status, &parts.headers, &bytes).unwrap_or_else(|e| shared::refuse(e));
     Captured {
         status: parts.status,
@@ -375,23 +396,93 @@ pub(super) async fn capture(
 
 /// A status-derived input verdict that also reads 501 and 413 as refusals.
 #[cfg(feature = "integration-tests")]
-pub(super) fn probe(captured: Captured) -> Probe {
-    Probe::refusing(captured, &[413, 501])
+pub(crate) fn probe(captured: Captured) -> Probe {
+    if captured.status == StatusCode::SWITCHING_PROTOCOLS {
+        Probe::upgrade(captured)
+    } else {
+        Probe::refusing(captured, &[413, 501])
+    }
 }
 
 /// The shared coverage engine, fed through this contract's validator.
 #[cfg(feature = "integration-tests")]
 #[derive(Default)]
-pub(super) struct Fixtures(PositiveFixtures);
+pub(crate) struct Fixtures(PositiveFixtures);
 #[cfg(feature = "integration-tests")]
 impl Fixtures {
-    pub(super) fn observe(&mut self, captured: &Captured) {
+    pub(crate) fn observe(&mut self, captured: &Captured) {
+        let template = captured
+            .template
+            .as_deref()
+            .expect("documented fixture template");
+        let op = shared::operation(artifact(), &captured.method, template).unwrap();
+        if captured.status == StatusCode::BAD_REQUEST
+            && op["responses"]["400"]["x-omg-positive-kind"] == "refusal"
+        {
+            validate(
+                artifact(),
+                &captured.method,
+                template,
+                captured.status,
+                &captured.headers,
+                &captured.bytes,
+            )
+            .unwrap_or_else(|e| shared::refuse(e));
+            let body: Value =
+                serde_json::from_slice(&captured.bytes).expect("validated refusal JSON kind");
+            if body["error"]["code"] != "unsupported_capability" {
+                return;
+            }
+        }
         self.0.observe_with(artifact(), captured, validate);
+    }
+    pub(super) fn has_positive(&self, method: &str, template: &str) -> bool {
+        self.0
+            .observed_operations()
+            .contains(&format!("{method} {template}"))
     }
     /// Every operation of the given areas must have earned positive credit and
     /// the coverage and boundary-vector gates must hold.
     pub(super) fn finish(&self, areas: &[&str]) {
         finish(&self.0, artifact(), areas).unwrap_or_else(|e| shared::refuse(e));
+    }
+    pub(crate) async fn query_vectors<C>(
+        &mut self,
+        method: &str,
+        template: &str,
+        seeds: &[(&str, &str)],
+        fresh: impl AsyncFn() -> (C, Vec<(String, String)>),
+        send: impl AsyncFn(&C, String) -> Probe,
+    ) {
+        let own = seeds
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect::<Vec<_>>();
+        let exchanges = http_vectors::run_query_with(
+            artifact(),
+            method,
+            template,
+            &own,
+            &[],
+            &fresh,
+            &async |context, query: String| {
+                send(
+                    context,
+                    if query.is_empty() {
+                        query
+                    } else {
+                        format!("?{query}")
+                    },
+                )
+                .await
+            },
+        )
+        .await
+        .unwrap_or_else(|e| shared::refuse(e));
+        for exchange in &exchanges {
+            self.observe(exchange);
+        }
+        self.0.record_vectors(method, template, "query");
     }
     /// Run the HTTP boundary vectors of a JSON body (one run per wire form).
     pub(super) async fn body_vectors(

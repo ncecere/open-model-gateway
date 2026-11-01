@@ -290,3 +290,7 @@ Dropping streams/futures requests cancellation without promising zero charges. N
 Logs telemetry is never returned to clients: the provider-reported served model and reasoning/thinking token breakdowns are recorded per attempt only (see [provider adapters](provider-adapters.md#logs-telemetry-served-model-and-reasoning-tokens)). Client responses keep the public model alias, and invalid or absent telemetry never fails a request. See [routing](routing.md) and [provider adapters](provider-adapters.md).
 
 The earlier “native protocol milestone 3” is historical. Isolated provider tests (including the earlier 77-test result) are not whole-stack, new-native-follow-up, real-server or production-readiness evidence. [Verification](verification.md) records dated checks separately.
+
+### Inference OpenAPI media and upgrade contract (#82)
+
+The [inference contract and its limitations](openapi/inference/README.md) describe multipart parts, binary stream completion, batch line reports, legacy video reads and the Realtime 101 handshake. OpenAPI 3.1 cannot model their full wire semantics: the reviewed `x-omg-*` extensions are required and are not covered by SDK generation. Limits are documented defaults, not promises about a configured installation.

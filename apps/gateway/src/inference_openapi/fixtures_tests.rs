@@ -31,7 +31,9 @@ use std::{collections::BTreeMap, sync::Arc};
 use tower::ServiceExt;
 
 /// Deterministic provider: shapes only, never a prompt echo.
-struct Adapter;
+struct Adapter {
+    pool: PgPool,
+}
 #[async_trait]
 impl ProviderAdapter for Adapter {
     fn id(&self) -> &'static str {
@@ -51,7 +53,46 @@ impl ProviderAdapter for Adapter {
                 | ApiProtocol::Rerank
                 | ApiProtocol::Systemone
                 | ApiProtocol::Images
+                | ApiProtocol::AudioSpeech
+                | ApiProtocol::AudioTranscriptions
         )
+    }
+    fn supports_transcription_request(&self, _: &Deployment, _: &TranscriptionRequest) -> bool {
+        true
+    }
+    fn supports_speech_request(&self, _: &Deployment, _: &SpeechRequest) -> bool {
+        true
+    }
+    async fn execute_audio_transcription(
+        &self,
+        _: &Deployment,
+        request: TranscriptionRequest,
+    ) -> Result<TranscriptionResponse, InferenceError> {
+        let mut usage = Usage {
+            meters: Some(crate::inference::audio::transcription_meters(Some(1000))),
+            ..Default::default()
+        };
+        if request.language.as_deref() == Some("en") {
+            usage.input_tokens = Some(2);
+            usage.output_tokens = Some(1);
+        }
+        Ok(TranscriptionResponse {
+            text: "fixture transcript".into(),
+            usage,
+        })
+    }
+    async fn execute_audio_speech(
+        &self,
+        _: &Deployment,
+        request: SpeechRequest,
+    ) -> Result<SpeechResponse, InferenceError> {
+        Ok(SpeechResponse {
+            audio: Box::pin(futures::stream::iter([Ok(Bytes::from_static(
+                b"fixture audio",
+            ))])),
+            content_type: request.response_format.content_type(),
+            usage: request.usage(),
+        })
     }
     async fn execute(
         &self,
@@ -59,6 +100,42 @@ impl ProviderAdapter for Adapter {
         _: ChatRequest,
     ) -> Result<ProviderOutput, InferenceError> {
         Err(InferenceError::Unsupported)
+    }
+    async fn cancel_batch(
+        &self,
+        _: &Deployment,
+        id: &crate::jobs::types::UpstreamId,
+    ) -> Result<crate::jobs::types::UpstreamBatch, InferenceError> {
+        use crate::jobs::types::{BatchStatus, UpstreamBatch};
+        let state = id
+            .as_str()
+            .split('_')
+            .nth(1)
+            .and_then(BatchStatus::parse)
+            .ok_or(InferenceError::InvalidUpstream)?;
+        // Deterministic poller race: while the native cancellation is awaiting
+        // its provider, another observer commits a terminal state. The real
+        // handler must reload it rather than invent a cancelling snapshot.
+        sqlx::query("UPDATE async_jobs SET state=$2,completed_at=clock_timestamp(),in_progress_at=clock_timestamp(),finalizing_at=clock_timestamp() WHERE upstream_id=$1").bind(id.as_str()).bind(state.state().as_str()).execute(&self.pool).await.map_err(|_|InferenceError::Storage)?;
+        Ok(UpstreamBatch {
+            id: id.clone(),
+            status: state,
+            input_file: None,
+            output_file: None,
+            error_file: None,
+            counts: None,
+            usage: None,
+            created_at: None,
+            in_progress_at: None,
+            finalizing_at: None,
+            completed_at: None,
+            failed_at: None,
+            expired_at: None,
+            cancelling_at: None,
+            cancelled_at: None,
+            expires_at: None,
+            metadata: None,
+        })
     }
     async fn execute_embeddings(
         &self,
@@ -235,7 +312,7 @@ impl ProviderAdapter for Adapter {
 
 /// A non-generation model serves exactly one protocol (`valid_model_protocols`),
 /// so the one seeded model is switched to the workload under test.
-async fn serve(pool: &PgPool, protocol: &str) {
+pub(super) async fn serve(pool: &PgPool, protocol: &str) {
     sqlx::query("UPDATE models SET supported_protocols=ARRAY[$1]")
         .bind(protocol)
         .execute(pool)
@@ -243,7 +320,7 @@ async fn serve(pool: &PgPool, protocol: &str) {
         .unwrap();
 }
 
-async fn gateway(pool: &PgPool) -> (axum::Router, DevelopmentKeys) {
+pub(super) async fn gateway(pool: &PgPool) -> (axum::Router, DevelopmentKeys) {
     let store = Store::new(pool.clone());
     let keys = bootstrap::seed(&store, Environment::Development)
         .await
@@ -257,12 +334,19 @@ async fn gateway(pool: &PgPool) -> (axum::Router, DevelopmentKeys) {
     }
     serve(pool, "embeddings").await;
     let mut registry = ProviderRegistry::default();
-    registry.register(Arc::new(Adapter)).unwrap();
+    registry
+        .register(Arc::new(Adapter { pool: pool.clone() }))
+        .unwrap();
     let engine = Engine::new(Arc::new(store.clone()), registry, EngineLimits::default()).unwrap();
     (http::router_with_engine(store, None, engine), keys)
 }
 
-fn request(method: &str, path: &str, key: Option<&str>, body: Option<&Value>) -> Request<Body> {
+pub(super) fn request(
+    method: &str,
+    path: &str,
+    key: Option<&str>,
+    body: Option<&Value>,
+) -> Request<Body> {
     let mut request = Request::builder().method(method).uri(path);
     if let Some(key) = key {
         request = request.header("authorization", format!("Bearer {key}"));

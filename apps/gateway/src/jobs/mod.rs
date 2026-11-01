@@ -513,7 +513,7 @@ pub(crate) async fn call<T>(
 #[cfg(all(test, feature = "integration-tests"))]
 mod batch_tests;
 #[cfg(all(test, feature = "integration-tests"))]
-mod db_tests;
+pub(crate) mod db_tests;
 #[cfg(all(test, feature = "integration-tests"))]
 mod schedule_db_tests;
 #[cfg(test)]

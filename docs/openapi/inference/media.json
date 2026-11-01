@@ -1,0 +1,510 @@
+{
+  "operations": {
+    "POST /v1/audio/speech": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {
+        "responses": {
+          "200": {
+            "description": "Successful representation; usage is observed only.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "audio/mpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary",
+                  "contentMediaType": "audio/mpeg"
+                }
+              },
+              "audio/wav": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary",
+                  "contentMediaType": "audio/wav"
+                }
+              },
+              "audio/opus": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary",
+                  "contentMediaType": "audio/opus"
+                }
+              },
+              "audio/pcm": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary",
+                  "contentMediaType": "audio/pcm"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/OpenAiBadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/OpenAiUnauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/OpenAiNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/OpenAiPayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/OpenAiTooManyRequests"
+          },
+          "502": {
+            "$ref": "#/components/responses/OpenAiBadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/OpenAiUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/OpenAiGatewayTimeout"
+          },
+          "529": {
+            "$ref": "#/components/responses/OpenAiOverloaded"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_v1_audio_speechRequest"
+              }
+            }
+          }
+        },
+        "x-omg-binary-stream": {
+          "late_error": "truncated",
+          "positive_requires": "clean transport EOF",
+          "description": "A body read error is not a clean EOF and earns no positive coverage; audio bytes alone cannot prove completion."
+        },
+        "x-omg-cancellation": {
+          "drop_test": "dropping_http_speech_body_cancels_upstream_and_keeps_the_hold",
+          "description": "Dropping the body cancels upstream work; settlement retains unknown usage."
+        },
+        "x-omg-limits": {
+          "body_bytes": {
+            "default": 2097152,
+            "env": "GATEWAY_MAX_BODY_BYTES_AUDIO_SPEECH"
+          },
+          "input_chars": {
+            "default": 4096,
+            "env": "GATEWAY_AUDIO_SPEECH_MAX_INPUT_CHARS"
+          },
+          "output_bytes": {
+            "default": 67108864,
+            "env": "GATEWAY_AUDIO_SPEECH_MAX_OUTPUT_BYTES"
+          }
+        },
+        "x-omg-refusals": [
+          {
+            "status": 400,
+            "envelope": "OpenAiErrorEnvelope",
+            "code": "unsupported_capability",
+            "trigger": "instructions non-null, stream_format other than audio, or aac/flac response format"
+          }
+        ]
+      }
+    },
+    "POST /v1/audio/transcriptions": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {
+        "responses": {
+          "200": {
+            "description": "Successful representation; usage is observed only.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_v1_audio_transcriptionsResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/OpenAiBadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/OpenAiUnauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/OpenAiNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/OpenAiPayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/OpenAiTooManyRequests"
+          },
+          "502": {
+            "$ref": "#/components/responses/OpenAiBadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/OpenAiUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/OpenAiGatewayTimeout"
+          },
+          "529": {
+            "$ref": "#/components/responses/OpenAiOverloaded"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/post_v1_audio_transcriptionsRequest"
+              },
+              "encoding": {
+                "model": {
+                  "contentType": "text/plain"
+                },
+                "file": {
+                  "contentType": "application/octet-stream"
+                },
+                "language": {
+                  "contentType": "text/plain"
+                },
+                "prompt": {
+                  "contentType": "text/plain"
+                },
+                "temperature": {
+                  "contentType": "text/plain"
+                },
+                "response_format": {
+                  "contentType": "text/plain"
+                },
+                "stream": {
+                  "contentType": "text/plain"
+                }
+              }
+            }
+          },
+          "x-omg-no-boundary-vectors": "Multipart parsing is checked using real bounded MIME frames; JSON-derived vectors cannot represent part headers, framing, filenames or binary container magic."
+        },
+        "x-omg-multipart": {
+          "max_parts": 16,
+          "max_header_bytes": 8192,
+          "max_field_bytes": 4096,
+          "max_name_bytes": 64,
+          "max_filename_bytes": 255,
+          "unknown_parts": "reject",
+          "file_requires_filename": true,
+          "duplicate_fields": "reject except stream=false",
+          "part_headers": [
+            "Content-Disposition",
+            "Content-Type"
+          ],
+          "framing": "CRLF; no preamble or epilogue except final CRLF; no nested or encoded parts",
+          "file": "Nonempty; extension, optional MIME and container magic must agree; flac/mp3/mp4/mpeg/mpga/m4a/ogg/wav/webm. Only file may have a filename. filename* takes precedence.",
+          "text_validation_precedes_refusals": "Non-file parts, including recognized unsupported include[]/stream fields, must first be UTF-8 and at most 4096 bytes. Failure is 400 invalid_request_error before unsupported-field classification."
+        },
+        "x-omg-limits": {
+          "body_bytes": {
+            "default": 27262976,
+            "env": "GATEWAY_MAX_BODY_BYTES_AUDIO_TRANSCRIPTIONS"
+          },
+          "file_bytes": {
+            "default": 26214400,
+            "env": "GATEWAY_AUDIO_MAX_UPLOAD_BYTES"
+          }
+        },
+        "x-omg-refusals": [
+          {
+            "status": 400,
+            "envelope": "OpenAiErrorEnvelope",
+            "code": "unsupported_capability",
+            "trigger": "stream other than false; timestamps, include, chunking, speaker fields; verbose_json, srt, vtt or diarized_json These unsupported-part refusals apply only after the text part passes UTF-8 and 4096-byte validation."
+          },
+          {
+            "status": 400,
+            "envelope": "OpenAiErrorEnvelope",
+            "code": "invalid_request_error",
+            "trigger": "Non-file text part is non-UTF-8 or exceeds 4096 bytes, including include[] or stream: text_field validation precedes unsupported-field matching."
+          }
+        ]
+      }
+    }
+  },
+  "schemas": {
+    "post_v1_audio_speechRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "model": {
+              "type": "string",
+              "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+              "maxLength": 200,
+              "x-omg-max-bytes": 200,
+              "description": "Public model name: at most 200 UTF-8 BYTES and not blank (providers/embeddings.rs validate, inference/workload_types.rs valid_model, inference/images.rs validate). Any other name, including one with control characters, is simply not a model: 404 model_not_found (inference/types.rs model_name_is_queryable)."
+            },
+            "input": {
+              "type": "string",
+              "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+              "maxLength": 4096,
+              "description": "Default configured Unicode scalar cap; GATEWAY_AUDIO_SPEECH_MAX_INPUT_CHARS changes it."
+            },
+            "voice": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "response_format": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "mp3",
+                "wav",
+                "opus",
+                "pcm",
+                null
+              ]
+            },
+            "speed": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0.25,
+              "maximum": 4
+            },
+            "instructions": {
+              "type": "null"
+            },
+            "stream_format": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "audio",
+                null
+              ]
+            }
+          },
+          "required": [
+            "model",
+            "input",
+            "voice"
+          ]
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string",
+              "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+              "maxLength": 200,
+              "x-omg-max-bytes": 200,
+              "description": "Public model name: at most 200 UTF-8 BYTES and not blank (providers/embeddings.rs validate, inference/workload_types.rs valid_model, inference/images.rs validate). Any other name, including one with control characters, is simply not a model: 404 model_not_found (inference/types.rs model_name_is_queryable)."
+            },
+            {
+              "type": "string",
+              "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+              "maxLength": 4096,
+              "description": "Default configured Unicode scalar cap; GATEWAY_AUDIO_SPEECH_MAX_INPUT_CHARS changes it."
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "mp3",
+                "wav",
+                "opus",
+                "pcm",
+                null
+              ]
+            },
+            {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0.25,
+              "maximum": 4
+            },
+            {
+              "type": "null"
+            },
+            {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "audio",
+                null
+              ]
+            }
+          ],
+          "minItems": 7,
+          "maxItems": 7,
+          "items": false,
+          "description": "serde positional form: every field slot must be present, optional slots may be null."
+        }
+      ]
+    },
+    "post_v1_audio_speechResponse": {
+      "type": "string",
+      "format": "binary",
+      "contentMediaType": "audio/mpeg"
+    },
+    "post_v1_audio_transcriptionsRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": "string",
+          "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+          "maxLength": 200,
+          "x-omg-max-bytes": 200,
+          "description": "Public model name: at most 200 UTF-8 BYTES and not blank (providers/embeddings.rs validate, inference/workload_types.rs valid_model, inference/images.rs validate). Any other name, including one with control characters, is simply not a model: 404 model_not_found (inference/types.rs model_name_is_queryable)."
+        },
+        "file": {
+          "type": "string",
+          "format": "binary"
+        },
+        "language": {
+          "type": "string",
+          "pattern": "^[a-z]{2,3}$"
+        },
+        "prompt": {
+          "type": "string",
+          "maxLength": 4096,
+          "x-omg-max-bytes": 4096,
+          "allOf": [
+            {
+              "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]"
+            },
+            {
+              "pattern": "^[^\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F]*$"
+            }
+          ]
+        },
+        "temperature": {
+          "type": "string",
+          "x-omg-parsed-number": {
+            "finite": true,
+            "minimum": 0,
+            "maximum": 1
+          },
+          "description": "Trimmed and parsed as a finite floating point number in [0,1]. This part constraint requires the custom extension, not SDK generation."
+        },
+        "response_format": {
+          "type": "string",
+          "enum": [
+            "json",
+            "text"
+          ]
+        },
+        "stream": {
+          "const": "false"
+        }
+      },
+      "required": [
+        "model",
+        "file"
+      ]
+    },
+    "post_v1_audio_transcriptionsResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "usage": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "tokens"
+                },
+                "input_tokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "output_tokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "total_tokens": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "type",
+                "input_tokens",
+                "output_tokens",
+                "total_tokens"
+              ]
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "const": "duration"
+                },
+                "seconds": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "type",
+                "seconds"
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "text"
+      ]
+    }
+  }
+}

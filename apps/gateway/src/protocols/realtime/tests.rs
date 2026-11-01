@@ -421,3 +421,6 @@ fn upstream_errors_are_not_browser_size_refusals() {
 
 #[cfg(feature = "integration-tests")]
 mod contract;
+
+#[cfg(feature = "integration-tests")]
+pub(crate) use contract::inference_openapi_handshake_fixtures;

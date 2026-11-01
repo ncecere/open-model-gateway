@@ -2,7 +2,7 @@
 
 [inference.openapi.json](../inference.openapi.json) is the **incomplete inference contract** for #82: the documented `/v1/*` surface of the gateway. It is generated test-only from the compiled `route_policy::ROUTES` entries under `/v1/` plus the reviewed fragments in this directory, with the #81 fragment format and loader. Nothing here changes runtime behaviour, adds a runtime endpoint or a production dependency, and no CI or workflow file is involved: the gates are ordinary `cargo test` tests.
 
-Status after PR1: **27 operations, 40 incomplete request/response schema slots** (20 operations still placeholders). Completed and wire-validated against the real handlers: `models`, `embeddings`, `rerank`, `systemone`, `images` and the two realtime refusals (`/v1/realtime/client_secrets`, `/v1/realtime/calls`) — 7 operations. Every other operation is an explicit, counted placeholder (`x-omg-schema-status: incomplete`); `inference_openapi_reports_incomplete_schemas` pins that baseline and later PRs must lower it to zero (generation protocols and SSE, then media, files, batches, videos and the realtime WebSocket).
+Status after PR3: **27 operations, 6 incomplete request/response slots**, all reserved for PR2’s Chat, Responses and Messages operations. The falling baseline must reach zero when PR2 lands; no media, file, batch, video or Realtime operation may remain a placeholder.
 
 ## Run the gates
 
@@ -58,7 +58,7 @@ Cross-checks OpenAPI cannot express: the embedding vectors of a response must be
 
 ## `x-omg-*` extensions
 
-OpenAPI 3.1 cannot express everything the real surface does; the contract states it with extensions (SDK generation does not cover them): `x-omg-access`, `x-omg-token-policy`, `x-omg-schema-status`, `x-omg-request-schema`, `x-omg-response-schema` (as in the management contract); `x-omg-max-bytes` (a UTF-8 byte limit, where `maxLength` counts characters); `x-omg-positive-kind: refusal`; `x-omg-limits` (below); and the vector-harness exemptions of the #81 README (`x-omg-unsendable-boundary`). Later PRs add `x-omg-sse`, `x-omg-websocket`, `x-omg-cancellation` and the refusal tables. Open JSON is allowed only at reviewed pointers (`inference_openapi::ARBITRARY_JSON`, each with its justification): System One forwards TypeSafe content parts verbatim, and several maps have caller-chosen keys.
+OpenAPI 3.1 cannot express everything the real surface does; the contract states it with extensions (SDK generation does not cover them): `x-omg-access`, `x-omg-token-policy`, `x-omg-schema-status`, `x-omg-request-schema`, `x-omg-response-schema` (as in the management contract); `x-omg-max-bytes` (a UTF-8 byte limit, where `maxLength` counts characters); `x-omg-positive-kind: refusal`; `x-omg-limits` (below); and the vector-harness exemptions of the #81 README (`x-omg-unsendable-boundary`). PR3 adds `x-omg-websocket`, `x-omg-cancellation`, `x-omg-multipart`, `x-omg-binary-stream`, `x-omg-parsed-number` and refusal tables; PR2 owns `x-omg-sse`. Open JSON is allowed only at reviewed pointers (`inference_openapi::ARBITRARY_JSON`, each with its justification): System One forwards TypeSafe content parts verbatim, and several maps have caller-chosen keys.
 
 ## Configurable limits
 
@@ -77,3 +77,64 @@ Fixed limits that are constants of the handlers (embeddings: 128 inputs, 1 MiB i
 ## Messages beta headers
 
 The decision text said Messages "rejects beta headers". The handler accepts an open list and refuses only a denylist (`protocols/messages.rs`, `docs/protocol-matrix.md`); the artifact documents the handler. The stale in-repo sentence (`docs/guardrails-design.md`, which also said `cache_control` and thinking were rejected) is corrected in the same PR.
+
+## PR3 media, jobs and WebSocket representation
+
+The falling baseline is **6 incomplete schema slots**, all owned by PR2's
+Chat, Responses and Messages operations. Removing those six when PR2 lands
+must produce zero; PR3 does not claim those generation protocols are complete.
+
+OpenAPI 3.1 cannot describe the full wire protocols. The reviewed `x-omg-*`
+extensions are part of this contract, **not covered by SDK generation**:
+
+- `x-omg-multipart` specifies part headers, duplicates, filenames, ordering,
+  byte limits and framing that JSON Schema cannot check. Transcriptions use
+  the bounded buffered audio parser; Files use a different streaming parser.
+  When purpose precedes file, file must be last and expiry fields must already
+  be complete. When file precedes purpose, expiry fields may be before or after
+  file; remaining fields are read before the provisional upload is committed,
+  moved or discarded.
+- `x-omg-binary-stream` requires clean transport EOF; `x-omg-binary-variants` lists the legacy video MIME allowlists per asset variant. A late speech, file-store
+  or video-provider failure truncates the body; HTTP 200 and a valid prefix are
+  not proof of a successful download. `x-omg-cancellation` names the executed
+  drop test; cancellation itself cannot be inferred from response bytes.
+- `x-omg-websocket` describes the 101 handshake, mutually exclusive Bearer or
+  key-subprotocol authentication, the client-event allowlist and close codes
+  1000 (idle/session expiry), 1003 (binary client frames), 1008 (event/policy/rate
+  denials), 1009 (transport size cap), and 1011 (fatal upstream/server failure).
+  Frames are not HTTP bodies. See [Realtime](../../realtime.md).
+- `x-omg-refusals` records status, native envelope, code and trigger. Video
+  creation currently refuses after validation; the read/delete routes remain
+  for legacy jobs. Batch invalid-input reports are a separate `errors.data[]`
+  list with line numbers, not an array in the top-level `error` object.
+- `x-omg-limits` records **defaults**, not a parity promise about a configured
+  installation. Runtime admission, live workspace/key policy and configured
+  caps always remain authoritative.
+
+### Configurable defaults
+
+| Limit | Default | Environment variable |
+|---|---:|---|
+| Transcription body | 26 MiB | `GATEWAY_MAX_BODY_BYTES_AUDIO_TRANSCRIPTIONS` |
+| Speech body | 2 MiB | `GATEWAY_MAX_BODY_BYTES_AUDIO_SPEECH` |
+| Transcription file part | 25 MiB | `GATEWAY_AUDIO_MAX_UPLOAD_BYTES` |
+| Speech input Unicode scalar values | 4096 | `GATEWAY_AUDIO_SPEECH_MAX_INPUT_CHARS` |
+| Speech output | 64 MiB | `GATEWAY_AUDIO_SPEECH_MAX_OUTPUT_BYTES` |
+| Files upload | 200 MiB (+64 KiB form overhead) | `GATEWAY_FILES_MAX_BYTES` |
+| Video create/list route body | 2 MiB | `GATEWAY_MAX_BODY_BYTES_VIDEOS` |
+| Batch input validation file | 200 MiB | `GATEWAY_MAX_BATCH_FILE_BYTES` |
+| Batch output scan | 1 GiB | `GATEWAY_BATCH_MAX_OUTPUT_SCAN_BYTES` |
+| Realtime session duration | 900 seconds | `GATEWAY_REALTIME_MAX_SESSION_SECONDS` |
+| Realtime idle timeout | 120 seconds | `GATEWAY_REALTIME_IDLE_SECONDS` |
+| Realtime output per response | 4096 tokens | `GATEWAY_REALTIME_MAX_OUTPUT_TOKENS` |
+| Realtime message/frame | 1 MiB | `GATEWAY_REALTIME_MAX_MESSAGE_BYTES` |
+| Realtime event rate | 50/second | `GATEWAY_REALTIME_MAX_EVENTS_PER_SECOND` |
+
+The root limit for the core Chat/Responses/Messages, embeddings/models group
+and Realtime is fixed at 2 MiB (no environment variable). Media/workload
+routes use the named caps above; job/file reads also have route-specific
+body-limit layers.
+A declared Content-Length over the applicable route limit yields plain text
+413 `length limit exceeded`, even on GET. A handler reading a streamed body
+may instead return its documented native JSON 413. Authentication and the
+route-specific layer ordering are not bypassed by this documentation.

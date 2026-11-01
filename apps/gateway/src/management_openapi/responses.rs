@@ -633,7 +633,10 @@ fn positive(response: &Value, status: StatusCode, headers: &HeaderMap, bytes: &[
                 })
             })
         });
-    permitted && cookie
+    let upgrade = status == StatusCode::SWITCHING_PROTOCOLS
+        && bytes.is_empty()
+        && response["x-omg-positive-kind"] == "websocket";
+    (permitted || upgrade) && cookie
 }
 
 fn json_media(headers: &HeaderMap) -> bool {

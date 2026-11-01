@@ -18,9 +18,9 @@ struct Script {
     calls: Vec<&'static str>,
 }
 #[derive(Clone, Default)]
-struct Fake(Arc<Mutex<Script>>);
+pub(crate) struct Fake(Arc<Mutex<Script>>);
 impl Fake {
-    fn push_video(&self, v: UpstreamVideo) {
+    pub(crate) fn push_video(&self, v: UpstreamVideo) {
         self.0.lock().unwrap().videos.push_back(v);
     }
     fn calls(&self) -> Vec<&'static str> {
@@ -115,7 +115,7 @@ impl ProviderAdapter for Fake {
     }
 }
 
-fn jobs(f: &Fixture, fake: &Fake, poll: bool) -> Jobs {
+pub(crate) fn jobs(f: &Fixture, fake: &Fake, poll: bool) -> Jobs {
     let mut registry = ProviderRegistry::default();
     registry.register(Arc::new(fake.clone())).unwrap();
     Jobs::with(
@@ -134,7 +134,7 @@ fn na(meter: Meter) -> Value {
     json!({"meter":meter.as_str(),"not_applicable":true})
 }
 /// Per-second video price: 720p $0.10/s, 1792x1024 $0.50/s; tokens NA.
-async fn video_setup(f: &Fixture) {
+pub(crate) async fn video_setup(f: &Fixture) {
     sqlx::query("UPDATE models SET supported_protocols=ARRAY['videos'] WHERE id=$1")
         .bind(f.model)
         .execute(&f.store.pool)
@@ -154,7 +154,7 @@ async fn video_setup(f: &Fixture) {
     lines.push(v);
     sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_token_limit,output_token_limit,pricing_version,price_lines,max_units) VALUES($1,$2,0,1,3,$3,'{}')").bind(Uuid::new_v4()).bind(f.deployment).bind(json!(lines)).execute(&f.store.pool).await.unwrap();
 }
-fn video_request() -> VideoRequest {
+pub(crate) fn video_request() -> VideoRequest {
     VideoRequest {
         model: "company/smart".into(),
         prompt: "a calm lake".into(),
@@ -162,7 +162,7 @@ fn video_request() -> VideoRequest {
         size: VideoSize::P720x1280,
     }
 }
-fn upstream_video(state: JobState, seconds: Option<u32>) -> UpstreamVideo {
+pub(crate) fn upstream_video(state: JobState, seconds: Option<u32>) -> UpstreamVideo {
     UpstreamVideo {
         id: UpstreamId::parse("video_up1").unwrap(),
         state,
@@ -442,7 +442,7 @@ async fn the_state_machine_is_forward_only_and_identity_immutable(pool: PgPool) 
     );
 }
 
-async fn bearer(f: &Fixture, workspace: Uuid) -> String {
+pub(crate) async fn bearer(f: &Fixture, workspace: Uuid) -> String {
     let key = crate::auth::NewApiKey::generate().unwrap();
     sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash) VALUES($1,$2,$3,'http',$4)").bind(key.id).bind(workspace).bind(f.owner).bind(key.digest.as_slice()).execute(&f.store.pool).await.unwrap();
     format!("Bearer {}", key.token)
