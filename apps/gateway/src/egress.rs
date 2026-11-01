@@ -1169,7 +1169,18 @@ mod tests {
         tokio::spawn(async move {
             while let Ok((mut stream, _)) = listener.accept().await {
                 counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                use tokio::io::AsyncWriteExt;
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                // Read the request head before answering, as a real server does:
+                // a response written before the request is read (then the socket
+                // closed) is an unexpected message to hyper >= 1.12.
+                let mut head = Vec::new();
+                let mut buf = [0u8; 1024];
+                while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match stream.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => head.extend_from_slice(&buf[..n]),
+                    }
+                }
                 let _ = stream
                     .write_all(b"HTTP/1.1 204 No Content\r\ncontent-length: 0\r\n\r\n")
                     .await;
