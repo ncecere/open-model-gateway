@@ -337,3 +337,8 @@ fn error_response(e: InferenceError) -> Response {
 mod frontend_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+pub(crate) fn openapi_normalize(value: Value) -> Result<ChatRequest> {
+    request::parse_request(value)
+}

@@ -575,10 +575,15 @@ fn relaxed(
         responses::validator(&document, &schema)
     };
     // Only the immutable committed artifact is cached (by value of the request).
-    if !std::ptr::eq(document, responses::artifact()) {
+    let inference = std::ptr::eq(document, crate::inference_openapi::committed_artifact());
+    if !std::ptr::eq(document, responses::artifact()) && !inference {
         return compile();
     }
-    let cache_key = format!("{key}={bound} {}", serde_json::to_string(schema)?);
+    let cache_key = format!(
+        "{:p} {key}={bound} {}",
+        document,
+        serde_json::to_string(schema)?
+    );
     if let Some(found) = CACHE
         .get_or_init(Default::default)
         .lock()
@@ -588,11 +593,13 @@ fn relaxed(
         return Ok(found.clone());
     }
     let validator = compile()?;
-    CACHE
-        .get_or_init(Default::default)
-        .lock()
-        .unwrap()
-        .insert(cache_key, validator.clone());
+    let mut cache = CACHE.get_or_init(Default::default).lock().unwrap();
+    // The inference graph has many nested request variants; bound its entries
+    // without changing management's existing caching policy.
+    if inference && cache.len() >= 128 {
+        cache.clear();
+    }
+    cache.insert(cache_key, validator.clone());
     Ok(validator)
 }
 
@@ -2354,6 +2361,32 @@ pub(crate) async fn run_body_with(
     candidates: &[(String, Value)],
     send: &impl AsyncFn(Value) -> Probe,
 ) -> Result<BodyRun> {
+    run_body_with_constraints(
+        document,
+        method,
+        template,
+        valid_body,
+        seeds,
+        candidates,
+        (send, &|_| true),
+    )
+    .await
+}
+
+/// Additive inference hook for documented cross-field request constraints that
+/// JSON Schema cannot express (e.g. equality of two non-null token aliases).
+/// Structural schema rejection is never overridden. Management's caller above
+/// retains exactly its existing schema-only verdict and vectors.
+pub(crate) async fn run_body_with_constraints(
+    document: &Value,
+    method: &str,
+    template: &str,
+    valid_body: Value,
+    seeds: &[(String, Value)],
+    candidates: &[(String, Value)],
+    dispatch: (&impl AsyncFn(Value) -> Probe, &impl Fn(&Value) -> bool),
+) -> Result<BodyRun> {
+    let (send, constraints) = dispatch;
     let operation = responses::operation(document, method, template)?;
     let plan = body_plan(document, operation, &valid_body, seeds, candidates)
         .with_context(|| format!("{method} {template}"))?;
@@ -2374,6 +2407,7 @@ pub(crate) async fn run_body_with(
     let mut exchanges = Vec::new();
     let mut accepted_seen = false;
     for (kind, location, body, expected) in plan {
+        let expected = expected && constraints(&body);
         let probe = send(body).await;
         same_operation(&probe.captured, method, template)?;
         let handler = probe

@@ -54,6 +54,8 @@ impl ProviderAdapter for FixtureAdapter {
         matches!(
             protocol,
             ApiProtocol::ChatCompletions
+                | ApiProtocol::Responses
+                | ApiProtocol::Messages
                 | ApiProtocol::Embeddings
                 | ApiProtocol::Rerank
                 | ApiProtocol::Systemone
@@ -1508,3 +1510,6 @@ async fn workload_body_caps_are_configured_per_route(pool: PgPool) {
     );
     assert_eq!(adapter.calls.load(Ordering::SeqCst), 1);
 }
+
+#[path = "inference/cancellation_tests.rs"]
+mod cancellation_tests;

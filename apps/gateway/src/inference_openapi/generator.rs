@@ -46,6 +46,11 @@ const EXTRA_CREDENTIALS: &[(&str, &str)] = &[
 ];
 /// Non-path parameters a route reads (`protocols/realtime.rs` `model_param`).
 /// Everything else is ignored by the real handlers, so none may be invented.
+pub(super) const HEADER_PARAMETERS: &[(&str, &str, &str)] = &[
+    ("POST", "/v1/messages", "anthropic-version"),
+    ("POST", "/v1/messages", "anthropic-beta"),
+];
+
 pub(super) const QUERY_PARAMETERS: &[(&str, &str, &str)] = &[
     ("GET", "/v1/realtime", "model"),
     ("GET", "/v1/files", "purpose"),
@@ -75,6 +80,25 @@ fn security(path: &str) -> Value {
         alternatives.push(Value::Object(alternative));
     }
     json!(alternatives)
+}
+
+/// Reviewed PR2 route -> client protocol join. Other areas retain their PR1/
+/// PR3 metadata scope; this does not infer provider support from a route name.
+fn generation_profiles(path: &str) -> Option<Value> {
+    use crate::inference::types::ApiProtocol as P;
+    let protocol = match path {
+        "/v1/chat/completions" => P::ChatCompletions,
+        "/v1/responses" => P::Responses,
+        "/v1/messages" => P::Messages,
+        _ => return None,
+    };
+    Some(json!(
+        crate::providers::capabilities::PROFILES
+            .iter()
+            .filter(|(_, protocols)| protocols.contains(&protocol))
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>()
+    ))
 }
 
 fn inventory() -> Result<BTreeMap<String, Declaration>> {
@@ -158,6 +182,9 @@ pub(super) fn generate(fragments: &Fragments) -> Result<Value> {
             "x-omg-response-schema":{"$ref":format!("#/components/schemas/{response_name}")},
             "responses":{"default":{"description":"Incomplete response contract; see x-omg-response-schema."}},
         });
+        if let Some(profiles) = generation_profiles(declaration.path) {
+            operation["x-omg-protocol-profiles"] = profiles;
+        }
         for (field, value) in &fragment.operation {
             ensure!(
                 ![
@@ -166,6 +193,7 @@ pub(super) fn generate(fragments: &Fragments) -> Result<Value> {
                     "x-omg-access",
                     "x-omg-token-policy",
                     "x-omg-required-scope",
+                    "x-omg-protocol-profiles",
                     "x-omg-request-schema",
                     "x-omg-response-schema"
                 ]
@@ -210,7 +238,7 @@ pub(super) fn generate(fragments: &Fragments) -> Result<Value> {
         "openapi":"3.1.0",
         "jsonSchemaDialect":"https://spec.openapis.org/oas/3.1/dialect/base",
         "info":{"title":"Open Model Gateway inference API","version":env!("CARGO_PKG_VERSION"),
-            "description":"INCOMPLETE contract (#82 PR3): Chat, Responses and Messages retain six schema placeholders for PR2. All other areas document their real HTTP and media contracts; zero placeholders is required once PR2 lands. Every operation authenticates with an inference key only (Bearer; /v1/messages also accepts x-api-key, GET /v1/realtime also the openai-insecure-api-key.<key> WebSocket subprotocol, never both); inference keys never authorize management and admin tokens never authorize inference. Live key, workspace, catalog and budget checks remain authoritative. The OpenAI-shaped, Anthropic-shaped, job and file error envelopes are distinct schemas and never the management ErrorEnvelope; /v1/messages errors carry no gateway machine code. x-omg-* extensions state what OpenAPI 3.1 cannot express (see docs/openapi/inference/README.md)."},
+            "description":"Complete contract (#82): every operation (models, embeddings, rerank, System One, images, Chat Completions, Responses, Messages, audio, files, batches, videos and realtime) documents its real HTTP, streaming and media contract and is wire-validated against the real handlers; no placeholder remains. Every operation authenticates with an inference key only (Bearer; /v1/messages also accepts x-api-key, GET /v1/realtime also the openai-insecure-api-key.<key> WebSocket subprotocol, never both); inference keys never authorize management and admin tokens never authorize inference. Live key, workspace, catalog and budget checks remain authoritative. The OpenAI-shaped, Anthropic-shaped, job and file error envelopes are distinct schemas and never the management ErrorEnvelope; /v1/messages errors carry no gateway machine code. x-omg-* extensions state what OpenAPI 3.1 cannot express (see docs/openapi/inference/README.md)."},
         "paths":paths,
         "components":{
             "schemas":schemas,
@@ -267,6 +295,12 @@ pub(super) fn verify(document: &Value) -> Result<()> {
                 operation["security"] == declaration.security,
                 "security drift for {key}"
             );
+            if let Some(profiles) = generation_profiles(path) {
+                ensure!(
+                    operation["x-omg-protocol-profiles"] == profiles,
+                    "generation protocol-profile drift for {key}"
+                );
+            }
             let parameters = operation["parameters"]
                 .as_array()
                 .context("parameters missing")?;
@@ -280,28 +314,60 @@ pub(super) fn verify(document: &Value) -> Result<()> {
                 "path parameters drift for {key}"
             );
             // Only parameters a real handler reads may be documented.
-            let documented: BTreeSet<&str> = parameters
+            let documented: BTreeSet<(&str, &str)> = parameters
                 .iter()
                 .filter(|p| p["in"] != "path")
-                .filter_map(|p| p["name"].as_str())
+                .filter_map(|p| Some((p["in"].as_str()?, p["name"].as_str()?)))
                 .collect();
-            let read: BTreeSet<&str> = QUERY_PARAMETERS
+            let read: BTreeSet<(&str, &str)> = QUERY_PARAMETERS
                 .iter()
                 .filter(|(m, p, _)| m.eq_ignore_ascii_case(method) && p == path)
-                .map(|(_, _, name)| *name)
+                .map(|(_, _, name)| ("query", *name))
+                .chain(
+                    HEADER_PARAMETERS
+                        .iter()
+                        .filter(|(m, p, _)| m.eq_ignore_ascii_case(method) && p == path)
+                        .map(|(_, _, name)| ("header", *name)),
+                )
                 .collect();
             ensure!(
-                parameters
-                    .iter()
-                    .filter(|p| p["in"] != "path")
-                    .all(|p| p["in"] == "query")
-                    && documented == read,
-                "query parameter drift for {key}: document exactly the parameters the handler reads"
+                documented == read
+                    && documented.len() == parameters.iter().filter(|p| p["in"] != "path").count(),
+                "query/header parameter drift for {key}: document exactly the parameters the handler reads"
             );
         }
     }
     ensure!(actual.iter().eq(inventory.keys()), "omitted operations");
     super::errors::verify_components(document)?;
+    let parameters = document["paths"]["/v1/messages"]["post"]["parameters"]
+        .as_array()
+        .context("Messages protocol headers")?;
+    let version = parameters
+        .iter()
+        .find(|p| p["name"] == "anthropic-version")
+        .context("Messages version header")?;
+    ensure!(
+        version["required"] == true
+            && version["schema"]["const"] == "2023-06-01"
+            && version["x-omg-max-occurrences"] == 1,
+        "Messages version declaration drift"
+    );
+    let beta = parameters
+        .iter()
+        .find(|p| p["name"] == "anthropic-beta")
+        .context("Messages beta header")?;
+    ensure!(
+        beta["required"] == false
+            && beta["schema"]["type"] == "string"
+            && beta["schema"].get("enum").is_none()
+            && beta["schema"]["minLength"] == 1
+            && beta["schema"]["maxLength"] == 1024
+            && beta["x-omg-max-occurrences"] == 16
+            && beta["x-omg-max-tokens"] == 32
+            && beta["x-omg-denied-prefixes"]
+                == json!(crate::providers::messages::DENIED_BETA_PREFIXES),
+        "Messages open beta list declaration drift"
+    );
     verify_transport_exceptions(document)?;
     Ok(())
 }

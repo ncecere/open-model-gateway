@@ -18,7 +18,7 @@ use crate::management::openapi::{
 };
 use crate::management::openapi::{quality, responses as shared, validation};
 
-/// Completed areas of PR1. Each is gated by an executed fixture group
+/// Completed PR1 workloads and PR2 generation areas. Each is gated by an executed fixture group
 /// (`fixtures_tests.rs`); the other areas stay counted placeholders.
 pub(super) const SIMPLE_JSON_AREAS: &[&str] = &[
     "models",
@@ -33,12 +33,14 @@ pub(super) const MEDIA_AREAS: &[&str] = &["audio"];
 pub(super) const FILE_BATCH_AREAS: &[&str] = &["files", "batches"];
 pub(super) const VIDEO_AREAS: &[&str] = &["videos"];
 pub(super) const REALTIME_AREAS: &[&str] = &["realtime"];
+pub(super) const GENERATION_AREAS: &[&str] = &["chat", "responses", "messages"];
 pub(super) const AREA_GROUPS: &[(&str, &[&str])] = &[
     ("SIMPLE_JSON_AREAS", SIMPLE_JSON_AREAS),
     ("MEDIA_AREAS", MEDIA_AREAS),
     ("FILE_BATCH_AREAS", FILE_BATCH_AREAS),
     ("VIDEO_AREAS", VIDEO_AREAS),
     ("REALTIME_AREAS", REALTIME_AREAS),
+    ("GENERATION_AREAS", GENERATION_AREAS),
 ];
 
 /// Area of a template: the first segment after `/v1/`, except `realtime`,
@@ -87,7 +89,10 @@ fn resolved<'a>(document: &'a Value, value: &'a Value) -> Result<&'a Value> {
 /// Compile a schema against the whole document (so local `$ref`s resolve).
 /// Only the immutable artifact is cached, by pointer identity: a mutated
 /// document control always compiles its own.
-fn validator(document: &Value, schema: &Value) -> Result<std::sync::Arc<jsonschema::Validator>> {
+pub(super) fn validator(
+    document: &Value,
+    schema: &Value,
+) -> Result<std::sync::Arc<jsonschema::Validator>> {
     fn compile(document: &Value, schema: &Value) -> Result<std::sync::Arc<jsonschema::Validator>> {
         let mut root = document.clone();
         root["$defs"] = json!({"observed":schema});
@@ -104,6 +109,9 @@ fn validator(document: &Value, schema: &Value) -> Result<std::sync::Arc<jsonsche
     let mut cache = CACHE.get_or_init(Default::default).lock().unwrap();
     if let Some(validator) = cache.get(&key) {
         return Ok(validator.clone());
+    }
+    if cache.len() >= 128 {
+        cache.clear();
     }
     let validator = compile(document, schema)?;
     cache.insert(key, validator.clone());
@@ -231,6 +239,12 @@ fn validate_exchange(
         let body: Value = serde_json::from_slice(bytes)
             .map_err(|e| anyhow::anyhow!("response is not JSON ({:?})", e.classify()))?;
         validate_value(document, schema, &body)?;
+    } else if media == "text/event-stream" {
+        let outcome = super::generation::validate_sse(document, template, bytes, true)?;
+        ensure!(
+            outcome.positive(),
+            "truncated generation SSE cannot earn positive coverage"
+        );
     } else if media.starts_with("text/") {
         let text = std::str::from_utf8(bytes)
             .map_err(|_| anyhow::anyhow!("text response is not UTF-8"))?;
@@ -500,14 +514,18 @@ impl Fixtures {
                 .map(|(pointer, value)| ((*pointer).to_owned(), value.clone()))
                 .collect()
         };
-        let run = http_vectors::run_body_with(
+        let constraints = |body: &Value| {
+            !GENERATION_AREAS.contains(&area(template))
+                || super::generation::validate_request(artifact(), template, body).is_ok()
+        };
+        let run = http_vectors::run_body_with_constraints(
             artifact(),
             method,
             template,
             valid,
             &own(seeds),
             &own(candidates),
-            &send,
+            (&send, &constraints),
         )
         .await
         .unwrap_or_else(|e| shared::refuse(e));
@@ -516,6 +534,7 @@ impl Fixtures {
         }
         self.0.record_vectors(method, template, "body");
         self.0.record_reach(method, template, &run.reached);
+        self.0.record_unsendable(method, template, &run.exempt_used);
     }
 }
 

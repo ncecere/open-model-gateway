@@ -174,6 +174,9 @@ fn inference_openapi_documents_every_status_the_renderers_produce() {
     use crate::inference::error::InferenceError as E;
     let doc = generated();
     for (path, validation_status) in [
+        ("/v1/chat/completions", 400),
+        ("/v1/responses", 400),
+        ("/v1/messages", 400),
         ("/v1/embeddings", 400),
         ("/v1/rerank", 400),
         ("/v1/images/generations", 400),
@@ -189,8 +192,15 @@ fn inference_openapi_documents_every_status_the_renderers_produce() {
             .collect();
         let mut produced = BTreeSet::new();
         for error in e::all() {
-            let (mut status, _) = batch_line_error(false, error);
-            if path != "/v1/embeddings" {
+            let (mut status, _) = batch_line_error(path == "/v1/messages", error);
+            if ![
+                "/v1/embeddings",
+                "/v1/chat/completions",
+                "/v1/responses",
+                "/v1/messages",
+            ]
+            .contains(&path)
+            {
                 // `workload_error`: unsupported is 400, validation is per route.
                 match error {
                     E::Unsupported => status = 400,
@@ -203,6 +213,9 @@ fn inference_openapi_documents_every_status_the_renderers_produce() {
         // 413 is the body cap, not an InferenceError; 200 the success.
         let mut expected = produced.clone();
         expected.extend([200, 413]);
+        if path == "/v1/messages" {
+            expected.insert(405);
+        }
         assert_eq!(
             documented, expected,
             "{path}: statuses differ from the renderers"

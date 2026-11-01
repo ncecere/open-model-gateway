@@ -63,31 +63,18 @@ fn inference_openapi_realtime_never_offers_x_api_key() {
 }
 
 #[test]
-fn inference_openapi_zero_placeholders_once_pr2_lands() {
+fn inference_openapi_closure_has_zero_placeholders() {
+    // #82 closure: PR1, PR2 and PR3 together complete every operation.
     let doc = generated();
-    let slots = doc["components"]["schemas"].as_object().unwrap();
-    let remaining: Vec<_> = slots
+    let remaining: Vec<_> = doc["components"]["schemas"]
+        .as_object()
+        .unwrap()
         .iter()
         .filter(|(_, s)| s["x-omg-schema-status"] == "incomplete")
         .map(|(name, _)| name.as_str())
         .collect();
-    let expected = [
-        "post_v1_chat_completionsRequest",
-        "post_v1_chat_completionsResponse",
-        "post_v1_messagesRequest",
-        "post_v1_messagesResponse",
-        "post_v1_responsesRequest",
-        "post_v1_responsesResponse",
-    ];
-    assert!(
-        remaining.iter().all(|s| expected.contains(s)),
-        "placeholder outside PR2"
-    );
-    assert_eq!(
-        generator::placeholder_count(&doc),
-        6,
-        "falling baseline: PR2 must remove these six slots to reach zero"
-    );
+    assert!(remaining.is_empty(), "placeholders remain: {remaining:?}");
+    assert_eq!(generator::placeholder_count(&doc), 0, "closure baseline");
 }
 
 #[cfg(feature = "integration-tests")]
