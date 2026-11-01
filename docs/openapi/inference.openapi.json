@@ -6179,6 +6179,14 @@
             "env": "GATEWAY_MAX_BODY_BYTES_VIDEOS"
           }
         },
+        "x-omg-refusals": [
+          {
+            "code": "invalid_request_error",
+            "envelope": "OpenAiErrorEnvelope",
+            "status": 400,
+            "trigger": "Unknown query parameter, invalid limit or order"
+          }
+        ],
         "x-omg-request-schema": {
           "$ref": "#/components/schemas/get_v1_videosRequest"
         },
@@ -6441,6 +6449,26 @@
           }
         ],
         "x-omg-access": "InferenceKey",
+        "x-omg-refusals": [
+          {
+            "code": "not_found",
+            "envelope": "JobErrorEnvelope",
+            "status": 404,
+            "trigger": "Malformed, missing, foreign or hidden video id"
+          },
+          {
+            "code": "video_not_owned",
+            "envelope": "JobErrorEnvelope",
+            "status": 403,
+            "trigger": "Caller is neither creator, workspace admin nor service key"
+          },
+          {
+            "code": "video_in_progress",
+            "envelope": "JobErrorEnvelope",
+            "status": 400,
+            "trigger": "Job is not terminal and cannot be deleted"
+          }
+        ],
         "x-omg-request-schema": {
           "$ref": "#/components/schemas/delete_v1_videos_by_idRequest"
         },
@@ -6584,6 +6612,14 @@
           }
         ],
         "x-omg-access": "InferenceKey",
+        "x-omg-refusals": [
+          {
+            "code": "not_found",
+            "envelope": "JobErrorEnvelope",
+            "status": 404,
+            "trigger": "Malformed, missing, foreign or hidden video id"
+          }
+        ],
         "x-omg-request-schema": {
           "$ref": "#/components/schemas/get_v1_videos_by_idRequest"
         },
@@ -6803,6 +6839,26 @@
             "application/binary"
           ]
         },
+        "x-omg-refusals": [
+          {
+            "code": "not_found",
+            "envelope": "JobErrorEnvelope",
+            "status": 404,
+            "trigger": "Malformed, missing, foreign or hidden video id"
+          },
+          {
+            "code": "video_not_ready",
+            "envelope": "JobErrorEnvelope",
+            "status": 400,
+            "trigger": "Content is requested before completion"
+          },
+          {
+            "code": "invalid_request_error",
+            "envelope": "OpenAiErrorEnvelope",
+            "status": 400,
+            "trigger": "Unknown query parameter or unsupported asset variant"
+          }
+        ],
         "x-omg-request-schema": {
           "$ref": "#/components/schemas/get_v1_videos_by_id_contentRequest"
         },

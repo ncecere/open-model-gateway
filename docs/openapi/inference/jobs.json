@@ -158,7 +158,15 @@
             "default": 2097152,
             "env": "GATEWAY_MAX_BODY_BYTES_VIDEOS"
           }
-        }
+        },
+        "x-omg-refusals": [
+          {
+            "status": 400,
+            "envelope": "OpenAiErrorEnvelope",
+            "code": "invalid_request_error",
+            "trigger": "Unknown query parameter, invalid limit or order"
+          }
+        ]
       }
     },
     "POST /v1/videos": {
@@ -389,7 +397,15 @@
             }
           }
         },
-        "description": "Inference-key scoped legacy video objects. The /v1/videos create/list route uses GATEWAY_MAX_BODY_BYTES_VIDEOS (default 2 MiB); item and content routes use a fixed 2 MiB cap. Declared Content-Length above the applicable cap is rejected with plain text 413 even on GET. Hidden or foreign ids are indistinguishable from missing objects."
+        "description": "Inference-key scoped legacy video objects. The /v1/videos create/list route uses GATEWAY_MAX_BODY_BYTES_VIDEOS (default 2 MiB); item and content routes use a fixed 2 MiB cap. Declared Content-Length above the applicable cap is rejected with plain text 413 even on GET. Hidden or foreign ids are indistinguishable from missing objects.",
+        "x-omg-refusals": [
+          {
+            "status": 404,
+            "envelope": "JobErrorEnvelope",
+            "code": "not_found",
+            "trigger": "Malformed, missing, foreign or hidden video id"
+          }
+        ]
       }
     },
     "DELETE /v1/videos/{id}": {
@@ -513,7 +529,27 @@
             }
           }
         },
-        "description": "Inference-key scoped legacy video objects. The /v1/videos create/list route uses GATEWAY_MAX_BODY_BYTES_VIDEOS (default 2 MiB); item and content routes use a fixed 2 MiB cap. Declared Content-Length above the applicable cap is rejected with plain text 413 even on GET. Hidden or foreign ids are indistinguishable from missing objects."
+        "description": "Inference-key scoped legacy video objects. The /v1/videos create/list route uses GATEWAY_MAX_BODY_BYTES_VIDEOS (default 2 MiB); item and content routes use a fixed 2 MiB cap. Declared Content-Length above the applicable cap is rejected with plain text 413 even on GET. Hidden or foreign ids are indistinguishable from missing objects.",
+        "x-omg-refusals": [
+          {
+            "status": 404,
+            "envelope": "JobErrorEnvelope",
+            "code": "not_found",
+            "trigger": "Malformed, missing, foreign or hidden video id"
+          },
+          {
+            "status": 403,
+            "envelope": "JobErrorEnvelope",
+            "code": "video_not_owned",
+            "trigger": "Caller is neither creator, workspace admin nor service key"
+          },
+          {
+            "status": 400,
+            "envelope": "JobErrorEnvelope",
+            "code": "video_in_progress",
+            "trigger": "Job is not terminal and cannot be deleted"
+          }
+        ]
       }
     },
     "GET /v1/videos/{id}/content": {
@@ -713,7 +749,27 @@
             "application/octet-stream",
             "application/binary"
           ]
-        }
+        },
+        "x-omg-refusals": [
+          {
+            "status": 404,
+            "envelope": "JobErrorEnvelope",
+            "code": "not_found",
+            "trigger": "Malformed, missing, foreign or hidden video id"
+          },
+          {
+            "status": 400,
+            "envelope": "JobErrorEnvelope",
+            "code": "video_not_ready",
+            "trigger": "Content is requested before completion"
+          },
+          {
+            "status": 400,
+            "envelope": "OpenAiErrorEnvelope",
+            "code": "invalid_request_error",
+            "trigger": "Unknown query parameter or unsupported asset variant"
+          }
+        ]
       }
     },
     "GET /v1/files": {
