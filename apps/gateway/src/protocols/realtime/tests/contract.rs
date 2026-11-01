@@ -1119,7 +1119,17 @@ pub(crate) async fn inference_openapi_handshake_fixtures(
     fixtures: &mut crate::inference_openapi::responses::Fixtures,
 ) {
     use crate::inference_openapi::responses::{capture, probe};
-    let g = gateway(pool, Init::Safe, vec![], limits()).await;
+    let g = gateway(
+        pool,
+        Init::Safe,
+        vec![],
+        RealtimeLimits {
+            idle: Duration::from_secs(5),
+            max_message_bytes: 1024,
+            ..limits()
+        },
+    )
+    .await;
     let send = async |query: String| {
         let mut request = format!("ws://{}/v1/realtime{query}", g.addr)
             .into_client_request()
@@ -1180,5 +1190,48 @@ pub(crate) async fn inference_openapi_handshake_fixtures(
             async |_, query| probe(send(query).await),
         )
         .await;
+    // These are WebSocket frames, not HTTP representations. Exercise two
+    // previously omitted codes on the real gateway and check the published
+    // extension rather than crediting frames as HTTP positive coverage.
+    let contract: Value = serde_json::from_slice(
+        &std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../docs/openapi/inference.openapi.json"),
+        )
+        .expect("inference artifact readable"),
+    )
+    .expect("inference artifact JSON kind");
+    let documented = &contract["paths"]["/v1/realtime"]["get"]["x-omg-websocket"]["close_codes"];
+    for (oversized, expected) in [(false, 1000u16), (true, 1009u16)] {
+        let mut client = g.connect().await;
+        if oversized {
+            client
+                .send(Message::Text("x".repeat(1025).into()))
+                .await
+                .expect("oversized fixture send failed");
+        }
+        let actual = tokio::time::timeout(Duration::from_secs(10), async {
+            while let Some(message) = client.next().await {
+                match message {
+                    Ok(Message::Close(Some(frame))) => return u16::from(frame.code),
+                    Ok(_) => {}
+                    Err(_) => panic!("close fixture transport failure"),
+                }
+            }
+            panic!("close fixture ended without close status");
+        })
+        .await
+        .expect("close fixture timed out");
+        assert_eq!(actual, expected, "realtime close trigger status");
+        assert!(
+            documented
+                .as_array()
+                .expect("close-code list kind")
+                .iter()
+                .any(|code| code.as_u64() == Some(u64::from(actual))),
+            "captured realtime close status is undocumented"
+        );
+    }
+    let _ = g.finished().await;
     g.pool.close().await;
 }

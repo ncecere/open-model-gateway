@@ -111,11 +111,21 @@
             "response.create"
           ],
           "close_codes": [
+            1000,
+            1003,
             1008,
+            1009,
             1011
           ],
           "documentation": "../../realtime.md",
-          "description": "GA only; beta realtime header, unknown subprotocols and unknown/duplicate model query parameters are refused. Frames are validated by a strict event allowlist, never modeled as HTTP bodies. Unknown events produce an error, not a silent drop. Frame payloads and limits are specified in docs/realtime.md."
+          "description": "GA only; beta realtime header, unknown subprotocols and unknown/duplicate model query parameters are refused. Frames are validated by a strict event allowlist, never modeled as HTTP bodies. Unknown events produce an error, not a silent drop. Frame payloads and limits are specified in docs/realtime.md.",
+          "close_code_triggers": {
+            "1000": "Idle timeout or maximum session duration, with or without an in-flight response.",
+            "1003": "A binary client frame is not supported; send JSON text events.",
+            "1008": "Rejected client event, event-rate limit, or live authorization/admission denial.",
+            "1009": "The client WebSocket frame or assembled message exceeds the configured transport size cap (message_too_big).",
+            "1011": "Fatal upstream/server failure, including invalid or unaccounted upstream events."
+          }
         },
         "description": "OpenAI GA Realtime WebSocket. HTTP errors precede upgrade; errors after upgrade are events and closes, not HTTP responses. Declared Content-Length above the fixed 2 MiB root limit is refused with plain text 413, including GET.",
         "x-omg-limits": {

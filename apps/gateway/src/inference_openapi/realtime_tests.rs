@@ -108,10 +108,10 @@ fn handler_close_codes() -> std::collections::BTreeSet<u16> {
         found: usize,
     }
     fn tail(expr: &syn::Expr) -> &syn::Expr {
-        if let syn::Expr::Block(block) = expr {
-            if let Some(syn::Stmt::Expr(last, None)) = block.block.stmts.last() {
-                return tail(last);
-            }
+        if let syn::Expr::Block(block) = expr
+            && let Some(syn::Stmt::Expr(last, None)) = block.block.stmts.last()
+        {
+            return tail(last);
         }
         expr
     }
@@ -214,6 +214,28 @@ fn handler_close_codes() -> std::collections::BTreeSet<u16> {
     table.codes
 }
 
+// Reviewed prose is deliberately exact: a nonempty but partial trigger
+// description must not erase a close path. The numeric inventory itself is
+// still derived exclusively from the handler dispatch above.
+fn reviewed_close_trigger(code: u16) -> Option<&'static str> {
+    match code {
+        1000 => {
+            Some("Idle timeout or maximum session duration, with or without an in-flight response.")
+        }
+        1003 => Some("A binary client frame is not supported; send JSON text events."),
+        1008 => {
+            Some("Rejected client event, event-rate limit, or live authorization/admission denial.")
+        }
+        1009 => Some(
+            "The client WebSocket frame or assembled message exceeds the configured transport size cap (message_too_big).",
+        ),
+        1011 => {
+            Some("Fatal upstream/server failure, including invalid or unaccounted upstream events.")
+        }
+        _ => None,
+    }
+}
+
 fn close_metadata_matches(
     doc: &serde_json::Value,
     codes: &std::collections::BTreeSet<u16>,
@@ -237,7 +259,7 @@ fn close_metadata_matches(
             triggers
                 .get(&code.to_string())
                 .and_then(serde_json::Value::as_str)
-                .is_some_and(|s| !s.trim().is_empty())
+                .is_some_and(|s| reviewed_close_trigger(*code) == Some(s))
         })
 }
 
@@ -260,6 +282,33 @@ fn inference_openapi_review_close_codes_match_handler_dispatch() {
             "missing handler close code escaped the pin"
         );
     }
+    for code in &codes {
+        let mut deleted = doc.clone();
+        deleted["paths"]["/v1/realtime"]["get"]["x-omg-websocket"]["close_code_triggers"]
+            .as_object_mut()
+            .unwrap()
+            .remove(&code.to_string());
+        assert!(
+            !close_metadata_matches(&deleted, &codes),
+            "missing close trigger escaped the pin"
+        );
+        for replacement in ["", "x"] {
+            let mut bad = doc.clone();
+            bad["paths"]["/v1/realtime"]["get"]["x-omg-websocket"]["close_code_triggers"]
+                [code.to_string()] = json!(replacement);
+            assert!(
+                !close_metadata_matches(&bad, &codes),
+                "blank or unreviewed close trigger escaped the pin"
+            );
+        }
+    }
+    let mut partial = doc.clone();
+    partial["paths"]["/v1/realtime"]["get"]["x-omg-websocket"]["close_code_triggers"]["1000"] =
+        json!("Idle timeout");
+    assert!(
+        !close_metadata_matches(&partial, &codes),
+        "partial idle trigger erased session-duration or in-flight coverage"
+    );
     let mut bad = doc;
     bad["paths"]["/v1/realtime"]["get"]["x-omg-websocket"]["close_codes"]
         .as_array_mut()
