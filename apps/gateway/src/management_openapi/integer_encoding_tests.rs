@@ -381,3 +381,59 @@ fn management_openapi_integer_encoding_untyped_finite_domains() {
         );
     }
 }
+
+#[test]
+fn management_openapi_integer_encoding_finite_domain_inference_is_restricted() {
+    for schema in [
+        json!({"enum":[1,"two"]}),
+        json!({"enum":[1,1.5]}),
+        json!({"enum":[]}),
+        json!({"type":"number","enum":[1,2]}),
+        json!({"type":"string","const":3}),
+    ] {
+        assert!(
+            !types(&[&schema]).contains("integer"),
+            "incorrect finite-domain integer inference"
+        );
+    }
+    let schema = json!({"const":3.0});
+    let mutations =
+        scalar_mutations(&json!({}), &schema, &[&schema], &json!(3.0), false, 0).unwrap();
+    assert!(
+        mutations
+            .vectors
+            .iter()
+            .any(|(kind, _)| *kind == "integer encoding fraction"),
+        "missing integral-float schema constant seed"
+    );
+}
+
+#[test]
+fn management_openapi_integer_encoding_nullable_union_requires_integer_run() {
+    let schema = json!({"anyOf":[{"type":"integer","minimum":0,"maximum":9},{"type":"null"}]});
+    let document = json!({"components":{"schemas":{}},"requestBody":{
+        "required":true,"content":{"application/json":{"schema":schema}}}});
+    let null = body_plan(&document, &document, &Value::Null, &[], &[]).unwrap();
+    assert!(
+        request_reach::unreached(&document, &schema, &null.reached)
+            .unwrap()
+            .iter()
+            .any(|(path, kind)| path == "/anyOf/0" && *kind == "union arm"),
+        "null-only run must leave integer arm uncovered"
+    );
+    let integer = body_plan(&document, &document, &json!(2), &[], &[]).unwrap();
+    assert!(
+        integer
+            .cases
+            .iter()
+            .any(|c| c.kind == "integer encoding exponent" && c.accept),
+        "integer-arm run omitted encoding vectors"
+    );
+    let reached = null.reached.union(&integer.reached).cloned().collect();
+    assert!(
+        request_reach::unreached(&document, &schema, &reached)
+            .unwrap()
+            .is_empty(),
+        "paired null/integer runs failed to cover union arms"
+    );
+}

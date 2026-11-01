@@ -44,4 +44,4 @@ Notes for changes on `main` after [v0.9.3](v0.9.3.md). They become the next rele
 
 ## Contract/harness
 
-- Management and inference document the JSON integer-literal request convention, with required root extensions and automatic HTTP refusal vectors for integer-valued floats and bare negative zero (#431). No production behaviour change.
+- Management and inference document the JSON integer-literal request convention, with required root extensions and automatic HTTP refusal vectors for integer-valued floats and bare negative zero, including integer-only const/enum domains (#431). No production behaviour change.

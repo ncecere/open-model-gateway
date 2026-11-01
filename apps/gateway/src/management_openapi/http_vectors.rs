@@ -272,6 +272,29 @@ fn types<'a>(nodes: &[&'a Value]) -> BTreeSet<&'a str> {
             _ => {}
         }
     }
+    // Finite numeric domains imply an integer slot even without `type`.
+    // Do not override an explicit type, or infer from a mixed/empty domain.
+    if out.is_empty() {
+        let mut members = nodes
+            .iter()
+            .flat_map(|node| {
+                node.get("const")
+                    .into_iter()
+                    .chain(node["enum"].as_array().into_iter().flatten())
+            })
+            .peekable();
+        if members.peek().is_some()
+            && members.all(|value| {
+                value.is_i64()
+                    || value.is_u64()
+                    || value
+                        .as_f64()
+                        .is_some_and(|n| n.is_finite() && n.fract() == 0.0)
+            })
+        {
+            out.insert("integer");
+        }
+    }
     out
 }
 fn repeat_to(seed: &str, length: usize) -> String {
@@ -1131,6 +1154,14 @@ fn scalar_mutations(
         seeds.extend(out.iter().map(|(_, value)| value.clone()));
         let mut seed = None;
         for candidate in seeds {
+            // Schema constants may themselves use an integral float spelling.
+            let candidate = if candidate.is_f64()
+                && candidate.as_f64().is_some_and(|n| n.fract() == 0.0)
+            {
+                serde_json::from_str(&format!("{:.0}", candidate.as_f64().expect("numeric seed")))?
+            } else {
+                candidate
+            };
             if (candidate.is_i64() || candidate.is_u64())
                 && valid(document, schema, &candidate)?
                 && valid(
