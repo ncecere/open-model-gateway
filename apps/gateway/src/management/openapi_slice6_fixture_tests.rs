@@ -31,7 +31,7 @@ struct Browser {
 async fn browser(pool: &PgPool, u: &BrowserPrincipal) -> Browser {
     let token = crate::entropy::hex_token().unwrap();
     let csrf = crate::entropy::hex_token().unwrap();
-    sqlx::query("INSERT INTO browser_sessions(token_hash,user_id,csrf_hash,expires_at,verified_email,last_seen_at) VALUES($1,$2,$3,now()+interval '1 hour',$4,now())")
+    sqlx::query("INSERT INTO browser_sessions(token_hash,user_id,csrf_hash,expires_at,verified_email,last_seen_at) VALUES($1,$2,$3,now()+interval '12 hours',$4,now())")
         .bind(Sha256::digest(token.as_bytes()).as_slice()).bind(u.user_id)
         .bind(Sha256::digest(csrf.as_bytes()).as_slice()).bind(&u.email).execute(pool).await.unwrap();
     Browser { token, csrf }
