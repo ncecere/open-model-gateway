@@ -198,24 +198,21 @@ pub(super) async fn email(
     let read = good(g, observed, admin, "GET", &path, &path, Value::Null).await;
     assert_eq!(read["last_test"]["ok"], true);
     assert!(read["last_test"]["error"].is_null());
-    // A relay the operator's allowlist does not list (the tests list 127.0.0.1
-    // only): it can be saved and is reported as not allowed. A test is refused
-    // before any connection or credential, but the refusal cannot be recorded:
-    // `host_not_allowed` violates the CHECK of `smtp_last_test_error` (migration
-    // 0010), so the request usually answers 409 and `last_test` stays empty
-    // (#411). Documented as the current behaviour. Only when the configuration
-    // changes between the send and the recording does the conditional UPDATE match
-    // no row (settings.rs `test_email`), and then a 200 body can carry
-    // `host_not_allowed` (the schema allows it in `SettingsEmailTest.error`, never
-    // in `last_test.error`); that race is not reproducible deterministically here.
+    // A relay outside the operator's allowlist fails before connecting, and
+    // migration 0068 lets that failed outcome be recorded (#411).
     let blocked = json!({"host":"localhost","port":mail_port,"tls":"none","from_address":"gateway@example.test"});
     let saved = good(g, observed, admin, "PUT", &path, &path, blocked).await;
     assert_eq!(saved["status"], "host_not_allowed");
     assert_eq!(saved["host_allowed"], false);
-    let refused = g.send(blocked_tester, "POST", &test, json!({})).await;
-    assert_eq!(refused.status, StatusCode::CONFLICT);
+    let refused = good(g, observed, blocked_tester, "POST", &test, &test, json!({})).await;
+    assert!(refused["ok"] == false, "/ok");
+    assert!(refused["error"] == "host_not_allowed", "/error");
     let read = good(g, observed, admin, "GET", &path, &path, Value::Null).await;
-    assert!(read["last_test"].is_null());
+    assert!(read["last_test"]["ok"] == false, "/last_test/ok");
+    assert!(
+        read["last_test"]["error"] == "host_not_allowed",
+        "/last_test/error"
+    );
     // Back to the listed relay for the fixtures that follow.
     good(g, observed, admin, "PUT", &path, &path, relay_saved).await;
 }

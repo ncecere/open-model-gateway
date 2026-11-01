@@ -1179,7 +1179,7 @@
                 "timeout",
                 "host_not_allowed"
               ],
-              "description": "A delivery category (email.rs DeliveryError). A test against a relay host the operator has not listed is refused with host_not_allowed, but recording it violates the last-test CHECK (migration 0010), so the request is usually answered 409 (see #411); a concurrent configuration change makes the recording UPDATE match no row and can instead return it in a 200 body."
+              "description": "A delivery category (email.rs DeliveryError). A test against a relay host the operator has not listed returns ok:false with host_not_allowed and records the failure against the saved configuration (migration 0068, #411)."
             },
             "recipient": {
               "type": "string"
@@ -3209,9 +3209,10 @@
                     "authentication",
                     "rejected",
                     "timeout",
+                    "host_not_allowed",
                     null
                   ],
-                  "description": "Delivery category of the last failed test; null when it succeeded. host_not_allowed is never recorded here: the column's CHECK (migration 0010) lists only the other categories, so a test against a relay host the operator has not listed is usually answered 409 and records nothing (see #411)."
+                  "description": "Delivery category of the last failed test; null when it succeeded. Disallowed relay hosts record host_not_allowed (migration 0068, #411)."
                 }
               },
               "required": [

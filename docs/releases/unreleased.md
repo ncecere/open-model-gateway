@@ -2,6 +2,10 @@
 
 Notes for changes on `main` after [v0.9.3](v0.9.3.md). They become the next release's notes.
 
+## Fixes
+
+- Email tests against disallowed relay hosts now record a failed test with `host_not_allowed` instead of returning 409 (#411). Requires migration 0068.
+
 ## Provider-reported cost reconciliation (#48)
 
 - **Admin → Usage & costs → Provider reconciliation:** Platform Admin/Auditor frozen comparisons with signed charges and variance, separate holds, unresolved coverage, identity-free personal totals and source/mapping provenance. Platform Admins can upload an Anthropic Cost Report envelope, attest whole mapping revisions and freeze snapshots in the dashboard.
