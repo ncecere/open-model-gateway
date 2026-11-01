@@ -55,7 +55,7 @@ lettre = { version = "=0.11.23", default-features = false, features = ["builder"
 percent-encoding = "2"
 # The already-locked reqwest transport's typed EOF/closed-connection errors;
 # never classify webhook retryability by attacker-controlled error text.
-hyper = { version = "=1.11.1", default-features = false }
+hyper = { version = "=1.12.0", default-features = false }
 # Prometheus/OpenMetrics exposition on the optional GATEWAY_METRICS_ADDR listener.
 prometheus-client = "=0.25.1"
 # Secrets come only from the OS CSPRNG (rand::rngs::SysRng, fallible; src/entropy.rs).
@@ -76,7 +76,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal
 # explicit ring-backed rustls config with webpki roots; no proxies, redirects or retries.
 tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
-webpki-roots = "=1.0.10"
+webpki-roots = "=1.0.11"
 # Audit export over syslog/TLS (#107): the same ring-backed rustls, no new TLS stack.
 tokio-rustls = { version = "=0.26.6", default-features = false, features = ["ring", "tls12"] }
 tower = { version = "0.5", features = ["util"] }
@@ -87,7 +87,7 @@ uuid = { version = "1", features = ["v4", "v7", "serde"] }
 
 [dev-dependencies]
 # Offline OpenAPI 3.1/Draft 2020-12 gates only (#81); no fetchers or schema-generator macros.
-jsonschema = { version = "=0.60.1", default-features = false }
+jsonschema = { version = "=0.60.2", default-features = false }
 # Deterministic paused-time coverage of the metrics worker's missed ticks.
 tokio = { version = "1", features = ["test-util"] }
 proc-macro2 = "1"
