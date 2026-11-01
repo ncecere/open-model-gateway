@@ -12473,7 +12473,7 @@
           }
         }
       },
-      "description": "delivery is always present: a run, its snapshot and its delivery envelope are written in one transaction (`complete` in src/scheduled_reports.rs, delivery::enqueue), and deliveries are never deleted (alert_deliveries_no_delete), so the scalar subquery of run_value/list_runs cannot be null. snapshot is null exactly when expired is true; a clock race between the run's and the payload's expiry instants can break that equality on the wire and is tracked in #406 (production bug, not a contract exception)."
+      "description": "delivery is always present: a run, its snapshot and its delivery envelope are written in one transaction (`complete` in src/scheduled_reports.rs, delivery::enqueue), and deliveries are never deleted (alert_deliveries_no_delete), so the scalar subquery of run_value/list_runs cannot be null. snapshot is null exactly when expired is true; both expiry checks use one captured database instant (#406)."
     },
     "MoneyWorkspaceReportRun": {
       "type": "object",
@@ -12560,7 +12560,7 @@
           }
         }
       },
-      "description": "delivery is always present: a run, its snapshot and its delivery envelope are written in one transaction (`complete` in src/scheduled_reports.rs, delivery::enqueue), and deliveries are never deleted (alert_deliveries_no_delete), so the scalar subquery of run_value/list_runs cannot be null. snapshot is null exactly when expired is true; a clock race between the run's and the payload's expiry instants can break that equality on the wire and is tracked in #406 (production bug, not a contract exception)."
+      "description": "delivery is always present: a run, its snapshot and its delivery envelope are written in one transaction (`complete` in src/scheduled_reports.rs, delivery::enqueue), and deliveries are never deleted (alert_deliveries_no_delete), so the scalar subquery of run_value/list_runs cannot be null. snapshot is null exactly when expired is true; both expiry checks use one captured database instant (#406)."
     },
     "MoneyPlatformExplorePersonalWorkspace": {
       "type": "object",

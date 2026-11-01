@@ -31,3 +31,6 @@ Notes for changes on `main` after [v0.9.3](v0.9.3.md). They become the next rele
 
 
 - List cursors, including sessions, before PostgreSQL’s minimum timestamp now return 400 invalid input instead of 503 (#409).
+
+
+- Report run detail and list reads use a single database instant per statement, keeping expiry and snapshot visibility consistent at expiry boundaries (#406).

@@ -16,6 +16,16 @@ pub(super) async fn occurrence_body(
     ws: Option<Uuid>,
     body: Option<Value>,
 ) -> (Uuid, Uuid, String) {
+    occurrence_body_at(f, pool, owner, ws, body, None).await
+}
+async fn occurrence_body_at(
+    f: &Fixture,
+    pool: &PgPool,
+    owner: &BrowserPrincipal,
+    ws: Option<Uuid>,
+    body: Option<Value>,
+    now: Option<chrono::DateTime<chrono::Utc>>,
+) -> (Uuid, Uuid, String) {
     let kind = if ws == Some(f.personal) {
         "personal"
     } else if ws.is_some() {
@@ -30,14 +40,16 @@ pub(super) async fn occurrence_body(
         .execute(pool)
         .await
         .unwrap();
-    sqlx::query("UPDATE report_schedules SET next_period_end=date_trunc('week',clock_timestamp(),'UTC')-interval '7 days',next_run_at=clock_timestamp()-interval '1 day' WHERE id=$1").bind(schedule).execute(pool).await.unwrap();
+    sqlx::query("WITH fixture_now AS MATERIALIZED (SELECT coalesce($2::timestamptz,clock_timestamp()) AS t) UPDATE report_schedules SET next_period_end=date_trunc('week',t,'UTC')-interval '7 days',next_run_at=t-interval '1 day' FROM fixture_now WHERE id=$1").bind(schedule).bind(now).execute(pool).await.unwrap();
     let leases = Leases::new();
     leases.renew_once(pool).await;
     let fence = leases.held(Lease::ReportScheduler).unwrap();
-    let c = crate::scheduled_reports::claim(&f.s, &fence, schedule)
-        .await
-        .unwrap()
-        .unwrap();
+    let c = match now {
+        Some(now) => crate::scheduled_reports::claim_at(&f.s, &fence, schedule, now).await,
+        None => crate::scheduled_reports::claim(&f.s, &fence, schedule).await,
+    }
+    .unwrap()
+    .unwrap();
     let body = match body {
         Some(mut body) => {
             let observed: chrono::DateTime<chrono::Utc> =
@@ -164,4 +176,184 @@ async fn scheduled_reports_read_authority_personal_privacy_auditor_and_live_revo
             crate::route_policy::TokenPolicy::Denied
         ));
     }
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn scheduled_reports_read_uses_one_clock_at_expiry(pool: PgPool) {
+    let mut f = fixture(&pool).await;
+    let past = sqlx::query_scalar(
+        "SELECT date_trunc('week',clock_timestamp(),'UTC') - interval '7 days 12 hours'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let (schedule, _, detail) =
+        occurrence_body_at(&f, &pool, &f.admin, None, None, Some(past)).await;
+    // Shadow only this test database's unqualified clock reads. The first two
+    // reads precede expiry; subsequent reads cross it, without sleeps or races.
+    // Session settings work even in the handler's read-only transaction.
+    sqlx::raw_sql(
+        "CREATE SCHEMA test_clock;
+         CREATE FUNCTION test_clock.clock_timestamp() RETURNS timestamptz
+         LANGUAGE plpgsql VOLATILE AS $$
+         DECLARE n int; expiry timestamptz; mode text;
+         BEGIN
+           n := coalesce(nullif(current_setting('test_clock.reads',true),''),'0')::int + 1;
+           PERFORM set_config('test_clock.reads',n::text,false);
+           mode := current_setting('test_clock.mode',true);
+           SELECT min(expires_at) INTO STRICT expiry FROM public.report_runs;
+           IF mode = 'boundary' THEN RETURN expiry; END IF;
+           IF mode = 'expired' OR (mode = 'moving' AND n > 2) THEN
+             RETURN expiry + interval '1 second';
+           END IF;
+           RETURN expiry - interval '1 second';
+         END $$;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let clock_pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            (*pool.connect_options())
+                .clone()
+                .options([("search_path", "test_clock,public,pg_catalog")]),
+        )
+        .await
+        .unwrap();
+    f.s.pool = clock_pool.clone();
+    for (mode, expired) in [
+        ("moving", false),
+        ("live", false),
+        ("boundary", true),
+        ("expired", true),
+    ] {
+        sqlx::query("SELECT set_config('test_clock.reads','0',false), set_config('test_clock.mode',$1,false)")
+            .bind(mode).execute(&clock_pool).await.unwrap();
+        let (status, body) = call(&f.s, &f.admin, "GET", &detail, Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "run detail status");
+        assert!(
+            body["expired"].as_bool() == Some(expired),
+            "run expiry classification"
+        );
+        assert!(
+            body["snapshot"].is_null() == expired,
+            "run snapshot expiry consistency"
+        );
+        let reads: String = sqlx::query_scalar("SELECT current_setting('test_clock.reads')")
+            .fetch_one(&clock_pool)
+            .await
+            .unwrap();
+        assert!(reads == "1", "run detail must evaluate the clock once");
+    }
+    let list = detail.rsplit_once('/').unwrap().0;
+    for (mode, expired) in [("live", false), ("boundary", true), ("expired", true)] {
+        sqlx::query("SELECT set_config('test_clock.reads','0',false), set_config('test_clock.mode',$1,false)")
+            .bind(mode).execute(&clock_pool).await.unwrap();
+        let (status, body) = call(&f.s, &f.admin, "GET", list, Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "run list status");
+        assert!(
+            body["data"].as_array().is_some_and(|rows| rows.len() == 1),
+            "run list count"
+        );
+        assert!(
+            body["data"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|row| row["expired"].as_bool() == Some(expired)),
+            "run list expiry classification"
+        );
+        let reads: String = sqlx::query_scalar("SELECT current_setting('test_clock.reads')")
+            .fetch_one(&clock_pool)
+            .await
+            .unwrap();
+        assert!(reads == "1", "run list must evaluate the clock once");
+    }
+    // Generate a second legitimate occurrence so per-row clock reads cannot
+    // accidentally satisfy the list's one-read-per-statement assertion.
+    let leases = Leases::new();
+    leases.renew_once(&pool).await;
+    let fence = leases.held(Lease::ReportScheduler).unwrap();
+    let now = past + chrono::Duration::days(7);
+    let claim =
+        crate::scheduled_reports::claim_at(&Store::new(pool.clone()), &fence, schedule, now)
+            .await
+            .unwrap()
+            .unwrap();
+    let body = crate::scheduled_reports::snapshot(&Store::new(pool.clone()), &claim)
+        .await
+        .unwrap();
+    assert!(
+        crate::scheduled_reports::complete(&Store::new(pool.clone()), &fence, &claim, &body)
+            .await
+            .unwrap(),
+        "second run completion"
+    );
+    sqlx::query("SELECT omg_lease_release('report_scheduler',$1,$2)")
+        .bind(fence.holder)
+        .bind(fence.epoch)
+        .execute(&pool)
+        .await
+        .unwrap();
+    {
+        let (mode, expired) = ("live", false);
+        sqlx::query("SELECT set_config('test_clock.reads','0',false), set_config('test_clock.mode',$1,false)")
+            .bind(mode).execute(&clock_pool).await.unwrap();
+        let (status, body) = call(&f.s, &f.admin, "GET", list, Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "run list status");
+        assert!(
+            body["data"].as_array().is_some_and(|rows| rows.len() == 2),
+            "run list count"
+        );
+        assert!(
+            body["data"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|row| row["expired"].as_bool() == Some(expired)),
+            "run list expiry classification"
+        );
+        let reads: String = sqlx::query_scalar("SELECT current_setting('test_clock.reads')")
+            .fetch_one(&clock_pool)
+            .await
+            .unwrap();
+        assert!(reads == "1", "run list must evaluate the clock once");
+    }
+    // Exercise the running HTTP gateway too, including live authorization refusal.
+    let app = routes()
+        .layer(Extension(ManagementPrincipal::Browser(f.admin.clone())))
+        .layer(Extension(f.admin.clone()))
+        .with_state(f.s.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await });
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let response = client
+        .get(format!("http://{address}{detail}"))
+        .send()
+        .await
+        .unwrap_or_else(|_| panic!("run HTTP transport"));
+    assert_eq!(response.status().as_u16(), 200, "run HTTP status");
+    let body: Value = response
+        .json()
+        .await
+        .unwrap_or_else(|_| panic!("run HTTP JSON"));
+    assert!(
+        body["expired"] == false && !body["snapshot"].is_null(),
+        "run HTTP live snapshot"
+    );
+    sqlx::query("UPDATE platform_role_grants SET revoked_at=clock_timestamp() WHERE user_id=$1")
+        .bind(f.admin.user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let response = client
+        .get(format!("http://{address}{detail}"))
+        .send()
+        .await
+        .unwrap_or_else(|_| panic!("revoked run HTTP transport"));
+    assert_eq!(response.status().as_u16(), 403, "revoked run HTTP status");
+    server.abort();
+    clock_pool.close().await;
 }
