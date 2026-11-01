@@ -5,6 +5,9 @@ use super::*;
 use openapi::responses::{Captured, PositiveFixtures, capture_http};
 use sha2::{Digest, Sha256};
 
+#[path = "settings/email_host_tests.rs"]
+mod email_host_tests;
+
 #[path = "openapi_alerts_states_tests.rs"]
 mod alerts_states;
 #[path = "openapi_settings_states_tests.rs"]
