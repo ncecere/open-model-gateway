@@ -18,4 +18,4 @@ Notes for changes on `main` after [v0.9.3](v0.9.3.md). They become the next rele
 
 ## Fixes
 
-- Inference contract tests now reject malformed generation SSE sequences and pin Responses/Messages HTTP stream cancellation and unknown settlement (#82). Generation operation schemas remain incomplete.
+- Complete the inference OpenAPI contracts for Chat Completions, Responses and Messages, with validated JSON/SSE, explicit refusals, cancellation evidence and official SDK wire replay (#82).

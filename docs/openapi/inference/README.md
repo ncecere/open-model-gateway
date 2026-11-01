@@ -2,14 +2,15 @@
 
 [inference.openapi.json](../inference.openapi.json) is the **incomplete inference contract** for #82: the documented `/v1/*` surface of the gateway. It is generated test-only from the compiled `route_policy::ROUTES` entries under `/v1/` plus the reviewed fragments in this directory, with the #81 fragment format and loader. Nothing here changes runtime behaviour, adds a runtime endpoint or a production dependency, and no CI or workflow file is involved: the gates are ordinary `cargo test` tests.
 
-Status after PR1: **27 operations, 40 incomplete request/response schema slots** (20 operations still placeholders). Completed and wire-validated against the real handlers: `models`, `embeddings`, `rerank`, `systemone`, `images` and the two realtime refusals (`/v1/realtime/client_secrets`, `/v1/realtime/calls`) — 7 operations. Every other operation is an explicit, counted placeholder (`x-omg-schema-status: incomplete`); `inference_openapi_reports_incomplete_schemas` pins that baseline and later PRs must lower it to zero (generation protocols and SSE, then media, files, batches, videos and the realtime WebSocket).
+Status after PR2: **27 operations, 34 incomplete request/response schema slots** (17 operations still placeholders). Completed and wire-validated against the real handlers: `models`, `embeddings`, `rerank`, `systemone`, `images`, `chat`, `responses`, `messages` and the two realtime refusals (`/v1/realtime/client_secrets`, `/v1/realtime/calls`) — 10 operations. Every other operation remains an explicit, counted placeholder (`x-omg-schema-status: incomplete`); `inference_openapi_reports_incomplete_schemas` pins this falling baseline. PR3 must finish media, files, batches, videos and the realtime WebSocket and lower it to zero.
 
 ## Run the gates
 
 ```sh
-cargo test -p open-model-gateway --lib inference_openapi -- --nocapture
+npm ci # existing official SDK dependencies; no new dependency
+cargo test -p open-model-gateway --lib inference_openapi -- --test-threads=4
 # with a PostgreSQL DATABASE_URL (sqlx creates isolated test databases):
-cargo test -p open-model-gateway --lib --all-features inference_openapi
+cargo test -p open-model-gateway --lib --all-features inference_openapi -- --test-threads=4
 ```
 
 Normal tests regenerate in memory and compare exact deterministic bytes with the committed artifact. To write it, after reviewing fragment changes:
@@ -26,9 +27,11 @@ Generated from source (a fragment cannot override any of it): paths, methods, pa
 
 * **Route parity is three-way**: the `/v1/` entries of `ROUTES`, the independent source scan of every route registration (`authz_matrix::inventory`) and the artifact must name the same method/template pairs. A new route (`count_tokens`, a Wave 7 realtime route) fails until its fragment lands. Omitted, extra, wrong-method, wrong-template, access, scope, token-policy, security, path-parameter and invented-query-parameter drift each fail (`wiring_tests.rs`).
 * **Authority** is inference-key only. `security` offers `inferenceKey` (Bearer); `/v1/messages` adds the `x-api-key` alternative and `GET /v1/realtime` the `openai-insecure-api-key.<key>` WebSocket subprotocol, never both with Bearer. The table is proven against the real credential parsers by sending each form to the real router (a well-formed credential in an accepted form reaches key authentication; anything else is a 401 first). Inference keys never authorize management, and admin tokens never authorize inference.
+* **Generation protocol profiles** are generated from `providers::capabilities::PROFILES` through the reviewed Chat/Responses/Messages route-to-`ApiProtocol` join, never supplied by fragments. Omitted or invented profiles fail. This PR2 metadata does not retroactively complete inherited non-generation profile metadata.
+* **Protocol headers** are inventoried separately: Messages requires exactly one `anthropic-version` and accepts the documented open `anthropic-beta` list. Missing, invented, wrong-kind and duplicate declarations fail.
 * **Query parameters** are exactly what handlers read (`GET /v1/realtime?model=`); every other query string is ignored by the real handlers, so none may be documented.
 
-Reviewed fragments (`operations.json` for placeholders, `simple-workloads.json` for the completed areas) have the #81 shape `{operations, schemas}` with `deny_unknown_fields`, duplicate-key and duplicate-name rejection. `operation` supplies hand-written OpenAPI fields; a completed operation replaces its generated `<operationId>Request` / `<operationId>Response` placeholder components by exact name.
+Reviewed fragments (`operations.json` for placeholders, `simple-workloads.json` and `generation.json` for the completed areas) have the #81 shape `{operations, schemas}` with `deny_unknown_fields`, duplicate-key and duplicate-name rejection. `operation` supplies hand-written OpenAPI fields; a completed operation replaces its generated `<operationId>Request` / `<operationId>Response` placeholder components by exact name.
 
 ## Error envelopes (never the management `ErrorEnvelope`)
 
@@ -42,7 +45,7 @@ Four native shapes, distinct schemas, each generated from source:
 | `FileErrorEnvelope` | files | OpenAI-shaped, nullable string `param` |
 
 * The code vocabulary is generated from `InferenceError::code` over a compile-time exhaustive variant list (adding a variant breaks the build until it is listed), the types from the real renderers (`protocols::batch_line_error`), and the job codes from a `syn` scan of the `JobError::{Conflict,Invalid,Forbidden}` literals under `src/jobs`. A reviewed table (`errors::OPENAI_TRANSPORT`) adds the transport-only types and codes, each checked to still occur in its source file.
-* `/v1/messages` errors follow Anthropic's shape and carry **no gateway machine code** (coordinator decision 5): `unsupported_capability`, `budget_exceeded` and the rest cannot be told apart there except by their message. The outer transport layer also rewrites 405 and 413 on that path into Anthropic's shape (`http.rs` `request_context`, `protocols/messages.rs` `http_error`); both are documented on the operation even though it is still incomplete, and the 413 is proven on the real stack.
+* `/v1/messages` errors follow Anthropic's shape and carry **no gateway machine code** (coordinator decision 5): `unsupported_capability`, `budget_exceeded` and the rest cannot be told apart there except by their message. The outer transport layer also rewrites 405 and 413 on that path into Anthropic's shape (`http.rs` `request_context`, `protocols/messages.rs` `http_error`); 401, 405 and 413 are pinned as Anthropic-shaped transport responses, and authentication/body caps are proven on the real stack.
 * The management `ErrorEnvelope` is refused by name and by reference, and an operation may only use the envelope family of its protocol.
 * A declared `Content-Length` over a body cap is refused before any handler by the body-limit layer with the plain text `length limit exceeded` (`text/plain`, 413); a streamed oversized body is refused by the handler with its JSON error. Both are documented on every body-bearing route (except `/v1/messages`, whose 413 is always Anthropic-shaped).
 * Headers: `x-request-id` (UUID) and `Cache-Control: no-store` on every response; `WWW-Authenticate: Bearer` on every 401; `x-should-retry: false` on permanent refusals; `Retry-After` when every route of a model is cooling down.
@@ -58,7 +61,7 @@ Cross-checks OpenAPI cannot express: the embedding vectors of a response must be
 
 ## `x-omg-*` extensions
 
-OpenAPI 3.1 cannot express everything the real surface does; the contract states it with extensions (SDK generation does not cover them): `x-omg-access`, `x-omg-token-policy`, `x-omg-schema-status`, `x-omg-request-schema`, `x-omg-response-schema` (as in the management contract); `x-omg-max-bytes` (a UTF-8 byte limit, where `maxLength` counts characters); `x-omg-positive-kind: refusal`; `x-omg-limits` (below); and the vector-harness exemptions of the #81 README (`x-omg-unsendable-boundary`). Later PRs add `x-omg-sse`, `x-omg-websocket`, `x-omg-cancellation` and the refusal tables. Open JSON is allowed only at reviewed pointers (`inference_openapi::ARBITRARY_JSON`, each with its justification): System One forwards TypeSafe content parts verbatim, and several maps have caller-chosen keys.
+OpenAPI 3.1 cannot express everything the real surface does; the contract states it with extensions (SDK generation does not cover them): `x-omg-access`, `x-omg-token-policy`, `x-omg-schema-status`, `x-omg-request-schema`, `x-omg-response-schema` (as in the management contract); `x-omg-max-bytes` (a UTF-8 byte limit, where `maxLength` counts characters); `x-omg-positive-kind: refusal`; `x-omg-limits` (below); and the vector-harness exemptions of the #81 README (`x-omg-unsendable-boundary`). PR2 adds `x-omg-sse`, `x-omg-cancellation` and refusal tables; PR3 adds `x-omg-websocket`. Open JSON is allowed only at reviewed pointers (`inference_openapi::ARBITRARY_JSON`, each with its justification): System One preserves TypeSafe parts, generation tools carry caller-owned JSON schemas/inputs, Messages preserves native blocks/deltas, and several maps have caller-chosen keys.
 
 ## Configurable limits
 
@@ -77,3 +80,30 @@ Fixed limits that are constants of the handlers (embeddings: 128 inputs, 1 MiB i
 ## Messages beta headers
 
 The decision text said Messages "rejects beta headers". The handler accepts an open list and refuses only a denylist (`protocols/messages.rs`, `docs/protocol-matrix.md`); the artifact documents the handler. The stale in-repo sentence (`docs/guardrails-design.md`, which also said `cache_control` and thinking were rejected) is corrected in the same PR.
+
+
+## Generation wire refinements (#82 PR2)
+
+Chat Completions, Responses and Messages now include JSON and SSE contracts.
+`x-omg-sse.events` maps frame kinds to payload schemas; Chat has unnamed data
+frames (`message`/`error` classify JSON), with a literal `[DONE]` terminator.
+The ordered grammar and terminal metadata are checked alongside the real wire.
+Truncated streams never earn positive coverage; cancellation is separate named
+HTTP drop-test evidence in `x-omg-cancellation`, not fabricated terminal bytes.
+
+`x-omg-request-constraints: generation-normalization` supplements structural
+JSON Schema with the actual protocol's normalization rules: equal non-null Chat
+`max_tokens`/`max_completion_tokens`, UTF-8 model byte limits, role/content and
+tool-name relationships, and conditional field bounds such as thinking budget
+less than max_tokens. Wire integers must use the integer JSON number kind:
+serde/Value::as_u64 reject `2.0`, although standard JSON Schema's `integer`
+includes it. The wire harness checks these refinements and the real HTTP paths;
+SDK generators that ignore extensions cannot enforce them. Provider-specific
+refusals remain conditional and are listed in `x-omg-refusals` rather than
+being treated as accepted generation results.
+
+Messages accepts an open beta-header list with a case-insensitive deny-prefix
+list, not a beta allowlist. Native content/delta blocks remain open JSON at
+explicitly justified, exact quality-allowlist locations. Usage counters are
+optional when unknown; message_start's input_tokens:0 is a compatibility
+placeholder only, not observed or billed zero usage.
