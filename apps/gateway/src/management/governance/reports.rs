@@ -696,6 +696,8 @@ pub(super) async fn reconcile(
         reasoning_tokens: None,
         reported_model: None,
     };
+    // Operator evidence is client input, unlike provider settlement observations.
+    crate::governance::validate_token_usage(usage).map_err(|_| invalid())?;
     crate::governance::resolve_usage(
         &s,
         ws,

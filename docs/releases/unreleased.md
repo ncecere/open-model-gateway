@@ -9,6 +9,7 @@ Notes for changes on `main` after [v0.9.3](v0.9.3.md). They become the next rele
 - List cursors, including sessions, before PostgreSQL’s minimum timestamp now return 400 invalid input instead of 503 (#409).
 - SCIM list filters containing control characters (for example a JSON-escaped NUL) are refused with 400 `invalidFilter` instead of reaching PostgreSQL and returning 500 (#414).
 - Report run detail and list reads use a single database instant per statement, keeping expiry and snapshot visibility consistent at expiry boundaries (#406).
+- Manual cost reconciliation refuses incoherent operator token usage with 400 instead of 503, retaining the unknown hold unchanged; provider settlement behaviour is unchanged (#408).
 
 ## Provider-reported cost reconciliation (#48)
 

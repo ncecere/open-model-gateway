@@ -6972,8 +6972,7 @@
             "billing_usage": {
               "anyOf": [
                 {
-                  "$ref": "#/components/schemas/MoneyBillingUsageInput",
-                  "x-omg-unprobed-location": "billing_usage counters cannot be varied one at a time: BillingUsage::validate and usage_values (governance.rs) refuse an incoherent set with a Storage error, which reconcile maps to 503 instead of 400 (#408), so the HTTP vectors run with billing_usage null. The pinned probes in openapi_money_probes_tests.rs (reconcile_probes) compare every counter rule with the real handler."
+                  "$ref": "#/components/schemas/MoneyBillingUsageInput"
                 },
                 {
                   "type": "null"
@@ -7038,8 +7037,7 @@
             {
               "anyOf": [
                 {
-                  "$ref": "#/components/schemas/MoneyBillingUsageInput",
-                  "x-omg-unprobed-location": "billing_usage counters cannot be varied one at a time: BillingUsage::validate and usage_values (governance.rs) refuse an incoherent set with a Storage error, which reconcile maps to 503 instead of 400 (#408), so the HTTP vectors run with billing_usage null. The pinned probes in openapi_money_probes_tests.rs (reconcile_probes) compare every counter rule with the real handler."
+                  "$ref": "#/components/schemas/MoneyBillingUsageInput"
                 },
                 {
                   "type": "null"
