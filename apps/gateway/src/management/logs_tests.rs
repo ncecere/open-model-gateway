@@ -718,3 +718,99 @@ async fn dashboard_batches_follow_object_visibility(pool: PgPool) {
         );
     }
 }
+
+#[test]
+fn cursor_timestamp_bounds() {
+    let id = "00000000-0000-0000-0000-000000000001";
+    for (case, micros, accepted) in [
+        ("below PostgreSQL minimum", "-210866803200000001", false),
+        ("PostgreSQL minimum", "-210866803200000000", true),
+        ("chrono maximum", "8210266876799999999", true),
+        ("above chrono maximum", "8210266876800000000", false),
+        // PostgreSQL's maximum Unix microseconds exceeds both chrono and i64.
+        ("above PostgreSQL maximum", "9224318016000000000", false),
+    ] {
+        let result = super::super::super::logs::cursor_parts(&format!("{micros}_{id}"));
+        assert_eq!(result.is_ok(), accepted, "{case}: acceptance");
+        if let Err(error) = result {
+            assert_eq!(error.0, StatusCode::BAD_REQUEST, "{case}: status");
+        }
+    }
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn cursor_timestamp_bounds_on_log_routes(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let id = "00000000-0000-0000-0000-000000000001";
+    let mut failures = 0;
+    // Sessions use a different, three-part cursor; these lists share cursor_parts.
+    for list in ["generations", "requests"] {
+        for (case, micros, expected) in [
+            (
+                "below PostgreSQL minimum",
+                "-210866803200000001",
+                StatusCode::BAD_REQUEST,
+            ),
+            ("PostgreSQL minimum", "-210866803200000000", StatusCode::OK),
+            ("chrono maximum", "8210266876799999999", StatusCode::OK),
+            (
+                "above chrono maximum",
+                "8210266876800000000",
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                "above PostgreSQL maximum",
+                "9224318016000000000",
+                StatusCode::BAD_REQUEST,
+            ),
+        ] {
+            let (status, body) = get(
+                &f,
+                &f.owner,
+                &format!("/api/v1/workspaces/{}/{list}?cursor={micros}_{id}", f.team),
+            )
+            .await;
+            if status != expected {
+                eprintln!("{list}: {case}: status {status}, expected {expected}");
+                failures += 1;
+            }
+            if expected == StatusCode::BAD_REQUEST && status == expected {
+                assert!(
+                    body["error"]["message"] == "Invalid request",
+                    "{list}: {case}: invalid error"
+                );
+            }
+        }
+    }
+    assert_eq!(failures, 0, "cursor route status failures");
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn session_cursor_timestamp_bounds_on_route(pool: PgPool) {
+    let f = fixture(&pool).await;
+    for (case, micros, expected) in [
+        ("PostgreSQL minimum", "-210866803200000000", StatusCode::OK),
+        (
+            "below PostgreSQL minimum",
+            "-210866803200000001",
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let (status, body) = get(
+            &f,
+            &f.owner,
+            &format!(
+                "/api/v1/workspaces/{}/sessions?cursor={micros}_{}_61",
+                f.team, f.team
+            ),
+        )
+        .await;
+        assert_eq!(status, expected, "{case}: sessions status");
+        if expected == StatusCode::BAD_REQUEST {
+            assert!(
+                body["error"]["message"] == "Invalid request",
+                "{case}: invalid error"
+            );
+        }
+    }
+}

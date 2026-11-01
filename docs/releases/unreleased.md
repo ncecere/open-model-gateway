@@ -28,3 +28,6 @@ Notes for changes on `main` after [v0.9.3](v0.9.3.md). They become the next rele
 ## Fixes
 
 - General settings validate support and logo URL length after percent-encoding, returning 400 instead of 409 when the stored form exceeds 2048 characters (#419).
+
+
+- List cursors, including sessions, before PostgreSQL’s minimum timestamp now return 400 invalid input instead of 503 (#409).

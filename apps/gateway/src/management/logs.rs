@@ -306,11 +306,26 @@ where
         .bind(f.streamed)
         .bind(f.session.as_deref())
 }
+// PostgreSQL 17 src/include/datatype/timestamp.h: MIN_TIMESTAMP (inclusive)
+// and END_TIMESTAMP (exclusive), shifted from the 2000 epoch to Unix micros.
+// Finite UTC bounds: -4713-11-24 00:00:00 (4714 BC) through
+// 294276-12-31 23:59:59.999999. The maximum needs i128 in Unix micros;
+// parsing i64 and chrono below impose the existing, narrower upper bound.
+const PG_MIN_UNIX_MICROS: i128 = -210_866_803_200_000_000;
+const PG_MAX_UNIX_MICROS: i128 = 9_224_318_015_999_999_999;
+
+fn cursor_timestamp(micros: &str) -> Result<DateTime<Utc>, ApiError> {
+    let micros: i64 = micros.parse().map_err(|_| invalid())?;
+    if !(PG_MIN_UNIX_MICROS..=PG_MAX_UNIX_MICROS).contains(&i128::from(micros)) {
+        return Err(invalid());
+    }
+    DateTime::from_timestamp_micros(micros).ok_or_else(invalid)
+}
+
 pub(super) fn cursor_parts(c: &str) -> Result<(DateTime<Utc>, Uuid), ApiError> {
     let (micros, id) = c.split_once('_').ok_or_else(invalid)?;
-    let micros: i64 = micros.parse().map_err(|_| invalid())?;
     Ok((
-        DateTime::from_timestamp_micros(micros).ok_or_else(invalid)?,
+        cursor_timestamp(micros)?,
         Uuid::parse_str(id).map_err(|_| invalid())?,
     ))
 }
@@ -419,7 +434,7 @@ fn session_cursor(c: &str) -> Result<(DateTime<Utc>, Uuid, String), ApiError> {
     let (Some(micros), Some(ws), Some(session)) = (parts.next(), parts.next(), parts.next()) else {
         return Err(invalid());
     };
-    let micros: i64 = micros.parse().map_err(|_| invalid())?;
+    let timestamp = cursor_timestamp(micros)?;
     if session.len() % 2 != 0 || session.len() > 4 * 128 * 2 {
         return Err(invalid());
     }
@@ -435,7 +450,7 @@ fn session_cursor(c: &str) -> Result<(DateTime<Utc>, Uuid, String), ApiError> {
         return Err(invalid());
     }
     Ok((
-        DateTime::from_timestamp_micros(micros).ok_or_else(invalid)?,
+        timestamp,
         Uuid::parse_str(ws).map_err(|_| invalid())?,
         session,
     ))
@@ -704,3 +719,7 @@ mod with_trace_id_tests {
         assert!(result["trace_id"].is_null());
     }
 }
+
+#[cfg(test)]
+#[path = "session_cursor_tests.rs"]
+mod session_cursor_tests;
