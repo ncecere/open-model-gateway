@@ -99,7 +99,9 @@ async fn raw(
         .header("cookie", format!("omg_session={}", b.token))
         .header("x-csrf-token", &b.csrf);
     if let Some(body) = body {
-        r = r.json(&body);
+        r = r
+            .header("content-type", "application/json")
+            .body(crate::management::openapi::http_vectors::wire_bytes(&body));
     }
     capture_http(
         method,

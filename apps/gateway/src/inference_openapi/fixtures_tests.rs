@@ -354,7 +354,9 @@ pub(super) fn request(
     match body {
         Some(body) => request
             .header("content-type", "application/json")
-            .body(Body::from(body.to_string()))
+            .body(Body::from(
+                crate::management::openapi::http_vectors::wire_bytes(body),
+            ))
             .unwrap(),
         None => request.body(Body::empty()).unwrap(),
     }

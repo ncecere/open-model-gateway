@@ -144,7 +144,7 @@ impl Gateway {
             method,
             path,
             "application/json",
-            serde_json::to_vec(&input).unwrap(),
+            crate::management::openapi::http_vectors::wire_bytes(&input),
         )
         .await
     }

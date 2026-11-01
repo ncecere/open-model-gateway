@@ -1,6 +1,8 @@
 //! HTTP boundary vectors: for every documented query parameter and request body
 //! the SCHEMA's verdict on an input must equal the real HANDLER's verdict over
 //! HTTP (served router or loopback client), not merely the DTO's serde verdict.
+//! The root integer-encoding convention pins schema acceptance against handler
+//! refusal for integer-valued floats, a document-wide lexical divergence.
 //!
 //! * Vectors derive from the artifact's schemas: bounds and bounds +/- 1,
 //!   `maxLength + 1`, pattern and format violations, enum members and
@@ -107,6 +109,82 @@ impl Probe {
     }
 }
 
+// Keep the fixture API typed while preserving lexical number spellings over HTTP.
+// The task-local scope follows the send future even when Tokio moves it between threads.
+tokio::task_local! {
+    static INTEGER_WIRE: (String, &'static str, std::cell::Cell<bool>);
+}
+
+pub(crate) fn wire_bytes(body: &Value) -> Vec<u8> {
+    fn encode(value: &Value, pointer: &str, target: &str, suffix: &str) -> String {
+        if pointer == target {
+            if suffix == "bare negative zero" {
+                return "-0".into();
+            }
+            let number = format!("{:.0}", value.as_f64().expect("integer encoding number"));
+            return format!("{number}{suffix}");
+        }
+        match value {
+            Value::Object(map) => format!(
+                "{{{}}}",
+                map.iter()
+                    .map(|(key, value)| {
+                        let next =
+                            format!("{pointer}/{}", key.replace('~', "~0").replace('/', "~1"));
+                        format!("{}:{}", json!(key), encode(value, &next, target, suffix))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+            Value::Array(items) => format!(
+                "[{}]",
+                items
+                    .iter()
+                    .enumerate()
+                    .map(|(i, value)| { encode(value, &format!("{pointer}/{i}"), target, suffix) })
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+            other => other.to_string(),
+        }
+    }
+    INTEGER_WIRE
+        .try_with(|(pointer, kind, sent)| {
+            if matches!(
+                *kind,
+                "integer encoding exponent"
+                    | "integer encoding fraction"
+                    | "integer encoding bare negative zero"
+            ) {
+                let target = if pointer == "(root)" { "" } else { pointer };
+                // A send closure may serialize auxiliary setup requests first.
+                // Only the vector's floating integer target is rewritten; the
+                // runner still fails closed if no vector serialization occurred.
+                if !body
+                    .pointer(target)
+                    .is_some_and(|v| v.as_number().is_some_and(|n| n.is_f64()))
+                {
+                    return serde_json::to_vec(body).expect("serialize auxiliary fixture body");
+                }
+                sent.set(true);
+                encode(
+                    body,
+                    "",
+                    target,
+                    match *kind {
+                        "integer encoding exponent" => "e0",
+                        "integer encoding bare negative zero" => "bare negative zero",
+                        _ => ".0",
+                    },
+                )
+                .into_bytes()
+            } else {
+                serde_json::to_vec(body).expect("serialize vector body")
+            }
+        })
+        .unwrap_or_else(|_| serde_json::to_vec(body).expect("serialize fixture body"))
+}
+
 // ---------------------------------------------------------------------------
 // Schema walking
 // ---------------------------------------------------------------------------
@@ -208,6 +286,29 @@ fn types<'a>(nodes: &[&'a Value]) -> BTreeSet<&'a str> {
             }
             Value::Array(all) => out.extend(all.iter().filter_map(Value::as_str)),
             _ => {}
+        }
+    }
+    // Finite numeric domains imply an integer slot even without `type`.
+    // Do not override an explicit type, or infer from a mixed/empty domain.
+    if out.is_empty() {
+        let mut members = nodes
+            .iter()
+            .flat_map(|node| {
+                node.get("const")
+                    .into_iter()
+                    .chain(node["enum"].as_array().into_iter().flatten())
+            })
+            .peekable();
+        if members.peek().is_some()
+            && members.all(|value| {
+                value.is_i64()
+                    || value.is_u64()
+                    || value
+                        .as_f64()
+                        .is_some_and(|n| n.is_finite() && n.fract() == 0.0)
+            })
+        {
+            out.insert("integer");
         }
     }
     out
@@ -1078,6 +1179,69 @@ fn scalar_mutations(
             out.push(("non-integer", json!(1.5)));
         }
     }
+    // Integer-valued floating point encodings are schema-valid too.
+    if kinds.contains("integer") {
+        let current = if query {
+            coerce(&kinds, &render(value))
+        } else {
+            value.clone()
+        };
+        let mut seeds = vec![current, json!(0), json!(1), json!(-1)];
+        declared_values(document, schema, &mut seeds, 0)?;
+        seeds.extend(out.iter().map(|(_, value)| value.clone()));
+        let mut seed = None;
+        for candidate in seeds {
+            // Schema constants may themselves use an integral float spelling.
+            let candidate = if candidate.is_f64()
+                && candidate.as_f64().is_some_and(|n| n.fract() == 0.0)
+            {
+                serde_json::from_str(&format!("{:.0}", candidate.as_f64().expect("numeric seed")))?
+            } else {
+                candidate
+            };
+            if (candidate.is_i64() || candidate.is_u64())
+                && valid(document, schema, &candidate)?
+                && valid(
+                    document,
+                    schema,
+                    &serde_json::from_str::<Value>(&format!("{candidate}.0"))?,
+                )?
+            {
+                seed = Some(candidate);
+                break;
+            }
+        }
+        if let Some(seed) = seed {
+            let raw = format!("{seed}.0");
+            let candidate: Value = serde_json::from_str(&raw)?;
+            if valid(document, schema, &candidate)? {
+                out.push((
+                    "integer encoding fraction",
+                    if query { json!(raw) } else { candidate },
+                ));
+            }
+            if valid(document, schema, &json!(0))? {
+                out.push((
+                    "integer encoding bare negative zero",
+                    if query { json!("-0") } else { json!(-0.0) },
+                ));
+                out.push((
+                    "integer encoding negative zero",
+                    if query { json!("-0.0") } else { json!(-0.0) },
+                ));
+            }
+            out.push((
+                "integer encoding exponent",
+                if query {
+                    json!(format!("{seed}e0"))
+                } else {
+                    serde_json::from_str(&raw)?
+                },
+            ));
+        } else {
+            bail!("integer encoding: no schema-valid representable integer seed");
+        }
+    }
     // String bounds are derived from the VALID value so the alphabet stays valid.
     if kinds.contains("string") {
         let seed = value.as_str().unwrap_or("a");
@@ -1362,6 +1526,17 @@ pub(super) fn query_plan(
         );
         for (label, kind, value) in all {
             let raw = render(&value);
+            // Only reviewed parameters accept bare -0. Every other integer
+            // query location sends the same spelling as a pinned refusal.
+            let kind = if kind == "integer encoding bare negative zero"
+                && document["x-omg-integer-encoding-query-exceptions"][name]
+                    .as_array()
+                    .is_some_and(|values| values.iter().any(|v| v == &raw))
+            {
+                "query negative zero literal"
+            } else {
+                kind
+            };
             // A request target is limited to 65534 bytes by the HTTP stack: the
             // REAL percent-encoded query string (not a worst-case estimate) must fit.
             if encode(&with_param(base, name, &raw)).len() > MAX_QUERY_BYTES {
@@ -1370,7 +1545,14 @@ pub(super) fn query_plan(
             }
             sent.push(label);
             if seen.insert(raw.clone()) {
-                let accept = accepts(document, schema, &coerce(&kinds, &raw))?;
+                let typed = if kind.starts_with("integer encoding ")
+                    || kind == "query negative zero literal"
+                {
+                    serde_json::from_str(&raw)?
+                } else {
+                    coerce(&kinds, &raw)
+                };
+                let accept = accepts(document, schema, &typed)?;
                 out.push(QueryCase {
                     param: name.clone(),
                     kind,
@@ -1449,6 +1631,35 @@ fn mismatch(
     )
 }
 
+// JSON Schema cannot express this lexical constraint. A declared document
+// pins the divergence rather than pretending these values are schema-invalid.
+fn integer_refusal(
+    document: &Value,
+    kind: &str,
+    schema_accepts: bool,
+    probe: &Probe,
+) -> Result<bool> {
+    if document["x-omg-integer-encoding"] != "json-integer-literal"
+        || !kind.starts_with("integer encoding ")
+    {
+        return Ok(false);
+    }
+    ensure!(
+        schema_accepts,
+        "integer encoding vector must be schema-accepted"
+    );
+    ensure!(
+        matches!(probe.captured.status.as_u16(), 400 | 422),
+        "documented integer encoding requires refusal (400/422), status {}",
+        probe.captured.status.as_u16()
+    );
+    ensure!(
+        !probe.verdict()?,
+        "documented integer encoding was accepted by the handler"
+    );
+    Ok(true)
+}
+
 /// Run every query vector; returns every exchange (so the caller can observe them).
 pub(super) async fn run_query<C>(
     document: &Value,
@@ -1498,7 +1709,9 @@ pub(crate) async fn run_query_with<C>(
         let handler = probe
             .verdict()
             .with_context(|| format!("{method} {template}: {kind} vector at {location}"))?;
-        if handler != expected {
+        let pinned = integer_refusal(document, kind, expected, &probe)
+            .with_context(|| format!("{method} {template}: {kind} vector at {location}"))?;
+        if !pinned && handler != expected {
             return Err(mismatch(
                 method, template, kind, &location, expected, &probe, handler,
             ));
@@ -1654,7 +1867,7 @@ fn set(root: &Value, path: &[Step], new: Option<Value>) -> Value {
 fn raw_pointer(path: &[Step]) -> String {
     path.iter()
         .map(|step| match step {
-            Step::Key(name) => format!("/{name}"),
+            Step::Key(name) => format!("/{}", name.replace('~', "~0").replace('/', "~1")),
             Step::Index(i) => format!("/{i}"),
         })
         .collect()
@@ -1665,7 +1878,7 @@ fn pointer(path: &[Step]) -> String {
     }
     path.iter()
         .map(|step| match step {
-            Step::Key(name) => format!("/{name}"),
+            Step::Key(name) => format!("/{}", name.replace('~', "~0").replace('/', "~1")),
             Step::Index(i) => format!("/{i}"),
         })
         .collect()
@@ -1703,11 +1916,34 @@ impl Walk<'_> {
         let body = set(&self.valid_body, path, new);
         if body == self.valid_body
             || body == *self.original
-            || !self.seen.insert(serde_json::to_string(&body)?)
+            || !self.seen.insert(format!(
+                "{}:{}",
+                if matches!(
+                    kind,
+                    "integer encoding exponent" | "integer encoding bare negative zero"
+                ) {
+                    kind
+                } else {
+                    ""
+                },
+                serde_json::to_string(&body)?
+            ))
         {
             return Ok(());
         }
         let accept = accepts(self.document, self.root_schema, &body)?;
+        if matches!(
+            kind,
+            "integer encoding negative zero" | "integer encoding bare negative zero"
+        ) && !accept
+        {
+            return Ok(()); // zero must be valid in the whole request, not only locally
+        }
+        ensure!(
+            !kind.starts_with("integer encoding ") || accept,
+            "integer encoding vector at {} needs a whole-request-valid integer seed",
+            pointer(path)
+        );
         self.out.push(BodyCase {
             pointer: pointer(path),
             kind,
@@ -2408,12 +2644,27 @@ pub(crate) async fn run_body_with_constraints(
     let mut accepted_seen = false;
     for (kind, location, body, expected) in plan {
         let expected = expected && constraints(&body);
-        let probe = send(body).await;
+        let probe = INTEGER_WIRE
+            .scope(
+                (location.clone(), kind, std::cell::Cell::new(false)),
+                async {
+                    let probe = send(body).await;
+                    let sent = INTEGER_WIRE.with(|(_, _, sent)| sent.get());
+                    ensure!(
+                        !matches!(kind, "integer encoding exponent" | "integer encoding fraction" | "integer encoding bare negative zero") || sent,
+                        "{method} {template}: integer encoding vector at {location} bypassed wire_bytes"
+                    );
+                    Ok::<_, anyhow::Error>(probe)
+                },
+            )
+            .await?;
         same_operation(&probe.captured, method, template)?;
         let handler = probe
             .verdict()
             .with_context(|| format!("{method} {template}: {kind} vector at {location}"))?;
-        if handler != expected {
+        let pinned = integer_refusal(document, kind, expected, &probe)
+            .with_context(|| format!("{method} {template}: {kind} vector at {location}"))?;
+        if !pinned && handler != expected {
             return Err(mismatch(
                 method, template, kind, &location, expected, &probe, handler,
             ));
@@ -2682,3 +2933,6 @@ pub(crate) async fn binary_body_vectors_http(
     }
     fixtures.record_vectors(method, template, "body");
 }
+
+#[path = "integer_encoding_tests.rs"]
+mod integer_encoding_tests;

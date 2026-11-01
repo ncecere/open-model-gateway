@@ -71,7 +71,9 @@ async fn send(
             .header("x-csrf-token", &b.csrf);
     }
     if let Some(body) = body {
-        request = request.json(&body);
+        request = request
+            .header("content-type", "application/json")
+            .body(crate::management::openapi::http_vectors::wire_bytes(&body));
     }
     capture_http(method, path, request.send().await.unwrap()).await
 }

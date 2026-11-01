@@ -227,6 +227,7 @@ pub(crate) fn validate_document_with(
     document: &Value,
     completed: &dyn Fn(&str) -> bool,
 ) -> Result<()> {
+    super::quality::integer_encoding(document)?;
     local_references(document, document)?;
     no_links(document)?;
     let validator = compile_schema(&json!({"$ref":OPENAPI_META}))?;

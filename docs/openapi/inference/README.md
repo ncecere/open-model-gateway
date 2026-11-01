@@ -139,3 +139,7 @@ A declared Content-Length over the applicable route limit yields plain text
 413 `length limit exceeded`, even on GET. A handler reading a streamed body
 may instead return its documented native JSON 413. Authentication and the
 route-specific layer ordering are not bypassed by this documentation.
+
+## Integer request encoding
+
+Request integers must be JSON integer literals without a fraction, exponent or -0. Spec-following JSON Schema validators are more permissive than the server for these encodings. The root `x-omg-integer-encoding: "json-integer-literal"` extension declares this document-wide rule. HTTP vectors pin schema acceptance and server refusal (400/422), including integer query parameters and positional JSON items.

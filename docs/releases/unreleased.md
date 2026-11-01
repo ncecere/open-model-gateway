@@ -50,3 +50,7 @@ Notes for changes on `main` after [v0.9.3](v0.9.3.md). They become the next rele
 - Complete the inference OpenAPI contracts for Chat Completions, Responses and Messages, with validated JSON/SSE, explicit refusals, cancellation evidence and official SDK wire replay (#82).
 
 - Align generation response tool-name and model-trim contracts with the real handlers; keep request-side tool-name restrictions (#82).
+
+## Contract/harness
+
+- Management and inference document the JSON integer-literal request convention, with required root extensions and automatic HTTP refusal vectors for integer-valued floats and bare negative zero, including integer-only const/enum domains (#431). No production behaviour change.
