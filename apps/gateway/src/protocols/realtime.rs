@@ -1119,3 +1119,6 @@ async fn proxy(socket: WebSocket, mut session: RealtimeSession) {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, feature = "integration-tests"))]
+pub(crate) use tests::inference_openapi_handshake_fixtures;

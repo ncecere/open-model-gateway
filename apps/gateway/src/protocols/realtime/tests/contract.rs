@@ -1111,3 +1111,52 @@ async fn an_oversized_fragmented_message_cancels_an_in_flight_session_and_keeps_
 ) {
     cap_closes_an_in_flight_session(pool, Trip::Fragments).await;
 }
+
+/// Shared with the inference contract; all traffic uses the existing local
+/// gateway + mock upstream fixture, never a paid provider.
+pub(crate) async fn inference_openapi_handshake_fixtures(
+    pool: PgPool,
+    fixtures: &mut crate::inference_openapi::responses::Fixtures,
+) {
+    use crate::inference_openapi::responses::{capture, probe};
+    let g = gateway(pool, Init::Safe, vec![], limits()).await;
+    let send = async |query: String| {
+        let mut request = format!("ws://{}/v1/realtime{query}", g.addr)
+            .into_client_request()
+            .unwrap();
+        request.headers_mut().insert(
+            "authorization",
+            format!("Bearer {}", g.key()).parse().unwrap(),
+        );
+        request
+            .headers_mut()
+            .insert("sec-websocket-protocol", "realtime".parse().unwrap());
+        let response = match connect_async(request).await {
+            Ok((mut socket, response)) => {
+                let _ = socket.close(None).await;
+                response
+            }
+            Err(tungstenite::Error::Http(response)) => *response,
+            Err(_) => panic!("realtime fixture transport failed"),
+        };
+        capture(
+            "GET",
+            &format!("/v1/realtime{query}"),
+            response.map(|body| axum::body::Body::from(body.unwrap_or_default())),
+        )
+        .await
+    };
+    let c = send("?model=company%2Fsmart".into()).await;
+    assert_eq!(c.status.as_u16(), 101, "real upgrade status");
+    fixtures.observe(&c);
+    fixtures
+        .query_vectors(
+            "GET",
+            "/v1/realtime",
+            &[("model", "company/smart")],
+            async || ((), vec![("model".into(), "company/smart".into())]),
+            async |_, query| probe(send(query).await),
+        )
+        .await;
+    g.pool.close().await;
+}

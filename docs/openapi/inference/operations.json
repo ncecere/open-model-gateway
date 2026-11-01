@@ -12,24 +12,6 @@
       "scope": null,
       "operation": {}
     },
-    "GET /v1/realtime": {
-      "access": "InferenceKey",
-      "token_policy": "Denied",
-      "scope": null,
-      "operation": {
-        "parameters": [
-          {
-            "name": "model",
-            "in": "query",
-            "required": true,
-            "description": "The public model name (percent-decoded, at most 200 bytes, no control characters). The only query parameter read.",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
     "POST /v1/messages": {
       "access": "InferenceKey",
       "token_policy": "Denied",
