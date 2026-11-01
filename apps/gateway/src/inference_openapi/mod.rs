@@ -17,8 +17,8 @@ mod fixtures_tests;
 /// Reviewed open-JSON locations of the inference contract, in the format and
 /// with the semantics of `management_openapi::quality::ARBITRARY_JSON`: the
 /// exact pointer plus the exact `$comment` justification. Everything here is
-/// content the gateway deliberately does not model (System One forwards TypeSafe
-/// content parts verbatim) or a map whose KEYS are chosen by the caller.
+/// caller/provider content the gateway deliberately does not model (tool JSON,
+/// native Messages blocks, System One parts), or maps with caller-chosen keys.
 pub(crate) const OPEN_CONTENT: &str = "Open JSON by design: System One forwards content parts verbatim (TypeSafe), so the gateway fixes only the JSON kind here.";
 const QUESTIONS: &str = "Question keys are caller chosen names: 1 to 64 questions, each key 1 to 128 bytes without control characters. The key is never sent to the model.";
 const OPTIONS: &str = "Option keys are caller chosen: 2 to 255 options, each key 1 to 256 bytes without control characters, each value non-blank text or JSON (or null).";
@@ -240,3 +240,15 @@ mod generation_tests;
 
 #[path = "generation_sdk_tests.rs"]
 mod generation_sdk_tests;
+
+/// Only the immutable committed artifact is cacheable; generated/mutated
+/// documents must always compile independently, as in the management harness.
+pub(crate) fn committed_artifact() -> &'static serde_json::Value {
+    responses::artifact()
+}
+pub(crate) fn cached_validator(
+    document: &serde_json::Value,
+    schema: &serde_json::Value,
+) -> anyhow::Result<std::sync::Arc<jsonschema::Validator>> {
+    responses::validator(document, schema)
+}

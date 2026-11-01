@@ -18,7 +18,7 @@ use crate::management::openapi::{
 };
 use crate::management::openapi::{quality, responses as shared, validation};
 
-/// Completed areas of PR1. Each is gated by an executed fixture group
+/// Completed PR1 workloads and PR2 generation areas. Each is gated by an executed fixture group
 /// (`fixtures_tests.rs`); the other areas stay counted placeholders.
 pub(super) const SIMPLE_JSON_AREAS: &[&str] = &[
     "models",
@@ -81,7 +81,10 @@ fn resolved<'a>(document: &'a Value, value: &'a Value) -> Result<&'a Value> {
 /// Compile a schema against the whole document (so local `$ref`s resolve).
 /// Only the immutable artifact is cached, by pointer identity: a mutated
 /// document control always compiles its own.
-fn validator(document: &Value, schema: &Value) -> Result<std::sync::Arc<jsonschema::Validator>> {
+pub(super) fn validator(
+    document: &Value,
+    schema: &Value,
+) -> Result<std::sync::Arc<jsonschema::Validator>> {
     fn compile(document: &Value, schema: &Value) -> Result<std::sync::Arc<jsonschema::Validator>> {
         let mut root = document.clone();
         root["$defs"] = json!({"observed":schema});
@@ -98,6 +101,9 @@ fn validator(document: &Value, schema: &Value) -> Result<std::sync::Arc<jsonsche
     let mut cache = CACHE.get_or_init(Default::default).lock().unwrap();
     if let Some(validator) = cache.get(&key) {
         return Ok(validator.clone());
+    }
+    if cache.len() >= 128 {
+        cache.clear();
     }
     let validator = compile(document, schema)?;
     cache.insert(key, validator.clone());
@@ -439,6 +445,7 @@ impl Fixtures {
         }
         self.0.record_vectors(method, template, "body");
         self.0.record_reach(method, template, &run.reached);
+        self.0.record_unsendable(method, template, &run.exempt_used);
     }
 }
 

@@ -559,10 +559,15 @@ fn relaxed(
         responses::validator(&document, &schema)
     };
     // Only the immutable committed artifact is cached (by value of the request).
-    if !std::ptr::eq(document, responses::artifact()) {
+    let inference = std::ptr::eq(document, crate::inference_openapi::committed_artifact());
+    if !std::ptr::eq(document, responses::artifact()) && !inference {
         return compile();
     }
-    let cache_key = format!("{key}={bound} {}", serde_json::to_string(schema)?);
+    let cache_key = format!(
+        "{:p} {key}={bound} {}",
+        document,
+        serde_json::to_string(schema)?
+    );
     if let Some(found) = CACHE
         .get_or_init(Default::default)
         .lock()
@@ -572,11 +577,13 @@ fn relaxed(
         return Ok(found.clone());
     }
     let validator = compile()?;
-    CACHE
-        .get_or_init(Default::default)
-        .lock()
-        .unwrap()
-        .insert(cache_key, validator.clone());
+    let mut cache = CACHE.get_or_init(Default::default).lock().unwrap();
+    // The inference graph has many nested request variants; bound its entries
+    // without changing management's existing caching policy.
+    if inference && cache.len() >= 128 {
+        cache.clear();
+    }
+    cache.insert(cache_key, validator.clone());
     Ok(validator)
 }
 

@@ -638,13 +638,19 @@ impl ProviderAdapter for GenerationAdapter {
             vec![ToolCall {
                 id: "call_0".into(),
                 name: "ping".into(),
-                arguments: "{}".into(),
+                arguments: if mode == "native" {
+                    json!({"nested":[null,true,1,"text",{},[]]}).to_string()
+                } else {
+                    "{}".into()
+                },
             }]
         } else {
             vec![]
         };
         let finish_reason = match mode {
             "length" => FinishReason::Length,
+            "context" => FinishReason::ContextWindowExceeded,
+            "filter" => FinishReason::ContentFilter,
             "refusal" => FinishReason::Refusal,
             "tools" | "both" | "native" => FinishReason::ToolCalls,
             _ => FinishReason::Stop,
@@ -654,7 +660,7 @@ impl ProviderAdapter for GenerationAdapter {
         } else {
             Usage {
                 input_tokens: Some(12),
-                output_tokens: Some(2),
+                output_tokens: Some(u64::from(request.max_output_tokens.unwrap_or(2).min(2))),
                 billing: Some(BillingUsage {
                     total_input_tokens: Some(12),
                     uncached_input_tokens: Some(7),
@@ -683,6 +689,25 @@ impl ProviderAdapter for GenerationAdapter {
             }));
         }
         let mut events = vec![];
+        if mode == "native" && request.messages_options.is_some() {
+            for block in [
+                json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}),
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"reason"}}),
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"opaque"}}),
+                json!({"type":"content_block_stop","index":0}),
+                json!({"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}),
+                json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"hello"}}),
+                json!({"type":"content_block_stop","index":1}),
+                json!({"type":"content_block_start","index":2,"content_block":{"type":"redacted_thinking","data":"opaque"}}),
+                json!({"type":"content_block_stop","index":2}),
+                json!({"type":"content_block_start","index":3,"content_block":{"type":"tool_use","id":"call_0","name":"ping","input":{}}}),
+                json!({"type":"content_block_delta","index":3,"delta":{"type":"input_json_delta","partial_json":calls[0].arguments}}),
+                json!({"type":"content_block_stop","index":3}),
+            ] {
+                events.push(Ok(ChatEvent::MessagesBlock(block)));
+            }
+        }
+
         if let Some(text) = content {
             events.push(Ok(ChatEvent::Delta {
                 text: Some(text),
@@ -735,6 +760,9 @@ async fn generation_gateway(pool: &PgPool) -> (axum::Router, DevelopmentKeys) {
     .execute(pool)
     .await
     .unwrap();
+    let cache = json!({"read":{"status":"priced","microusd_per_million":"500000"},"write":{"status":"priced","microusd_per_million":"1000000"},"write_5m":{"status":"priced","microusd_per_million":"1250000"},"write_1h":{"status":"priced","microusd_per_million":"2000000"}});
+    sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version,cache_pricing) SELECT gen_random_uuid(),id,1000000,2000000,1048576,4294967295,2,$1 FROM deployments")
+        .bind(cache).execute(pool).await.unwrap();
     let mut registry = ProviderRegistry::default();
     registry.register(Arc::new(GenerationAdapter)).unwrap();
     let engine = Engine::new(Arc::new(store.clone()), registry, EngineLimits::default()).unwrap();
@@ -765,9 +793,11 @@ async fn inference_openapi_generation_real_handler_fixtures(pool: PgPool) {
     let key = keys.personal_key.token;
     let mut fixtures = Fixtures::default();
     for path in ["/v1/chat/completions", "/v1/responses", "/v1/messages"] {
+        let mut event_kinds = std::collections::BTreeSet::new();
         for stream in [false, true] {
             for mode in [
-                "text", "tools", "both", "unknown", "length", "refusal", "native", "error",
+                "text", "tools", "both", "unknown", "length", "context", "filter", "refusal",
+                "native", "error",
             ] {
                 if mode == "error" && !stream {
                     continue;
@@ -775,16 +805,24 @@ async fn inference_openapi_generation_real_handler_fixtures(pool: PgPool) {
                 let body = generation_body(path, mode, stream);
                 super::generation::validate_request(r::artifact(), path, &body)
                     .expect("valid generation fixture request");
-                let captured = capture(
-                    "POST",
+                let captured = generation_capture(
                     path,
+                    &body,
                     app.clone()
                         .oneshot(generation_http(path, &key, &body))
                         .await
                         .unwrap(),
                 )
                 .await;
-                assert_eq!(captured.status, StatusCode::OK, "generation fixture status");
+                let expected_status = if path == "/v1/messages" && mode == "filter" && !stream {
+                    StatusCode::NOT_IMPLEMENTED
+                } else {
+                    StatusCode::OK
+                };
+                assert_eq!(
+                    captured.status, expected_status,
+                    "generation fixture status"
+                );
                 if stream {
                     let outcome = super::generation::validate_sse(
                         r::artifact(),
@@ -793,18 +831,39 @@ async fn inference_openapi_generation_real_handler_fixtures(pool: PgPool) {
                         false,
                     )
                     .expect("generation stream contract");
-                    let expected = if mode == "error" {
-                        super::sse::Outcome::Errored
-                    } else if path == "/v1/responses" && matches!(mode, "length" | "refusal") {
-                        super::sse::Outcome::Incomplete
+                    if path == "/v1/chat/completions" {
+                        event_kinds.insert(if mode == "error" {
+                            "error".to_owned()
+                        } else {
+                            "message".to_owned()
+                        });
                     } else {
-                        super::sse::Outcome::Completed
-                    };
+                        for line in std::str::from_utf8(&captured.bytes)
+                            .expect("validated SSE UTF-8")
+                            .lines()
+                        {
+                            if let Some(kind) = line.strip_prefix("event: ") {
+                                event_kinds.insert(kind.to_owned());
+                            }
+                        }
+                    }
+                    let expected =
+                        if mode == "error" || (path == "/v1/messages" && mode == "filter") {
+                            super::sse::Outcome::Errored
+                        } else if path == "/v1/responses"
+                            && matches!(mode, "length" | "context" | "filter" | "refusal")
+                        {
+                            super::sse::Outcome::Incomplete
+                        } else {
+                            super::sse::Outcome::Completed
+                        };
                     assert_eq!(outcome, expected, "generation terminal kind");
                 }
                 fixtures.observe(&captured);
             }
         }
+        let declared = r::artifact()["paths"][path]["post"]["responses"]["200"]["content"]["text/event-stream"]["x-omg-sse"]["events"].as_object().unwrap().keys().cloned().collect();
+        assert_eq!(event_kinds, declared, "SSE event fixture inventory differs");
         let body = generation_body(path, "text", false);
         let send = async |body: Value| {
             let response = app
@@ -812,11 +871,26 @@ async fn inference_openapi_generation_real_handler_fixtures(pool: PgPool) {
                 .oneshot(generation_http(path, &key, &body))
                 .await
                 .unwrap();
-            probe(capture("POST", path, response).await)
+            probe(generation_capture(path, &body, response).await)
         };
         fixtures
             .body_vectors("POST", path, body, &[], &[], send)
             .await;
+        for valid in generation_full_requests(path) {
+            super::generation::validate_request(r::artifact(), path, &valid)
+                .expect("full generation request fixture");
+            let send = async |body: Value| {
+                let response = app
+                    .clone()
+                    .oneshot(generation_http(path, &key, &body))
+                    .await
+                    .unwrap();
+                probe(generation_capture(path, &body, response).await)
+            };
+            fixtures
+                .body_vectors("POST", path, valid, &[], &[], send)
+                .await;
+        }
     }
     fixtures.finish(r::GENERATION_AREAS);
 }
@@ -897,6 +971,22 @@ async fn inference_openapi_generation_refusals_and_beta_headers(pool: PgPool) {
             "generation declared body cap status"
         );
     }
+    for (path, body) in super::generation_tests::integer_float_cases() {
+        let captured = capture(
+            "POST",
+            path,
+            app.clone()
+                .oneshot(generation_http(path, &key, &body))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            captured.status,
+            StatusCode::BAD_REQUEST,
+            "floating-point integer wire kind status"
+        );
+    }
     let before: i64 = sqlx::query_scalar("SELECT count(*) FROM inference_executions")
         .fetch_one(&pool)
         .await
@@ -915,6 +1005,16 @@ async fn inference_openapi_generation_refusals_and_beta_headers(pool: PgPool) {
         let mut req = generation_http("/v1/messages", &key, &body);
         req.headers_mut()
             .insert("anthropic-beta", beta.parse().unwrap());
+        let header_verdict = super::generation::validate_request_headers(
+            r::artifact(),
+            "/v1/messages",
+            req.headers(),
+        );
+        assert_eq!(
+            header_verdict.is_ok(),
+            status == StatusCode::OK,
+            "Messages beta request contract verdict"
+        );
         let captured = capture(
             "POST",
             "/v1/messages",
@@ -941,5 +1041,464 @@ async fn inference_openapi_generation_refusals_and_beta_headers(pool: PgPool) {
             .collect::<Vec<_>>()
             .as_slice(),
         "Messages beta denylist drift"
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn inference_openapi_generation_large_message_boundaries(pool: PgPool) {
+    let (app, keys) = generation_gateway(&pool).await;
+    for path in ["/v1/chat/completions", "/v1/responses", "/v1/messages"] {
+        for (count, status) in [(4096, StatusCode::OK), (4097, StatusCode::BAD_REQUEST)] {
+            let messages = vec![json!({"role":"user","content":"x"}); count];
+            let mut body = generation_body(path, "text", false);
+            body[if path == "/v1/responses" {
+                "input"
+            } else {
+                "messages"
+            }] = json!(messages);
+            for body in [body.clone(), generation_positional(path, &body)] {
+                let captured = capture(
+                    "POST",
+                    path,
+                    app.clone()
+                        .oneshot(generation_http(path, &keys.personal_key.token, &body))
+                        .await
+                        .unwrap(),
+                )
+                .await;
+                assert_eq!(
+                    captured.status, status,
+                    "generation message-count boundary status"
+                );
+            }
+        }
+    }
+}
+
+fn generation_positional(path: &str, body: &Value) -> Value {
+    let fields: &[&str] = match path {
+        "/v1/chat/completions" => &[
+            "model",
+            "messages",
+            "stream",
+            "stream_options",
+            "temperature",
+            "max_completion_tokens",
+            "max_tokens",
+            "n",
+            "tools",
+            "tool_choice",
+            "user",
+            "metadata",
+        ],
+        "/v1/responses" => &[
+            "model",
+            "input",
+            "instructions",
+            "stream",
+            "store",
+            "max_output_tokens",
+            "temperature",
+            "tools",
+            "tool_choice",
+            "text",
+            "user",
+            "metadata",
+        ],
+        _ => &[
+            "model",
+            "messages",
+            "system",
+            "max_tokens",
+            "stream",
+            "temperature",
+            "top_p",
+            "top_k",
+            "stop_sequences",
+            "tools",
+            "tool_choice",
+            "metadata",
+            "thinking",
+            "output_config",
+            "context_management",
+        ],
+    };
+    let length = fields.len();
+    Value::Array(
+        fields[..length]
+            .iter()
+            .map(|key| {
+                body.get(key).cloned().unwrap_or_else(|| match *key {
+                    "tools" => json!([]),
+                    "stream" | "store" => json!(false),
+                    _ => Value::Null,
+                })
+            })
+            .collect(),
+    )
+}
+
+fn generation_full_requests(path: &str) -> Vec<Value> {
+    let parameters = json!({"type":"object","properties":{"value":{"type":"string"}}});
+    let cache = json!({"type":"ephemeral","ttl":"5m"});
+    let image = json!({"type":"image","source":{"type":"base64","media_type":"image/png","data":PNG_1X1},"cache_control":cache});
+    let mut full = match path {
+        "/v1/chat/completions" => json!({"model":"company/smart","messages":[
+            {"role":"system","content":"instructions"},{"role":"developer","content":"instructions"},
+            {"role":"user","content":"text"},
+            {"role":"assistant","content":null,"tool_calls":[{"id":"call_0","type":"function","function":{"name":"ping","arguments":"{}"}}],"refusal":null},
+            {"role":"tool","content":"result","tool_call_id":"call_0"},
+            {"role":"assistant","content":"both","tool_calls":[]}],
+            "stream":true,"stream_options":{"include_usage":true},"temperature":1,"max_completion_tokens":32,"max_tokens":32,"n":1,
+            "tools":[{"type":"function","function":{"name":"ping","description":"Ping","parameters":parameters,"strict":false}}],
+            "tool_choice":{"type":"function","function":{"name":"ping"}},"user":"client-case","metadata":{"session_id":"fixture"}}),
+        "/v1/responses" => json!({"model":"company/smart","input":[
+            {"type":"message","role":"assistant","content":[{"type":"output_text","text":"earlier","annotations":[]}],"id":"msg_prior","status":"completed"},
+            {"type":"function_call","call_id":"call_0","name":"ping","arguments":"{}","id":"fc_prior","status":"completed"},
+            {"type":"function_call_output","call_id":"call_0","output":"result","id":null,"status":null},
+            {"type":"function_call","call_id":"call_1","name":"ping","arguments":"{}","id":"fc_prior_1","status":"completed"},
+            {"type":"function_call_output","call_id":"call_1","output":"result","id":"result_1","status":"completed"},
+            {"type":"message","role":"user","content":[{"type":"input_text","text":"earlier"}],"id":"msg_user","status":"completed"},
+            {"type":"message","role":"user","content":"both","id":"msg_last","status":"completed"}],
+            "instructions":"instructions","stream":true,"store":false,"max_output_tokens":32,"temperature":1,
+            "tools":[{"type":"function","name":"ping","description":"Ping","parameters":parameters,"strict":false}],
+            "tool_choice":{"type":"function","name":"ping"},"text":{"format":{"type":"text"}},"user":"client-case","metadata":{"session_id":"fixture"}}),
+        _ => json!({"model":"company/smart","messages":[
+            {"role":"user","content":"earlier"}, {"role":"assistant","content":"earlier"},
+            {"role":"assistant","content":[{"type":"thinking","thinking":"reasoning","signature":"opaque"},{"type":"redacted_thinking","data":"opaque"},
+                {"type":"text","text":"earlier","cache_control":cache},{"type":"tool_use","id":"call_0","name":"ping","input":{"nested":[null,true,1,"text",{},[]]},"cache_control":{"type":"ephemeral","ttl":"1h"}},
+                {"type":"tool_use","id":"call_1","name":"ping","input":{},"cache_control":cache},image]},
+            {"role":"user","content":[image,{"type":"tool_result","tool_use_id":"call_0","content":[{"type":"text","text":"result"},image],"is_error":false,"cache_control":cache},{"type":"tool_result","tool_use_id":"call_1","content":"result","is_error":true,"cache_control":cache},{"type":"text","text":"native","cache_control":cache}]}],
+            "system":[{"type":"text","text":"instructions","cache_control":{"type":"ephemeral","ttl":"1h"}}],
+            "max_tokens":2048,"stream":true,"temperature":0.5,"top_p":0.5,"top_k":5,"stop_sequences":["END"],
+            "tools":[{"type":"custom","name":"ping","description":"Ping","input_schema":parameters,"defer_loading":false,"cache_control":cache}],
+            "tool_choice":{"type":"tool","name":"ping"},"metadata":{"user_id":"client-case"},
+            "thinking":{"type":"enabled","budget_tokens":1024,"display":"summarized"},
+            "output_config":{"effort":"medium","task_budget":{"type":"tokens","total":64000,"remaining":32000}},
+            "context_management":{"edits":[{"type":"clear_tool_uses_20250919","trigger":{"type":"input_tokens","value":0},"keep":{"type":"tool_uses","value":3},"clear_at_least":{"type":"thinking_turns","value":1},"clear_tool_inputs":true,"exclude_tools":["ping"]},{"type":"clear_thinking_20251015","keep":"all"}]}}),
+    };
+    // Probe the token aliases independently as well as their equality rule.
+    if path == "/v1/chat/completions" {
+        full.as_object_mut().unwrap().remove("max_tokens");
+    }
+    let mut basic = generation_body(path, "text", false);
+    basic["tools"] = match path {
+        "/v1/chat/completions" => json!([{"type":"function","function":{"name":"ping"}}]),
+        "/v1/responses" => json!([{"type":"function","name":"ping","parameters":{}}]),
+        _ => json!([{"name":"ping","input_schema":{}}]),
+    };
+    let mut cases = vec![generation_positional(path, &basic)];
+    if path == "/v1/chat/completions" {
+        // Cross product of outer call/message and nested function serde forms;
+        // all-tuple and all-object bodies alone do not reach mixed branches.
+        let calls = json!([
+            {"id":"call_0","type":"function","function":{"name":"ping","arguments":"{}"}},
+            {"id":"call_1","type":"function","function":["ping","{}"]},
+            ["call_2","function",{"name":"ping","arguments":"{}"}],
+            ["call_3","function",["ping","{}"]]
+        ]);
+        for nested in [false, true] {
+            let mut mixed = if nested {
+                generation_nested_positional(path, full.clone())
+            } else {
+                full.clone()
+            };
+            if nested {
+                mixed["messages"][3][2] = calls.clone();
+            } else {
+                mixed["messages"][3]["tool_calls"] = calls.clone();
+            }
+            let messages = mixed["messages"].as_array_mut().unwrap();
+            messages.splice(
+                5..5,
+                (1..4).map(|i| {
+                    let id = format!("call_{i}");
+                    if nested {
+                        json!(["tool", "result", [], id])
+                    } else {
+                        json!({"role":"tool","content":"result","tool_call_id":id})
+                    }
+                }),
+            );
+            mixed["tool_choice"] = if nested {
+                json!(["function",{"name":"ping"}])
+            } else {
+                json!({"type":"function","function":["ping"]})
+            };
+            cases.push(mixed.clone());
+            cases.push(generation_positional(path, &mixed));
+        }
+        let mut equal = full.clone();
+        equal["max_tokens"] = json!(32);
+        cases.push(equal); // Equal aliases are supported, not just unequal refusals.
+    }
+    let mut variants = vec![full.clone()];
+    let mut nulls = full.clone();
+    let optional: &[&str] = match path {
+        "/v1/chat/completions" => &[
+            "stream",
+            "stream_options",
+            "temperature",
+            "max_completion_tokens",
+            "max_tokens",
+            "n",
+            "tool_choice",
+            "user",
+            "metadata",
+        ],
+        "/v1/responses" => &[
+            "instructions",
+            "stream",
+            "store",
+            "max_output_tokens",
+            "temperature",
+            "tool_choice",
+            "text",
+            "user",
+            "metadata",
+        ],
+        _ => &[
+            "system",
+            "temperature",
+            "top_p",
+            "top_k",
+            "stop_sequences",
+            "tool_choice",
+            "metadata",
+            "thinking",
+            "output_config",
+            "context_management",
+        ],
+    };
+    for key in optional {
+        nulls[*key] = Value::Null;
+    }
+    cases.push(nulls.clone());
+    cases.push(generation_positional(path, &nulls));
+    let mut child_nulls = full.clone();
+    match path {
+        "/v1/chat/completions" => {
+            child_nulls["tools"][0]["function"]["description"] = Value::Null;
+            child_nulls["tools"][0]["function"]["strict"] = Value::Null;
+            child_nulls["messages"][3]["tool_call_id"] = Value::Null;
+            let mut legacy = full.clone();
+            legacy
+                .as_object_mut()
+                .unwrap()
+                .remove("max_completion_tokens");
+            legacy["max_tokens"] = json!(32);
+            variants.push(legacy);
+        }
+        "/v1/responses" => {
+            child_nulls["tools"][0]["description"] = Value::Null;
+            child_nulls["tools"][0]["strict"] = Value::Null;
+        }
+        _ => {
+            child_nulls["metadata"]["user_id"] = Value::Null;
+        }
+    }
+    variants.push(child_nulls);
+    let mut automatic = full.clone();
+    automatic["tool_choice"] = if path == "/v1/messages" {
+        json!({"type":"auto"})
+    } else {
+        json!("auto")
+    };
+    if path == "/v1/messages" {
+        automatic["system"] = json!("instructions");
+        automatic["thinking"] = json!({"type":"adaptive","display":"omitted"});
+    }
+    cases.push(automatic.clone());
+    cases.push(generation_positional(path, &automatic));
+    for variant in variants {
+        cases.push(variant.clone());
+        cases.push(generation_positional(path, &variant));
+        let nested = generation_nested_positional(path, variant);
+        cases.push(nested.clone());
+        cases.push(generation_positional(path, &nested));
+    }
+    cases
+}
+
+fn generation_nested_positional(path: &str, mut full: Value) -> Value {
+    match path {
+        "/v1/chat/completions" => {
+            for message in full["messages"].as_array_mut().unwrap() {
+                let role = message["role"].clone();
+                let calls = message["tool_calls"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|c| {
+                        json!([
+                            c["id"],
+                            c["type"],
+                            [c["function"]["name"], c["function"]["arguments"]]
+                        ])
+                    })
+                    .collect::<Vec<_>>();
+                let mut positional = vec![
+                    role.clone(),
+                    message["content"].clone(),
+                    json!(calls),
+                    message["tool_call_id"].clone(),
+                ];
+                if role == "assistant" {
+                    positional.push(Value::Null);
+                }
+                *message = json!(positional);
+            }
+            full["stream_options"] = json!([true]);
+            let f = &full["tools"][0]["function"];
+            full["tools"] = json!([[
+                "function",
+                [f["name"], f["description"], f["parameters"], f["strict"]]
+            ]]);
+            full["tool_choice"] = json!(["function", ["ping"]]);
+        }
+        "/v1/responses" => {
+            let f = &full["tools"][0];
+            full["tools"] = json!([[
+                f["type"],
+                f["name"],
+                f["description"],
+                f["parameters"],
+                f["strict"]
+            ]]);
+            full["text"] = json!([["text"]]);
+        }
+        _ => {
+            for message in full["messages"].as_array_mut().unwrap() {
+                *message = json!([message["role"], message["content"]]);
+            }
+            full["metadata"] = json!([full["metadata"]["user_id"]]);
+        }
+    }
+    full
+}
+
+async fn generation_capture(
+    path: &str,
+    request: &Value,
+    response: axum::response::Response,
+) -> crate::management::openapi::responses::Captured {
+    let captured = capture("POST", path, response).await;
+    if captured.status == StatusCode::OK {
+        super::generation::validate_request(r::artifact(), path, request)
+            .expect("accepted generation request contract");
+        let is_sse = captured
+            .headers
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| {
+                v.split(';')
+                    .next()
+                    .unwrap()
+                    .trim()
+                    .eq_ignore_ascii_case("text/event-stream")
+            });
+        let stream_index = match path {
+            "/v1/chat/completions" => 2,
+            "/v1/responses" => 3,
+            _ => 4,
+        };
+        let requested_stream = request
+            .get("stream")
+            .or_else(|| request.get(stream_index))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        assert_eq!(
+            is_sse, requested_stream,
+            "generation request/response wire mode"
+        );
+        if is_sse {
+            let options = request.get("stream_options").or_else(|| request.get(3));
+            let include_usage = options
+                .and_then(|v| v.get("include_usage").or_else(|| v.get(0)))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let outcome = super::generation::validate_sse(
+                r::artifact(),
+                path,
+                &captured.bytes,
+                include_usage,
+            )
+            .expect("request-aware generation SSE contract");
+            assert!(
+                outcome.positive(),
+                "request-aware generation stream truncated"
+            );
+        }
+    }
+    captured
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn inference_openapi_generation_distinct_tool_boundaries(pool: PgPool) {
+    let (app, keys) = generation_gateway(&pool).await;
+    for path in ["/v1/chat/completions", "/v1/responses", "/v1/messages"] {
+        for (count, status) in [(128, StatusCode::OK), (129, StatusCode::BAD_REQUEST)] {
+            let mut body = generation_body(path, "text", false);
+            body["tools"] = Value::Array(
+                (0..count)
+                    .map(|i| {
+                        let name = format!("tool_{i}");
+                        match path {
+                            "/v1/chat/completions" => {
+                                json!({"type":"function","function":{"name":name}})
+                            }
+                            "/v1/responses" => {
+                                json!({"type":"function","name":name,"parameters":{}})
+                            }
+                            _ => json!({"name":name,"input_schema":{}}),
+                        }
+                    })
+                    .collect(),
+            );
+            let captured = generation_capture(
+                path,
+                &body,
+                app.clone()
+                    .oneshot(generation_http(path, &keys.personal_key.token, &body))
+                    .await
+                    .unwrap(),
+            )
+            .await;
+            assert_eq!(
+                captured.status, status,
+                "distinct tool-count boundary status"
+            );
+        }
+    }
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn inference_openapi_generation_native_image_count_boundary(pool: PgPool) {
+    let (app, keys) = generation_gateway(&pool).await;
+    for (count, status) in [(20, StatusCode::OK), (21, StatusCode::BAD_REQUEST)] {
+        let body = json!({"model":"company/smart","max_tokens":32,"messages":[{"role":"user","content":vec![json!({"type":"image","source":{"type":"base64","media_type":"image/png","data":PNG_1X1}});count]}]});
+        let captured = generation_capture(
+            "/v1/messages",
+            &body,
+            app.clone()
+                .oneshot(generation_http(
+                    "/v1/messages",
+                    &keys.personal_key.token,
+                    &body,
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            captured.status, status,
+            "aggregate native image count status"
+        );
+    }
+    assert_eq!(
+        r::artifact()["paths"]["/v1/messages"]["post"]["x-omg-limits"]["images"]["maximum"],
+        json!(20),
+        "image-count contract drift"
     );
 }

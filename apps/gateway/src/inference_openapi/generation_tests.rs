@@ -339,6 +339,30 @@ fn inference_openapi_generation_request_dto_field_inventory() {
     .expect("Messages DTO inventory");
 }
 
+#[test]
+fn inference_openapi_generation_validator_cache_is_contract_scoped() {
+    let document = super::responses::artifact();
+    let schema = json!({"$ref":"#/components/schemas/get_v1_modelsResponse"});
+    let first = crate::management::openapi::responses::validator(document, &schema).unwrap();
+    let again = crate::management::openapi::responses::validator(document, &schema).unwrap();
+    let body = json!({"object":"list","data":[]});
+    assert!(
+        first.is_valid(&body) && again.is_valid(&body),
+        "cache control fixture"
+    );
+    let mut mutated = document.clone();
+    mutated["components"]["schemas"]["get_v1_modelsResponse"] = json!({"const":false});
+    let bad = crate::management::openapi::responses::validator(&mutated, &schema).unwrap();
+    assert!(!bad.is_valid(&body), "mutated schema reused trusted cache");
+    assert!(
+        crate::management::openapi::responses::validator(
+            crate::management::openapi::responses::artifact(),
+            &schema
+        )
+        .is_err(),
+        "inference refs leaked into management cache"
+    );
+}
 
 #[test]
 fn inference_openapi_generation_sse_payload_refs_are_complete() {
