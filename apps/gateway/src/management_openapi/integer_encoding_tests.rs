@@ -128,6 +128,9 @@ async fn management_openapi_integer_encoding_escaped_positional_location() {
         if bytes == br#"[{"a/b~c":-0.0}]"# {
             seen.borrow_mut().insert("negative zero");
         }
+        if bytes == br#"[{"a/b~c":-0}]"# {
+            seen.borrow_mut().insert("bare negative zero");
+        }
         let parsed: Value = serde_json::from_slice(&bytes).unwrap();
         let accepted = valid(&document, &schema, &parsed).unwrap()
             && serde_json::from_slice::<Vec<std::collections::BTreeMap<String, u32>>>(&bytes)
@@ -143,7 +146,7 @@ async fn management_openapi_integer_encoding_escaped_positional_location() {
     })
     .await
     .unwrap();
-    assert!(seen.borrow().len() == 3, "missing integer wire spellings");
+    assert!(seen.borrow().len() == 4, "missing integer wire spellings");
 }
 
 #[test]
@@ -156,9 +159,11 @@ fn management_openapi_integer_encoding_zero_requires_whole_request_validity() {
         "required":true,"content":{"application/json":{"schema":schema}}}});
     let cases = body_cases(&document, &document, &json!({"n":2,"flag":false}), &[]).unwrap();
     assert!(
-        !cases
-            .iter()
-            .any(|c| c.pointer == "/n" && c.kind == "integer encoding negative zero"),
+        !cases.iter().any(|c| c.pointer == "/n"
+            && matches!(
+                c.kind,
+                "integer encoding negative zero" | "integer encoding bare negative zero"
+            )),
         "schema-invalid zero divergence"
     );
 }
@@ -258,4 +263,77 @@ async fn management_openapi_integer_encoding_bare_zero_wire_spelling() {
             "unsigned extractor accepted bare negative zero"
         );
     }
+}
+
+#[tokio::test]
+async fn management_openapi_integer_encoding_bare_zero_query_refusal_and_exception() {
+    use axum::{
+        Router,
+        body::Body,
+        extract::Query,
+        http::{Request, StatusCode},
+        routing::get,
+    };
+    use tower::ServiceExt;
+    #[derive(serde::Deserialize)]
+    struct Integers {
+        count: u32,
+        offset: i64,
+    }
+    let app = Router::new().route(
+        "/x",
+        get(|Query(values): Query<Integers>| async move {
+            if values.count <= 9 && (0..=9).contains(&values.offset) {
+                StatusCode::OK
+            } else {
+                StatusCode::BAD_REQUEST
+            }
+        }),
+    );
+    let mut document = json!({"x-omg-integer-encoding":"json-integer-literal",
+        "x-omg-integer-encoding-query-exceptions":{"offset":["-0"]},
+        "components":{"schemas":{}},"paths":{"/x":{"get":{"parameters":[
+        {"in":"query","name":"offset","required":true,"schema":{"type":"integer","minimum":0,"maximum":9}},
+        {"in":"query","name":"count","required":true,"schema":{"type":"integer","minimum":0,"maximum":9}}]}}}});
+    let send = async |_: &(), query: String| {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/x?{query}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        Probe::from(Captured {
+            status: response.status(),
+            headers: response.headers().clone(),
+            bytes: bytes::Bytes::new(),
+            method: "GET".into(),
+            template: Some("/x".into()),
+            query: vec![],
+        })
+    };
+    let fresh = async || {
+        (
+            (),
+            vec![("offset".into(), "2".into()), ("count".into(), "2".into())],
+        )
+    };
+    run_query(&document, "GET", "/x", &[], &fresh, &send)
+        .await
+        .unwrap();
+    document
+        .as_object_mut()
+        .unwrap()
+        .remove("x-omg-integer-encoding-query-exceptions");
+    let error = run_query(&document, "GET", "/x", &[], &fresh, &send)
+        .await
+        .err()
+        .expect("unreviewed bare negative zero acceptance must fail");
+    assert!(
+        format!("{error:#}").contains("integer encoding bare negative zero vector at offset"),
+        "wrong query failure kind"
+    );
 }

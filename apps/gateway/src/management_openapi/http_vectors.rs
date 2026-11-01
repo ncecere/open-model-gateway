@@ -102,6 +102,9 @@ tokio::task_local! {
 pub(crate) fn wire_bytes(body: &Value) -> Vec<u8> {
     fn encode(value: &Value, pointer: &str, target: &str, suffix: &str) -> String {
         if pointer == target {
+            if suffix == "bare negative zero" {
+                return "-0".into();
+            }
             let number = format!("{:.0}", value.as_f64().expect("integer encoding number"));
             return format!("{number}{suffix}");
         }
@@ -133,7 +136,9 @@ pub(crate) fn wire_bytes(body: &Value) -> Vec<u8> {
         .try_with(|(pointer, kind, sent)| {
             if matches!(
                 *kind,
-                "integer encoding exponent" | "integer encoding fraction"
+                "integer encoding exponent"
+                    | "integer encoding fraction"
+                    | "integer encoding bare negative zero"
             ) {
                 let target = if pointer == "(root)" { "" } else { pointer };
                 // A send closure may serialize auxiliary setup requests first.
@@ -150,10 +155,10 @@ pub(crate) fn wire_bytes(body: &Value) -> Vec<u8> {
                     body,
                     "",
                     target,
-                    if *kind == "integer encoding exponent" {
-                        "e0"
-                    } else {
-                        ".0"
+                    match *kind {
+                        "integer encoding exponent" => "e0",
+                        "integer encoding bare negative zero" => "bare negative zero",
+                        _ => ".0",
                     },
                 )
                 .into_bytes()
@@ -1148,11 +1153,10 @@ fn scalar_mutations(
                 ));
             }
             if valid(document, schema, &json!(0))? {
-                if query {
-                    // Signed pagination parsers accept bare -0 as zero. This
-                    // exception is separately documented and pinned, not a float.
-                    out.push(("query negative zero literal", json!("-0")));
-                }
+                out.push((
+                    "integer encoding bare negative zero",
+                    if query { json!("-0") } else { json!(-0.0) },
+                ));
                 out.push((
                     "integer encoding negative zero",
                     if query { json!("-0.0") } else { json!(-0.0) },
@@ -1454,13 +1458,17 @@ pub(super) fn query_plan(
         );
         for (label, kind, value) in all {
             let raw = render(&value);
-            if kind == "query negative zero literal"
-                && !document["x-omg-integer-encoding-query-exceptions"][name]
+            // Only reviewed parameters accept bare -0. Every other integer
+            // query location sends the same spelling as a pinned refusal.
+            let kind = if kind == "integer encoding bare negative zero"
+                && document["x-omg-integer-encoding-query-exceptions"][name]
                     .as_array()
                     .is_some_and(|values| values.iter().any(|v| v == &raw))
             {
-                continue; // only reviewed query locations may accept bare -0
-            }
+                "query negative zero literal"
+            } else {
+                kind
+            };
             // A request target is limited to 65534 bytes by the HTTP stack: the
             // REAL percent-encoded query string (not a worst-case estimate) must fit.
             if encode(&with_param(base, name, &raw)).len() > MAX_QUERY_BYTES {
@@ -1842,7 +1850,10 @@ impl Walk<'_> {
             || body == *self.original
             || !self.seen.insert(format!(
                 "{}:{}",
-                if kind == "integer encoding exponent" {
+                if matches!(
+                    kind,
+                    "integer encoding exponent" | "integer encoding bare negative zero"
+                ) {
                     kind
                 } else {
                     ""
@@ -1853,7 +1864,11 @@ impl Walk<'_> {
             return Ok(());
         }
         let accept = accepts(self.document, self.root_schema, &body)?;
-        if kind == "integer encoding negative zero" && !accept {
+        if matches!(
+            kind,
+            "integer encoding negative zero" | "integer encoding bare negative zero"
+        ) && !accept
+        {
             return Ok(()); // zero must be valid in the whole request, not only locally
         }
         ensure!(
@@ -2541,7 +2556,7 @@ pub(crate) async fn run_body_with(
                     let probe = send(body).await;
                     let sent = INTEGER_WIRE.with(|(_, _, sent)| sent.get());
                     ensure!(
-                        !matches!(kind, "integer encoding exponent" | "integer encoding fraction") || sent,
+                        !matches!(kind, "integer encoding exponent" | "integer encoding fraction" | "integer encoding bare negative zero") || sent,
                         "{method} {template}: integer encoding vector at {location} bypassed wire_bytes"
                     );
                     Ok::<_, anyhow::Error>(probe)
