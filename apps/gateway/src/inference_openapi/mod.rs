@@ -178,6 +178,6 @@ mod tests {
     }
 }
 
-mod sse;
+pub(crate) mod sse;
 #[path = "sse_tests.rs"]
 mod sse_tests;

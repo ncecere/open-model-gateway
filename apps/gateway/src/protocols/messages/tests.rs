@@ -132,13 +132,20 @@ fn stream(events: Vec<Result<ChatEvent>>) -> ProviderOutput {
     ProviderOutput::Stream(Box::pin(futures_util::stream::iter(events)))
 }
 async fn body(response: Response) -> String {
-    String::from_utf8(
-        axum::body::to_bytes(response.into_body(), 8 * 1024 * 1024)
-            .await
-            .unwrap()
-            .to_vec(),
-    )
-    .unwrap()
+    let is_sse = response
+        .headers()
+        .get("content-type")
+        .is_some_and(|v| v == "text/event-stream");
+    let bytes = axum::body::to_bytes(response.into_body(), 8 * 1024 * 1024)
+        .await
+        .unwrap();
+    if is_sse {
+        use crate::inference_openapi::sse::{Protocol, validate};
+        let outcome = validate(Protocol::Messages, &bytes)
+            .unwrap_or_else(|_| panic!("generation SSE sequence mismatch"));
+        assert!(outcome.positive(), "generation SSE capture truncated");
+    }
+    String::from_utf8(bytes.to_vec()).unwrap()
 }
 #[tokio::test]
 async fn native_message_blocks_and_usage() {
