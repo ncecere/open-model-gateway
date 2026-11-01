@@ -1280,11 +1280,16 @@ fn billing_json(usage: Usage) -> Result<Option<serde_json::Value>, InferenceErro
         .transpose()
         .map_err(|_| InferenceError::Storage)
 }
-fn workload_usage(r: &Reservation, mut usage: Usage) -> Result<Usage, InferenceError> {
+fn workload_usage(
+    r: &Reservation,
+    mut usage: Usage,
+    invalid_output: InferenceError,
+) -> Result<Usage, InferenceError> {
     // Input-only workloads: output zero is semantic non-applicability.
+    // Provider observations and operator input use different refusal semantics.
     if matches!(r.workload_kind.as_str(), "embeddings" | "rerank") {
         if usage.output_tokens.is_some_and(|n| n != 0) {
-            return Err(InferenceError::Storage);
+            return Err(invalid_output);
         }
         usage.output_tokens = Some(0);
     }
@@ -1712,7 +1717,7 @@ async fn finish_unobserved(
     let r = reservation(&mut tx, record.id, scoped(store)).await?;
     timer.phase("locks");
     crate::telemetry::mark_phase(crate::telemetry::SpanName::SettlementLocks);
-    let mut usage = workload_usage(&r, record.usage)?;
+    let mut usage = workload_usage(&r, record.usage, InferenceError::Storage)?;
     // A free price's pre-processing rejection processed no tokens: record the
     // semantic zeros a settled row requires (see `free_rejection`).
     let free = free_rejection(&mut tx, &r, record).await?;
@@ -1972,7 +1977,7 @@ async fn resolve_usage_once(
     if authorized.is_none() {
         return Err(InferenceError::InvalidRequest);
     }
-    let usage = workload_usage(&r, usage)?;
+    let usage = workload_usage(&r, usage, InferenceError::InvalidRequest)?;
     let (input, output) = usage_values(usage)?;
     let billing = billing_json(usage)?;
     let m = meter_evidence(usage)?;
