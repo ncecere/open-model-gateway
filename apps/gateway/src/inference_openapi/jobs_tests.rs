@@ -696,3 +696,121 @@ async fn inference_openapi_files_auth_storage_failure_uses_transport_envelope() 
     )
     .unwrap();
 }
+
+#[test]
+fn inference_openapi_followup_file_part_rules_are_explicit() {
+    let doc = generated();
+    let schema = &doc["components"]["schemas"]["post_v1_filesRequest"];
+    assert!(
+        validate_value(&doc, schema, &json!({"purpose":"user_data","file":""})).is_err(),
+        "empty file accepted by schema"
+    );
+    let rules = &doc["paths"]["/v1/files"]["post"]["x-omg-multipart"]["file_content_rules"];
+    assert_eq!(rules["sniff_bytes"], 4096, "file sniff bound missing");
+    assert_eq!(
+        rules["batch"]["first_non_whitespace_byte"], "{",
+        "batch head rule missing"
+    );
+    assert_eq!(
+        rules["batch"]["reject_nul_in_head"], true,
+        "batch NUL rule missing"
+    );
+    assert_eq!(
+        rules["vision"]["signatures"],
+        json!(["PNG", "JPEG", "GIF87a", "GIF89a", "RIFF/WEBP"]),
+        "vision signature rules missing"
+    );
+}
+
+#[test]
+fn inference_openapi_followup_refusals_match_handler_kinds() {
+    let doc = generated();
+    for (path, method, status, code, envelope) in [
+        (
+            "/v1/files",
+            "get",
+            400,
+            "invalid_request_error",
+            "FileErrorEnvelope",
+        ),
+        (
+            "/v1/files",
+            "post",
+            400,
+            "invalid_request_error",
+            "FileErrorEnvelope",
+        ),
+        (
+            "/v1/batches",
+            "post",
+            400,
+            "invalid_metadata",
+            "JobErrorEnvelope",
+        ),
+        (
+            "/v1/batches",
+            "post",
+            400,
+            "batch_files_disabled",
+            "JobErrorEnvelope",
+        ),
+        (
+            "/v1/batches/{id}/cancel",
+            "post",
+            403,
+            "batch_not_owned",
+            "JobErrorEnvelope",
+        ),
+        (
+            "/v1/batches/{id}/cancel",
+            "post",
+            400,
+            "batch_not_cancellable",
+            "JobErrorEnvelope",
+        ),
+    ] {
+        let rows = doc["paths"][path][method]["x-omg-refusals"]
+            .as_array()
+            .expect("refusal table kind");
+        assert!(
+            rows.iter()
+                .any(|r| r["status"] == status && r["code"] == code && r["envelope"] == envelope),
+            "handler refusal row missing for {method} {path}"
+        );
+    }
+    assert!(
+        !doc["paths"]["/v1/files"]["get"]["x-omg-refusals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["status"] == 404),
+        "file-list cursor incorrectly documented as not found"
+    );
+}
+
+#[test]
+fn inference_openapi_followup_video_multipart_matches_json_bounds() {
+    let doc = generated();
+    let schema = &doc["paths"]["/v1/videos"]["post"]["requestBody"]["content"]["multipart/form-data"]
+        ["schema"];
+    let valid = json!({"model":"m","prompt":"p","seconds":"4","size":"720x1280"});
+    assert!(
+        validate_value(&doc, schema, &valid).is_ok(),
+        "valid video multipart fields rejected"
+    );
+    for (field, value) in [
+        ("seconds", json!("5")),
+        ("size", json!("auto")),
+        ("model", json!("m".repeat(201))),
+        ("prompt", json!("p".repeat(32769))),
+        ("model", json!(" ")),
+        ("prompt", json!(" ")),
+    ] {
+        let mut bad = valid.clone();
+        bad[field] = value;
+        assert!(
+            validate_value(&doc, schema, &bad).is_err(),
+            "invalid video multipart field accepted: {field}"
+        );
+    }
+}
