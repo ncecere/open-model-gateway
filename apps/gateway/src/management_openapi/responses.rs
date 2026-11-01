@@ -138,6 +138,14 @@ pub(super) fn validator(
     if let Some(validator) = cache.get(&key) {
         return Ok(validator.clone());
     }
+    // Bounded: every entry carries its own copy of the whole artifact, and the
+    // vector walks validate many distinct combined fragments (union arms,
+    // conditionals, positional items), so an unbounded cache grew to the size of
+    // the CI runner's memory. A full cache is flushed; hot fragments recompile.
+    const CAPACITY: usize = 128;
+    if cache.len() >= CAPACITY {
+        cache.clear();
+    }
     let validator = compile(document, schema)?;
     cache.insert(key, validator.clone());
     Ok(validator)
