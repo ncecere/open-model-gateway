@@ -1,5 +1,61 @@
 use super::*;
 
+#[test]
+fn management_openapi_slice3_resource_request_vectors() {
+    use openapi::requests::vectors;
+    let nil = Uuid::nil();
+    let omitted: ProviderUpdate = serde_json::from_value(json!({"enabled":true})).unwrap();
+    let cleared: ProviderUpdate =
+        serde_json::from_value(json!({"enabled":true,"endpoint":null})).unwrap();
+    assert_eq!((omitted.endpoint, cleared.endpoint), (None, Some(None)));
+    let omitted: ModelUpdate = serde_json::from_value(json!({})).unwrap();
+    let cleared: ModelUpdate = serde_json::from_value(json!({"description":null})).unwrap();
+    assert_eq!(
+        (omitted.description, cleared.description),
+        (None, Some(None))
+    );
+    assert!(serde_json::from_value::<ModelUpdate>(json!({"supported_protocols":null})).is_err());
+    vectors::<ProviderInput>(
+        "POST",
+        "/api/v1/platform/providers",
+        json!({"name":"Reference","provider":"openrouter","credential_ref":"env:REFERENCE","endpoint":null,"region":null,"enabled":true,"aws_external_id":null,"aws_session_name":null}),
+    );
+    vectors::<ProviderUpdate>(
+        "PATCH",
+        "/api/v1/platform/providers/{id}",
+        json!({"enabled":true,"credential_ref":null,"aws_external_id":null,"aws_session_name":null,"endpoint":null}),
+    );
+    vectors::<ModelInput>(
+        "POST",
+        "/api/v1/platform/models",
+        json!({"public_name":"contract","display_name":"Contract","description":null,"enabled":true,"supported_protocols":["chat_completions"]}),
+    );
+    vectors::<ModelUpdate>(
+        "PATCH",
+        "/api/v1/platform/models/{id}",
+        json!({"public_name":"contract","display_name":"Contract","description":null,"enabled":true,"supported_protocols":["chat_completions"]}),
+    );
+    vectors::<DeploymentInput>(
+        "POST",
+        "/api/v1/platform/deployments",
+        json!({"model_id":nil,"provider_connection_id":nil,"upstream_model":"contract","enabled":true}),
+    );
+    for path in [
+        "/api/v1/platform/deployments/{id}",
+        "/api/v1/platform/deployments/{id}/configuration/preview",
+    ] {
+        vectors::<Enabled>(
+            if path.ends_with("preview") {
+                "POST"
+            } else {
+                "PATCH"
+            },
+            path,
+            json!({"enabled":true}),
+        );
+    }
+}
+
 /// The catalog advisory lock precedes the single installation lock everywhere.
 /// Holding installation through audit/commit serializes admission and authority mutations.
 pub(crate) async fn catalog_lock(

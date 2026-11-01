@@ -5,6 +5,16 @@
 //! (catalog advisory lock -> installation row -> scoped rows), error codes and audit
 //! events are identical to the individual endpoints and any failure creates nothing.
 use super::*;
+
+#[test]
+fn management_openapi_slice3_setup_request_vectors() {
+    openapi::requests::vectors::<ModelSetup>(
+        "POST",
+        "/api/v1/platform/model-setup",
+        json!({"model":{"public_name":"contract","display_name":"Contract","description":null,"enabled":true,"supported_protocols":["chat_completions"]},"route":{"provider_connection_id":Uuid::nil(),"upstream_model":"contract","enabled":true},"price":{"input_token_limit":10,"output_token_limit":10,"input_microusd_per_million":"1","output_microusd_per_million":"2"},"catalog_ids":[Uuid::nil()]}),
+    );
+}
+
 use catalogs::{Membership, replace_membership};
 use governance::prices::{Price, insert_price, validate_price};
 use resources::{
