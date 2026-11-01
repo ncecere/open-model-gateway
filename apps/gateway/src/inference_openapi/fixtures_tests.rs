@@ -51,7 +51,46 @@ impl ProviderAdapter for Adapter {
                 | ApiProtocol::Rerank
                 | ApiProtocol::Systemone
                 | ApiProtocol::Images
+                | ApiProtocol::AudioSpeech
+                | ApiProtocol::AudioTranscriptions
         )
+    }
+    fn supports_transcription_request(&self, _: &Deployment, _: &TranscriptionRequest) -> bool {
+        true
+    }
+    fn supports_speech_request(&self, _: &Deployment, _: &SpeechRequest) -> bool {
+        true
+    }
+    async fn execute_audio_transcription(
+        &self,
+        _: &Deployment,
+        request: TranscriptionRequest,
+    ) -> Result<TranscriptionResponse, InferenceError> {
+        let mut usage = Usage {
+            meters: Some(crate::inference::audio::transcription_meters(Some(1000))),
+            ..Default::default()
+        };
+        if request.language.as_deref() == Some("en") {
+            usage.input_tokens = Some(2);
+            usage.output_tokens = Some(1);
+        }
+        Ok(TranscriptionResponse {
+            text: "fixture transcript".into(),
+            usage,
+        })
+    }
+    async fn execute_audio_speech(
+        &self,
+        _: &Deployment,
+        request: SpeechRequest,
+    ) -> Result<SpeechResponse, InferenceError> {
+        Ok(SpeechResponse {
+            audio: Box::pin(futures::stream::iter([Ok(Bytes::from_static(
+                b"fixture audio",
+            ))])),
+            content_type: request.response_format.content_type(),
+            usage: request.usage(),
+        })
     }
     async fn execute(
         &self,
@@ -235,7 +274,7 @@ impl ProviderAdapter for Adapter {
 
 /// A non-generation model serves exactly one protocol (`valid_model_protocols`),
 /// so the one seeded model is switched to the workload under test.
-async fn serve(pool: &PgPool, protocol: &str) {
+pub(super) async fn serve(pool: &PgPool, protocol: &str) {
     sqlx::query("UPDATE models SET supported_protocols=ARRAY[$1]")
         .bind(protocol)
         .execute(pool)
@@ -243,7 +282,7 @@ async fn serve(pool: &PgPool, protocol: &str) {
         .unwrap();
 }
 
-async fn gateway(pool: &PgPool) -> (axum::Router, DevelopmentKeys) {
+pub(super) async fn gateway(pool: &PgPool) -> (axum::Router, DevelopmentKeys) {
     let store = Store::new(pool.clone());
     let keys = bootstrap::seed(&store, Environment::Development)
         .await
@@ -257,12 +296,19 @@ async fn gateway(pool: &PgPool) -> (axum::Router, DevelopmentKeys) {
     }
     serve(pool, "embeddings").await;
     let mut registry = ProviderRegistry::default();
-    registry.register(Arc::new(Adapter)).unwrap();
+    registry
+        .register(Arc::new(Adapter { pool: pool.clone() }))
+        .unwrap();
     let engine = Engine::new(Arc::new(store.clone()), registry, EngineLimits::default()).unwrap();
     (http::router_with_engine(store, None, engine), keys)
 }
 
-fn request(method: &str, path: &str, key: Option<&str>, body: Option<&Value>) -> Request<Body> {
+pub(super) fn request(
+    method: &str,
+    path: &str,
+    key: Option<&str>,
+    body: Option<&Value>,
+) -> Request<Body> {
     let mut request = Request::builder().method(method).uri(path);
     if let Some(key) = key {
         request = request.header("authorization", format!("Bearer {key}"));

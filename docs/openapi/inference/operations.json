@@ -12,18 +12,6 @@
       "scope": null,
       "operation": {}
     },
-    "POST /v1/audio/transcriptions": {
-      "access": "InferenceKey",
-      "token_policy": "Denied",
-      "scope": null,
-      "operation": {}
-    },
-    "POST /v1/audio/speech": {
-      "access": "InferenceKey",
-      "token_policy": "Denied",
-      "scope": null,
-      "operation": {}
-    },
     "GET /v1/videos": {
       "access": "InferenceKey",
       "token_policy": "Denied",
