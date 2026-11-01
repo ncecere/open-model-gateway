@@ -718,8 +718,8 @@ impl Vx<'_> {
         // pass a 404 or a 409).
         let accept = Want::Pinned(Handler::Status(200), true);
         let refuse = Want::Pinned(Handler::Refuse, false);
-        // Current behaviour; see #408 (a Storage error maps to 503).
-        let incoherent = Want::Pinned(Handler::Status(503), true);
+        // Cross-field coherence is a handler rule, not expressible in the schema (#408).
+        let incoherent = Want::Pinned(Handler::Status(400), true);
         self.reconcile_probe("every optional sibling", full(), accept)
             .await;
         self.reconcile_probe("input_tokens at i64::MAX", bare(MAX, "0"), accept)
@@ -787,12 +787,8 @@ impl Vx<'_> {
             Want::Pinned(Handler::Status(409), true),
         )
         .await;
-        // BillingUsage::validate refuses these, but the refusal surfaces as a
-        // Storage error: 503 "Reconciliation unavailable" (usage_values in
-        // src/governance.rs -> the error mapping of reconcile in
-        // src/management/governance/reports.rs), not 400. The schema cannot
-        // state the cross-field rules, so it accepts them. Current behaviour;
-        // see #408.
+        // The operator's incoherent usage is invalid (400), not a storage
+        // failure. The schema still accepts these cross-field combinations.
         self.reconcile_probe(
             "input_tokens + output_tokens past i64",
             bare(MAX, "1"),

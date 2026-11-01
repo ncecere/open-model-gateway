@@ -1238,6 +1238,12 @@ fn meter_evidence(usage: Usage) -> Result<MeterEvidence, InferenceError> {
 }
 fn usage_values(usage: Usage) -> Result<(Option<i64>, Option<i64>), InferenceError> {
     meter_evidence(usage)?;
+    validate_token_usage(usage)
+}
+/// Shared token coherence checks; callers choose provider or operator error semantics.
+pub(crate) fn validate_token_usage(
+    usage: Usage,
+) -> Result<(Option<i64>, Option<i64>), InferenceError> {
     if let Some(b) = usage.billing {
         b.validate().map_err(|_| InferenceError::Storage)?;
         if usage

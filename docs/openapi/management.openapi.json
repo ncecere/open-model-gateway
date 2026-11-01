@@ -46826,8 +46826,7 @@
               "billing_usage": {
                 "anyOf": [
                   {
-                    "$ref": "#/components/schemas/MoneyBillingUsageInput",
-                    "x-omg-unprobed-location": "billing_usage counters cannot be varied one at a time: BillingUsage::validate and usage_values (governance.rs) refuse an incoherent set with a Storage error, which reconcile maps to 503 instead of 400 (#408), so the HTTP vectors run with billing_usage null. The pinned probes in openapi_money_probes_tests.rs (reconcile_probes) compare every counter rule with the real handler."
+                    "$ref": "#/components/schemas/MoneyBillingUsageInput"
                   },
                   {
                     "type": "null"
@@ -46906,8 +46905,7 @@
               {
                 "anyOf": [
                   {
-                    "$ref": "#/components/schemas/MoneyBillingUsageInput",
-                    "x-omg-unprobed-location": "billing_usage counters cannot be varied one at a time: BillingUsage::validate and usage_values (governance.rs) refuse an incoherent set with a Storage error, which reconcile maps to 503 instead of 400 (#408), so the HTTP vectors run with billing_usage null. The pinned probes in openapi_money_probes_tests.rs (reconcile_probes) compare every counter rule with the real handler."
+                    "$ref": "#/components/schemas/MoneyBillingUsageInput"
                   },
                   {
                     "type": "null"
@@ -70494,7 +70492,7 @@
     },
     "/api/v1/workspaces/{ws}/costs/{execution}/reconcile": {
       "post": {
-        "description": "Requires live Platform Admin write authority AND workspace access; foreign personal executions are hidden. billing_usage is required but nullable; every nested billing counter is required and nullable. Adds evidence to the pinned valuation, never replaces historical prices or silently converts unknown usage to zero. Rules the schemas cannot express: billing_usage must be coherent (BillingUsage::validate, billing.rs): every counter is at most 9223372036854775807; with writes = the sum of the three cache-write parts, writes may not exceed cache_write_input_tokens, and must equal it when all three parts are given; uncached + cache_read + max(writes, cache_write_input_tokens) may not exceed total_input_tokens, and must equal it when uncached, cache_read and cache_write are all given; the sums must fit in i64; input_tokens may not exceed total_input_tokens; input_tokens + output_tokens must fit in i64 (counters up to 9223372036854775807 are accepted with 200 on a priced hold). An incoherent usage, or a token sum past i64, is currently refused with 503 \"Reconciliation unavailable\" (the usage_values Storage error in src/governance.rs falls through the error mapping of reconcile in src/management/governance/reports.rs), not 400: the contract documents the current behaviour; see #408. meter_usage, output_image_variant and provider_cost_microusd are optional evidence that may be added to an unknown hold, never changed or erased once stored. The hold must be unknown and its execution terminal, the actor a live Platform Admin with workspace access, and the workload not realtime; otherwise 400. Without a complete pinned valuation the request is 409 (for example billing_usage without total_input_tokens on a hold pinned to a version-1 price). Token counters and provider cost are canonical decimal strings in the contract (the handler also tolerates zero-padded forms such as \"007\").",
+        "description": "Requires live Platform Admin write authority AND workspace access; foreign personal executions are hidden. billing_usage is required but nullable; every nested billing counter is required and nullable. Adds evidence to the pinned valuation, never replaces historical prices or silently converts unknown usage to zero. Rules the schemas cannot express: billing_usage must be coherent (BillingUsage::validate, billing.rs): every counter is at most 9223372036854775807; with writes = the sum of the three cache-write parts, writes may not exceed cache_write_input_tokens, and must equal it when all three parts are given; uncached + cache_read + max(writes, cache_write_input_tokens) may not exceed total_input_tokens, and must equal it when uncached, cache_read and cache_write are all given; the sums must fit in i64; input_tokens may not exceed total_input_tokens; input_tokens + output_tokens must fit in i64 (counters up to 9223372036854775807 are accepted with 200 on a priced hold). Incoherent operator usage, including a token sum past i64, is refused with 400 Invalid request before settlement; the unknown hold remains unchanged (#408). meter_usage, output_image_variant and provider_cost_microusd are optional evidence that may be added to an unknown hold, never changed or erased once stored. The hold must be unknown and its execution terminal, the actor a live Platform Admin with workspace access, and the workload not realtime; otherwise 400. Without a complete pinned valuation the request is 409 (for example billing_usage without total_input_tokens on a hold pinned to a version-1 price). Token counters and provider cost are canonical decimal strings in the contract (the handler also tolerates zero-padded forms such as \"007\").",
         "operationId": "post_api_v1_workspaces_by_ws_costs_by_execution_reconcile",
         "parameters": [
           {

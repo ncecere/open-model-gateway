@@ -2,6 +2,10 @@
 
 Notes for changes on `main` after [v0.9.3](v0.9.3.md). They become the next release's notes.
 
+## Fixes
+
+- Manual cost reconciliation refuses incoherent operator token usage with 400 instead of 503, retaining the unknown hold unchanged; provider settlement behaviour is unchanged (#408).
+
 ## Provider-reported cost reconciliation (#48)
 
 - **Admin → Usage & costs → Provider reconciliation:** Platform Admin/Auditor frozen comparisons with signed charges and variance, separate holds, unresolved coverage, identity-free personal totals and source/mapping provenance. Platform Admins can upload an Anthropic Cost Report envelope, attest whole mapping revisions and freeze snapshots in the dashboard.

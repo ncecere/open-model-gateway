@@ -669,24 +669,25 @@ impl Vx<'_> {
             plain,
         )
         .await;
-        // Reconciliation consumes its hold, so every request gets a fresh one.
-        // billing_usage is null: BillingUsage's cross-field rules refuse an
-        // incoherent counter with 503 (#408), so no counter can be varied on
-        // its own (the schema's billing arm carries the reviewed exemption and
-        // the pinned probes cover the counters). The meter evidence, the image
-        // variant and the provider cost carry every optional sibling, in each
-        // wire form of the root and of the meter evidence.
+        // Every request gets a fresh hold. Walk billing and meter evidence in
+        // both wire forms, including null; cross-field 400 refusals are decided
+        // only when the original body actually violates token coherence (#408).
         let meter = json!({"output_images":"1","input_characters":"2","input_audio_seconds_ms":"3","output_audio_seconds_ms":"4","search_units":"5","requests":"6","output_video_seconds_ms":"7"});
-        let reconcile = |meter: Value| json!({"input_tokens":"1","output_tokens":"1","billing_usage":null,"evidence":"vector:receipt","meter_usage":meter,"output_image_variant":"1024x1024","provider_cost_microusd":"5"});
+        let reconcile = |meter: Value, billing: Value| json!({"input_tokens":"1","output_tokens":"1","billing_usage":billing,"evidence":"vector:receipt","meter_usage":meter,"output_image_variant":"1024x1024","provider_cost_microusd":"5"});
+        // Nonzero seeds let the pattern walker derive canonical 19-digit
+        // boundary strings (repeating a zero seed would only make leading zeros).
+        let billing = json!({"total_input_tokens":"6","uncached_input_tokens":"1","cache_read_input_tokens":"1","cache_write_input_tokens":"4","cache_write_default_input_tokens":"1","cache_write_5m_input_tokens":"1","cache_write_1h_input_tokens":"2"});
         let mut runs = Vec::new();
         for root in [false, true] {
             for meter in [meter.clone(), seq(&meter, METER), Value::Null] {
-                let object = reconcile(meter);
-                runs.push(if root {
-                    seq(&object, RECONCILE)
-                } else {
-                    object
-                });
+                for billing in [billing.clone(), seq(&billing, BILLING), Value::Null] {
+                    let object = reconcile(meter.clone(), billing);
+                    runs.push(if root {
+                        seq(&object, RECONCILE)
+                    } else {
+                        object
+                    });
+                }
             }
         }
         self.forms(
@@ -708,7 +709,34 @@ impl Vx<'_> {
                 .await;
                 format!("{wsbase}/costs/{hold}/reconcile")
             },
-            plain,
+            async |captured, input| {
+                let object = view(&input, RECONCILE);
+                let tokens = |key: &str| object[key].as_str()?.parse::<u64>().ok();
+                let billing = serde_json::from_value::<Option<crate::billing::BillingUsage>>(
+                    object["billing_usage"].clone(),
+                );
+                if let (Some(input_tokens), Some(output_tokens), Ok(billing)) =
+                    (tokens("input_tokens"), tokens("output_tokens"), billing)
+                {
+                    let usage = crate::inference::types::Usage {
+                        input_tokens: Some(input_tokens),
+                        output_tokens: Some(output_tokens),
+                        billing,
+                        ..Default::default()
+                    };
+                    if crate::governance::validate_token_usage(usage).is_err()
+                        && captured.status == StatusCode::BAD_REQUEST
+                        && self.schema_body(
+                            "POST",
+                            "/api/v1/workspaces/{ws}/costs/{execution}/reconcile",
+                            &input,
+                        )
+                    {
+                        return Probe::decided(captured, true);
+                    }
+                }
+                Probe::from(captured)
+            },
         )
         .await;
     }
@@ -861,6 +889,15 @@ const RECONCILE: &[&str] = &[
     "meter_usage",
     "output_image_variant",
     "provider_cost_microusd",
+];
+const BILLING: &[&str] = &[
+    "total_input_tokens",
+    "uncached_input_tokens",
+    "cache_read_input_tokens",
+    "cache_write_input_tokens",
+    "cache_write_default_input_tokens",
+    "cache_write_5m_input_tokens",
+    "cache_write_1h_input_tokens",
 ];
 const METER: &[&str] = &[
     "output_images",
