@@ -333,7 +333,7 @@ fn inference_openapi_completed_areas_have_no_incomplete_references() {
             }
         }
     }
-    assert_eq!(count, 7);
+    assert_eq!(count, 27);
     // Groups are disjoint and every area names real operations.
     let mut seen = BTreeSet::new();
     for (_, group) in AREA_GROUPS {
@@ -409,6 +409,15 @@ fn inference_openapi_area_groups_are_bound_to_executed_fixtures() {
         finished: BTreeSet::new(),
     };
     visitor.visit_file(&source);
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/inference_openapi/media_tests.rs");
+    visitor.visit_file(&syn::parse_file(&std::fs::read_to_string(path).unwrap()).unwrap());
+    for name in ["jobs_tests.rs", "realtime_tests.rs"] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/inference_openapi")
+            .join(name);
+        visitor.visit_file(&syn::parse_file(&std::fs::read_to_string(path).unwrap()).unwrap());
+    }
     for (name, _) in super::responses::AREA_GROUPS {
         assert!(
             visitor.finished.contains(*name),

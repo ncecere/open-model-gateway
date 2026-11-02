@@ -832,7 +832,17 @@ fn unprobed_request_keywords(document: &Value, node: &Value, location: &str) -> 
         .or_else(|| {
             NUMERIC_BOUNDS
                 .iter()
-                .find(|keyword| node.get(**keyword).is_some_and(|v| v.as_i64().is_none()))
+                .find(|keyword| {
+                    node.get(**keyword).is_some_and(|v| {
+                        v.as_i64().is_none()
+                            && !(v.as_f64().is_some_and(|n| {
+                                n.is_finite() && n.fract() != 0.0 && n.abs() < (1u64 << 52) as f64
+                            }) && (node["type"] == "number"
+                                || node["type"].as_array().is_some_and(|types| {
+                                    types.contains(&serde_json::json!("number"))
+                                })))
+                    })
+                })
                 .copied()
         });
     if let Some(keyword) = keyword
@@ -1134,4 +1144,21 @@ fn operation_at(document: &Value, operation: &Value, location: &str) -> Result<(
         Ok(())
     }
     discover(document, operation, location, &mut BTreeSet::new())
+}
+
+/// Global lexical convention shared by both request contracts.
+pub(crate) const INTEGER_ENCODING_DESCRIPTION: &str = "Request integers must be JSON integer literals without a fraction, exponent or -0. Spec-following JSON Schema validators are more permissive than the server for these encodings.";
+
+pub(crate) fn integer_encoding(document: &Value) -> Result<()> {
+    ensure!(
+        document["x-omg-integer-encoding"] == "json-integer-literal",
+        "missing or invalid root integer encoding convention"
+    );
+    ensure!(
+        document["info"]["description"]
+            .as_str()
+            .is_some_and(|text| text.contains(INTEGER_ENCODING_DESCRIPTION)),
+        "missing integer encoding description"
+    );
+    Ok(())
 }

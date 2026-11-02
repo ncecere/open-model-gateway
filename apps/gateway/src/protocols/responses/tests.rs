@@ -231,13 +231,36 @@ fn stream(events: Vec<Result<ChatEvent>>) -> ProviderOutput {
     ProviderOutput::Stream(Box::pin(futures_util::stream::iter(events)))
 }
 async fn body(response: Response) -> String {
-    String::from_utf8(
-        axum::body::to_bytes(response.into_body(), 8 * 1024 * 1024)
-            .await
-            .unwrap()
-            .to_vec(),
-    )
-    .unwrap()
+    let media = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .map(str::trim)
+        .expect("generation response content-type missing");
+    // These renderer fixtures have exactly two wire modes. A media-type drift
+    // cannot silently bypass sequence validation.
+    assert!(
+        matches!(media, "application/json" | "text/event-stream"),
+        "generation response media type"
+    );
+    let is_sse = media == "text/event-stream";
+    let bytes = axum::body::to_bytes(response.into_body(), 8 * 1024 * 1024)
+        .await
+        .unwrap();
+    if is_sse {
+        use crate::inference_openapi::sse::{Protocol, validate};
+        let outcome = validate(Protocol::Responses, &bytes)
+            .unwrap_or_else(|_| panic!("generation SSE sequence mismatch"));
+        assert!(outcome.positive(), "generation SSE capture truncated");
+    }
+    if !is_sse {
+        assert!(
+            serde_json::from_slice::<Value>(&bytes).is_ok(),
+            "generation JSON representation mismatch"
+        );
+    }
+    String::from_utf8(bytes.to_vec()).unwrap_or_else(|_| panic!("generation response is not UTF-8"))
 }
 fn frames(body: &str) -> Vec<Value> {
     body.lines()

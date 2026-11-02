@@ -572,3 +572,10 @@ fn rejection(e: JsonRejection) -> Response {
 }
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+pub(crate) fn openapi_normalize(value: Value) -> Result<ChatRequest> {
+    serde_json::from_value::<Request>(value)
+        .map_err(|_| InferenceError::InvalidRequest)?
+        .normalize()
+}

@@ -1,0 +1,4870 @@
+{
+  "operations": {
+    "POST /v1/chat/completions": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {
+        "x-omg-cancellation": "dropping_http_stream_cancels_transport_and_retains_unknown_hold",
+        "summary": "Generate with completions",
+        "description": "Real gateway text/function generation frontend. Admission checks live key, workspace, model and provider capabilities. Default root body cap is fixed 2097152 bytes: declared Content-Length above it is rejected before decoding; Messages uses Anthropic errors, other routes plain text. Unknown fields are 400 invalid_request_error. Usage counters are emitted only when known; Messages message_start input_tokens:0 is a compatibility placeholder, never accounting. Native-only fields and translated-route refusals are described below.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_v1_chat_completionsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "JSON completion or ordered SSE. Errors after opening a stream are terminal error frames, never fabricated successful termination.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_v1_chat_completionsResponse"
+                },
+                "example": {
+                  "id": "chatcmpl_example",
+                  "object": "chat.completion",
+                  "created": 1,
+                  "model": "company/smart",
+                  "choices": [
+                    {
+                      "index": 0,
+                      "message": {
+                        "role": "assistant",
+                        "content": "hello",
+                        "tool_calls": [
+                          {
+                            "id": "call_example",
+                            "type": "function",
+                            "function": {
+                              "name": "ping",
+                              "arguments": "{}"
+                            }
+                          }
+                        ]
+                      },
+                      "finish_reason": "tool_calls"
+                    }
+                  ]
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "contentMediaType": "text/event-stream"
+                },
+                "example": "data: {\"id\":\"chatcmpl_example\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"company/smart\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl_example\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"company/smart\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl_example\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"company/smart\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_example\",\"type\":\"function\",\"function\":{\"name\":\"ping\",\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl_example\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"company/smart\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n",
+                "x-omg-sse": {
+                  "events": {
+                    "message": {
+                      "$ref": "#/components/schemas/GenChatChunk"
+                    },
+                    "error": {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  },
+                  "ordered": [
+                    "assistant role chunk",
+                    "zero or more content/tool/finish/optional requested usage chunks",
+                    "one [DONE], or final OpenAI error without [DONE]"
+                  ],
+                  "terminal": [
+                    "[DONE]"
+                  ],
+                  "error_event": "error",
+                  "truncated_is_positive": false,
+                  "event_field": "absent; message/error classify JSON data, not named events",
+                  "usage": "Only with stream_options.include_usage:true; absent or null until all required counters are known."
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/OpenAiBadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/OpenAiUnauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/OpenAiNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/OpenAiPayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/OpenAiTooManyRequests"
+          },
+          "501": {
+            "$ref": "#/components/responses/OpenAiNotImplemented"
+          },
+          "502": {
+            "$ref": "#/components/responses/OpenAiBadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/OpenAiUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/OpenAiGatewayTimeout"
+          },
+          "529": {
+            "$ref": "#/components/responses/OpenAiOverloaded"
+          }
+        },
+        "x-omg-refusals": [
+          {
+            "status": 400,
+            "envelope": "OpenAiErrorEnvelope",
+            "code": "invalid_request_error",
+            "trigger": "unknown fields, invalid types, bounds, malformed JSON or unsupported request field"
+          },
+          {
+            "status": 400,
+            "envelope": "OpenAiErrorEnvelope",
+            "code": "invalid_request_error",
+            "trigger": "unequal non-null max_tokens and max_completion_tokens, n other than 1, non-null refusal or unsupported message/tool shape"
+          },
+          {
+            "status": 501,
+            "envelope": "OpenAiErrorEnvelope",
+            "code": "unsupported_capability",
+            "trigger": "no configured deployment supports requested capability"
+          }
+        ],
+        "x-omg-request-constraints": "generation-normalization",
+        "x-omg-limits": {
+          "body_bytes": {
+            "default": 2097152,
+            "env": null,
+            "source": "Fixed root RequestBodyLimitLayer in apps/gateway/src/http.rs"
+          }
+        }
+      }
+    },
+    "POST /v1/responses": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {
+        "x-omg-cancellation": "dropping_responses_http_stream_cancels_transport_and_retains_unknown_hold",
+        "summary": "Generate with responses",
+        "description": "Real gateway text/function generation frontend. Admission checks live key, workspace, model and provider capabilities. Default root body cap is fixed 2097152 bytes: declared Content-Length above it is rejected before decoding; Messages uses Anthropic errors, other routes plain text. Unknown fields are 400 invalid_request_error. Usage counters are emitted only when known; Messages message_start input_tokens:0 is a compatibility placeholder, never accounting. Native-only fields and translated-route refusals are described below.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_v1_responsesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "JSON completion or ordered SSE. Errors after opening a stream are terminal error frames, never fabricated successful termination.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_v1_responsesResponse"
+                },
+                "example": {
+                  "id": "resp_example",
+                  "object": "response",
+                  "created_at": 1,
+                  "model": "company/smart",
+                  "status": "completed",
+                  "error": null,
+                  "incomplete_details": null,
+                  "output": [
+                    {
+                      "id": "msg_example",
+                      "type": "message",
+                      "role": "assistant",
+                      "status": "completed",
+                      "content": [
+                        {
+                          "type": "output_text",
+                          "text": "hello",
+                          "annotations": []
+                        }
+                      ]
+                    },
+                    {
+                      "id": "fc_example",
+                      "type": "function_call",
+                      "status": "completed",
+                      "call_id": "call_example",
+                      "name": "ping",
+                      "arguments": "{}"
+                    }
+                  ],
+                  "store": false,
+                  "usage": null
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "contentMediaType": "text/event-stream"
+                },
+                "example": "event: response.created\ndata: {\"response\":{\"id\":\"resp_example\",\"object\":\"response\",\"created_at\":1,\"model\":\"company/smart\",\"status\":\"in_progress\",\"error\":null,\"incomplete_details\":null,\"output\":[],\"store\":false,\"usage\":null},\"type\":\"response.created\",\"sequence_number\":0}\n\nevent: response.in_progress\ndata: {\"response\":{\"id\":\"resp_example\",\"object\":\"response\",\"created_at\":1,\"model\":\"company/smart\",\"status\":\"in_progress\",\"error\":null,\"incomplete_details\":null,\"output\":[],\"store\":false,\"usage\":null},\"type\":\"response.in_progress\",\"sequence_number\":1}\n\nevent: response.output_item.added\ndata: {\"output_index\":0,\"item\":{\"id\":\"msg_example\",\"type\":\"message\",\"role\":\"assistant\",\"status\":\"in_progress\",\"content\":[]},\"type\":\"response.output_item.added\",\"sequence_number\":2}\n\nevent: response.content_part.added\ndata: {\"output_index\":0,\"item_id\":\"msg_example\",\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]},\"type\":\"response.content_part.added\",\"sequence_number\":3}\n\nevent: response.output_text.delta\ndata: {\"output_index\":0,\"item_id\":\"msg_example\",\"content_index\":0,\"delta\":\"hello\",\"type\":\"response.output_text.delta\",\"sequence_number\":4}\n\nevent: response.output_text.done\ndata: {\"output_index\":0,\"item_id\":\"msg_example\",\"content_index\":0,\"text\":\"hello\",\"type\":\"response.output_text.done\",\"sequence_number\":5}\n\nevent: response.content_part.done\ndata: {\"output_index\":0,\"item_id\":\"msg_example\",\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"hello\",\"annotations\":[]},\"type\":\"response.content_part.done\",\"sequence_number\":6}\n\nevent: response.output_item.done\ndata: {\"output_index\":0,\"item\":{\"id\":\"msg_example\",\"type\":\"message\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\",\"annotations\":[]}]},\"type\":\"response.output_item.done\",\"sequence_number\":7}\n\nevent: response.output_item.added\ndata: {\"output_index\":1,\"item\":{\"id\":\"fc_example\",\"type\":\"function_call\",\"status\":\"in_progress\",\"call_id\":\"call_example\",\"name\":\"ping\",\"arguments\":\"\"},\"type\":\"response.output_item.added\",\"sequence_number\":8}\n\nevent: response.function_call_arguments.delta\ndata: {\"output_index\":1,\"item_id\":\"fc_example\",\"delta\":\"{}\",\"type\":\"response.function_call_arguments.delta\",\"sequence_number\":9}\n\nevent: response.function_call_arguments.done\ndata: {\"output_index\":1,\"item_id\":\"fc_example\",\"arguments\":\"{}\",\"name\":\"ping\",\"type\":\"response.function_call_arguments.done\",\"sequence_number\":10}\n\nevent: response.output_item.done\ndata: {\"output_index\":1,\"item\":{\"id\":\"fc_example\",\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"call_example\",\"name\":\"ping\",\"arguments\":\"{}\"},\"type\":\"response.output_item.done\",\"sequence_number\":11}\n\nevent: response.completed\ndata: {\"response\":{\"id\":\"resp_example\",\"object\":\"response\",\"created_at\":1,\"model\":\"company/smart\",\"status\":\"completed\",\"error\":null,\"incomplete_details\":null,\"output\":[{\"id\":\"msg_example\",\"type\":\"message\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\",\"annotations\":[]}]},{\"id\":\"fc_example\",\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"call_example\",\"name\":\"ping\",\"arguments\":\"{}\"}],\"store\":false,\"usage\":null},\"type\":\"response.completed\",\"sequence_number\":12}\n\n",
+                "x-omg-sse": {
+                  "events": {
+                    "response.created": {
+                      "$ref": "#/components/schemas/GenResponseEventCreated"
+                    },
+                    "response.in_progress": {
+                      "$ref": "#/components/schemas/GenResponseEventInprogress"
+                    },
+                    "response.completed": {
+                      "$ref": "#/components/schemas/GenResponseEventCompleted"
+                    },
+                    "response.incomplete": {
+                      "$ref": "#/components/schemas/GenResponseEventIncomplete"
+                    },
+                    "response.output_item.added": {
+                      "$ref": "#/components/schemas/GenResponseEventOutputItemAdded"
+                    },
+                    "response.output_item.done": {
+                      "$ref": "#/components/schemas/GenResponseEventOutputItemDone"
+                    },
+                    "response.content_part.added": {
+                      "$ref": "#/components/schemas/GenResponseEventContentPartAdded"
+                    },
+                    "response.content_part.done": {
+                      "$ref": "#/components/schemas/GenResponseEventContentPartDone"
+                    },
+                    "response.output_text.delta": {
+                      "$ref": "#/components/schemas/GenResponseEventOutputTextDelta"
+                    },
+                    "response.output_text.done": {
+                      "$ref": "#/components/schemas/GenResponseEventOutputTextDone"
+                    },
+                    "response.function_call_arguments.delta": {
+                      "$ref": "#/components/schemas/GenResponseEventFunctionCallArgumentsDelta"
+                    },
+                    "response.function_call_arguments.done": {
+                      "$ref": "#/components/schemas/GenResponseEventFunctionCallArgumentsDone"
+                    },
+                    "error": {
+                      "$ref": "#/components/schemas/GenResponsesError"
+                    }
+                  },
+                  "ordered": [
+                    "response.created",
+                    "response.in_progress",
+                    "numbered output events with sequence_number 0..n without gaps",
+                    "exactly one response.completed or response.incomplete, or final error"
+                  ],
+                  "terminal": [
+                    "response.completed",
+                    "response.incomplete"
+                  ],
+                  "error_event": "error",
+                  "truncated_is_positive": false,
+                  "event_field": "required; identical to data.type"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/OpenAiBadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/OpenAiUnauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/OpenAiNotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/OpenAiPayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/OpenAiTooManyRequests"
+          },
+          "501": {
+            "$ref": "#/components/responses/OpenAiNotImplemented"
+          },
+          "502": {
+            "$ref": "#/components/responses/OpenAiBadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/OpenAiUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/OpenAiGatewayTimeout"
+          },
+          "529": {
+            "$ref": "#/components/responses/OpenAiOverloaded"
+          }
+        },
+        "x-omg-refusals": [
+          {
+            "status": 400,
+            "envelope": "OpenAiErrorEnvelope",
+            "code": "invalid_request_error",
+            "trigger": "unknown fields, invalid types, bounds, malformed JSON or unsupported request field"
+          },
+          {
+            "status": 400,
+            "envelope": "OpenAiErrorEnvelope",
+            "code": "invalid_request_error",
+            "trigger": "store:true, previous_response_id, non-text format or unsupported input item"
+          },
+          {
+            "status": 501,
+            "envelope": "OpenAiErrorEnvelope",
+            "code": "unsupported_capability",
+            "trigger": "no configured deployment supports requested capability"
+          }
+        ],
+        "x-omg-request-constraints": "generation-normalization",
+        "x-omg-limits": {
+          "body_bytes": {
+            "default": 2097152,
+            "env": null,
+            "source": "Fixed root RequestBodyLimitLayer in apps/gateway/src/http.rs"
+          },
+          "output_buffer_bytes": {
+            "default": 4194304,
+            "env": null,
+            "source": "protocols/responses.rs OUTPUT_LIMIT; aggregate content/tool buffer"
+          }
+        }
+      }
+    },
+    "POST /v1/messages": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {
+        "summary": "Generate with messages",
+        "description": "Real gateway text/function generation frontend. Admission checks live key, workspace, model and provider capabilities. Default root body cap is fixed 2097152 bytes: declared Content-Length above it is rejected before decoding; Messages uses Anthropic errors, other routes plain text. Unknown fields are 400 invalid_request_error. Usage counters are emitted only when known; Messages message_start input_tokens:0 is a compatibility placeholder, never accounting. Native-only fields and translated-route refusals are described below.",
+        "responses": {
+          "200": {
+            "description": "JSON completion or ordered SSE. Errors after opening a stream are terminal error frames, never fabricated successful termination.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_v1_messagesResponse"
+                },
+                "example": {
+                  "id": "msg_example",
+                  "type": "message",
+                  "role": "assistant",
+                  "model": "company/smart",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "hello"
+                    },
+                    {
+                      "type": "tool_use",
+                      "id": "call_example",
+                      "name": "ping",
+                      "input": {}
+                    }
+                  ],
+                  "stop_reason": "tool_use",
+                  "stop_sequence": null,
+                  "usage": {
+                    "input_tokens": 1,
+                    "output_tokens": 1
+                  }
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "contentMediaType": "text/event-stream"
+                },
+                "example": "event: message_start\ndata: {\"message\":{\"id\":\"msg_example\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"company/smart\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0}},\"type\":\"message_start\"}\n\nevent: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"},\"type\":\"content_block_start\"}\n\nevent: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"},\"type\":\"content_block_delta\"}\n\nevent: content_block_stop\ndata: {\"index\":0,\"type\":\"content_block_stop\"}\n\nevent: content_block_start\ndata: {\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"call_example\",\"name\":\"ping\",\"input\":{}},\"type\":\"content_block_start\"}\n\nevent: content_block_delta\ndata: {\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{}\"},\"type\":\"content_block_delta\"}\n\nevent: content_block_stop\ndata: {\"index\":1,\"type\":\"content_block_stop\"}\n\nevent: message_delta\ndata: {\"delta\":{\"stop_reason\":\"tool_use\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":1,\"output_tokens\":1},\"type\":\"message_delta\"}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+                "x-omg-sse": {
+                  "events": {
+                    "message_start": {
+                      "$ref": "#/components/schemas/GenMessagesEventMessageStart"
+                    },
+                    "content_block_start": {
+                      "$ref": "#/components/schemas/GenMessagesEventContentBlockStart"
+                    },
+                    "content_block_delta": {
+                      "$ref": "#/components/schemas/GenMessagesEventContentBlockDelta"
+                    },
+                    "content_block_stop": {
+                      "$ref": "#/components/schemas/GenMessagesEventContentBlockStop"
+                    },
+                    "message_delta": {
+                      "$ref": "#/components/schemas/GenMessagesEventMessageDelta"
+                    },
+                    "message_stop": {
+                      "$ref": "#/components/schemas/GenMessagesEventMessageStop"
+                    },
+                    "error": {
+                      "$ref": "#/components/schemas/AnthropicErrorEnvelope"
+                    }
+                  },
+                  "ordered": [
+                    "message_start",
+                    "balanced content_block_start/delta/stop per index",
+                    "message_delta",
+                    "message_stop, or final error without message_stop"
+                  ],
+                  "terminal": [
+                    "message_stop"
+                  ],
+                  "error_event": "error",
+                  "truncated_is_positive": false,
+                  "event_field": "required; identical to data.type"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Anthropic-shaped error without gateway machine code; status 400",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "x-should-retry": {
+                "$ref": "#/components/headers/ShouldRetryFalse"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnthropicErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Anthropic-shaped error without gateway machine code; status 401",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "www-authenticate": {
+                "$ref": "#/components/headers/WwwAuthenticate"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnthropicErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Anthropic-shaped error without gateway machine code; status 404",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnthropicErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Anthropic-shaped error without gateway machine code; status 413",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnthropicErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Anthropic-shaped error without gateway machine code; status 429",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "x-should-retry": {
+                "$ref": "#/components/headers/ShouldRetryFalse"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnthropicErrorEnvelope"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Anthropic-shaped error without gateway machine code; status 501",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "x-should-retry": {
+                "$ref": "#/components/headers/ShouldRetryFalse"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnthropicErrorEnvelope"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Anthropic-shaped error without gateway machine code; status 502",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnthropicErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Anthropic-shaped error without gateway machine code; status 503",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "x-should-retry": {
+                "$ref": "#/components/headers/ShouldRetryFalse"
+              },
+              "retry-after": {
+                "$ref": "#/components/headers/RetryAfter"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnthropicErrorEnvelope"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Anthropic-shaped error without gateway machine code; status 504",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnthropicErrorEnvelope"
+                }
+              }
+            }
+          },
+          "529": {
+            "description": "Anthropic-shaped error without gateway machine code; status 529",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnthropicErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Method not allowed",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "allow": {
+                "required": true,
+                "schema": {
+                  "const": "POST"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnthropicErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "x-omg-cancellation": "dropping_messages_http_stream_cancels_transport_and_retains_unknown_hold",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_v1_messagesRequest"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "anthropic-version",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "const": "2023-06-01"
+            },
+            "description": "Exactly one occurrence with the literal version 2023-06-01.",
+            "x-omg-max-occurrences": 1
+          },
+          {
+            "name": "anthropic-beta",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024,
+              "pattern": "^[\\x09\\x20-\\x7E]+$"
+            },
+            "description": "Open comma-separated list, not an allowlist. At most 16 header occurrences, 32 total nonempty tokens; ASCII graphical characters plus space/tab. Tokens are trimmed for case-insensitive deny-prefix checks.",
+            "x-omg-denied-prefixes": [
+              "context-1m-",
+              "code-execution-",
+              "web-search-",
+              "web-fetch-",
+              "files-api-",
+              "mcp-client-",
+              "computer-use-"
+            ],
+            "x-omg-max-occurrences": 16,
+            "x-omg-max-tokens": 32
+          }
+        ],
+        "x-omg-refusals": [
+          {
+            "status": 400,
+            "envelope": "AnthropicErrorEnvelope",
+            "code": null,
+            "trigger": "unknown fields, invalid types, bounds, malformed JSON or unsupported request field"
+          },
+          {
+            "status": 501,
+            "envelope": "AnthropicErrorEnvelope",
+            "code": null,
+            "trigger": "tool_result.is_error:true on translated routes"
+          },
+          {
+            "status": 400,
+            "envelope": "AnthropicErrorEnvelope",
+            "code": null,
+            "trigger": "strict tools, output_config.format, disable_parallel_tool_use, hosted/server tools, remote image sources or denied beta prefixes"
+          },
+          {
+            "status": 400,
+            "envelope": "AnthropicErrorEnvelope",
+            "code": null,
+            "trigger": "image or top_k on translated routes; image/thinking history without a representable translated conversation"
+          },
+          {
+            "status": 501,
+            "envelope": "AnthropicErrorEnvelope",
+            "code": null,
+            "trigger": "no configured deployment supports requested capability"
+          },
+          {
+            "status": 501,
+            "envelope": "AnthropicErrorEnvelope",
+            "code": null,
+            "trigger": "content_filter finish cannot be represented as a Messages terminal; streaming emits a final error without message_stop"
+          }
+        ],
+        "x-omg-request-constraints": "generation-normalization",
+        "x-omg-limits": {
+          "body_bytes": {
+            "default": 2097152,
+            "env": null,
+            "source": "Fixed root RequestBodyLimitLayer in apps/gateway/src/http.rs"
+          },
+          "output_buffer_bytes": {
+            "default": 16777216,
+            "env": null,
+            "source": "protocols/messages.rs OUTPUT_LIMIT; aggregate native/canonical buffers"
+          },
+          "images": {
+            "maximum": 20,
+            "decoded_bytes_per_image": 5242880,
+            "encoded_bytes_per_image": 6990508,
+            "scope": "All message and tool-result images combined; the aggregate HTTP body cap applies first."
+          }
+        }
+      }
+    }
+  },
+  "schemas": {
+    "GenFunction": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            },
+            "description": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "parameters": {
+              "type": "object",
+              "$comment": "Function parameter schemas are caller-owned JSON Schema objects; the gateway checks only object kind and forwards their keys and nested JSON unchanged."
+            },
+            "strict": {
+              "oneOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "object",
+              "$comment": "Function parameter schemas are caller-owned JSON Schema objects; the gateway checks only object kind and forwards their keys and nested JSON unchanged."
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          ],
+          "minItems": 4,
+          "maxItems": 4,
+          "items": false
+        }
+      ]
+    },
+    "GenToolCall": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "type": {
+              "const": "function"
+            },
+            "function": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                    },
+                    "arguments": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "arguments"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "minItems": 2,
+                  "maxItems": 2,
+                  "items": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "type",
+            "function"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "const": "function"
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                    },
+                    "arguments": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "arguments"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "minItems": 2,
+                  "maxItems": 2,
+                  "items": false
+                }
+              ]
+            }
+          ],
+          "minItems": 3,
+          "maxItems": 3,
+          "items": false
+        }
+      ]
+    },
+    "GenChatMessage": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "enum": [
+                "system",
+                "developer",
+                "user",
+                "assistant",
+                "tool"
+              ]
+            },
+            "content": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "tool_calls": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/GenToolCall"
+              },
+              "minItems": 0
+            },
+            "tool_call_id": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "refusal": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "role"
+          ],
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "role": {
+                    "const": "tool"
+                  }
+                },
+                "required": [
+                  "role"
+                ]
+              },
+              "then": {
+                "required": [
+                  "content",
+                  "tool_call_id"
+                ],
+                "properties": {
+                  "content": {
+                    "type": "string"
+                  },
+                  "tool_call_id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "tool_calls": {
+                    "const": []
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "role": {
+                    "enum": [
+                      "system",
+                      "developer",
+                      "user"
+                    ]
+                  }
+                },
+                "required": [
+                  "role"
+                ]
+              },
+              "then": {
+                "required": [
+                  "content"
+                ],
+                "properties": {
+                  "content": {
+                    "type": "string"
+                  },
+                  "refusal": false,
+                  "tool_calls": {
+                    "const": []
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": "assistant"
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/GenToolCall"
+              },
+              "minItems": 0
+            },
+            {
+              "type": "null"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "minItems": 4,
+          "maxItems": 5,
+          "items": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string",
+              "enum": [
+                "system",
+                "developer",
+                "user"
+              ]
+            },
+            {
+              "type": "string"
+            },
+            {
+              "const": []
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "minItems": 4,
+          "maxItems": 4,
+          "items": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": "tool"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "const": []
+            },
+            {
+              "type": "string",
+              "minLength": 1
+            }
+          ],
+          "minItems": 4,
+          "maxItems": 4,
+          "items": false
+        }
+      ]
+    },
+    "GenChatTool": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "function"
+            },
+            "function": {
+              "$ref": "#/components/schemas/GenFunction"
+            }
+          },
+          "required": [
+            "type",
+            "function"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": "function"
+            },
+            {
+              "$ref": "#/components/schemas/GenFunction"
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2,
+          "items": false
+        }
+      ]
+    },
+    "GenResponseInputMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "message"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "user",
+            "assistant",
+            "system",
+            "developer"
+          ]
+        },
+        "content": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "const": "input_text"
+                      },
+                      "text": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "text"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "const": "output_text"
+                      },
+                      "text": {
+                        "type": "string"
+                      },
+                      "annotations": {
+                        "const": []
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "text"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "in_progress",
+            "completed",
+            "incomplete"
+          ]
+        }
+      },
+      "required": [
+        "role",
+        "content"
+      ],
+      "additionalProperties": false
+    },
+    "GenResponseCall": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "function_call"
+        },
+        "call_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+        },
+        "arguments": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "in_progress",
+            "completed",
+            "incomplete"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "call_id",
+        "name",
+        "arguments"
+      ],
+      "additionalProperties": false
+    },
+    "GenResponseResult": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "function_call_output"
+        },
+        "call_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "output": {
+          "type": "string"
+        },
+        "id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": [
+                "in_progress",
+                "completed",
+                "incomplete"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "call_id",
+        "output"
+      ],
+      "additionalProperties": false
+    },
+    "GenResponseTool": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "function"
+            },
+            "name": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            },
+            "description": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "parameters": {
+              "type": "object",
+              "$comment": "Function parameter schemas are caller-owned JSON Schema objects; the gateway checks only object kind and forwards their keys and nested JSON unchanged."
+            },
+            "strict": {
+              "oneOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "parameters"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": "function"
+            },
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "object",
+              "$comment": "Function parameter schemas are caller-owned JSON Schema objects; the gateway checks only object kind and forwards their keys and nested JSON unchanged."
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          ],
+          "minItems": 5,
+          "maxItems": 5,
+          "items": false
+        }
+      ]
+    },
+    "GenCache": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "ephemeral"
+        },
+        "ttl": {
+          "type": "string",
+          "enum": [
+            "5m",
+            "1h"
+          ]
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "GenTextBlock": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "text"
+        },
+        "text": {
+          "type": "string"
+        },
+        "cache_control": {
+          "$ref": "#/components/schemas/GenCache"
+        }
+      },
+      "required": [
+        "type",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "GenImageBlock": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "image"
+        },
+        "source": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "base64"
+            },
+            "media_type": {
+              "type": "string",
+              "enum": [
+                "image/png",
+                "image/jpeg",
+                "image/gif",
+                "image/webp"
+              ]
+            },
+            "data": {
+              "type": "string",
+              "minLength": 1,
+              "x-omg-max-encoded-bytes": 6990508,
+              "x-omg-max-decoded-bytes": 5242880,
+              "description": "Nonempty base64 with matching PNG/JPEG/GIF/WebP magic, validated by generation-normalization. The 2 MiB aggregate HTTP JSON cap dominates the normalizer's 5 MiB decoded-image cap; an individual 6990508-byte boundary cannot ride an accepted HTTP body."
+            }
+          },
+          "required": [
+            "type",
+            "media_type",
+            "data"
+          ],
+          "additionalProperties": false
+        },
+        "cache_control": {
+          "$ref": "#/components/schemas/GenCache"
+        }
+      },
+      "required": [
+        "type",
+        "source"
+      ],
+      "additionalProperties": false
+    },
+    "GenThinkingBlock": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "thinking"
+        },
+        "thinking": {
+          "type": "string"
+        },
+        "signature": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "thinking",
+        "signature"
+      ],
+      "additionalProperties": false
+    },
+    "GenRedactedBlock": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "redacted_thinking"
+        },
+        "data": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "GenToolUseBlock": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "tool_use"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+        },
+        "input": {
+          "type": "object",
+          "$comment": "Function tool inputs are caller-owned JSON objects; the gateway preserves their keys and arbitrary nested JSON as function arguments."
+        },
+        "cache_control": {
+          "$ref": "#/components/schemas/GenCache"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "name",
+        "input"
+      ],
+      "additionalProperties": false
+    },
+    "GenToolResultBlock": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "tool_result"
+        },
+        "tool_use_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "content": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/GenTextBlock"
+                  },
+                  {
+                    "$ref": "#/components/schemas/GenImageBlock"
+                  }
+                ]
+              },
+              "minItems": 0,
+              "maxItems": 256
+            }
+          ]
+        },
+        "is_error": {
+          "type": "boolean"
+        },
+        "cache_control": {
+          "$ref": "#/components/schemas/GenCache"
+        }
+      },
+      "required": [
+        "type",
+        "tool_use_id"
+      ],
+      "additionalProperties": false
+    },
+    "GenMessagesTurn": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "role": {
+              "const": "user"
+            },
+            "content": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/GenTextBlock"
+                      },
+                      {
+                        "$ref": "#/components/schemas/GenImageBlock"
+                      },
+                      {
+                        "$ref": "#/components/schemas/GenToolResultBlock"
+                      }
+                    ]
+                  },
+                  "minItems": 1,
+                  "maxItems": 256
+                }
+              ]
+            }
+          },
+          "required": [
+            "role",
+            "content"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "role": {
+              "const": "assistant"
+            },
+            "content": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/GenTextBlock"
+                      },
+                      {
+                        "$ref": "#/components/schemas/GenImageBlock"
+                      },
+                      {
+                        "$ref": "#/components/schemas/GenToolUseBlock"
+                      },
+                      {
+                        "$ref": "#/components/schemas/GenThinkingBlock"
+                      },
+                      {
+                        "$ref": "#/components/schemas/GenRedactedBlock"
+                      }
+                    ]
+                  },
+                  "minItems": 1,
+                  "maxItems": 256
+                }
+              ]
+            }
+          },
+          "required": [
+            "role",
+            "content"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": "user"
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/GenTextBlock"
+                      },
+                      {
+                        "$ref": "#/components/schemas/GenImageBlock"
+                      },
+                      {
+                        "$ref": "#/components/schemas/GenToolResultBlock"
+                      }
+                    ]
+                  },
+                  "minItems": 1,
+                  "maxItems": 256
+                }
+              ]
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2,
+          "items": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": "assistant"
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/GenTextBlock"
+                      },
+                      {
+                        "$ref": "#/components/schemas/GenImageBlock"
+                      },
+                      {
+                        "$ref": "#/components/schemas/GenToolUseBlock"
+                      },
+                      {
+                        "$ref": "#/components/schemas/GenThinkingBlock"
+                      },
+                      {
+                        "$ref": "#/components/schemas/GenRedactedBlock"
+                      }
+                    ]
+                  },
+                  "minItems": 1,
+                  "maxItems": 256
+                }
+              ]
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2,
+          "items": false
+        }
+      ]
+    },
+    "GenMessagesTool": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "custom"
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+        },
+        "description": {
+          "type": "string"
+        },
+        "input_schema": {
+          "type": "object",
+          "$comment": "Function parameter schemas are caller-owned JSON Schema objects; the gateway checks only object kind and forwards their keys and nested JSON unchanged."
+        },
+        "defer_loading": {
+          "type": "boolean"
+        },
+        "cache_control": {
+          "$ref": "#/components/schemas/GenCache"
+        }
+      },
+      "required": [
+        "name",
+        "input_schema"
+      ],
+      "additionalProperties": false
+    },
+    "GenThinking": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "adaptive",
+                "disabled"
+              ]
+            },
+            "display": {
+              "type": "string",
+              "enum": [
+                "summarized",
+                "omitted"
+              ]
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "enabled"
+            },
+            "budget_tokens": {
+              "type": "integer",
+              "minimum": 1024
+            },
+            "display": {
+              "type": "string",
+              "enum": [
+                "summarized",
+                "omitted"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "budget_tokens"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "post_v1_chat_completionsRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "model": {
+              "type": "string",
+              "x-omg-max-bytes": 200,
+              "minLength": 1,
+              "description": "Nonempty after Rust str::trim(), enforced by generation-normalization; ECMA regex whitespace differs (notably U+FEFF). UTF-8 byte limit remains enforced."
+            },
+            "messages": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/GenChatMessage"
+              },
+              "minItems": 1,
+              "maxItems": 4096,
+              "x-omg-unsendable-boundary": "The shared automatic vector planner is capped at 1000 array items; generation accepts 4096. inference_openapi_generation_large_message_boundaries executes the real 4096/4097 HTTP straddle separately with compact text messages, without raising the planner memory bound."
+            },
+            "stream": {
+              "oneOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "stream_options": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/GenStreamOptions"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "temperature": {
+              "oneOf": [
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 2
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "max_completion_tokens": {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4294967295
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "max_tokens": {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4294967295
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "n": {
+              "oneOf": [
+                {
+                  "const": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "tools": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/GenChatTool"
+              },
+              "minItems": 0,
+              "maxItems": 128
+            },
+            "tool_choice": {
+              "oneOf": [
+                {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "auto",
+                        "none",
+                        "required"
+                      ]
+                    },
+                    {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "required": [
+                            "type",
+                            "function"
+                          ],
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "function"
+                            },
+                            "function": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "name"
+                                  ],
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "name": {
+                                      "type": "string",
+                                      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "array",
+                                  "prefixItems": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                                    }
+                                  ],
+                                  "minItems": 1,
+                                  "maxItems": 1,
+                                  "items": false
+                                }
+                              ]
+                            }
+                          }
+                        },
+                        {
+                          "type": "array",
+                          "prefixItems": [
+                            {
+                              "const": "function"
+                            },
+                            {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "name"
+                                  ],
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "name": {
+                                      "type": "string",
+                                      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "array",
+                                  "prefixItems": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                                    }
+                                  ],
+                                  "minItems": 1,
+                                  "maxItems": 1,
+                                  "items": false
+                                }
+                              ]
+                            }
+                          ],
+                          "minItems": 2,
+                          "maxItems": 2,
+                          "items": false
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "user": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "metadata": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "maxLength": 512
+                  },
+                  "$comment": "OpenAI metadata keys are caller-chosen client labels (at most 16); keys are 1 to 64 characters, values at most 512 characters, and the map is never forwarded upstream.",
+                  "x-omg-max-pairs": 16,
+                  "x-omg-key-schema": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "model",
+            "messages"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string",
+              "x-omg-max-bytes": 200,
+              "minLength": 1,
+              "description": "Nonempty after Rust str::trim(), enforced by generation-normalization; ECMA regex whitespace differs (notably U+FEFF). UTF-8 byte limit remains enforced."
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/GenChatMessage"
+              },
+              "minItems": 1,
+              "maxItems": 4096,
+              "x-omg-unsendable-boundary": "The shared automatic vector planner is capped at 1000 array items; generation accepts 4096. inference_openapi_generation_large_message_boundaries executes the real 4096/4097 HTTP straddle separately with compact text messages, without raising the planner memory bound."
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/GenStreamOptions"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 2
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4294967295
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4294967295
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "oneOf": [
+                {
+                  "const": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/GenChatTool"
+              },
+              "minItems": 0,
+              "maxItems": 128
+            },
+            {
+              "oneOf": [
+                {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "auto",
+                        "none",
+                        "required"
+                      ]
+                    },
+                    {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "required": [
+                            "type",
+                            "function"
+                          ],
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "function"
+                            },
+                            "function": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "name"
+                                  ],
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "name": {
+                                      "type": "string",
+                                      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "array",
+                                  "prefixItems": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                                    }
+                                  ],
+                                  "minItems": 1,
+                                  "maxItems": 1,
+                                  "items": false
+                                }
+                              ]
+                            }
+                          }
+                        },
+                        {
+                          "type": "array",
+                          "prefixItems": [
+                            {
+                              "const": "function"
+                            },
+                            {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "name"
+                                  ],
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "name": {
+                                      "type": "string",
+                                      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "array",
+                                  "prefixItems": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                                    }
+                                  ],
+                                  "minItems": 1,
+                                  "maxItems": 1,
+                                  "items": false
+                                }
+                              ]
+                            }
+                          ],
+                          "minItems": 2,
+                          "maxItems": 2,
+                          "items": false
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "maxLength": 512
+                  },
+                  "$comment": "OpenAI metadata keys are caller-chosen client labels (at most 16); keys are 1 to 64 characters, values at most 512 characters, and the map is never forwarded upstream.",
+                  "x-omg-max-pairs": 16,
+                  "x-omg-key-schema": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          ],
+          "items": false,
+          "minItems": 12,
+          "maxItems": 12
+        }
+      ],
+      "x-omg-request-constraints": "generation-normalization",
+      "description": "JSON Schema validates structure. x-omg-request-constraints additionally enforces serde integer wire representation, UTF-8 byte limits, token alias equality, role/content rules, tool-name uniqueness and conditional field rules; provider-specific capability refusals are listed separately. No store or conversation persistence. The semantic extension also enforces the 2 MiB serialized JSON body cap and image encoding, signature, decoded-size and aggregate image-count rules."
+    },
+    "post_v1_responsesRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "model": {
+              "type": "string",
+              "x-omg-max-bytes": 200,
+              "minLength": 1,
+              "description": "Nonempty after Rust str::trim(), enforced by generation-normalization; ECMA regex whitespace differs (notably U+FEFF). UTF-8 byte limit remains enforced."
+            },
+            "input": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/GenResponseInputMessage"
+                      },
+                      {
+                        "$ref": "#/components/schemas/GenResponseCall"
+                      },
+                      {
+                        "$ref": "#/components/schemas/GenResponseResult"
+                      }
+                    ]
+                  },
+                  "minItems": 1,
+                  "maxItems": 4096
+                }
+              ],
+              "x-omg-unsendable-boundary": "The shared automatic vector planner is capped at 1000 array items; generation accepts 4096. inference_openapi_generation_large_message_boundaries executes the real 4096/4097 HTTP straddle separately with compact text messages, without raising the planner memory bound."
+            },
+            "instructions": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "stream": {
+              "oneOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "store": {
+              "oneOf": [
+                {
+                  "const": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "max_output_tokens": {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4294967295
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "temperature": {
+              "oneOf": [
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 2
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "tools": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/GenResponseTool"
+              },
+              "minItems": 0,
+              "maxItems": 128
+            },
+            "tool_choice": {
+              "oneOf": [
+                {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "auto",
+                        "none",
+                        "required"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "const": "function"
+                        },
+                        "name": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "name"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "text": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/GenResponseText"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "user": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "metadata": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "maxLength": 512
+                  },
+                  "$comment": "OpenAI metadata keys are caller-chosen client labels (at most 16); keys are 1 to 64 characters, values at most 512 characters, and the map is never forwarded upstream.",
+                  "x-omg-max-pairs": 16,
+                  "x-omg-key-schema": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "model",
+            "input"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string",
+              "x-omg-max-bytes": 200,
+              "minLength": 1,
+              "description": "Nonempty after Rust str::trim(), enforced by generation-normalization; ECMA regex whitespace differs (notably U+FEFF). UTF-8 byte limit remains enforced."
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/GenResponseInputMessage"
+                      },
+                      {
+                        "$ref": "#/components/schemas/GenResponseCall"
+                      },
+                      {
+                        "$ref": "#/components/schemas/GenResponseResult"
+                      }
+                    ]
+                  },
+                  "minItems": 1,
+                  "maxItems": 4096
+                }
+              ],
+              "x-omg-unsendable-boundary": "The shared automatic vector planner is capped at 1000 array items; generation accepts 4096. inference_openapi_generation_large_message_boundaries executes the real 4096/4097 HTTP straddle separately with compact text messages, without raising the planner memory bound."
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "oneOf": [
+                {
+                  "const": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4294967295
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 2
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/GenResponseTool"
+              },
+              "minItems": 0,
+              "maxItems": 128
+            },
+            {
+              "oneOf": [
+                {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "auto",
+                        "none",
+                        "required"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "const": "function"
+                        },
+                        "name": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "name"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/GenResponseText"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "maxLength": 512
+                  },
+                  "$comment": "OpenAI metadata keys are caller-chosen client labels (at most 16); keys are 1 to 64 characters, values at most 512 characters, and the map is never forwarded upstream.",
+                  "x-omg-max-pairs": 16,
+                  "x-omg-key-schema": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          ],
+          "items": false,
+          "minItems": 12,
+          "maxItems": 12
+        }
+      ],
+      "x-omg-request-constraints": "generation-normalization",
+      "description": "JSON Schema validates structure. x-omg-request-constraints additionally enforces serde integer wire representation, UTF-8 byte limits, token alias equality, role/content rules, tool-name uniqueness and conditional field rules; provider-specific capability refusals are listed separately. No store or conversation persistence. The semantic extension also enforces the 2 MiB serialized JSON body cap and image encoding, signature, decoded-size and aggregate image-count rules."
+    },
+    "post_v1_messagesRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "model": {
+              "type": "string",
+              "x-omg-max-bytes": 200,
+              "minLength": 1,
+              "description": "Nonempty after Rust str::trim(), enforced by generation-normalization; ECMA regex whitespace differs (notably U+FEFF). UTF-8 byte limit remains enforced."
+            },
+            "messages": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/GenMessagesTurn"
+              },
+              "minItems": 1,
+              "maxItems": 4096,
+              "x-omg-unsendable-boundary": "The shared automatic vector planner is capped at 1000 array items; generation accepts 4096. inference_openapi_generation_large_message_boundaries executes the real 4096/4097 HTTP straddle separately with compact text messages, without raising the planner memory bound."
+            },
+            "system": {
+              "oneOf": [
+                {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/GenTextBlock"
+                      },
+                      "minItems": 0,
+                      "maxItems": 256
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "max_tokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967295
+            },
+            "stream": {
+              "type": "boolean"
+            },
+            "temperature": {
+              "oneOf": [
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "top_p": {
+              "oneOf": [
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "top_k": {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4294967295
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "stop_sequences": {
+              "oneOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 0,
+                  "maxItems": 64
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "tools": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/GenMessagesTool"
+              },
+              "minItems": 0,
+              "maxItems": 128
+            },
+            "tool_choice": {
+              "oneOf": [
+                {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "auto",
+                            "none",
+                            "any"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "const": "tool"
+                        },
+                        "name": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "name"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "metadata": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/GenMessagesMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "thinking": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/GenThinking"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "output_config": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "effort": {
+                      "type": "string",
+                      "enum": [
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                      ]
+                    },
+                    "task_budget": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "const": "tokens"
+                        },
+                        "total": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "remaining": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "total"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "context_management": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "edits": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "clear_tool_uses_20250919",
+                              "clear_thinking_20251015"
+                            ]
+                          },
+                          "trigger": {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "input_tokens",
+                                  "tool_uses",
+                                  "thinking_turns"
+                                ]
+                              },
+                              "value": {
+                                "type": "integer",
+                                "minimum": 0
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "value"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "keep": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "enum": [
+                                      "input_tokens",
+                                      "tool_uses",
+                                      "thinking_turns"
+                                    ]
+                                  },
+                                  "value": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  }
+                                },
+                                "required": [
+                                  "type",
+                                  "value"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "const": "all"
+                              }
+                            ]
+                          },
+                          "clear_at_least": {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "input_tokens",
+                                  "tool_uses",
+                                  "thinking_turns"
+                                ]
+                              },
+                              "value": {
+                                "type": "integer",
+                                "minimum": 0
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "value"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "clear_tool_inputs": {
+                            "type": "boolean"
+                          },
+                          "exclude_tools": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "minItems": 0
+                          }
+                        },
+                        "required": [
+                          "type"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "minItems": 0,
+                      "maxItems": 256
+                    }
+                  },
+                  "required": [
+                    "edits"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "model",
+            "messages",
+            "max_tokens"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string",
+              "x-omg-max-bytes": 200,
+              "minLength": 1,
+              "description": "Nonempty after Rust str::trim(), enforced by generation-normalization; ECMA regex whitespace differs (notably U+FEFF). UTF-8 byte limit remains enforced."
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/GenMessagesTurn"
+              },
+              "minItems": 1,
+              "maxItems": 4096,
+              "x-omg-unsendable-boundary": "The shared automatic vector planner is capped at 1000 array items; generation accepts 4096. inference_openapi_generation_large_message_boundaries executes the real 4096/4097 HTTP straddle separately with compact text messages, without raising the planner memory bound."
+            },
+            {
+              "oneOf": [
+                {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/GenTextBlock"
+                      },
+                      "minItems": 0,
+                      "maxItems": 256
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967295
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4294967295
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 0,
+                  "maxItems": 64
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/GenMessagesTool"
+              },
+              "minItems": 0,
+              "maxItems": 128
+            },
+            {
+              "oneOf": [
+                {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "auto",
+                            "none",
+                            "any"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "const": "tool"
+                        },
+                        "name": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "name"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/GenMessagesMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/GenThinking"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "effort": {
+                      "type": "string",
+                      "enum": [
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                      ]
+                    },
+                    "task_budget": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "const": "tokens"
+                        },
+                        "total": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "remaining": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "total"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "edits": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "clear_tool_uses_20250919",
+                              "clear_thinking_20251015"
+                            ]
+                          },
+                          "trigger": {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "input_tokens",
+                                  "tool_uses",
+                                  "thinking_turns"
+                                ]
+                              },
+                              "value": {
+                                "type": "integer",
+                                "minimum": 0
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "value"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "keep": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "enum": [
+                                      "input_tokens",
+                                      "tool_uses",
+                                      "thinking_turns"
+                                    ]
+                                  },
+                                  "value": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  }
+                                },
+                                "required": [
+                                  "type",
+                                  "value"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "const": "all"
+                              }
+                            ]
+                          },
+                          "clear_at_least": {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "input_tokens",
+                                  "tool_uses",
+                                  "thinking_turns"
+                                ]
+                              },
+                              "value": {
+                                "type": "integer",
+                                "minimum": 0
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "value"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "clear_tool_inputs": {
+                            "type": "boolean"
+                          },
+                          "exclude_tools": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "minItems": 0
+                          }
+                        },
+                        "required": [
+                          "type"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "minItems": 0,
+                      "maxItems": 256
+                    }
+                  },
+                  "required": [
+                    "edits"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          ],
+          "items": false,
+          "minItems": 15,
+          "maxItems": 15
+        }
+      ],
+      "x-omg-request-constraints": "generation-normalization",
+      "description": "JSON Schema validates structure. x-omg-request-constraints additionally enforces serde integer wire representation, UTF-8 byte limits, token alias equality, role/content rules, tool-name uniqueness and conditional field rules; provider-specific capability refusals are listed separately. No store or conversation persistence. The semantic extension also enforces the 2 MiB serialized JSON body cap and image encoding, signature, decoded-size and aggregate image-count rules."
+    },
+    "GenChatUsage": {
+      "type": "object",
+      "properties": {
+        "prompt_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "completion_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "prompt_tokens_details": {
+          "type": "object",
+          "properties": {
+            "cached_tokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "cache_write_tokens": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens"
+      ],
+      "additionalProperties": false
+    },
+    "GenResponseUsage": {
+      "type": "object",
+      "properties": {
+        "input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "input_tokens_details": {
+          "type": "object",
+          "properties": {
+            "cached_tokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "cache_write_tokens": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "total_tokens"
+      ],
+      "additionalProperties": false
+    },
+    "GenMessagesUsage": {
+      "type": "object",
+      "properties": {
+        "input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_read_input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_creation_input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_creation": {
+          "type": "object",
+          "properties": {
+            "ephemeral_5m_input_tokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "ephemeral_1h_input_tokens": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "post_v1_chat_completionsResponse": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "object": {
+          "const": "chat.completion"
+        },
+        "created": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "model": {
+          "type": "string"
+        },
+        "choices": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "index": {
+                "const": 0
+              },
+              "message": {
+                "type": "object",
+                "properties": {
+                  "role": {
+                    "const": "assistant"
+                  },
+                  "content": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "tool_calls": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/GenOutputToolCall"
+                    },
+                    "minItems": 1
+                  }
+                },
+                "required": [
+                  "role",
+                  "content"
+                ],
+                "additionalProperties": false
+              },
+              "finish_reason": {
+                "type": "string",
+                "enum": [
+                  "stop",
+                  "length",
+                  "tool_calls",
+                  "content_filter"
+                ]
+              }
+            },
+            "required": [
+              "index",
+              "message",
+              "finish_reason"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 1
+        },
+        "usage": {
+          "$ref": "#/components/schemas/GenChatUsage"
+        }
+      },
+      "required": [
+        "id",
+        "object",
+        "created",
+        "model",
+        "choices"
+      ],
+      "additionalProperties": false
+    },
+    "GenChatChunk": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "object": {
+          "const": "chat.completion.chunk"
+        },
+        "created": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "model": {
+          "type": "string"
+        },
+        "choices": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "index": {
+                "const": 0
+              },
+              "delta": {
+                "type": "object",
+                "properties": {
+                  "role": {
+                    "const": "assistant"
+                  },
+                  "content": {
+                    "type": "string"
+                  },
+                  "tool_calls": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "index": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "const": "function"
+                        },
+                        "function": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "arguments": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "index"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "minItems": 1
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              },
+              "finish_reason": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "stop",
+                      "length",
+                      "tool_calls",
+                      "content_filter"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "index",
+              "delta",
+              "finish_reason"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 0,
+          "maxItems": 1
+        },
+        "usage": {
+          "oneOf": [
+            {
+              "$ref": "#/components/schemas/GenChatUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "object",
+        "created",
+        "model",
+        "choices"
+      ],
+      "additionalProperties": false
+    },
+    "GenOutputText": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "output_text"
+        },
+        "text": {
+          "type": "string"
+        },
+        "annotations": {
+          "const": []
+        }
+      },
+      "required": [
+        "type",
+        "text",
+        "annotations"
+      ],
+      "additionalProperties": false
+    },
+    "GenOutputMessage": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "message"
+        },
+        "role": {
+          "const": "assistant"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "in_progress",
+            "completed",
+            "incomplete"
+          ]
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/GenOutputText"
+          },
+          "minItems": 0,
+          "maxItems": 1
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "role",
+        "status",
+        "content"
+      ],
+      "additionalProperties": false
+    },
+    "GenOutputCall": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "function_call"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "in_progress",
+            "completed",
+            "incomplete"
+          ]
+        },
+        "call_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "arguments": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "status",
+        "call_id",
+        "name",
+        "arguments"
+      ],
+      "additionalProperties": false
+    },
+    "post_v1_responsesResponse": {
+      "allOf": [
+        {
+          "$ref": "#/components/schemas/GenResponseSnapshot"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "completed",
+                "incomplete"
+              ]
+            }
+          },
+          "required": [
+            "status"
+          ]
+        }
+      ]
+    },
+    "post_v1_messagesResponse": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "message"
+        },
+        "role": {
+          "const": "assistant"
+        },
+        "model": {
+          "type": "string"
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$comment": "Native Anthropic content blocks are provider-controlled JSON objects: the Messages frontend preserves validated native blocks verbatim, including thinking/signatures and future native block fields, rather than projecting the translated text/tool subset."
+          },
+          "minItems": 0
+        },
+        "stop_reason": {
+          "type": "string",
+          "enum": [
+            "end_turn",
+            "max_tokens",
+            "tool_use",
+            "refusal",
+            "model_context_window_exceeded"
+          ]
+        },
+        "stop_sequence": {
+          "type": "null"
+        },
+        "usage": {
+          "$ref": "#/components/schemas/GenMessagesUsage"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "role",
+        "model",
+        "content",
+        "stop_reason",
+        "stop_sequence",
+        "usage"
+      ],
+      "additionalProperties": false
+    },
+    "GenResponsesError": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "error"
+        },
+        "sequence_number": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "code": {
+          "$ref": "#/components/schemas/OpenAiErrorCode"
+        },
+        "message": {
+          "type": "string"
+        },
+        "param": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "type",
+        "sequence_number",
+        "code",
+        "message",
+        "param"
+      ],
+      "additionalProperties": false
+    },
+    "GenResponseEventCreated": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "response.created"
+        },
+        "sequence_number": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "response": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/GenResponseSnapshot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "const": "in_progress"
+                },
+                "incomplete_details": {
+                  "type": "null"
+                },
+                "output": {
+                  "const": []
+                },
+                "usage": {
+                  "type": "null"
+                }
+              },
+              "required": [
+                "status",
+                "incomplete_details"
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "sequence_number",
+        "response"
+      ],
+      "additionalProperties": false
+    },
+    "GenResponseEventInprogress": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "response.in_progress"
+        },
+        "sequence_number": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "response": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/GenResponseSnapshot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "const": "in_progress"
+                },
+                "incomplete_details": {
+                  "type": "null"
+                },
+                "output": {
+                  "const": []
+                },
+                "usage": {
+                  "type": "null"
+                }
+              },
+              "required": [
+                "status",
+                "incomplete_details"
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "sequence_number",
+        "response"
+      ],
+      "additionalProperties": false
+    },
+    "GenResponseEventCompleted": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "response.completed"
+        },
+        "sequence_number": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "response": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/GenResponseSnapshot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "const": "completed"
+                },
+                "incomplete_details": {
+                  "type": "null"
+                }
+              },
+              "required": [
+                "status",
+                "incomplete_details"
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "sequence_number",
+        "response"
+      ],
+      "additionalProperties": false
+    },
+    "GenResponseEventIncomplete": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "response.incomplete"
+        },
+        "sequence_number": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "response": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/GenResponseSnapshot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "const": "incomplete"
+                },
+                "incomplete_details": {
+                  "type": "object",
+                  "required": [
+                    "reason"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "max_output_tokens",
+                        "content_filter"
+                      ]
+                    }
+                  }
+                }
+              },
+              "required": [
+                "status",
+                "incomplete_details"
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "sequence_number",
+        "response"
+      ],
+      "additionalProperties": false
+    },
+    "GenResponseEventOutputItemAdded": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "response.output_item.added"
+        },
+        "sequence_number": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "item": {
+          "oneOf": [
+            {
+              "$ref": "#/components/schemas/GenOutputMessage"
+            },
+            {
+              "$ref": "#/components/schemas/GenOutputCall"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "sequence_number",
+        "output_index",
+        "item"
+      ],
+      "additionalProperties": false
+    },
+    "GenResponseEventOutputItemDone": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "response.output_item.done"
+        },
+        "sequence_number": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "item": {
+          "oneOf": [
+            {
+              "$ref": "#/components/schemas/GenOutputMessage"
+            },
+            {
+              "$ref": "#/components/schemas/GenOutputCall"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "sequence_number",
+        "output_index",
+        "item"
+      ],
+      "additionalProperties": false
+    },
+    "GenResponseEventContentPartAdded": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "response.content_part.added"
+        },
+        "sequence_number": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "item_id": {
+          "type": "string"
+        },
+        "content_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "part": {
+          "$ref": "#/components/schemas/GenOutputText"
+        }
+      },
+      "required": [
+        "type",
+        "sequence_number",
+        "output_index",
+        "item_id",
+        "content_index",
+        "part"
+      ],
+      "additionalProperties": false
+    },
+    "GenResponseEventContentPartDone": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "response.content_part.done"
+        },
+        "sequence_number": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "item_id": {
+          "type": "string"
+        },
+        "content_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "part": {
+          "$ref": "#/components/schemas/GenOutputText"
+        }
+      },
+      "required": [
+        "type",
+        "sequence_number",
+        "output_index",
+        "item_id",
+        "content_index",
+        "part"
+      ],
+      "additionalProperties": false
+    },
+    "GenResponseEventOutputTextDelta": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "response.output_text.delta"
+        },
+        "sequence_number": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "item_id": {
+          "type": "string"
+        },
+        "content_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "delta": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "sequence_number",
+        "output_index",
+        "item_id",
+        "content_index",
+        "delta"
+      ],
+      "additionalProperties": false
+    },
+    "GenResponseEventOutputTextDone": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "response.output_text.done"
+        },
+        "sequence_number": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "item_id": {
+          "type": "string"
+        },
+        "content_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "sequence_number",
+        "output_index",
+        "item_id",
+        "content_index",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "GenResponseEventFunctionCallArgumentsDelta": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "response.function_call_arguments.delta"
+        },
+        "sequence_number": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "item_id": {
+          "type": "string"
+        },
+        "delta": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "sequence_number",
+        "output_index",
+        "item_id",
+        "delta"
+      ],
+      "additionalProperties": false
+    },
+    "GenResponseEventFunctionCallArgumentsDone": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "response.function_call_arguments.done"
+        },
+        "sequence_number": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "item_id": {
+          "type": "string"
+        },
+        "arguments": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "sequence_number",
+        "output_index",
+        "item_id",
+        "arguments",
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "GenMessagesEventMessageStart": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "message_start"
+        },
+        "message": {
+          "$ref": "#/components/schemas/GenMessagesStart"
+        }
+      },
+      "required": [
+        "type",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "GenMessagesEventContentBlockStart": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "content_block_start"
+        },
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "content_block": {
+          "type": "object",
+          "$comment": "Native Anthropic content blocks are provider-controlled JSON objects: the Messages frontend preserves validated native blocks verbatim, including thinking/signatures and future native block fields, rather than projecting the translated text/tool subset."
+        }
+      },
+      "required": [
+        "type",
+        "index",
+        "content_block"
+      ],
+      "additionalProperties": false
+    },
+    "GenMessagesEventContentBlockDelta": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "content_block_delta"
+        },
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "delta": {
+          "type": "object",
+          "$comment": "Native Anthropic block deltas are provider-controlled JSON objects: the Messages frontend preserves validated native delta payloads verbatim, including thinking and signature deltas."
+        }
+      },
+      "required": [
+        "type",
+        "index",
+        "delta"
+      ],
+      "additionalProperties": false
+    },
+    "GenMessagesEventContentBlockStop": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "content_block_stop"
+        },
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "type",
+        "index"
+      ],
+      "additionalProperties": false
+    },
+    "GenMessagesEventMessageDelta": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "message_delta"
+        },
+        "delta": {
+          "type": "object",
+          "properties": {
+            "stop_reason": {
+              "type": "string",
+              "enum": [
+                "end_turn",
+                "max_tokens",
+                "tool_use",
+                "refusal",
+                "model_context_window_exceeded"
+              ]
+            },
+            "stop_sequence": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "stop_reason",
+            "stop_sequence"
+          ],
+          "additionalProperties": false
+        },
+        "usage": {
+          "$ref": "#/components/schemas/GenMessagesUsage"
+        }
+      },
+      "required": [
+        "type",
+        "delta",
+        "usage"
+      ],
+      "additionalProperties": false
+    },
+    "GenMessagesEventMessageStop": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "message_stop"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "GenMessagesStart": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "message"
+        },
+        "role": {
+          "const": "assistant"
+        },
+        "model": {
+          "type": "string"
+        },
+        "content": {
+          "const": []
+        },
+        "stop_reason": {
+          "type": "null"
+        },
+        "stop_sequence": {
+          "type": "null"
+        },
+        "usage": {
+          "type": "object",
+          "required": [
+            "input_tokens"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "input_tokens": {
+              "const": 0
+            }
+          },
+          "description": "Compatibility placeholder at stream start, not observed or billed usage; unknown output is omitted."
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "role",
+        "model",
+        "content",
+        "stop_reason",
+        "stop_sequence",
+        "usage"
+      ],
+      "additionalProperties": false
+    },
+    "GenResponseFormat": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "text"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": "text"
+            }
+          ],
+          "minItems": 1,
+          "maxItems": 1,
+          "items": false
+        }
+      ]
+    },
+    "GenResponseText": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "format": {
+              "$ref": "#/components/schemas/GenResponseFormat"
+            }
+          },
+          "required": [
+            "format"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "$ref": "#/components/schemas/GenResponseFormat"
+            }
+          ],
+          "minItems": 1,
+          "maxItems": 1,
+          "items": false
+        }
+      ]
+    },
+    "GenStreamOptions": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "include_usage": {
+              "type": "boolean"
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "boolean"
+            }
+          ],
+          "minItems": 0,
+          "maxItems": 1,
+          "items": false
+        }
+      ]
+    },
+    "GenMessagesMetadata": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "user_id": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          ],
+          "minItems": 1,
+          "maxItems": 1,
+          "items": false
+        }
+      ]
+    },
+    "GenOutputToolCall": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "const": "function"
+        },
+        "function": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "arguments": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "arguments"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "function"
+      ],
+      "additionalProperties": false
+    },
+    "GenResponseSnapshot": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "object": {
+          "const": "response"
+        },
+        "created_at": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "model": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "in_progress",
+            "completed",
+            "incomplete"
+          ]
+        },
+        "error": {
+          "type": "null"
+        },
+        "incomplete_details": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "reason": {
+                  "type": "string",
+                  "enum": [
+                    "max_output_tokens",
+                    "content_filter"
+                  ]
+                }
+              },
+              "required": [
+                "reason"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "output": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GenOutputMessage"
+              },
+              {
+                "$ref": "#/components/schemas/GenOutputCall"
+              }
+            ]
+          },
+          "minItems": 0
+        },
+        "store": {
+          "const": false
+        },
+        "usage": {
+          "oneOf": [
+            {
+              "$ref": "#/components/schemas/GenResponseUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "object",
+        "created_at",
+        "model",
+        "status",
+        "error",
+        "incomplete_details",
+        "output",
+        "store",
+        "usage"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "incomplete"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "incomplete_details": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "enum": [
+                      "max_output_tokens",
+                      "content_filter"
+                    ]
+                  }
+                },
+                "required": [
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "incomplete_details"
+            ]
+          },
+          "else": {
+            "properties": {
+              "incomplete_details": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "incomplete_details"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

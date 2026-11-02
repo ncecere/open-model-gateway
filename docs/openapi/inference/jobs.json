@@ -1,0 +1,3688 @@
+{
+  "operations": {
+    "GET /v1/videos": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {
+        "responses": {
+          "200": {
+            "description": "Successful representation; usage is observed only.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_v1_videosResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Job or inference error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/OpenAiUnauthorized"
+          },
+          "404": {
+            "description": "Job or inference error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/OpenAiPayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/OpenAiTooManyRequests"
+          },
+          "502": {
+            "$ref": "#/components/responses/OpenAiBadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/OpenAiUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/OpenAiGatewayTimeout"
+          },
+          "529": {
+            "$ref": "#/components/responses/OpenAiOverloaded"
+          },
+          "403": {
+            "description": "Job or inference error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Inference-key scoped legacy video objects. The /v1/videos create/list route uses GATEWAY_MAX_BODY_BYTES_VIDEOS (default 2 MiB); item and content routes use a fixed 2 MiB cap. Declared Content-Length above the applicable cap is rejected with plain text 413 even on GET. Hidden or foreign ids are indistinguishable from missing objects.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "in": "query",
+            "name": "order",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "default": "desc"
+            }
+          }
+        ],
+        "x-omg-limits": {
+          "body_bytes": {
+            "default": 2097152,
+            "env": "GATEWAY_MAX_BODY_BYTES_VIDEOS"
+          }
+        },
+        "x-omg-refusals": [
+          {
+            "status": 400,
+            "envelope": "OpenAiErrorEnvelope",
+            "code": "invalid_request_error",
+            "trigger": "Unknown query parameter, invalid limit or order"
+          },
+          {
+            "status": 404,
+            "envelope": "JobErrorEnvelope",
+            "code": "not_found",
+            "trigger": "Malformed after pagination cursor"
+          }
+        ]
+      }
+    },
+    "POST /v1/videos": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {
+        "responses": {
+          "400": {
+            "description": "Validation or explicit no-provider refusal; video creation never succeeds with the current provider registry.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            },
+            "x-omg-positive-kind": "refusal"
+          },
+          "401": {
+            "$ref": "#/components/responses/OpenAiUnauthorized"
+          },
+          "413": {
+            "$ref": "#/components/responses/OpenAiPayloadTooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/OpenAiUnavailable"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_v1_videosRequest"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+                    "maxLength": 200,
+                    "x-omg-max-bytes": 200,
+                    "description": "Public video model name: nonblank and at most 200 UTF-8 bytes (jobs/types.rs VideoRequest::validate). With the current provider registry, validated creation returns 400 unsupported_capability before any model lookup."
+                  },
+                  "prompt": {
+                    "type": "string",
+                    "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+                    "maxLength": 32768,
+                    "x-omg-max-bytes": 32768
+                  },
+                  "seconds": {
+                    "type": "string",
+                    "enum": [
+                      "4",
+                      "8",
+                      "12"
+                    ]
+                  },
+                  "size": {
+                    "type": "string",
+                    "enum": [
+                      "720x1280",
+                      "1280x720",
+                      "1024x1792",
+                      "1792x1024"
+                    ]
+                  }
+                },
+                "required": [
+                  "model",
+                  "prompt"
+                ]
+              },
+              "encoding": {
+                "model": {
+                  "contentType": "text/plain"
+                },
+                "prompt": {
+                  "contentType": "text/plain"
+                },
+                "seconds": {
+                  "contentType": "text/plain"
+                },
+                "size": {
+                  "contentType": "text/plain"
+                }
+              }
+            }
+          }
+        },
+        "description": "Inference-key scoped legacy video objects. The /v1/videos create/list route uses GATEWAY_MAX_BODY_BYTES_VIDEOS (default 2 MiB); item and content routes use a fixed 2 MiB cap. Declared Content-Length above the applicable cap is rejected with plain text 413 even on GET. Hidden or foreign ids are indistinguishable from missing objects.",
+        "x-omg-refusals": [
+          {
+            "status": 400,
+            "envelope": "JobErrorEnvelope",
+            "code": "unsupported_capability",
+            "trigger": "Validated create; no video provider is supported. input_reference is also unsupported. Decimal seconds strings such as 08 or +8 that parse to an allowed duration also reach this unsupported_capability refusal; they are not invalid_request_error merely for that spelling."
+          }
+        ],
+        "x-omg-limits": {
+          "body_bytes": {
+            "default": 2097152,
+            "env": "GATEWAY_MAX_BODY_BYTES_VIDEOS"
+          }
+        }
+      }
+    },
+    "GET /v1/videos/{id}": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {
+        "responses": {
+          "200": {
+            "description": "Successful representation; usage is observed only.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_v1_videos_by_idResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Job or inference error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/OpenAiUnauthorized"
+          },
+          "404": {
+            "description": "Job or inference error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/OpenAiPayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/OpenAiTooManyRequests"
+          },
+          "502": {
+            "$ref": "#/components/responses/OpenAiBadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/OpenAiUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/OpenAiGatewayTimeout"
+          },
+          "529": {
+            "$ref": "#/components/responses/OpenAiOverloaded"
+          },
+          "403": {
+            "description": "Job or inference error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Inference-key scoped legacy video objects. The /v1/videos create/list route uses GATEWAY_MAX_BODY_BYTES_VIDEOS (default 2 MiB); item and content routes use a fixed 2 MiB cap. Declared Content-Length above the applicable cap is rejected with plain text 413 even on GET. Hidden or foreign ids are indistinguishable from missing objects.",
+        "x-omg-refusals": [
+          {
+            "status": 404,
+            "envelope": "JobErrorEnvelope",
+            "code": "not_found",
+            "trigger": "Malformed, missing, foreign or hidden video id"
+          }
+        ]
+      }
+    },
+    "DELETE /v1/videos/{id}": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {
+        "responses": {
+          "200": {
+            "description": "Successful representation; usage is observed only.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/delete_v1_videos_by_idResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Job or inference error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/OpenAiUnauthorized"
+          },
+          "404": {
+            "description": "Job or inference error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/OpenAiPayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/OpenAiTooManyRequests"
+          },
+          "502": {
+            "$ref": "#/components/responses/OpenAiBadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/OpenAiUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/OpenAiGatewayTimeout"
+          },
+          "529": {
+            "$ref": "#/components/responses/OpenAiOverloaded"
+          },
+          "403": {
+            "description": "Job or inference error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Inference-key scoped legacy video objects. The /v1/videos create/list route uses GATEWAY_MAX_BODY_BYTES_VIDEOS (default 2 MiB); item and content routes use a fixed 2 MiB cap. Declared Content-Length above the applicable cap is rejected with plain text 413 even on GET. Hidden or foreign ids are indistinguishable from missing objects.",
+        "x-omg-refusals": [
+          {
+            "status": 404,
+            "envelope": "JobErrorEnvelope",
+            "code": "not_found",
+            "trigger": "Malformed, missing, foreign or hidden video id"
+          },
+          {
+            "status": 403,
+            "envelope": "JobErrorEnvelope",
+            "code": "video_not_owned",
+            "trigger": "Caller is neither creator, workspace admin nor service key"
+          },
+          {
+            "status": 400,
+            "envelope": "JobErrorEnvelope",
+            "code": "video_in_progress",
+            "trigger": "Job is not terminal and cannot be deleted"
+          }
+        ]
+      }
+    },
+    "GET /v1/videos/{id}/content": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {
+        "responses": {
+          "200": {
+            "description": "Successful representation; usage is observed only.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "video/mp4": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary",
+                  "contentMediaType": "video/mp4"
+                }
+              },
+              "image/webp": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary",
+                  "contentMediaType": "image/webp"
+                }
+              },
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary",
+                  "contentMediaType": "image/jpeg"
+                }
+              },
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary",
+                  "contentMediaType": "application/octet-stream"
+                }
+              },
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary",
+                  "contentMediaType": "image/png"
+                }
+              },
+              "application/binary": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary",
+                  "contentMediaType": "application/binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Job or inference error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/OpenAiUnauthorized"
+          },
+          "404": {
+            "description": "Job or inference error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/OpenAiPayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/OpenAiTooManyRequests"
+          },
+          "502": {
+            "$ref": "#/components/responses/OpenAiBadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/OpenAiUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/OpenAiGatewayTimeout"
+          },
+          "529": {
+            "$ref": "#/components/responses/OpenAiOverloaded"
+          },
+          "403": {
+            "description": "Job or inference error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Inference-key scoped legacy video objects. The /v1/videos create/list route uses GATEWAY_MAX_BODY_BYTES_VIDEOS (default 2 MiB); item and content routes use a fixed 2 MiB cap. Declared Content-Length above the applicable cap is rejected with plain text 413 even on GET. Hidden or foreign ids are indistinguishable from missing objects.",
+        "x-omg-binary-stream": {
+          "late_error": "truncated",
+          "positive_requires": "clean transport EOF"
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "variant",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "video",
+                "thumbnail",
+                "spritesheet"
+              ]
+            }
+          }
+        ],
+        "x-omg-binary-variants": {
+          "video": [
+            "video/mp4",
+            "application/octet-stream",
+            "application/binary"
+          ],
+          "thumbnail": [
+            "image/webp",
+            "image/jpeg",
+            "image/png",
+            "application/octet-stream",
+            "application/binary"
+          ],
+          "spritesheet": [
+            "image/webp",
+            "image/jpeg",
+            "image/png",
+            "application/octet-stream",
+            "application/binary"
+          ]
+        },
+        "x-omg-refusals": [
+          {
+            "status": 404,
+            "envelope": "JobErrorEnvelope",
+            "code": "not_found",
+            "trigger": "Malformed, missing, foreign or hidden video id"
+          },
+          {
+            "status": 400,
+            "envelope": "JobErrorEnvelope",
+            "code": "video_not_ready",
+            "trigger": "Job state is not completed, including failed, cancelled or expired jobs"
+          },
+          {
+            "status": 400,
+            "envelope": "OpenAiErrorEnvelope",
+            "code": "invalid_request_error",
+            "trigger": "Unknown query parameter or unsupported asset variant"
+          }
+        ]
+      }
+    },
+    "GET /v1/files": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {
+        "responses": {
+          "200": {
+            "description": "Successful representation; usage is observed only.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_v1_filesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Files API error; param identifies the field, or is null.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/OpenAiUnauthorized"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FileErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "const": "length limit exceeded"
+                }
+              }
+            },
+            "description": "Body layer plain-text 413 or Files upload quota/size JSON error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            }
+          },
+          "503": {
+            "description": "Files API error; param identifies the field, or is null.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FileErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Files API error; param identifies the field, or is null.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Files are inference-key scoped; foreign or hidden ids are indistinguishable from missing objects. The route body cap also rejects declared Content-Length on GET with plain text 413. /v1/files uses the upload cap; id/content routes use 2 MiB.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "schema": {
+              "type": "string",
+              "pattern": "^file-[0-9a-f]{32}$",
+              "minLength": 37,
+              "maxLength": 37
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000,
+              "default": 10000
+            }
+          },
+          {
+            "in": "query",
+            "name": "order",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "default": "desc"
+            }
+          },
+          {
+            "in": "query",
+            "name": "purpose",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "batch",
+                "batch_output",
+                "user_data",
+                "vision",
+                "assistants",
+                "evals"
+              ]
+            }
+          }
+        ],
+        "x-omg-error-codes": [
+          "file_storage_not_configured",
+          "file_purpose_disabled",
+          "invalid_request_error",
+          "unsupported_capability",
+          "file_too_large",
+          "storage_quota_exceeded",
+          "file_storage_unavailable",
+          "not_found",
+          "file_not_owned"
+        ],
+        "x-omg-refusals": [
+          {
+            "status": 503,
+            "envelope": "FileErrorEnvelope",
+            "code": "file_storage_not_configured",
+            "trigger": "Encrypted file storage is off"
+          },
+          {
+            "status": 400,
+            "envelope": "FileErrorEnvelope",
+            "code": "invalid_request_error",
+            "trigger": "Unknown query parameter or invalid purpose, limit, order or malformed after cursor. A malformed after is 400, not 404; a well-formed cursor with no visible match yields an empty page."
+          }
+        ]
+      }
+    },
+    "POST /v1/files": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {
+        "responses": {
+          "200": {
+            "description": "Successful representation; usage is observed only.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_v1_filesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Files API error; param identifies the field, or is null.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/OpenAiUnauthorized"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FileErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "const": "length limit exceeded"
+                }
+              }
+            },
+            "description": "Body layer plain-text 413 or Files upload quota/size JSON error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            }
+          },
+          "503": {
+            "description": "Files API error; param identifies the field, or is null.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FileErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Files API error; param identifies the field, or is null.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/post_v1_filesRequest"
+              },
+              "encoding": {
+                "purpose": {
+                  "contentType": "text/plain"
+                },
+                "file": {
+                  "contentType": "application/octet-stream"
+                },
+                "expires_after[anchor]": {
+                  "contentType": "text/plain"
+                },
+                "expires_after[seconds]": {
+                  "contentType": "text/plain"
+                }
+              }
+            }
+          },
+          "x-omg-no-boundary-vectors": "Streaming multipart framing, part order, file headers and binary data need raw MIME vectors, not JSON-derived boundary vectors; real uploads cover both field orders."
+        },
+        "description": "Files are inference-key scoped; foreign or hidden ids are indistinguishable from missing objects. The route body cap also rejects declared Content-Length on GET with plain text 413. /v1/files uses the upload cap; id/content routes use 2 MiB. File parts must be nonempty. Batch uploads require a JSON-object-looking head without NUL; vision uploads require a recognized image signature. See the file schema and x-omg-multipart for the precise sniff rules.",
+        "x-omg-error-codes": [
+          "file_storage_not_configured",
+          "file_purpose_disabled",
+          "invalid_request_error",
+          "unsupported_capability",
+          "file_too_large",
+          "storage_quota_exceeded",
+          "file_storage_unavailable",
+          "not_found",
+          "file_not_owned"
+        ],
+        "x-omg-multipart": {
+          "file_requires_filename": true,
+          "file_parts": 1,
+          "unknown_parts": "reject",
+          "duplicate_fields": "reject",
+          "field_bytes": 64,
+          "ordering": "When purpose precedes file, file must be the last part and all expiry fields must precede it. When file precedes purpose, expiry fields may precede or follow the file; trailing purpose/expiry fields are read before the provisional upload is committed, moved or discarded.",
+          "expiry": "anchor=created_at and seconds must appear together; seconds in 3600..2592000",
+          "file_content_rules": {
+            "non_empty": true,
+            "sniff_bytes": 4096,
+            "batch": {
+              "strip_leading_utf8_bom": true,
+              "whitespace": "ASCII",
+              "first_non_whitespace_byte": "{",
+              "reject_nul_in_head": true
+            },
+            "vision": {
+              "signatures": [
+                "PNG",
+                "JPEG",
+                "GIF87a",
+                "GIF89a",
+                "RIFF/WEBP"
+              ]
+            },
+            "other_purposes": "Opaque nonempty bytes; no content signature required."
+          }
+        },
+        "x-omg-limits": {
+          "file_bytes": {
+            "default": 209715200,
+            "env": "GATEWAY_FILES_MAX_BYTES"
+          },
+          "form_overhead_bytes": 65536
+        },
+        "x-omg-refusals": [
+          {
+            "status": 503,
+            "envelope": "FileErrorEnvelope",
+            "code": "file_storage_not_configured",
+            "trigger": "Encrypted file storage is off"
+          },
+          {
+            "status": 400,
+            "envelope": "FileErrorEnvelope",
+            "code": "unsupported_capability",
+            "trigger": "Unsupported upload purpose"
+          },
+          {
+            "status": 403,
+            "envelope": "FileErrorEnvelope",
+            "code": "file_purpose_disabled",
+            "trigger": "Purpose disabled by platform"
+          },
+          {
+            "status": 413,
+            "envelope": "FileErrorEnvelope",
+            "code": "file_too_large",
+            "trigger": "File exceeds configured cap"
+          },
+          {
+            "status": 413,
+            "envelope": "FileErrorEnvelope",
+            "code": "storage_quota_exceeded",
+            "trigger": "Workspace storage quota exceeded"
+          },
+          {
+            "status": 400,
+            "envelope": "FileErrorEnvelope",
+            "code": "invalid_request_error",
+            "trigger": "Unknown/duplicate form fields, malformed multipart or bad expiry. Empty file, batch head not beginning with { after optional BOM/ASCII whitespace or containing NUL in its first 4096 bytes, or unrecognized vision signature are refused with param=file. A trailing part after file when purpose preceded file is malformed multipart (param=null when the preceding fields were valid)."
+          }
+        ]
+      }
+    },
+    "GET /v1/files/{id}": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {
+        "responses": {
+          "200": {
+            "description": "Successful representation; usage is observed only.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_v1_files_by_idResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Files API error; param identifies the field, or is null.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/OpenAiUnauthorized"
+          },
+          "404": {
+            "description": "Files API error; param identifies the field, or is null.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FileErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "const": "length limit exceeded"
+                }
+              }
+            },
+            "description": "Body layer plain-text 413 or Files upload quota/size JSON error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            }
+          },
+          "503": {
+            "description": "Files API error; param identifies the field, or is null.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FileErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Files API error; param identifies the field, or is null.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Files are inference-key scoped; foreign or hidden ids are indistinguishable from missing objects. The route body cap also rejects declared Content-Length on GET with plain text 413. /v1/files uses the upload cap; id/content routes use 2 MiB.",
+        "x-omg-error-codes": [
+          "file_storage_not_configured",
+          "file_purpose_disabled",
+          "invalid_request_error",
+          "unsupported_capability",
+          "file_too_large",
+          "storage_quota_exceeded",
+          "file_storage_unavailable",
+          "not_found",
+          "file_not_owned"
+        ],
+        "x-omg-refusals": [
+          {
+            "status": 503,
+            "envelope": "FileErrorEnvelope",
+            "code": "file_storage_not_configured",
+            "trigger": "Encrypted file storage is off"
+          },
+          {
+            "status": 404,
+            "envelope": "FileErrorEnvelope",
+            "code": "not_found",
+            "trigger": "Missing, malformed, foreign or hidden object id"
+          }
+        ]
+      }
+    },
+    "DELETE /v1/files/{id}": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {
+        "responses": {
+          "200": {
+            "description": "Successful representation; usage is observed only.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/delete_v1_files_by_idResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Files API error; param identifies the field, or is null.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/OpenAiUnauthorized"
+          },
+          "404": {
+            "description": "Files API error; param identifies the field, or is null.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FileErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "const": "length limit exceeded"
+                }
+              }
+            },
+            "description": "Body layer plain-text 413 or Files upload quota/size JSON error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            }
+          },
+          "503": {
+            "description": "Files API error; param identifies the field, or is null.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FileErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Files API error; param identifies the field, or is null.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Files are inference-key scoped; foreign or hidden ids are indistinguishable from missing objects. The route body cap also rejects declared Content-Length on GET with plain text 413. /v1/files uses the upload cap; id/content routes use 2 MiB.",
+        "x-omg-error-codes": [
+          "file_storage_not_configured",
+          "file_purpose_disabled",
+          "invalid_request_error",
+          "unsupported_capability",
+          "file_too_large",
+          "storage_quota_exceeded",
+          "file_storage_unavailable",
+          "not_found",
+          "file_not_owned"
+        ],
+        "x-omg-refusals": [
+          {
+            "status": 503,
+            "envelope": "FileErrorEnvelope",
+            "code": "file_storage_not_configured",
+            "trigger": "Encrypted file storage is off"
+          },
+          {
+            "status": 404,
+            "envelope": "FileErrorEnvelope",
+            "code": "not_found",
+            "trigger": "Missing, malformed, foreign or hidden object id"
+          }
+        ]
+      }
+    },
+    "GET /v1/files/{id}/content": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {
+        "responses": {
+          "200": {
+            "description": "Successful representation; usage is observed only.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              },
+              "content-length": {
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+$"
+                }
+              },
+              "content-disposition": {
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-content-type-options": {
+                "required": true,
+                "schema": {
+                  "const": "nosniff"
+                }
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary",
+                  "contentMediaType": "application/octet-stream"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Files API error; param identifies the field, or is null.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/OpenAiUnauthorized"
+          },
+          "404": {
+            "description": "Files API error; param identifies the field, or is null.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FileErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "const": "length limit exceeded"
+                }
+              }
+            },
+            "description": "Body layer plain-text 413 or Files upload quota/size JSON error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            }
+          },
+          "503": {
+            "description": "Files API error; param identifies the field, or is null.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FileErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Files API error; param identifies the field, or is null.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Files are inference-key scoped; foreign or hidden ids are indistinguishable from missing objects. The route body cap also rejects declared Content-Length on GET with plain text 413. /v1/files uses the upload cap; id/content routes use 2 MiB.",
+        "x-omg-binary-stream": {
+          "late_error": "truncated",
+          "positive_requires": "clean transport EOF"
+        },
+        "x-omg-error-codes": [
+          "file_storage_not_configured",
+          "file_purpose_disabled",
+          "invalid_request_error",
+          "unsupported_capability",
+          "file_too_large",
+          "storage_quota_exceeded",
+          "file_storage_unavailable",
+          "not_found",
+          "file_not_owned"
+        ],
+        "x-omg-refusals": [
+          {
+            "status": 503,
+            "envelope": "FileErrorEnvelope",
+            "code": "file_storage_not_configured",
+            "trigger": "Encrypted file storage is off"
+          },
+          {
+            "status": 404,
+            "envelope": "FileErrorEnvelope",
+            "code": "not_found",
+            "trigger": "Missing, malformed, foreign or hidden object id"
+          }
+        ]
+      }
+    },
+    "GET /v1/batches": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {
+        "responses": {
+          "200": {
+            "description": "Successful representation; usage is observed only.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_v1_batchesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Job or inference error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/OpenAiUnauthorized"
+          },
+          "404": {
+            "description": "Job or inference error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/OpenAiPayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/OpenAiTooManyRequests"
+          },
+          "502": {
+            "$ref": "#/components/responses/OpenAiBadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/OpenAiUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/OpenAiGatewayTimeout"
+          },
+          "529": {
+            "$ref": "#/components/responses/OpenAiOverloaded"
+          },
+          "403": {
+            "description": "Job or inference error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Inference key scoped objects; foreign or hidden ids are indistinguishable from missing objects. Declared Content-Length over 2 MiB is rejected by the route body-limit layer even on GET (plain text 413).",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "in": "query",
+            "name": "order",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "desc"
+              ],
+              "default": "desc"
+            }
+          }
+        ],
+        "x-omg-refusals": [
+          {
+            "status": 404,
+            "envelope": "JobErrorEnvelope",
+            "code": "not_found",
+            "trigger": "Missing, malformed, foreign or hidden object id"
+          }
+        ]
+      }
+    },
+    "POST /v1/batches": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {
+        "responses": {
+          "200": {
+            "description": "Successful representation; usage is observed only.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_v1_batchesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Job or inference error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/BatchInvalidInput"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/OpenAiUnauthorized"
+          },
+          "404": {
+            "description": "Job or inference error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/OpenAiPayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/OpenAiTooManyRequests"
+          },
+          "502": {
+            "$ref": "#/components/responses/OpenAiBadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/OpenAiUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/OpenAiGatewayTimeout"
+          },
+          "529": {
+            "$ref": "#/components/responses/OpenAiOverloaded"
+          },
+          "403": {
+            "description": "Job or inference error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_v1_batchesRequest"
+              }
+            }
+          }
+        },
+        "description": "Inference key scoped objects; foreign or hidden ids are indistinguishable from missing objects. Declared Content-Length over 2 MiB is rejected by the route body-limit layer even on GET (plain text 413).",
+        "x-omg-refusals": [
+          {
+            "status": 404,
+            "envelope": "JobErrorEnvelope",
+            "code": "not_found",
+            "trigger": "Missing, malformed, foreign or hidden object id"
+          },
+          {
+            "status": 400,
+            "envelope": "OpenAiErrorEnvelope",
+            "code": "unsupported_capability",
+            "trigger": "Endpoint outside the four allowed, or output_expires_after non-null"
+          },
+          {
+            "status": 400,
+            "envelope": "BatchInvalidInput",
+            "code": "invalid_batch_input",
+            "trigger": "Input file line validation failed; inspect errors.data (at most 20 1-based line reports)"
+          },
+          {
+            "status": 400,
+            "envelope": "JobErrorEnvelope",
+            "code": "invalid_metadata",
+            "trigger": "Metadata exceeds 16 pairs, has empty/over-64-byte keys or non-string/over-512-byte values, or invalid omg_mode/omg_retries values."
+          },
+          {
+            "status": 400,
+            "envelope": "JobErrorEnvelope",
+            "code": "batch_files_disabled",
+            "trigger": "Batch file storage is disabled by installation policy."
+          }
+        ],
+        "x-omg-limits": {
+          "batch_file_bytes": {
+            "default": 209715200,
+            "env": "GATEWAY_MAX_BATCH_FILE_BYTES"
+          },
+          "output_scan_bytes": {
+            "default": 1073741824,
+            "env": "GATEWAY_BATCH_MAX_OUTPUT_SCAN_BYTES"
+          }
+        }
+      }
+    },
+    "GET /v1/batches/{id}": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {
+        "responses": {
+          "200": {
+            "description": "Successful representation; usage is observed only.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_v1_batches_by_idResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Job or inference error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/OpenAiUnauthorized"
+          },
+          "404": {
+            "description": "Job or inference error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/OpenAiPayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/OpenAiTooManyRequests"
+          },
+          "502": {
+            "$ref": "#/components/responses/OpenAiBadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/OpenAiUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/OpenAiGatewayTimeout"
+          },
+          "529": {
+            "$ref": "#/components/responses/OpenAiOverloaded"
+          },
+          "403": {
+            "description": "Job or inference error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Inference key scoped objects; foreign or hidden ids are indistinguishable from missing objects. Declared Content-Length over 2 MiB is rejected by the route body-limit layer even on GET (plain text 413).",
+        "x-omg-refusals": [
+          {
+            "status": 404,
+            "envelope": "JobErrorEnvelope",
+            "code": "not_found",
+            "trigger": "Missing, malformed, foreign or hidden object id"
+          }
+        ]
+      }
+    },
+    "POST /v1/batches/{id}/cancel": {
+      "access": "InferenceKey",
+      "token_policy": "Denied",
+      "scope": null,
+      "operation": {
+        "responses": {
+          "200": {
+            "description": "Successful representation; usage is observed only.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_v1_batches_by_id_cancelResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Job or inference error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/OpenAiUnauthorized"
+          },
+          "404": {
+            "description": "Job or inference error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/OpenAiPayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/OpenAiTooManyRequests"
+          },
+          "502": {
+            "$ref": "#/components/responses/OpenAiBadGateway"
+          },
+          "503": {
+            "$ref": "#/components/responses/OpenAiUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/OpenAiGatewayTimeout"
+          },
+          "529": {
+            "$ref": "#/components/responses/OpenAiOverloaded"
+          },
+          "403": {
+            "description": "Job or inference error.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/JobErrorEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OpenAiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Inference key scoped objects; foreign or hidden ids are indistinguishable from missing objects. Declared Content-Length over 2 MiB is rejected by the route body-limit layer even on GET (plain text 413).",
+        "x-omg-refusals": [
+          {
+            "status": 404,
+            "envelope": "JobErrorEnvelope",
+            "code": "not_found",
+            "trigger": "Missing, malformed, foreign or hidden object id"
+          },
+          {
+            "status": 403,
+            "envelope": "JobErrorEnvelope",
+            "code": "batch_not_owned",
+            "trigger": "Caller is neither the creator, a workspace admin nor a service key."
+          },
+          {
+            "status": 400,
+            "envelope": "JobErrorEnvelope",
+            "code": "batch_not_cancellable",
+            "trigger": "The batch is already in a terminal state."
+          }
+        ]
+      }
+    }
+  },
+  "schemas": {
+    "FileObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^file-[0-9a-f]{32}$"
+        },
+        "object": {
+          "const": "file"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "created_at": {
+          "type": "integer"
+        },
+        "expires_at": {
+          "type": "integer",
+          "description": "Effective expiry includes the mandatory purpose retention policy."
+        },
+        "filename": {
+          "type": "string"
+        },
+        "purpose": {
+          "type": "string",
+          "enum": [
+            "batch",
+            "batch_output",
+            "user_data",
+            "vision",
+            "assistants",
+            "evals"
+          ]
+        },
+        "status": {
+          "const": "processed"
+        },
+        "status_details": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "object",
+        "bytes",
+        "created_at",
+        "expires_at",
+        "filename",
+        "purpose",
+        "status",
+        "status_details"
+      ]
+    },
+    "VideoObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^video_[0-9a-f]{32}$"
+        },
+        "object": {
+          "const": "video"
+        },
+        "model": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "queued",
+            "in_progress",
+            "completed",
+            "failed",
+            "cancelled",
+            "expired"
+          ]
+        },
+        "progress": {
+          "type": "integer"
+        },
+        "created_at": {
+          "type": "integer"
+        },
+        "completed_at": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "seconds": {
+          "type": "string",
+          "description": "The database video-kind CHECK requires both fields to be non-null, including legacy rows."
+        },
+        "size": {
+          "type": "string",
+          "description": "The database video-kind CHECK requires both fields to be non-null, including legacy rows."
+        },
+        "remixed_from_video_id": {
+          "type": "null"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "object",
+        "model",
+        "status",
+        "progress",
+        "created_at",
+        "completed_at",
+        "expires_at",
+        "seconds",
+        "size",
+        "remixed_from_video_id",
+        "error"
+      ]
+    },
+    "BatchObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^batch_[0-9a-f]{32}$"
+        },
+        "object": {
+          "const": "batch"
+        },
+        "endpoint": {
+          "type": "string",
+          "enum": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/embeddings",
+            "/v1/messages"
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "errors": {
+          "type": "null"
+        },
+        "input_file_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^file-[0-9a-f]{32}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "completion_window": {
+          "type": "string",
+          "enum": [
+            "24h",
+            "48h",
+            "72h",
+            "168h"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "validating",
+            "in_progress",
+            "finalizing",
+            "completed",
+            "failed",
+            "expired",
+            "cancelling",
+            "cancelled"
+          ]
+        },
+        "output_file_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^file-[0-9a-f]{32}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error_file_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^file-[0-9a-f]{32}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "created_at": {
+          "type": "integer"
+        },
+        "in_progress_at": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expires_at": {
+          "type": "integer",
+          "description": "Stored expiry or the created-at plus completion-window fallback; never null."
+        },
+        "finalizing_at": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "completed_at": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "failed_at": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expired_at": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cancelling_at": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cancelled_at": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_counts": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "total": {
+                  "type": "integer"
+                },
+                "completed": {
+                  "type": "integer"
+                },
+                "failed": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "total",
+                "completed",
+                "failed"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "metadata": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "object",
+        "endpoint",
+        "model",
+        "errors",
+        "input_file_id",
+        "completion_window",
+        "status",
+        "output_file_id",
+        "error_file_id",
+        "created_at",
+        "in_progress_at",
+        "expires_at",
+        "finalizing_at",
+        "completed_at",
+        "failed_at",
+        "expired_at",
+        "cancelling_at",
+        "cancelled_at",
+        "request_counts",
+        "metadata"
+      ]
+    },
+    "BatchInvalidInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "const": "invalid_request_error"
+            },
+            "code": {
+              "const": "invalid_batch_input"
+            },
+            "param": {
+              "const": "input_file_id"
+            }
+          },
+          "required": [
+            "message",
+            "type",
+            "code",
+            "param"
+          ]
+        },
+        "errors": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "object": {
+              "const": "list"
+            },
+            "data": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "enum": [
+                      "invalid_json",
+                      "invalid_line",
+                      "invalid_custom_id",
+                      "duplicate_custom_id",
+                      "invalid_method",
+                      "invalid_url",
+                      "invalid_body",
+                      "unsupported_feature",
+                      "model_not_found",
+                      "model_unsupported",
+                      "model_not_priced",
+                      "max_tokens_too_large",
+                      "line_too_large",
+                      "too_many_lines",
+                      "empty_file"
+                    ]
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "line": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "param": {
+                    "type": "null"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "line",
+                  "param"
+                ]
+              }
+            }
+          },
+          "required": [
+            "object",
+            "data"
+          ]
+        }
+      },
+      "required": [
+        "error",
+        "errors"
+      ]
+    },
+    "get_v1_videosRequest": {
+      "type": "null",
+      "description": "No request body is read."
+    },
+    "get_v1_videosResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "object": {
+          "const": "list"
+        },
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/VideoObject"
+          }
+        },
+        "first_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "has_more": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "object",
+        "data",
+        "first_id",
+        "last_id",
+        "has_more"
+      ]
+    },
+    "post_v1_videosRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "model": {
+              "type": "string",
+              "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+              "maxLength": 200,
+              "x-omg-max-bytes": 200,
+              "description": "Public video model name: nonblank and at most 200 UTF-8 bytes (jobs/types.rs VideoRequest::validate). With the current provider registry, validated creation returns 400 unsupported_capability before any model lookup."
+            },
+            "prompt": {
+              "type": "string",
+              "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+              "maxLength": 32768,
+              "x-omg-max-bytes": 32768
+            },
+            "seconds": {
+              "anyOf": [
+                {
+                  "oneOf": [
+                    {
+                      "type": "integer",
+                      "enum": [
+                        4,
+                        8,
+                        12
+                      ]
+                    },
+                    {
+                      "type": "string",
+                      "enum": [
+                        "4",
+                        "8",
+                        "12"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "size": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "720x1280",
+                    "1280x720",
+                    "1024x1792",
+                    "1792x1024"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "input_reference": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "model",
+            "prompt"
+          ]
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string",
+              "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+              "maxLength": 200,
+              "x-omg-max-bytes": 200,
+              "description": "Public video model name: nonblank and at most 200 UTF-8 bytes (jobs/types.rs VideoRequest::validate). With the current provider registry, validated creation returns 400 unsupported_capability before any model lookup."
+            },
+            {
+              "type": "string",
+              "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]",
+              "maxLength": 32768,
+              "x-omg-max-bytes": 32768
+            },
+            {
+              "anyOf": [
+                {
+                  "oneOf": [
+                    {
+                      "type": "integer",
+                      "enum": [
+                        4,
+                        8,
+                        12
+                      ]
+                    },
+                    {
+                      "type": "string",
+                      "enum": [
+                        "4",
+                        "8",
+                        "12"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "720x1280",
+                    "1280x720",
+                    "1024x1792",
+                    "1792x1024"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "minItems": 5,
+          "maxItems": 5,
+          "items": false
+        }
+      ]
+    },
+    "post_v1_videosResponse": {
+      "type": "null",
+      "description": "No successful video create representation; legacy read operations remain available."
+    },
+    "get_v1_videos_by_idRequest": {
+      "type": "null",
+      "description": "No request body is read."
+    },
+    "get_v1_videos_by_idResponse": {
+      "$ref": "#/components/schemas/VideoObject"
+    },
+    "delete_v1_videos_by_idRequest": {
+      "type": "null",
+      "description": "No request body is read."
+    },
+    "delete_v1_videos_by_idResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "object": {
+          "const": "video.deleted"
+        },
+        "deleted": {
+          "const": true
+        }
+      },
+      "required": [
+        "id",
+        "object",
+        "deleted"
+      ]
+    },
+    "get_v1_videos_by_id_contentRequest": {
+      "type": "null",
+      "description": "No request body is read."
+    },
+    "get_v1_videos_by_id_contentResponse": {
+      "type": "string",
+      "format": "binary",
+      "contentMediaType": "application/octet-stream"
+    },
+    "get_v1_filesRequest": {
+      "type": "null",
+      "description": "No request body is read."
+    },
+    "get_v1_filesResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "object": {
+          "const": "list"
+        },
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/FileObject"
+          }
+        },
+        "first_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "has_more": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "object",
+        "data",
+        "first_id",
+        "last_id",
+        "has_more"
+      ]
+    },
+    "post_v1_filesRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "purpose": {
+          "type": "string",
+          "enum": [
+            "batch",
+            "user_data",
+            "vision",
+            "assistants",
+            "evals"
+          ]
+        },
+        "file": {
+          "type": "string",
+          "format": "binary",
+          "minLength": 1,
+          "description": "One nonempty binary file part. For batch, inspect only the first 4096 bytes: strip an optional leading UTF-8 BOM, require the first non-ASCII-whitespace byte to be {, and reject NUL in that head. Vision requires PNG, JPEG, GIF87a/GIF89a or RIFF/WEBP signatures; this is header sniffing, not full image decoding. Other accepted purposes store opaque nonempty bytes. Full batch-line validation occurs at Batch creation."
+        },
+        "expires_after[anchor]": {
+          "const": "created_at"
+        },
+        "expires_after[seconds]": {
+          "type": "string",
+          "description": "Integer seconds in 3600..2592000; both expiry fields required together."
+        }
+      },
+      "required": [
+        "purpose",
+        "file"
+      ]
+    },
+    "post_v1_filesResponse": {
+      "$ref": "#/components/schemas/FileObject"
+    },
+    "get_v1_files_by_idRequest": {
+      "type": "null",
+      "description": "No request body is read."
+    },
+    "get_v1_files_by_idResponse": {
+      "$ref": "#/components/schemas/FileObject"
+    },
+    "delete_v1_files_by_idRequest": {
+      "type": "null",
+      "description": "No request body is read."
+    },
+    "delete_v1_files_by_idResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "object": {
+          "const": "file"
+        },
+        "deleted": {
+          "const": true
+        }
+      },
+      "required": [
+        "id",
+        "object",
+        "deleted"
+      ]
+    },
+    "get_v1_files_by_id_contentRequest": {
+      "type": "null",
+      "description": "No request body is read."
+    },
+    "get_v1_files_by_id_contentResponse": {
+      "type": "string",
+      "format": "binary",
+      "contentMediaType": "application/octet-stream"
+    },
+    "get_v1_batchesRequest": {
+      "type": "null",
+      "description": "No request body is read."
+    },
+    "get_v1_batchesResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "object": {
+          "const": "list"
+        },
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/BatchObject"
+          }
+        },
+        "first_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "has_more": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "object",
+        "data",
+        "first_id",
+        "last_id",
+        "has_more"
+      ]
+    },
+    "post_v1_batchesRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "input_file_id": {
+              "type": "string",
+              "description": "Gateway file id. Malformed, missing, foreign and hidden ids all produce 404, not input-validation 400."
+            },
+            "endpoint": {
+              "type": "string",
+              "enum": [
+                "/v1/chat/completions",
+                "/v1/responses",
+                "/v1/embeddings",
+                "/v1/messages"
+              ]
+            },
+            "completion_window": {
+              "type": "string",
+              "enum": [
+                "24h",
+                "48h",
+                "72h",
+                "168h"
+              ]
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "maxLength": 512,
+                    "x-omg-max-bytes": 512
+                  },
+                  "$comment": "Batch metadata is a caller-keyed map of at most 16 strings; omg_mode and omg_retries have further rules.",
+                  "description": "At most 16 entries, nonempty keys <=64 UTF-8 bytes, string values <=512 bytes; omg_mode auto|gateway; omg_retries 0|1|2. Map cardinality/key constraints require handler validation, as for System One maps.",
+                  "properties": {
+                    "omg_mode": {
+                      "type": "string",
+                      "enum": [
+                        "auto",
+                        "gateway"
+                      ]
+                    },
+                    "omg_retries": {
+                      "type": "string",
+                      "enum": [
+                        "0",
+                        "1",
+                        "2"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "output_expires_after": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "input_file_id",
+            "endpoint",
+            "completion_window"
+          ]
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string",
+              "description": "Gateway file id. Malformed, missing, foreign and hidden ids all produce 404, not input-validation 400."
+            },
+            {
+              "type": "string",
+              "enum": [
+                "/v1/chat/completions",
+                "/v1/responses",
+                "/v1/embeddings",
+                "/v1/messages"
+              ]
+            },
+            {
+              "type": "string",
+              "enum": [
+                "24h",
+                "48h",
+                "72h",
+                "168h"
+              ]
+            },
+            {
+              "$ref": "#/components/schemas/post_v1_batchesRequest/oneOf/0/properties/metadata"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "minItems": 5,
+          "maxItems": 5,
+          "items": false
+        }
+      ]
+    },
+    "post_v1_batchesResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^batch_[0-9a-f]{32}$"
+        },
+        "object": {
+          "const": "batch"
+        },
+        "endpoint": {
+          "type": "string",
+          "enum": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/embeddings",
+            "/v1/messages"
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "errors": {
+          "type": "null"
+        },
+        "input_file_id": {
+          "type": "string",
+          "pattern": "^file-[0-9a-f]{32}$"
+        },
+        "completion_window": {
+          "type": "string",
+          "enum": [
+            "24h",
+            "48h",
+            "72h",
+            "168h"
+          ]
+        },
+        "status": {
+          "const": "validating"
+        },
+        "output_file_id": {
+          "type": "null"
+        },
+        "error_file_id": {
+          "type": "null"
+        },
+        "created_at": {
+          "type": "integer"
+        },
+        "in_progress_at": {
+          "type": "null"
+        },
+        "expires_at": {
+          "type": "integer",
+          "description": "Stored expiry or the created-at plus completion-window fallback; never null."
+        },
+        "finalizing_at": {
+          "type": "null"
+        },
+        "completed_at": {
+          "type": "null"
+        },
+        "failed_at": {
+          "type": "null"
+        },
+        "expired_at": {
+          "type": "null"
+        },
+        "cancelling_at": {
+          "type": "null"
+        },
+        "cancelled_at": {
+          "type": "null"
+        },
+        "request_counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "total": {
+              "type": "integer"
+            },
+            "completed": {
+              "type": "integer"
+            },
+            "failed": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "total",
+            "completed",
+            "failed"
+          ]
+        },
+        "metadata": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "object",
+        "endpoint",
+        "model",
+        "errors",
+        "input_file_id",
+        "completion_window",
+        "status",
+        "output_file_id",
+        "error_file_id",
+        "created_at",
+        "in_progress_at",
+        "expires_at",
+        "finalizing_at",
+        "completed_at",
+        "failed_at",
+        "expired_at",
+        "cancelling_at",
+        "cancelled_at",
+        "request_counts",
+        "metadata"
+      ]
+    },
+    "get_v1_batches_by_idRequest": {
+      "type": "null",
+      "description": "No request body is read."
+    },
+    "get_v1_batches_by_idResponse": {
+      "$ref": "#/components/schemas/BatchObject"
+    },
+    "post_v1_batches_by_id_cancelRequest": {
+      "type": "null",
+      "description": "No request body is read."
+    },
+    "post_v1_batches_by_id_cancelResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^batch_[0-9a-f]{32}$"
+        },
+        "object": {
+          "const": "batch"
+        },
+        "endpoint": {
+          "type": "string",
+          "enum": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/embeddings",
+            "/v1/messages"
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "errors": {
+          "type": "null"
+        },
+        "input_file_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^file-[0-9a-f]{32}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "completion_window": {
+          "type": "string",
+          "enum": [
+            "24h",
+            "48h",
+            "72h",
+            "168h"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "validating",
+            "in_progress",
+            "finalizing",
+            "completed",
+            "failed",
+            "expired",
+            "cancelling",
+            "cancelled"
+          ]
+        },
+        "output_file_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^file-[0-9a-f]{32}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error_file_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^file-[0-9a-f]{32}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "created_at": {
+          "type": "integer"
+        },
+        "in_progress_at": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expires_at": {
+          "type": "integer",
+          "description": "Stored expiry or the created-at plus completion-window fallback; never null."
+        },
+        "finalizing_at": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "completed_at": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "failed_at": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expired_at": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cancelling_at": {
+          "type": "integer",
+          "description": "Successful cancellation always records cancel_requested_at, including already-submitted legacy jobs."
+        },
+        "cancelled_at": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_counts": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "total": {
+                  "type": "integer"
+                },
+                "completed": {
+                  "type": "integer"
+                },
+                "failed": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "total",
+                "completed",
+                "failed"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "metadata": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "object",
+        "endpoint",
+        "model",
+        "errors",
+        "input_file_id",
+        "completion_window",
+        "status",
+        "output_file_id",
+        "error_file_id",
+        "created_at",
+        "in_progress_at",
+        "expires_at",
+        "finalizing_at",
+        "completed_at",
+        "failed_at",
+        "expired_at",
+        "cancelling_at",
+        "cancelled_at",
+        "request_counts",
+        "metadata"
+      ]
+    }
+  }
+}

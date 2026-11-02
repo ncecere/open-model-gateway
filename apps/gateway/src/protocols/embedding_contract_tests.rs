@@ -416,3 +416,50 @@ async fn invalid_results_keep_observed_usage_and_holds(
     assert_eq!(row, (None, "unknown".into(), None));
     *response_override.lock().unwrap() = None;
 }
+
+/// No Content-Length: exercise the handler's JSON rejection, not the outer
+/// declared-length body limit. The real gateway authenticates before parsing.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn embeddings_streamed_oversized_body_uses_shared_envelope(pool: sqlx::PgPool) {
+    let store = Store::new(pool);
+    let keys = bootstrap::seed(&store, Environment::Development)
+        .await
+        .unwrap()
+        .unwrap();
+    let engine = Engine::new(
+        Arc::new(store.clone()),
+        ProviderRegistry::default(),
+        EngineLimits::default(),
+    )
+    .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = http::router_with_engine(store, None, engine);
+    let _gateway = Server(tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    }));
+    let chunk = Bytes::from(vec![b' '; 1 << 20]);
+    let chunks: Vec<Result<Bytes, std::io::Error>> = (0..3).map(|_| Ok(chunk.clone())).collect();
+    let request = reqwest::Client::new()
+        .post(format!("http://{address}/v1/embeddings"))
+        .bearer_auth(&keys.personal_key.token)
+        .header("content-type", "application/json")
+        .body(reqwest::Body::wrap_stream(futures_util::stream::iter(
+            chunks,
+        )))
+        .build()
+        .unwrap();
+    assert!(request.headers().get("content-length").is_none());
+    let response = reqwest::Client::new().execute(request).await.unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::PAYLOAD_TOO_LARGE);
+    let body: Value = response.json().await.unwrap();
+    assert!(
+        body == json!({"error": {
+            "message": "Request body too large",
+            "type": "invalid_request_error",
+            "code": "payload_too_large",
+            "param": null
+        }}),
+        "streamed embeddings 413 must use the shared error envelope"
+    );
+}

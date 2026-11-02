@@ -136,6 +136,11 @@ pub(crate) fn validator(
     document: &Value,
     schema: &Value,
 ) -> Result<std::sync::Arc<jsonschema::Validator>> {
+    // Additive #82 routing: inference owns its own bounded cache. Never mix
+    // identically spelled refs from the two contracts in management's cache.
+    if std::ptr::eq(document, crate::inference_openapi::committed_artifact()) {
+        return crate::inference_openapi::cached_validator(document, schema);
+    }
     fn compile(document: &Value, schema: &Value) -> Result<std::sync::Arc<jsonschema::Validator>> {
         let mut root = document.clone();
         root["$defs"] = json!({"observed":schema});
@@ -633,7 +638,10 @@ fn positive(response: &Value, status: StatusCode, headers: &HeaderMap, bytes: &[
                 })
             })
         });
-    permitted && cookie
+    let upgrade = status == StatusCode::SWITCHING_PROTOCOLS
+        && bytes.is_empty()
+        && response["x-omg-positive-kind"] == "websocket";
+    (permitted || upgrade) && cookie
 }
 
 fn json_media(headers: &HeaderMap) -> bool {
@@ -741,7 +749,7 @@ impl PositiveFixtures {
     }
     /// The unsendable-boundary use of one body vector run; runs of one operation
     /// accumulate (a reason any run needed is used).
-    pub(super) fn record_unsendable(
+    pub(crate) fn record_unsendable(
         &mut self,
         method: &str,
         template: &str,

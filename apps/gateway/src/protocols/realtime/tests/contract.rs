@@ -1111,3 +1111,127 @@ async fn an_oversized_fragmented_message_cancels_an_in_flight_session_and_keeps_
 ) {
     cap_closes_an_in_flight_session(pool, Trip::Fragments).await;
 }
+
+/// Shared with the inference contract; all traffic uses the existing local
+/// gateway + mock upstream fixture, never a paid provider.
+pub(crate) async fn inference_openapi_handshake_fixtures(
+    pool: PgPool,
+    fixtures: &mut crate::inference_openapi::responses::Fixtures,
+) {
+    use crate::inference_openapi::responses::{capture, probe};
+    let g = gateway(
+        pool,
+        Init::Safe,
+        vec![],
+        RealtimeLimits {
+            idle: Duration::from_secs(5),
+            max_message_bytes: 1024,
+            ..limits()
+        },
+    )
+    .await;
+    let send = async |query: String| {
+        let mut request = format!("ws://{}/v1/realtime{query}", g.addr)
+            .into_client_request()
+            .unwrap();
+        request.headers_mut().insert(
+            "authorization",
+            format!("Bearer {}", g.key()).parse().unwrap(),
+        );
+        request
+            .headers_mut()
+            .insert("sec-websocket-protocol", "realtime".parse().unwrap());
+        let response = match connect_async(request).await {
+            Ok((mut socket, response)) => {
+                let _ = socket.close(None).await;
+                response
+            }
+            Err(tungstenite::Error::Http(response)) => *response,
+            Err(_) => panic!("realtime fixture transport failed"),
+        };
+        capture(
+            "GET",
+            &format!("/v1/realtime{query}"),
+            response.map(|body| axum::body::Body::from(body.unwrap_or_default())),
+        )
+        .await
+    };
+    let c = send("?model=company%2Fsmart".into()).await;
+    assert_eq!(c.status.as_u16(), 101, "real upgrade status");
+    fixtures.observe(&c);
+    // Browser authentication alternative: the inference key is offered only
+    // in the key subprotocol, never alongside a Bearer header or upstream.
+    let mut request = g.request("company/smart");
+    request.headers_mut().insert(
+        "sec-websocket-protocol",
+        format!("realtime, openai-insecure-api-key.{}", g.key())
+            .parse()
+            .unwrap(),
+    );
+    let (mut socket, response) = match connect_async(request).await {
+        Ok(exchange) => exchange,
+        Err(_) => panic!("key-subprotocol fixture handshake failed"),
+    };
+    let _ = socket.close(None).await;
+    let c = capture(
+        "GET",
+        "/v1/realtime?model=company%2Fsmart",
+        response.map(|body| axum::body::Body::from(body.unwrap_or_default())),
+    )
+    .await;
+    assert_eq!(c.status.as_u16(), 101, "key-subprotocol upgrade status");
+    fixtures.observe(&c);
+    fixtures
+        .query_vectors(
+            "GET",
+            "/v1/realtime",
+            &[("model", "company/smart")],
+            async || ((), vec![("model".into(), "company/smart".into())]),
+            async |_, query| probe(send(query).await),
+        )
+        .await;
+    // These are WebSocket frames, not HTTP representations. Exercise two
+    // previously omitted codes on the real gateway and check the published
+    // extension rather than crediting frames as HTTP positive coverage.
+    let contract: Value = serde_json::from_slice(
+        &std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../docs/openapi/inference.openapi.json"),
+        )
+        .expect("inference artifact readable"),
+    )
+    .expect("inference artifact JSON kind");
+    let documented = &contract["paths"]["/v1/realtime"]["get"]["x-omg-websocket"]["close_codes"];
+    for (oversized, expected) in [(false, 1000u16), (true, 1009u16)] {
+        let mut client = g.connect().await;
+        if oversized {
+            client
+                .send(Message::Text("x".repeat(1025).into()))
+                .await
+                .expect("oversized fixture send failed");
+        }
+        let actual = tokio::time::timeout(Duration::from_secs(10), async {
+            while let Some(message) = client.next().await {
+                match message {
+                    Ok(Message::Close(Some(frame))) => return u16::from(frame.code),
+                    Ok(_) => {}
+                    Err(_) => panic!("close fixture transport failure"),
+                }
+            }
+            panic!("close fixture ended without close status");
+        })
+        .await
+        .expect("close fixture timed out");
+        assert_eq!(actual, expected, "realtime close trigger status");
+        assert!(
+            documented
+                .as_array()
+                .expect("close-code list kind")
+                .iter()
+                .any(|code| code.as_u64() == Some(u64::from(actual))),
+            "captured realtime close status is undocumented"
+        );
+    }
+    let _ = g.finished().await;
+    g.pool.close().await;
+}

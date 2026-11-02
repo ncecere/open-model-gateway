@@ -5,19 +5,24 @@
 //! Documentation: `docs/openapi/inference/README.md`.
 mod errors;
 mod errors_tests;
+mod generation;
 mod generator;
-mod responses;
+pub(crate) mod responses;
 mod wiring_tests;
 mod workload_tests;
 
 #[cfg(all(test, feature = "integration-tests"))]
 mod fixtures_tests;
 
+#[cfg(feature = "integration-tests")]
+#[path = "response_name_tests.rs"]
+mod response_name_tests;
+
 /// Reviewed open-JSON locations of the inference contract, in the format and
 /// with the semantics of `management_openapi::quality::ARBITRARY_JSON`: the
 /// exact pointer plus the exact `$comment` justification. Everything here is
-/// content the gateway deliberately does not model (System One forwards TypeSafe
-/// content parts verbatim) or a map whose KEYS are chosen by the caller.
+/// caller/provider content the gateway deliberately does not model (tool JSON,
+/// native Messages blocks, System One parts), or maps with caller-chosen keys.
 pub(crate) const OPEN_CONTENT: &str = "Open JSON by design: System One forwards content parts verbatim (TypeSafe), so the gateway fixes only the JSON kind here.";
 const QUESTIONS: &str = "Question keys are caller chosen names: 1 to 64 questions, each key 1 to 128 bytes without control characters. The key is never sent to the model.";
 const OPTIONS: &str = "Option keys are caller chosen: 2 to 255 options, each key 1 to 256 bytes without control characters, each value non-blank text or JSON (or null).";
@@ -27,6 +32,62 @@ const PROBABILITIES: &str = "Probability keys are the caller's option keys or sc
 const PROVIDER_LEGEND: &str = "Provider-controlled JSON: parse_answers (inference/workload_types.rs, Score) copies each legend value from the System One answer unvalidated (only the keys are checked against the level indices), so any JSON value, including null, a number or blank text, can be returned.";
 const LEGEND: &str = "Legend keys are the caller's score level indices.";
 pub(crate) const ARBITRARY_JSON: &[(&str, &str)] = &[
+    (
+        "/components/schemas/post_v1_batchesRequest/oneOf/0/properties/metadata/anyOf/0",
+        "Batch metadata is a caller-keyed map of at most 16 strings; omg_mode and omg_retries have further rules.",
+    ),
+    (
+        "/components/schemas/GenFunction/oneOf/0/properties/parameters",
+        "Function parameter schemas are caller-owned JSON Schema objects; the gateway checks only object kind and forwards their keys and nested JSON unchanged.",
+    ),
+    (
+        "/components/schemas/GenFunction/oneOf/1/prefixItems/2",
+        "Function parameter schemas are caller-owned JSON Schema objects; the gateway checks only object kind and forwards their keys and nested JSON unchanged.",
+    ),
+    (
+        "/components/schemas/GenResponseTool/oneOf/0/properties/parameters",
+        "Function parameter schemas are caller-owned JSON Schema objects; the gateway checks only object kind and forwards their keys and nested JSON unchanged.",
+    ),
+    (
+        "/components/schemas/GenResponseTool/oneOf/1/prefixItems/3",
+        "Function parameter schemas are caller-owned JSON Schema objects; the gateway checks only object kind and forwards their keys and nested JSON unchanged.",
+    ),
+    (
+        "/components/schemas/GenToolUseBlock/properties/input",
+        "Function tool inputs are caller-owned JSON objects; the gateway preserves their keys and arbitrary nested JSON as function arguments.",
+    ),
+    (
+        "/components/schemas/GenMessagesTool/properties/input_schema",
+        "Function parameter schemas are caller-owned JSON Schema objects; the gateway checks only object kind and forwards their keys and nested JSON unchanged.",
+    ),
+    (
+        "/components/schemas/post_v1_chat_completionsRequest/oneOf/0/properties/metadata/oneOf/0",
+        "OpenAI metadata keys are caller-chosen client labels (at most 16); keys are 1 to 64 characters, values at most 512 characters, and the map is never forwarded upstream.",
+    ),
+    (
+        "/components/schemas/post_v1_chat_completionsRequest/oneOf/1/prefixItems/11/oneOf/0",
+        "OpenAI metadata keys are caller-chosen client labels (at most 16); keys are 1 to 64 characters, values at most 512 characters, and the map is never forwarded upstream.",
+    ),
+    (
+        "/components/schemas/post_v1_responsesRequest/oneOf/0/properties/metadata/oneOf/0",
+        "OpenAI metadata keys are caller-chosen client labels (at most 16); keys are 1 to 64 characters, values at most 512 characters, and the map is never forwarded upstream.",
+    ),
+    (
+        "/components/schemas/post_v1_responsesRequest/oneOf/1/prefixItems/11/oneOf/0",
+        "OpenAI metadata keys are caller-chosen client labels (at most 16); keys are 1 to 64 characters, values at most 512 characters, and the map is never forwarded upstream.",
+    ),
+    (
+        "/components/schemas/post_v1_messagesResponse/properties/content/items",
+        "Native Anthropic content blocks are provider-controlled JSON objects: the Messages frontend preserves validated native blocks verbatim, including thinking/signatures and future native block fields, rather than projecting the translated text/tool subset.",
+    ),
+    (
+        "/components/schemas/GenMessagesEventContentBlockStart/properties/content_block",
+        "Native Anthropic content blocks are provider-controlled JSON objects: the Messages frontend preserves validated native blocks verbatim, including thinking/signatures and future native block fields, rather than projecting the translated text/tool subset.",
+    ),
+    (
+        "/components/schemas/GenMessagesEventContentBlockDelta/properties/delta",
+        "Native Anthropic block deltas are provider-controlled JSON objects: the Messages frontend preserves validated native delta payloads verbatim, including thinking and signature deltas.",
+    ),
     (
         "/components/schemas/post_v1_systemoneRequest/oneOf/0/properties/state/oneOf/1",
         OPEN_CONTENT,
@@ -150,7 +211,7 @@ mod tests {
             "review route additions and update this baseline"
         );
         assert_eq!(
-            placeholders, 40,
+            placeholders, 0,
             "review schema completion and update this progress baseline"
         );
     }
@@ -176,4 +237,34 @@ mod tests {
             );
         }
     }
+}
+
+#[path = "media_tests.rs"]
+mod media;
+
+#[path = "jobs_tests.rs"]
+mod jobs;
+
+#[path = "realtime_tests.rs"]
+mod realtime;
+pub(crate) mod sse;
+#[path = "sse_tests.rs"]
+mod sse_tests;
+
+#[path = "generation_tests.rs"]
+mod generation_tests;
+
+#[path = "generation_sdk_tests.rs"]
+mod generation_sdk_tests;
+
+/// Only the immutable committed artifact is cacheable; generated/mutated
+/// documents must always compile independently, as in the management harness.
+pub(crate) fn committed_artifact() -> &'static serde_json::Value {
+    responses::artifact()
+}
+pub(crate) fn cached_validator(
+    document: &serde_json::Value,
+    schema: &serde_json::Value,
+) -> anyhow::Result<std::sync::Arc<jsonschema::Validator>> {
+    responses::validator(document, schema)
 }
