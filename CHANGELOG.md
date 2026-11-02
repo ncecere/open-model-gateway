@@ -6,7 +6,23 @@ The project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). 
 
 ## [Unreleased]
 
-Changes after v0.9.0: [unreleased notes](docs/releases/unreleased.md).
+Changes after v0.10.0: [unreleased notes](docs/releases/unreleased.md).
+
+## [0.10.0]
+
+Drift-checked OpenAPI 3.1 contracts for the whole management API (#81, 251 operations) and the supported inference API (#82, 27 operations), validated against the real handlers, with a documented JSON integer-literal convention for request integers (#431). Client input that used to return a 5xx or an undocumented 409 now returns 400 or a recorded result: control characters in list searches, OIDC issuers, model/catalog descriptions and SCIM filters (#404, #427, #428, #414); email tests against disallowed relays (#411); multibyte settings URLs (#419); out-of-range list cursors (#409); incoherent manual cost reconciliation (#408); the embeddings streamed-body 413 envelope (#432). Report run reads use one clock per statement (#406). The provider-cost reconciliation dashboard (#48). **Migration `0068`** (schema now 0068), no runtime-grant changes. See [release and upgrade notes](docs/releases/v0.10.0.md).
+
+## [0.9.3]
+
+An opt-in CNPG synchronous durability policy (#391) and test-only accounting fault signatures. No migrations. Notes: [`docs/releases/v0.9.3.md`](docs/releases/v0.9.3.md).
+
+## [0.9.2]
+
+Operator privilege-probe fixture isolation and test-only native accounting diagnostics. No migrations. Notes: [`docs/releases/v0.9.2.md`](docs/releases/v0.9.2.md).
+
+## [0.9.1]
+
+A security and maintenance patch: refreshed runtime and CA trust store, image publication isolated from untrusted build inputs, dashboard navigation and accessibility fixes. No migrations. Notes: [`docs/releases/v0.9.1.md`](docs/releases/v0.9.1.md).
 
 ## [0.9.0]
 
@@ -66,7 +82,11 @@ Alerts, key safety, model compare, SCIM, JWKS refresh, metrics and backup toolin
 
 The single-enterprise rebuild: Team, Project and personal workspaces, OIDC platform roles, catalogs, multimodal workloads across five provider families, immutable micro-USD accounting, logs and Admin settings. Migrations `0001` to `0010`. Notes: [`docs/releases/v0.1.0.md`](docs/releases/v0.1.0.md).
 
-[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/ncecere/open-model-gateway/compare/v0.9.3...v0.10.0
+[0.9.3]: https://github.com/ncecere/open-model-gateway/compare/v0.9.2...v0.9.3
+[0.9.2]: https://github.com/ncecere/open-model-gateway/compare/v0.9.1...v0.9.2
+[0.9.1]: https://github.com/ncecere/open-model-gateway/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/ncecere/open-model-gateway/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/ncecere/open-model-gateway/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/ncecere/open-model-gateway/compare/v0.7.1...v0.7.2

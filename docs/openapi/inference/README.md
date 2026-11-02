@@ -1,6 +1,6 @@
 # Inference OpenAPI contract maintenance
 
-[inference.openapi.json](../inference.openapi.json) is the **incomplete inference contract** for #82: the documented `/v1/*` surface of the gateway. It is generated test-only from the compiled `route_policy::ROUTES` entries under `/v1/` plus the reviewed fragments in this directory, with the #81 fragment format and loader. Nothing here changes runtime behaviour, adds a runtime endpoint or a production dependency, and no CI or workflow file is involved: the gates are ordinary `cargo test` tests.
+[inference.openapi.json](../inference.openapi.json) is the **complete inference contract** (#82): the documented `/v1/*` surface of the gateway. It is generated test-only from the compiled `route_policy::ROUTES` entries under `/v1/` plus the reviewed fragments in this directory, with the #81 fragment format and loader. Nothing here changes runtime behaviour, adds a runtime endpoint or a production dependency, and no CI or workflow file is involved: the gates are ordinary `cargo test` tests.
 
 Status: **27 operations, 0 incomplete request/response slots** (#82 complete). Every operation is completed and wire-validated against the real handlers: `models`, `embeddings`, `rerank`, `systemone`, `images`, `chat`, `responses`, `messages`, audio, files, batches, videos and realtime.
 

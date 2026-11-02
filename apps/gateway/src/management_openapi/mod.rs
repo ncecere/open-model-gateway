@@ -55,7 +55,7 @@ mod tests {
         eprintln!(
             "management OpenAPI: {operations} operations; {placeholders} incomplete request/response schemas remaining (#81)"
         );
-        // Intentionally not acceptance of #81: later slices must reduce this count to zero.
+        // #81 is complete: 251 operations and zero placeholders (a new route fails until its fragment is complete).
         assert_eq!(
             operations, 251,
             "review route additions and update this progress baseline"
