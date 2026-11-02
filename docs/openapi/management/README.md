@@ -1,8 +1,8 @@
 # Management OpenAPI contract maintenance
 
-[management.openapi.json](../management.openapi.json) is an **incomplete management contract** for #81, not yet a finished client-generation contract. The first 22 operations have response-validation coverage; other areas remain explicitly incomplete. The test-only generator reads compiled `route_policy::ROUTES`, expands declared methods and includes exactly `/api/v1/*`. Inference, SCIM, health and metrics are excluded; anonymous authentication/branding operations and authorized installation-policy tombstones are included. Implicit HEAD follows GET policy without synthetic operations. `info.version` is the gateway package version.
+[management.openapi.json](../management.openapi.json) is the **complete management contract** (#81): every management operation documents its request and response schemas and is validated against the real handlers (response captures, HTTP request boundary vectors on PostgreSQL, coverage gates). The test-only generator reads compiled `route_policy::ROUTES`, expands declared methods and includes exactly `/api/v1/*`. Inference, SCIM, health and metrics are excluded; anonymous authentication/branding operations and authorized installation-policy tombstones are included. Implicit HEAD follows GET policy without synthetic operations. `info.version` is the gateway package version.
 
-The contract has 251 operations, 40 shared error reasons and **458 incomplete request/response schema slots** (502 → 458: 44 completed slots). Completed areas are auth (4 operations/8 slots), branding (1/2), invitations (1/2), me (15/30), and access-request-targets (1/2). `management_openapi_reports_incomplete_schemas` pins progress; later slices must reduce the baseline. #81 stays open until exhaustive schema and real-handler coverage is complete with no placeholders.
+The contract has 251 operations and **0 incomplete request/response schema slots**. It was completed in six slices (#399, #433, #436, #440, #426, #418); `management_openapi_reports_incomplete_schemas` pins 251 operations and zero placeholders, so a new route fails until its fragment is complete.
 
 ## Run the gates
 
