@@ -138,11 +138,11 @@ impl Filters {
         let cost_center = if unallocated { None } else { uuid(cc)? };
         let model = params.remove("model");
         let provider = params.remove("provider");
-        if model
-            .iter()
-            .chain(provider.iter())
-            .any(|s| s.is_empty() || s.len() > 200 || s.chars().any(char::is_control))
-        {
+        if model.iter().chain(provider.iter()).any(|s| {
+            s.is_empty()
+                || !crate::management::chars_at_most(s, 200)
+                || s.chars().any(char::is_control)
+        }) {
             return Err(invalid());
         }
         let status = params.remove("accounting_status");

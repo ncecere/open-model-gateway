@@ -82,7 +82,7 @@ pub(super) struct Parsed {
     pub lines: Vec<Line>,
 }
 pub(in crate::management) fn bounded(s: &str, max: usize) -> bool {
-    !s.is_empty() && s.len() <= max && !s.chars().any(char::is_control)
+    !s.is_empty() && crate::management::chars_at_most(s, max) && !s.chars().any(char::is_control)
 }
 pub(super) fn timestamp(s: &str) -> Result<DateTime<Utc>, ApiError> {
     if s.len() > 40 {

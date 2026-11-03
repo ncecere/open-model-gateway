@@ -203,7 +203,10 @@ impl CompiledWindow {
 impl TimeWindow {
     /// Validate and compile (unknown zone, day or time: `None`).
     pub fn compile(&self) -> Option<CompiledWindow> {
-        if self.timezone.is_empty() || self.timezone.len() > 64 || self.days.is_empty() {
+        if self.timezone.is_empty()
+            || !crate::management::chars_at_most(&self.timezone, 64)
+            || self.days.is_empty()
+        {
             return None;
         }
         let mut days = 0u8;

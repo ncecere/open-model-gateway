@@ -470,7 +470,7 @@ fn email_input(
     if username.is_some() != password_ref.is_some()
         || username
             .as_deref()
-            .is_some_and(|u| u.len() > 256 || u.chars().any(char::is_control))
+            .is_some_and(|u| !super::chars_at_most(u, 256) || u.chars().any(char::is_control))
     {
         return Err(invalid());
     }

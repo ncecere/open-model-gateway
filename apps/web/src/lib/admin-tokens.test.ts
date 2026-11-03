@@ -57,9 +57,11 @@ describe("admin token creation field validation", () => {
   it.each(["1", "30", "90"])("accepts %s days", value => expect(adminTokenExpiryError(value)).toBeUndefined());
   it.each(["0", "91", "-1", "", "abc", "30.5", "1000"])("rejects %s days", value => expect(adminTokenExpiryError(value)).toBeDefined());
   it("rejects a missing name", () => { expect(adminTokenNameError("")).toBeDefined(); expect(adminTokenNameError("   ")).toBeDefined(); });
-  it("rejects a name over 120 bytes but accepts exactly 120", () => {
-    expect(adminTokenNameError("x".repeat(120))).toBeUndefined();
-    expect(adminTokenNameError("x".repeat(121))).toBeDefined();
+  it("counts characters, not bytes: accepts exactly 120 and rejects 121 (#405)", () => {
+    for (const glyph of ["x", "\u00e9", "\u20ac", "\u{1F600}"]) {
+      expect(adminTokenNameError(glyph.repeat(120))).toBeUndefined();
+      expect(adminTokenNameError(glyph.repeat(121))).toBeDefined();
+    }
   });
   it("trims a valid name", () => { expect(adminTokenNameError("  CI publisher  ")).toBeUndefined(); });
 });

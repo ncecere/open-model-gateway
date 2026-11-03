@@ -19,7 +19,7 @@ pub(super) struct CompareQuery {
 }
 /// 2-4 distinct model ids, in the order given.
 pub(crate) fn parse_ids(raw: &str) -> Result<Vec<Uuid>, ApiError> {
-    if raw.len() > 4 * 37 {
+    if !super::chars_at_most(raw, 4 * 37) {
         return Err(invalid());
     }
     let mut ids: Vec<Uuid> = Vec::new();

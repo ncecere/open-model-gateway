@@ -3122,8 +3122,9 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             )
             .await;
         }
-        let wide = "\u{e9}".repeat(101);
-        let exact = "\u{e9}".repeat(100);
+        // The model filter counts characters, as maxLength does (#405).
+        let wide = "\u{e9}".repeat(201);
+        let exact = "\u{e9}".repeat(200);
         for (template, path) in [
             ("/api/v1/workspaces/{ws}/sessions", session_path.clone()),
             (
@@ -3135,9 +3136,9 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
                 &owner,
                 template,
                 &path,
-                "model above 200 bytes in fewer characters",
+                "model above 200 multibyte characters",
                 &[("model", wide.as_str())],
-                true,
+                false,
                 false,
             )
             .await;
@@ -3145,7 +3146,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
                 &owner,
                 template,
                 &path,
-                "model of exactly 200 bytes",
+                "model of exactly 200 multibyte characters",
                 &[("model", exact.as_str())],
                 true,
                 true,

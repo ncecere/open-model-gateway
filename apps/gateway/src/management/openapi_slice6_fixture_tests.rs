@@ -3074,8 +3074,18 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
     let uuid = "00000000-0000-4000-8000-000000000000";
     for (label, name, value, expressible) in [
         ("model control", "model", "a\u{1}b".to_owned(), true),
-        ("model 200 bytes", "model", multibyte(100), true),
-        ("model 202 bytes", "model", multibyte(101), false),
+        (
+            "model 200 multibyte characters",
+            "model",
+            multibyte(200),
+            true,
+        ),
+        (
+            "model 201 multibyte characters",
+            "model",
+            multibyte(201),
+            true,
+        ),
         ("session leading space", "session_id", " a".to_owned(), true),
         (
             "session trailing space",

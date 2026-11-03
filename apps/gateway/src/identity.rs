@@ -1148,7 +1148,7 @@ async fn callback(
     }
     let code = query
         .code
-        .filter(|code| !code.is_empty() && code.len() <= 8192)
+        .filter(|code| !code.is_empty() && crate::management::chars_at_most(code, 8192))
         .ok_or_else(invalid)?;
     let transport = |request| provider.http.clone().send(request);
     let tokens = provider

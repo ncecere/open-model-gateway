@@ -2,4 +2,6 @@
 
 Notes for changes on `main` after [v0.10.1](v0.10.1.md). They become the next release's notes.
 
-No changes recorded yet.
+## Behaviour changes
+
+- **Management text limits count characters, not bytes** (#405). Every management text limit now counts Unicode characters (code points), matching the API contract's `maxLength` and the web forms: names (120), descriptions (2000), emails (320), OIDC group-mapping issuers (2048) and group values (512), upstream model IDs (512), the SMTP username (256), time zones (64), log and cost-report filters (200), compare ids (148), the sign-in callback code (8192) and provider-cost reconciliation text (account IDs 200, evidence references 256, model names 512, dimensions and cursors 4096). Text that was refused for its byte length but fits in characters (for example a 61-character name of two-byte letters) is now accepted; nothing that was accepted before is refused. The management contract drops its `x-omg-max-bytes` annotations, so `maxLength` is exact, except the settings support/logo URLs, whose limit applies to the stored, percent-encoded form (#419). The dashboard counts characters too. Requires migration **0069** (the provider-cost reconciliation text CHECKs count characters; no data change).
