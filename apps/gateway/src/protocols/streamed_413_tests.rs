@@ -45,6 +45,8 @@ async fn every_openai_route_uses_the_shared_streamed_413_envelope(pool: sqlx::Pg
     let cap = |kind| workloads.body_bytes(kind).unwrap();
     let (json, multipart) = ("application/json", "multipart/form-data; boundary=omg438");
     let small = 2 << 20;
+    // Not here: /v1/files (its own upload errors, file_too_large), /v1/messages
+    // (Anthropic-shaped 413) and the realtime routes (they ignore the body).
     // Each route's own body cap: a streamed body one MiB over it reaches the
     // handler's rejection, never a parse error of the (blank) content.
     let cases = [

@@ -167,7 +167,7 @@
             }
           }
         },
-        "description": "The request body exceeds the route's cap. A declared Content-Length over the cap is refused by the body-limit layer with the plain text `length limit exceeded`, before any handler runs; a streamed body is refused by the handler with an OpenAI-shaped JSON error of type invalid_request_error: code payload_too_large (message Request body too large) on every route (#432, #438).",
+        "description": "The request body exceeds the route's cap. A declared Content-Length over the cap is refused by the body-limit layer with the plain text `length limit exceeded`, before any handler runs; a streamed body is refused by the handler with an OpenAI-shaped JSON error of type invalid_request_error: code payload_too_large (message Request body too large) on every route that reads a request body (#432, #438); the realtime routes ignore the body, and /v1/files documents its own upload errors.",
         "headers": {
           "cache-control": {
             "$ref": "#/components/headers/NoStore"
