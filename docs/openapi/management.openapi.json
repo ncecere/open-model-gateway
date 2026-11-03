@@ -17865,6 +17865,7 @@
             ]
           },
           "key_name": {
+            "description": "Name of the inference key that created the batch. Under workspace-wide object visibility an ordinary member sees every member's batches, so also other members' key names; the keys list itself stays filtered (decided in #403). The platform route omits it.",
             "type": "string"
           },
           "last_progress_at": {
