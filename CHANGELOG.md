@@ -6,7 +6,11 @@ The project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). 
 
 ## [Unreleased]
 
-Changes after v0.10.0: [unreleased notes](docs/releases/unreleased.md).
+Changes after v0.10.1: [unreleased notes](docs/releases/unreleased.md).
+
+## [0.10.1]
+
+Current Anthropic SDKs work with `/v1/messages`: `anthropic-version` `2026-10-21` is accepted with its request rules (sampling parameters refused) alongside `2023-06-01` (#430). Chat Completions and Responses use the shared streamed-body 413 envelope (#438); authentication storage failures answer 503 instead of 500 (#439). Faster contract tests (#444) and two test flakes (#396, #290). No migrations (schema still 0068), no runtime-grant changes. See [release and upgrade notes](docs/releases/v0.10.1.md).
 
 ## [0.10.0]
 
@@ -82,7 +86,8 @@ Alerts, key safety, model compare, SCIM, JWKS refresh, metrics and backup toolin
 
 The single-enterprise rebuild: Team, Project and personal workspaces, OIDC platform roles, catalogs, multimodal workloads across five provider families, immutable micro-USD accounting, logs and Admin settings. Migrations `0001` to `0010`. Notes: [`docs/releases/v0.1.0.md`](docs/releases/v0.1.0.md).
 
-[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/ncecere/open-model-gateway/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/ncecere/open-model-gateway/compare/v0.9.3...v0.10.0
 [0.9.3]: https://github.com/ncecere/open-model-gateway/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/ncecere/open-model-gateway/compare/v0.9.1...v0.9.2
