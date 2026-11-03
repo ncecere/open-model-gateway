@@ -561,11 +561,7 @@ fn error_response(e: InferenceError) -> Response {
 }
 fn rejection(e: JsonRejection) -> Response {
     if e.status() == StatusCode::PAYLOAD_TOO_LARGE {
-        (
-            StatusCode::PAYLOAD_TOO_LARGE,
-            Json(error_body(InferenceError::InvalidRequest)),
-        )
-            .into_response()
+        super::payload_too_large()
     } else {
         error_response(InferenceError::InvalidRequest)
     }

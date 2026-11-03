@@ -257,11 +257,7 @@ pub async fn handle(
     let wire = match input {
         Ok(Json(request)) => request,
         Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
-            return (
-                StatusCode::PAYLOAD_TOO_LARGE,
-                Json(error_body(InferenceError::InvalidRequest)),
-            )
-                .into_response();
+            return super::payload_too_large();
         }
         Err(_) => return error_response(InferenceError::InvalidRequest),
     };

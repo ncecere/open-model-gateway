@@ -49,7 +49,7 @@ Four native shapes, distinct schemas, each generated from source:
 * The management `ErrorEnvelope` is refused by name and by reference, and an operation may only use the envelope family of its protocol.
 * A declared `Content-Length` over a body cap is refused before any handler by the body-limit layer with the plain text `length limit exceeded` (`text/plain`, 413); a streamed oversized body is refused by the handler with its JSON error. Both are documented on every body-bearing route (except `/v1/messages`, whose 413 is always Anthropic-shaped).
 * Headers: `x-request-id` (UUID) and `Cache-Control: no-store` on every response; `WWW-Authenticate: Bearer` on every 401; `x-should-retry: false` on permanent refusals; `Retry-After` when every route of a model is cooling down.
-* `POST /v1/embeddings` uses the shared streamed-body 413 envelope: `type: invalid_request_error`, `code: payload_too_large`, message "Request body too large" (#432).
+* Every OpenAI-shaped route that reads a request body uses the shared streamed-body 413 envelope (`/v1/files` has its own upload errors; the realtime routes ignore the body): `type: invalid_request_error`, `code: payload_too_large`, message "Request body too large" (#432, #438).
 
 ## Wire validation, coverage and vectors
 
