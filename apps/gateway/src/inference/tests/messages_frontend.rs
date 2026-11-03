@@ -476,10 +476,7 @@ async fn api_version_2026_10_21_refuses_sampling_parameters_before_admission() {
                 "{name}: {field}"
             );
             assert!(
-                error["error"]["message"]
-                    .as_str()
-                    .unwrap()
-                    .contains(field),
+                error["error"]["message"].as_str().unwrap().contains(field),
                 "{name}: {field}"
             );
         }

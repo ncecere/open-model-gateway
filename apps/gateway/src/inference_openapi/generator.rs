@@ -349,7 +349,7 @@ pub(super) fn verify(document: &Value) -> Result<()> {
         .context("Messages version header")?;
     ensure!(
         version["required"] == true
-            && version["schema"]["const"] == "2023-06-01"
+            && version["schema"] == json!({"type":"string","enum":["2023-06-01","2026-10-21"]})
             && version["x-omg-max-occurrences"] == 1,
         "Messages version declaration drift"
     );

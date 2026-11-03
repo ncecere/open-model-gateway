@@ -18,6 +18,79 @@ fn version_is_exact_and_beta_is_accepted() {
     );
     assert!(valid_version(&h));
 }
+#[test]
+fn both_supported_versions_are_recognized_exactly() {
+    let mut h = HeaderMap::new();
+    for (value, expected) in [
+        ("2023-06-01", Some(ApiVersion::V2023_06_01)),
+        ("2026-10-21", Some(ApiVersion::V2026_10_21)),
+        ("2026-10-22", None),
+        ("2026-10-21,2023-06-01", None),
+        ("2026-10-21 ", None),
+        ("2026-10-2", None),
+        ("", None),
+    ] {
+        h.insert("anthropic-version", value.parse().unwrap());
+        assert_eq!(version(&h), expected, "{value:?}");
+    }
+    h.insert("anthropic-version", "2026-10-21".parse().unwrap());
+    h.append("anthropic-version", "2026-10-21".parse().unwrap());
+    assert_eq!(version(&h), None);
+    h.insert("anthropic-version", "2026-10-21".parse().unwrap());
+    h.insert("anthropic-beta", "x".repeat(1025).parse().unwrap());
+    assert_eq!(version(&h), None);
+}
+#[test]
+fn version_2026_10_21_refuses_sampling_keys_and_2023_06_01_keeps_them() {
+    let base = json!({"model":"m","max_tokens":32,"messages":[{"role":"user","content":"hi"}]});
+    let wire = |extra: Value| {
+        let mut v = base.clone();
+        v.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::from_value::<Request>(v).unwrap()
+    };
+    for (extra, field) in [
+        (json!({"temperature":1.0}), "temperature"),
+        (json!({"temperature":null}), "temperature"),
+        (json!({"top_p":1.0}), "top_p"),
+        (json!({"top_p":null}), "top_p"),
+        (json!({"top_k":40}), "top_k"),
+        (json!({"top_k":null}), "top_k"),
+    ] {
+        let request = wire(extra);
+        assert!(matches!(
+            request.check_version(ApiVersion::V2026_10_21),
+            Err(InferenceError::InvalidField(f)) if f == field
+        ));
+        assert!(request.check_version(ApiVersion::V2023_06_01).is_ok());
+    }
+    assert!(
+        wire(json!({}))
+            .check_version(ApiVersion::V2026_10_21)
+            .is_ok()
+    );
+    // 2023-06-01: `null` stays absent and values keep their bounds.
+    let r = wire(json!({"temperature":null,"top_p":null,"top_k":null}))
+        .normalize()
+        .unwrap();
+    assert_eq!(r.temperature, None);
+    let options = r.messages_options.unwrap();
+    assert_eq!((options.top_p, options.top_k), (None, None));
+    let r = wire(json!({"temperature":0.5,"top_p":0.9,"top_k":7}))
+        .normalize()
+        .unwrap();
+    assert_eq!(r.temperature, Some(0.5));
+    let options = r.messages_options.unwrap();
+    assert_eq!((options.top_p, options.top_k), (Some(0.9), Some(7)));
+    for extra in [
+        json!({"temperature":1.5}),
+        json!({"top_p":-0.1}),
+        json!({"top_k":0}),
+    ] {
+        assert!(wire(extra).normalize().is_err());
+    }
+}
 fn parse(v: Value) -> Result<ChatRequest> {
     serde_json::from_value::<Request>(v)
         .map_err(|_| InferenceError::InvalidRequest)?

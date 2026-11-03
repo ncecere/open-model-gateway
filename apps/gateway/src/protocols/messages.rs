@@ -20,13 +20,32 @@ pub use request::Request;
 #[cfg(test)]
 use request::parse_request;
 pub(crate) const OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
+/// The two Anthropic API versions the gateway accepts (#430). Requests are
+/// always sent upstream as `2023-06-01`: under `2026-10-21` the gateway refuses
+/// every field whose meaning differs between the versions (the sampling
+/// parameters; documents and citations are outside the supported grammar under
+/// both), so the forwarded request means the same thing under either version.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ApiVersion {
+    V2023_06_01,
+    V2026_10_21,
+}
+fn version(headers: &HeaderMap) -> Option<ApiVersion> {
+    if headers.get_all("anthropic-version").iter().count() != 1 || beta_headers(headers).is_err() {
+        return None;
+    }
+    match headers
+        .get("anthropic-version")
+        .and_then(|v| v.to_str().ok())
+    {
+        Some("2023-06-01") => Some(ApiVersion::V2023_06_01),
+        Some("2026-10-21") => Some(ApiVersion::V2026_10_21),
+        _ => None,
+    }
+}
+#[cfg(test)]
 fn valid_version(headers: &HeaderMap) -> bool {
-    headers.get_all("anthropic-version").iter().count() == 1
-        && headers
-            .get("anthropic-version")
-            .and_then(|v| v.to_str().ok())
-            == Some("2023-06-01")
-        && beta_headers(headers).is_ok()
+    version(headers).is_some()
 }
 fn beta_headers(headers: &HeaderMap) -> std::result::Result<Vec<String>, BetaHeaderError> {
     let values = headers
@@ -64,9 +83,9 @@ pub async fn handle(
             return error_response(InferenceError::InvalidField("anthropic-beta"));
         }
     };
-    if !valid_version(&headers) {
+    let Some(version) = version(&headers) else {
         return error_response(InferenceError::InvalidRequest);
-    }
+    };
     let wire = match input {
         Ok(Json(v)) => v,
         Err(e) if e.status() == StatusCode::PAYLOAD_TOO_LARGE => {
@@ -74,6 +93,9 @@ pub async fn handle(
         }
         Err(e) => return rejection(e),
     };
+    if let Err(e) = wire.check_version(version) {
+        return error_response(e);
+    }
     // Anthropic bounds metadata.user_id to 256 characters.
     if wire
         .metadata
@@ -132,7 +154,8 @@ fn usage_json(usage: Usage) -> Value {
     value
 }
 /// `/v1/batches` line body (`crate::jobs::lines`, Anthropic shape): the
-/// interactive contract, never streamed.
+/// interactive contract, never streamed. Batch creation carries no
+/// `anthropic-version`, so every line follows the `2023-06-01` rules (#430).
 pub(crate) fn batch_request(body: Value) -> Result<ChatRequest> {
     let wire: Request = serde_json::from_value(body).map_err(|_| InferenceError::InvalidRequest)?;
     if wire.stream

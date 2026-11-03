@@ -88,7 +88,7 @@ Upstream requests explicitly set `store:false`. Upstream assistant message items
 
 ## Messages
 
-Requires exactly one `anthropic-version: 2023-06-01`. `/v1/messages?beta=true` uses the same exact method/path policy as `/v1/messages`; queries do not create another authorization route. All generation adapters can serve Messages when the model declares `messages`. See [Claude Code setup](claude-code.md).
+Requires exactly one `anthropic-version` header: `2023-06-01` or `2026-10-21` (the version current Anthropic SDKs send, #430). Under `2026-10-21` the gateway applies that version's request rules: `temperature`, `top_p` and `top_k` are refused with **400** naming the field, even at their default value or as `null`. The version's other two rules are already met under both versions: `document` blocks and `citations` are not part of the supported grammar and are refused. Native Anthropic routes therefore send `2023-06-01` upstream for either client version, because the forwarded request means the same under both. `/v1/batches` lines with the `/v1/messages` endpoint carry no version header and follow the `2023-06-01` rules. `/v1/messages?beta=true` uses the same exact method/path policy as `/v1/messages`; queries do not create another authorization route. All generation adapters can serve Messages when the model declares `messages`. See [Claude Code setup](claude-code.md).
 
 ### Claude Code field rules
 
@@ -97,7 +97,7 @@ Deliveries 1–2 validate the field grammar into `ChatRequest.messages_options`;
 | Field | Anthropic | OpenAI-style | Bedrock Converse | Local |
 | --- | --- | --- | --- | --- |
 | `model`, `messages`, required positive `max_tokens`, `stream` | Existing native mapping | Chat mapping | Converse mapping | Compatible Chat mapping |
-| `anthropic-version` | Validated exact supported version; sent upstream | Accepted, not forwarded | Accepted, not forwarded | Accepted, not forwarded |
+| `anthropic-version` | Validated exact supported version (`2023-06-01` or `2026-10-21`); sent upstream as `2023-06-01` | Accepted, not forwarded | Accepted, not forwarded | Accepted, not forwarded |
 | `anthropic-beta` (including repeated values) | Forward original values verbatim except denied prefixes below; never add betas | Same denylist/bounds; not forwarded | Same denylist/bounds; not forwarded | Same denylist/bounds; not forwarded |
 | String/block `system`, text blocks | Preserve system form, block order and content | Keep text | Keep text | Keep text |
 | `cache_control` on system/message/tool/result blocks and tools; `ttl:5m/1h` | Preserve exactly; pinned v2/v3 price must explicitly price cache reads and every requested write TTL | Validate then drop hints | Validate then drop hints | Validate then drop hints |
@@ -111,9 +111,9 @@ Deliveries 1–2 validate the field grammar into `ChatRequest.messages_options`;
 | Tool `defer_loading` | Forward, including explicit false | Validate then drop | Validate then drop | Validate then drop |
 | `output_config.task_budget` (`type:tokens`, `total`, optional `remaining`) | Forward | Validate then drop | Validate then drop | Validate then drop |
 | Server tools (web search/code execution), server-tool history/results | **400 `tools.type`**, extra charges unpriced | **400 `tools.type`** | **400 `tools.type`** | **400 `tools.type`** |
-| `temperature` (0–1) | Forward | Map | Map | Map |
-| `top_p` (0–1) | Forward | Map `top_p` | Map `topP` | Map `top_p` |
-| `top_k` (positive integer) | Forward | **400 `top_k`** | **400 `top_k`**, no universal Converse mapping | **400 `top_k`**, not in the pinned compatible dialect |
+| `temperature` (0–1; `2023-06-01` only, **400** under `2026-10-21`) | Forward | Map | Map | Map |
+| `top_p` (0–1; `2023-06-01` only, **400** under `2026-10-21`) | Forward | Map `top_p` | Map `topP` | Map `top_p` |
+| `top_k` (positive integer; `2023-06-01` only, **400** under `2026-10-21`) | Forward | **400 `top_k`** | **400 `top_k`**, no universal Converse mapping | **400 `top_k`**, not in the pinned compatible dialect |
 | `stop_sequences` | Forward | Map `stop` | Map `stopSequences` | Map `stop` |
 | `metadata.user_id` (up to 256 characters) | Gateway client label only; not forwarded | Map to gateway client label only | Map to gateway client label only | Map to gateway client label only |
 | Ordinary function tools, `tool_choice:auto/none/any/tool` | Existing mapping | Existing mapping | Existing constraints | Existing profile constraints |
