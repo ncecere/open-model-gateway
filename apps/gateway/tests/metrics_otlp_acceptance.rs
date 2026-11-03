@@ -229,6 +229,15 @@ struct Gateway {
     outputs: Vec<Output>,
     drains: Vec<JoinHandle<()>>,
     _dir: tempfile::TempDir,
+    spec: Spec,
+}
+/// What a respawn needs: the same process configuration on fresh ports.
+#[derive(Clone)]
+struct Spec {
+    database_url: String,
+    collector_url: String,
+    enabled: bool,
+    scrape: bool,
 }
 impl Gateway {
     async fn spawn(database_url: &str, collector_url: &str, enabled: bool) -> Self {
@@ -240,6 +249,24 @@ impl Gateway {
         enabled: bool,
         scrape: bool,
     ) -> Self {
+        let spec = Spec {
+            database_url: database_url.to_owned(),
+            collector_url: collector_url.to_owned(),
+            enabled,
+            scrape,
+        };
+        Self::launch(spec, None).await
+    }
+    /// `taken`: a listener that is still bound to the address handed to the
+    /// binary, standing in for another test claiming the port in the
+    /// reserve-then-spawn window (#396).
+    async fn launch(spec: Spec, taken: Option<&tokio::net::TcpListener>) -> Self {
+        let Spec {
+            ref database_url,
+            ref collector_url,
+            enabled,
+            scrape,
+        } = spec;
         let scrape_listener = if scrape {
             Some(loopback_listener().await)
         } else {
@@ -251,8 +278,13 @@ impl Gateway {
         std::fs::write(&empty_env, "").expect("empty environment file");
         // The binary has no socket-activation API. Reserve an ephemeral address
         // until immediately before spawning, like the existing startup fixtures.
+        // Another process can still take it in that window: `ready` respawns on
+        // fresh ports when the binary reports exactly that bind failure.
         let listener = loopback_listener().await;
-        let addr = listener.local_addr().unwrap();
+        let addr = taken.map_or_else(
+            || listener.local_addr().unwrap(),
+            |t| t.local_addr().unwrap(),
+        );
         let mut command = Command::new(BINARY);
         command
             .arg("serve")
@@ -301,10 +333,25 @@ impl Gateway {
             outputs: vec![stdout, stderr],
             drains: vec![stdout_task, stderr_task],
             _dir: dir,
+            spec: spec.clone(),
         }
     }
 
     async fn ready(&mut self, label: &str) {
+        // A port taken in the reserve-then-spawn window is retried on fresh
+        // ports, a bounded number of times (#396); every other early exit fails.
+        for _ in 0..3 {
+            if !self.ready_once(label).await {
+                return;
+            }
+            *self = Self::launch(self.spec.clone(), None).await;
+        }
+        panic!("{label}: listen port taken three times before the gateway could bind");
+    }
+
+    /// `true` when the binary exited because its listen address was already in
+    /// use (classified from the withheld output, which is never printed).
+    async fn ready_once(&mut self, label: &str) -> bool {
         let client = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
@@ -323,6 +370,13 @@ impl Gateway {
                     });
                     assert!(!refused,
                         "{label}: valid GATEWAY_METRICS_OTLP_URL still explicitly refuses startup; metrics runtime is not wired");
+                    let port_taken = self.outputs.iter().any(|output| {
+                        String::from_utf8_lossy(&output.lock().unwrap())
+                            .contains("Address already in use")
+                    });
+                    if port_taken {
+                        return true;
+                    }
                     panic!("{label}: gateway exited before readiness (bounded output withheld)");
                 }
                 if let Ok(response) = client
@@ -338,7 +392,7 @@ impl Gateway {
                     && body["checks"]["database"] == "ok"
                     && body["checks"]["schema"] == "ok"
                 {
-                    return;
+                    return false;
                 }
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
@@ -347,6 +401,7 @@ impl Gateway {
             ready.is_ok(),
             "{label}: gateway did not become ready while collector acknowledgements were withheld"
         );
+        ready.unwrap()
     }
 
     async fn stop(&mut self) {
@@ -1188,3 +1243,33 @@ async fn startup_and_periodic_checkpoint(pool: PgPool) {
         assert!(matches!(disabled_collector.receipts.try_recv(), Err(mpsc::error::TryRecvError::Empty)), "URL-unset control must have no queued send");
     }).await.expect("bounded metrics process acceptance checkpoint");
 }
+
+/// #396: the reserve-then-spawn window is a port race under parallel tests.
+/// An address taken before the binary binds must not fail the test: `ready`
+/// respawns on fresh ports when (and only when) the binary reports that bind
+/// failure, and never prints the child's withheld output.
+async fn port_collision_checkpoint(pool: PgPool) {
+    tokio::time::timeout(Duration::from_secs(45), async {
+        seed_canaries(&pool).await;
+        let database_url = fresh_child_url(&pool);
+        let collector = Collector::start().await;
+        let taken = loopback_listener().await;
+        let spec = Spec {
+            database_url,
+            collector_url: collector.url.clone(),
+            enabled: false,
+            scrape: false,
+        };
+        let mut gateway = Gateway::launch(spec, Some(&taken)).await;
+        assert_eq!(gateway.addr, taken.local_addr().unwrap());
+        gateway.ready("port taken before bind").await;
+        assert_ne!(gateway.addr, taken.local_addr().unwrap());
+        gateway.stop().await;
+    })
+    .await
+    .expect("bounded port collision checkpoint");
+}
+database_checkpoint!(
+    spawn_recovers_from_a_port_taken_before_the_binary_binds,
+    port_collision_checkpoint
+);
