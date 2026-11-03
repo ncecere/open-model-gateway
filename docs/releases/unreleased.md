@@ -2,6 +2,10 @@
 
 Notes for changes on `main` after [v0.10.0](v0.10.0.md). They become the next release's notes.
 
+## Documentation
+
+- Workspace-wide object visibility also shows ordinary members the key names on other members' batch rows; the keys list stays filtered. This is the intended behaviour, now documented in the management API, batches guide and contract (#403).
+
 ## Fixes
 
 - **Chat Completions and Responses** answer an oversized streamed request body (no `Content-Length`) with the shared OpenAI 413 envelope, code `payload_too_large`, like the embeddings, rerank, image, System One, audio, video and batch routes; they used code `invalid_request_error` with the generic invalid-request message (#438).
