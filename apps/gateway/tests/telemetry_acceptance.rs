@@ -287,6 +287,14 @@ impl Gateway {
 /// Requests per timing sample.
 const SAMPLES: usize = 5;
 
+/// The tests of this binary run one at a time (#290). The outage test bounds
+/// each request's wall-clock time against a same-run baseline; the other tests
+/// start their own gateways and collectors, and running them alongside it put
+/// a load outlier on its first fault request (2.8 s against a 1.58 s bound)
+/// that the bound cannot tell apart from a request held up by an export. With
+/// no in-binary neighbour, the bound keeps its meaning unchanged.
+static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Headroom a fault request gets over the same-run healthy baseline. The
 /// hanging collector's whole exchange takes 2 s, so a request held up by an
 /// export exchange overshoots this and fails, while an ordinary host stall
@@ -343,6 +351,7 @@ async fn healthy_baseline(pool: &PgPool, key: &str) -> Duration {
 async fn a_shared_workspace_request_exports_the_expected_span_set_with_parentage_matching_the_logs_trace_id(
     pool: PgPool,
 ) {
+    let _serial = SERIAL.lock().await;
     let keys = seed(&pool).await;
     let collector = Collector::start(StatusCode::OK, "{}", Duration::ZERO).await;
     let gateway = Gateway::for_trace_config(&pool, Some(&collector.url), 1.0).await;
@@ -425,6 +434,7 @@ async fn a_shared_workspace_request_exports_the_expected_span_set_with_parentage
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn a_personal_workspace_request_exports_nothing(pool: PgPool) {
+    let _serial = SERIAL.lock().await;
     let keys = seed(&pool).await;
     let collector = Collector::start(StatusCode::OK, "{}", Duration::ZERO).await;
     let gateway = Gateway::for_trace_config(&pool, Some(&collector.url), 1.0).await;
@@ -453,6 +463,7 @@ async fn a_personal_workspace_request_exports_nothing(pool: PgPool) {
 /// `gateway_trace_deliveries_total{outcome=...}`), never silently.
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn a_collector_outage_never_fails_or_slows_inference_and_drops_are_counted(pool: PgPool) {
+    let _serial = SERIAL.lock().await;
     let keys = seed(&pool).await;
     // Same run, same host load, no fault: what a request costs right now.
     let baseline = healthy_baseline(&pool, &keys.team_key.token).await;
@@ -542,6 +553,7 @@ async fn a_collector_outage_never_fails_or_slows_inference_and_drops_are_counted
 #[sqlx::test(migrations = "./enterprise_migrations")]
 #[ignore = "live external collector: set OMG_TRACE_LIVE_COLLECTOR_URL to a loopback http://127.0.0.1:<port>/v1/traces URL"]
 async fn shared_workspace_trace_reaches_an_external_collector(pool: PgPool) {
+    let _serial = SERIAL.lock().await;
     let Ok(url) = std::env::var("OMG_TRACE_LIVE_COLLECTOR_URL") else {
         eprintln!(
             "SKIP shared_workspace_trace_reaches_an_external_collector: OMG_TRACE_LIVE_COLLECTOR_URL is unset"
