@@ -808,7 +808,8 @@ impl IntoResponse for AuthError {
 /// other management storage failure answers (#439), never details. A failed
 /// OS RNG stays a 500 (`random_token`).
 fn internal(error: sqlx::Error) -> AuthError {
-    // SQLSTATE and kind only, never values (the management storage logger).
+    // The sanitized management storage diagnostic: kind, SQLSTATE and object
+    // names, never row data or bound values.
     crate::management::log_storage_error(&error);
     storage_unavailable()
 }

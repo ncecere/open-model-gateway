@@ -10,7 +10,7 @@ Changes after v0.10.1: [unreleased notes](docs/releases/unreleased.md).
 
 ## [0.10.1]
 
-Current Anthropic SDKs work with `/v1/messages`: `anthropic-version` `2026-10-21` is accepted with its request rules (sampling parameters refused) alongside `2023-06-01` (#430). Chat Completions and Responses use the shared streamed-body 413 envelope (#438); authentication storage failures answer 503 instead of 500 (#439). Faster contract tests (#444) and two test flakes (#396, #290). No migrations (schema still 0068), no runtime-grant changes. See [release and upgrade notes](docs/releases/v0.10.1.md).
+`/v1/messages` accepts `anthropic-version` `2026-10-21`, the version current Anthropic SDKs send, with its request rules (sampling parameters refused), alongside `2023-06-01` (#430). Chat Completions and Responses use the shared streamed-body 413 envelope (#438); authentication storage failures answer 503 instead of 500 (#439). Faster contract tests (#444), a test flake fix (#396) and a mitigation for another (#290). No migrations (schema still 0068), no runtime-grant changes. See [release and upgrade notes](docs/releases/v0.10.1.md).
 
 ## [0.10.0]
 
