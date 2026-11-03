@@ -255,9 +255,17 @@ fn inference_openapi_generation_headers_are_exact() {
         super::generation::validate_request_headers(&good, "/v1/messages", &headers).is_err(),
         "accepted missing version header"
     );
+    for version in ["2023-06-01", "2026-10-21"] {
+        headers.insert("anthropic-version", version.parse().unwrap());
+        super::generation::validate_request_headers(&good, "/v1/messages", &headers)
+            .expect("valid protocol headers");
+    }
+    headers.insert("anthropic-version", "2026-10-22".parse().unwrap());
+    assert!(
+        super::generation::validate_request_headers(&good, "/v1/messages", &headers).is_err(),
+        "accepted an unsupported version"
+    );
     headers.insert("anthropic-version", "2023-06-01".parse().unwrap());
-    super::generation::validate_request_headers(&good, "/v1/messages", &headers)
-        .expect("valid protocol headers");
 
     for case in [
         "invented",
@@ -265,6 +273,8 @@ fn inference_openapi_generation_headers_are_exact() {
         "wrong kind",
         "duplicate",
         "version literal",
+        "version dropped",
+        "version invented",
         "version optional",
         "beta allowlist",
         "beta denylist",
@@ -283,6 +293,10 @@ fn inference_openapi_generation_headers_are_exact() {
             }
             "wrong kind" => parameters[0]["in"] = json!("query"),
             "version literal" => parameters[0]["schema"]["const"] = json!("unsupported"),
+            "version dropped" => parameters[0]["schema"]["enum"] = json!(["2023-06-01"]),
+            "version invented" => {
+                parameters[0]["schema"]["enum"] = json!(["2023-06-01", "2026-10-21", "2026-10-22"])
+            }
             "version optional" => parameters[0]["required"] = json!(false),
             "beta allowlist" => parameters[1]["schema"]["enum"] = json!(["only-one-beta"]),
             "beta denylist" => parameters[1]["x-omg-denied-prefixes"] = json!([]),

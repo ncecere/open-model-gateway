@@ -157,7 +157,7 @@ if (protocol === "responses") {
     [{ role: "assistant", content: [{ type: "output_text", text: "hi", annotations: null }] }],
   ]) await raw({ input }, 400);
 }
-// Native Anthropic 0.131 stream/tools are not nullable. max_tokens stays required.
+// Native Anthropic SDK 1.x stream/tools are not nullable. max_tokens stays required.
 for (const extra of [{ stream: null }, { tools: null }, { max_tokens: null }, { model: null }, { unknown: null }]) {
   const result = await fetch(`${base}/v1/messages`, {
     method: "POST",

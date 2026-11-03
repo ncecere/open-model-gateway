@@ -44,6 +44,8 @@ try {
   check((await anthropic.messages.create(messages)).content[0].text === 'hello');
   const messageStream = await anthropic.messages.stream(messages).finalMessage();
   check(messageStream.content[0].text === 'hello' && messageStream.content[1].type === 'tool_use' && Object.keys(messageStream.content[1].input).length === 0);
+  // #430: the current SDK major must keep exercising anthropic-version 2026-10-21.
+  check(requests.every((r) => r.path !== '/v1/messages' || r.headers['anthropic-version'] === '2026-10-21'));
   process.stdout.write(JSON.stringify(requests));
 } catch {
   process.stderr.write('SDK wire replay failed\n');

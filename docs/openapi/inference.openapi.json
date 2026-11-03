@@ -5902,6 +5902,7 @@
                 ]
               },
               "temperature": {
+                "description": "Only under anthropic-version 2023-06-01; under 2026-10-21 the key is refused with 400 (naming the field and the version for a well-typed value or null), even at a default value.",
                 "oneOf": [
                   {
                     "maximum": 1,
@@ -5977,6 +5978,7 @@
                 "type": "array"
               },
               "top_k": {
+                "description": "Only under anthropic-version 2023-06-01; under 2026-10-21 the key is refused with 400 (naming the field and the version for a well-typed value or null), even at a default value.",
                 "oneOf": [
                   {
                     "maximum": 4294967295,
@@ -5989,6 +5991,7 @@
                 ]
               },
               "top_p": {
+                "description": "Only under anthropic-version 2023-06-01; under 2026-10-21 the key is refused with 400 (naming the field and the version for a well-typed value or null), even at a default value.",
                 "oneOf": [
                   {
                     "maximum": 1,
@@ -6059,6 +6062,7 @@
                 "type": "boolean"
               },
               {
+                "description": "Only under anthropic-version 2023-06-01; under 2026-10-21 the key is refused with 400 (naming the field and the version for a well-typed value or null), even at a default value.",
                 "oneOf": [
                   {
                     "maximum": 1,
@@ -6071,6 +6075,7 @@
                 ]
               },
               {
+                "description": "Only under anthropic-version 2023-06-01; under 2026-10-21 the key is refused with 400 (naming the field and the version for a well-typed value or null), even at a default value.",
                 "oneOf": [
                   {
                     "maximum": 1,
@@ -6083,6 +6088,7 @@
                 ]
               },
               {
+                "description": "Only under anthropic-version 2023-06-01; under 2026-10-21 the key is refused with 400 (naming the field and the version for a well-typed value or null), even at a default value.",
                 "oneOf": [
                   {
                     "maximum": 4294967295,
@@ -9617,12 +9623,16 @@
         "operationId": "post_v1_messages",
         "parameters": [
           {
-            "description": "Exactly one occurrence with the literal version 2023-06-01.",
+            "description": "Exactly one occurrence with the literal version 2023-06-01 or 2026-10-21. Under 2026-10-21 the request must not contain temperature, top_p or top_k (400, even at a default value or null; a well-typed value or null names the field and the version; the positional array form always carries those positions, so it is refused under 2026-10-21). Native Anthropic routes send 2023-06-01 upstream for either version.",
             "in": "header",
             "name": "anthropic-version",
             "required": true,
             "schema": {
-              "const": "2023-06-01"
+              "enum": [
+                "2023-06-01",
+                "2026-10-21"
+              ],
+              "type": "string"
             },
             "x-omg-max-occurrences": 1
           },
