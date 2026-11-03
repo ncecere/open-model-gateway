@@ -260,7 +260,8 @@ impl Gateway {
     ///
     /// The registry is process-wide (`metrics::METRICS`), shared by every test
     /// in this binary. Callers compare before/after deltas, which is sound only
-    /// while no two concurrently running tests read the same label.
+    /// while no two concurrently running tests read the same label: the
+    /// binary's test bodies are serialized by [`SERIAL`].
     async fn metric_value(&self, name: &str, label: &str) -> f64 {
         reqwest::Client::new()
             .get(format!("http://{}/metrics", self.metrics_addr))
@@ -287,12 +288,16 @@ impl Gateway {
 /// Requests per timing sample.
 const SAMPLES: usize = 5;
 
-/// The tests of this binary run one at a time (#290). The outage test bounds
-/// each request's wall-clock time against a same-run baseline; the other tests
-/// start their own gateways and collectors, and running them alongside it put
-/// a load outlier on its first fault request (2.8 s against a 1.58 s bound)
-/// that the bound cannot tell apart from a request held up by an export. With
-/// no in-binary neighbour, the bound keeps its meaning unchanged.
+/// The test bodies of this binary run one at a time (#290). The outage test
+/// bounds each request's wall-clock time against a same-run baseline; the
+/// other tests start their own gateways and collectors in parallel threads.
+/// The suspected cause of one 2.8 s first fault request (against a 1.58 s
+/// bound, under a loaded full-suite run; 20/20 isolated runs passed) is that
+/// contention, which the bound cannot tell apart from a request held up by an
+/// export. This removes it without changing the bound; #290 stays open for a
+/// structural assertion that the request path never awaits export. It also
+/// makes the process-wide metric deltas of `metric_value` safe by
+/// construction. (sqlx creates and drops each test's database outside it.)
 static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Headroom a fault request gets over the same-run healthy baseline. The
