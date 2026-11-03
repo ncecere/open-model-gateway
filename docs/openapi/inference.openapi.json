@@ -167,7 +167,7 @@
             }
           }
         },
-        "description": "The request body exceeds the route's cap. A declared Content-Length over the cap is refused by the body-limit layer with the plain text `length limit exceeded`, before any handler runs; a streamed body is refused by the handler with an OpenAI-shaped JSON error of type invalid_request_error: code payload_too_large (message Request body too large) on every route except Chat Completions and Responses, which answer code invalid_request_error with their invalid-request message (a follow-up issue tracks unifying the code).",
+        "description": "The request body exceeds the route's cap. A declared Content-Length over the cap is refused by the body-limit layer with the plain text `length limit exceeded`, before any handler runs; a streamed body is refused by the handler with an OpenAI-shaped JSON error of type invalid_request_error: code payload_too_large (message Request body too large) on every route (#432, #438).",
         "headers": {
           "cache-control": {
             "$ref": "#/components/headers/NoStore"

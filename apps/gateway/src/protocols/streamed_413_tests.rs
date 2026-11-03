@@ -40,29 +40,39 @@ async fn every_openai_route_uses_the_shared_streamed_413_envelope(pool: sqlx::Pg
         axum::serve(listener, app).await.unwrap();
     }));
     let client = reqwest::Client::new();
-    let json_routes = [
-        "/v1/chat/completions",
-        "/v1/responses",
-        "/v1/embeddings",
-        "/v1/rerank",
-        "/v1/images/generations",
-        "/v1/systemone",
-        "/v1/audio/speech",
-        "/v1/batches",
-        "/v1/videos",
+    use crate::inference::types::WorkloadKind as W;
+    let workloads = EngineLimits::default().workloads;
+    let cap = |kind| workloads.body_bytes(kind).unwrap();
+    let (json, multipart) = ("application/json", "multipart/form-data; boundary=omg438");
+    let small = 2 << 20;
+    // Each route's own body cap: a streamed body one MiB over it reaches the
+    // handler's rejection, never a parse error of the (blank) content.
+    let cases = [
+        ("/v1/chat/completions", json, small),
+        ("/v1/responses", json, small),
+        ("/v1/embeddings", json, small),
+        ("/v1/batches", json, small),
+        ("/v1/rerank", json, cap(W::Rerank)),
+        ("/v1/images/generations", json, cap(W::Images)),
+        ("/v1/systemone", json, cap(W::Systemone)),
+        ("/v1/audio/speech", json, cap(W::AudioSpeech)),
+        (
+            "/v1/audio/transcriptions",
+            multipart,
+            cap(W::AudioTranscriptions),
+        ),
+        ("/v1/videos", json, crate::jobs::limits().video_body_bytes),
+        (
+            "/v1/videos",
+            multipart,
+            crate::jobs::limits().video_body_bytes,
+        ),
     ];
-    let multipart = "multipart/form-data; boundary=omg438";
-    let cases = json_routes
-        .iter()
-        .map(|path| (*path, "application/json"))
-        .chain([
-            ("/v1/audio/transcriptions", multipart),
-            ("/v1/videos", multipart),
-        ]);
-    for (path, content_type) in cases {
+    for (path, content_type, limit) in cases {
         let chunk = Bytes::from(vec![b' '; 1 << 20]);
-        let chunks: Vec<Result<Bytes, std::io::Error>> =
-            (0..3).map(|_| Ok(chunk.clone())).collect();
+        let chunks: Vec<Result<Bytes, std::io::Error>> = (0..limit.div_ceil(1 << 20) + 1)
+            .map(|_| Ok(chunk.clone()))
+            .collect();
         let request = client
             .post(format!("http://{address}{path}"))
             .bearer_auth(&keys.personal_key.token)
