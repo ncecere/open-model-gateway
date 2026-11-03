@@ -340,11 +340,13 @@ impl Gateway {
     async fn ready(&mut self, label: &str) {
         // A port taken in the reserve-then-spawn window is retried on fresh
         // ports, a bounded number of times (#396); every other early exit fails.
-        for _ in 0..3 {
+        for attempt in 0..3 {
             if !self.ready_once(label).await {
                 return;
             }
-            *self = Self::launch(self.spec.clone(), None).await;
+            if attempt < 2 {
+                *self = Self::launch(self.spec.clone(), None).await;
+            }
         }
         panic!("{label}: listen port taken three times before the gateway could bind");
     }
@@ -1213,7 +1215,7 @@ async fn startup_and_periodic_checkpoint(pool: PgPool) {
         disabled.ready("URL-unset control").await;
         let not_before = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64;
         let mut enabled = Gateway::spawn(&database_url, &enabled_collector.url, true).await;
-        canaries.extend([format!("http://{}", disabled.addr), format!("http://{}", enabled.addr)]);
+        canaries.push(format!("http://{}", disabled.addr));
 
         // Observe the disabled control throughout enabled startup AND two real
         // periodic receipts. This is receiver-driven, not a sleep/min-of-N
@@ -1222,6 +1224,8 @@ async fn startup_and_periodic_checkpoint(pool: PgPool) {
             _ = disabled_collector.receipts.recv() => panic!("URL-unset control sent to the collector (including via ignored OTEL_* settings)"),
             receipts = async {
                 enabled.ready("metrics enabled").await;
+                // After ready: a respawn on fresh ports changes the address (#396).
+                canaries.push(format!("http://{}", enabled.addr));
                 // Readiness has succeeded without any collector acknowledgement.
                 enabled_collector.reply_allowed.send_replace(true);
                 let first = verify_receipt(enabled_collector.next().await, &canaries, not_before, LeaseRole::Standby);
