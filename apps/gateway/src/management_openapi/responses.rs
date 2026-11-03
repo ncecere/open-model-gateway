@@ -137,7 +137,7 @@ fn resolved<'a>(document: &'a Value, value: &'a Value) -> Result<&'a Value> {
 /// never reused) has its key serialized once and remembered by address; any
 /// other value is serialized on every call, so a temporary can never match an
 /// entry by address. Serializing per call cost ~88 % of the slice 3 fixture's
-/// validation time (#444).
+/// validation time in the unoptimized test profile (#444).
 pub(super) fn cache_key(schema: &Value) -> Result<std::sync::Arc<str>> {
     static NODES: std::sync::OnceLock<std::collections::HashSet<usize>> =
         std::sync::OnceLock::new();

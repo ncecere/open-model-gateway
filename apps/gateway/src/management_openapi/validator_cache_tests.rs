@@ -1,6 +1,7 @@
 //! The management validator cache (#444): content-keyed like before, but the
 //! key of a node of the committed artifact is derived once, not re-serialized
-//! on every validation (40 million times in the slice 3 fixture).
+//! on every validation (about 40 million times in the slice 3 fixture,
+//! counted with temporary instrumentation).
 use super::responses::{self, artifact};
 use serde_json::{Value, json};
 use std::sync::Arc;
