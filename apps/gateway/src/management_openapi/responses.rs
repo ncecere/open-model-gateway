@@ -138,7 +138,7 @@ fn resolved<'a>(document: &'a Value, value: &'a Value) -> Result<&'a Value> {
 /// other value is serialized on every call, so a temporary can never match an
 /// entry by address. Serializing per call cost ~88 % of the slice 3 fixture's
 /// validation time (#444).
-fn cache_key(schema: &Value) -> Result<std::sync::Arc<str>> {
+pub(super) fn cache_key(schema: &Value) -> Result<std::sync::Arc<str>> {
     static NODES: std::sync::OnceLock<std::collections::HashSet<usize>> =
         std::sync::OnceLock::new();
     static KEYS: std::sync::OnceLock<
@@ -153,7 +153,7 @@ fn cache_key(schema: &Value) -> Result<std::sync::Arc<str>> {
         }
     }
     let serialize = || -> Result<std::sync::Arc<str>> {
-        KEY_SERIALIZATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        KEY_SERIALIZATIONS.with(|n| n.set(n.get() + 1));
         Ok(serde_json::to_string(schema)?.into())
     };
     let address = std::ptr::from_ref(schema) as usize;
@@ -174,10 +174,13 @@ fn cache_key(schema: &Value) -> Result<std::sync::Arc<str>> {
     Ok(key)
 }
 
-/// How many validator cache keys were serialized (#444 regression control).
-static KEY_SERIALIZATIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+thread_local! {
+    /// How many validator cache keys THIS thread serialized (#444 regression
+    /// control; per thread, so concurrently running tests cannot disturb it).
+    static KEY_SERIALIZATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 pub(crate) fn key_serializations() -> usize {
-    KEY_SERIALIZATIONS.load(std::sync::atomic::Ordering::Relaxed)
+    KEY_SERIALIZATIONS.with(std::cell::Cell::get)
 }
 
 pub(crate) fn validator(
