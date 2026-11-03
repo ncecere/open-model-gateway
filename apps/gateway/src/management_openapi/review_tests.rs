@@ -41,6 +41,17 @@ fn management_openapi_review_middleware_inventory_is_shared_by_all_protected_rou
                     "503 lacks the authentication storage body: {method} {}",
                     route.path
                 );
+                // ...bound to the private headers that body carries.
+                assert!(
+                    response["x-omg-body-header-requirements"]
+                        .as_array()
+                        .is_some_and(|bindings| bindings
+                            .iter()
+                            .any(|b| b["schema"].to_string().contains("ManagementAuth503")
+                                && b["headers"].get("Referrer-Policy").is_some())),
+                    "503 authentication body without its private headers: {method} {}",
+                    route.path
+                );
             }
         }
     }

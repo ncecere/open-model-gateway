@@ -1085,7 +1085,7 @@ mod database {
                     .method("POST")
                     .uri("/api/v1/me/sessions/revoke-others")
                     .header(header::COOKIE, format!("{SESSION}={session}"))
-                    .header("origin", "https://gateway.example.test")
+                    .header("origin", "http://127.0.0.1:3000")
                     .header("x-csrf-token", &csrf)
                     .body(Body::empty())
                     .unwrap(),
@@ -1096,17 +1096,33 @@ mod database {
                     .unwrap(),
             ]
         };
-        // Positive control while storage works.
+        // Positive control while storage works: each request is admitted.
         for request in requests() {
+            let label = format!("{} {}", request.method(), request.uri());
             let response = app.clone().oneshot(request).await.unwrap();
             assert!(
-                !response.status().is_server_error(),
-                "control: {}",
+                response.status().is_success(),
+                "control {label}: {}",
                 response.status()
             );
         }
         pool.close().await;
-        for request in requests() {
+        let logout = Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/logout")
+            .header(
+                header::COOKIE,
+                format!("{SESSION}={session}; {CSRF}={csrf}"),
+            )
+            .header("origin", "http://127.0.0.1:3000")
+            .header("x-csrf-token", &csrf)
+            .body(Body::empty())
+            .unwrap();
+        let login = Request::builder()
+            .uri("/api/v1/auth/login")
+            .body(Body::empty())
+            .unwrap();
+        for request in requests().into_iter().chain([logout, login]) {
             let label = format!("{} {}", request.method(), request.uri());
             let response = app.clone().oneshot(request).await.unwrap();
             assert_eq!(
@@ -1117,6 +1133,16 @@ mod database {
             assert_eq!(
                 response.headers()[header::CACHE_CONTROL],
                 "no-store",
+                "{label}"
+            );
+            assert_eq!(
+                response.headers()["referrer-policy"],
+                "no-referrer",
+                "{label}"
+            );
+            // Nothing is signed in or out: no cookie is set or cleared.
+            assert!(
+                response.headers().get(header::SET_COOKIE).is_none(),
                 "{label}"
             );
             let body = axum::body::to_bytes(response.into_body(), 4096)

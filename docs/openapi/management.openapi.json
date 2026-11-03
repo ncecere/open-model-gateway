@@ -48995,7 +48995,7 @@
                 }
               }
             },
-            "description": "SSO unavailable or pending-attempt cap reached",
+            "description": "SSO unavailable or pending-attempt cap reached (with Retry-After), or authentication storage unavailable (no Retry-After, #439)",
             "headers": {
               "Retry-After": {
                 "schema": {
@@ -49066,9 +49066,6 @@
           },
           "413": {
             "$ref": "#/components/responses/ManagementMiddleware413Variant1"
-          },
-          "500": {
-            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
           },
           "503": {
             "$ref": "#/components/responses/ManagementMiddleware503Variant2"

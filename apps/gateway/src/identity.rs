@@ -796,6 +796,8 @@ impl IntoResponse for AuthError {
             StatusCode::FORBIDDEN => "Request verification failed",
             StatusCode::CONFLICT => "Account linking requires operator approval",
             StatusCode::SERVICE_UNAVAILABLE => "Login unavailable",
+            // Only a failed OS RNG during sign-in is a 500 now; storage failures
+            // carry the same text with 503 (`storage_unavailable`, #439).
             StatusCode::INTERNAL_SERVER_ERROR => "Authentication service unavailable",
             _ => "Login verification failed",
         });
@@ -805,7 +807,9 @@ impl IntoResponse for AuthError {
 /// Storage failed while authenticating or signing in: the retryable 503 every
 /// other management storage failure answers (#439), never details. A failed
 /// OS RNG stays a 500 (`random_token`).
-fn internal(_: sqlx::Error) -> AuthError {
+fn internal(error: sqlx::Error) -> AuthError {
+    // SQLSTATE and kind only, never values (the management storage logger).
+    crate::management::log_storage_error(&error);
     storage_unavailable()
 }
 fn storage_unavailable() -> AuthError {
@@ -1201,7 +1205,7 @@ async fn callback(
     .await
     {
         Ok(id) => id,
-        Err(AuthError(status, message)) if status == StatusCode::FORBIDDEN => {
+        Err(AuthError(StatusCode::FORBIDDEN, _)) => {
             // A denied sign-in (no platform role) still records who tried under the
             // linked identity, so Admin › Users shows a name rather than a bare row.
             sqlx::query("UPDATE users u SET display_name=$3 FROM oidc_identities i WHERE i.issuer=$1 AND i.subject=$2 AND u.id=i.user_id AND u.cleaned_at IS NULL AND u.display_name IS DISTINCT FROM $3")
@@ -1215,7 +1219,7 @@ async fn callback(
                 return denied_browser_callback(&state, &headers, provider.config.secure_cookies)
                     .await;
             }
-            return Err(AuthError(status, message));
+            return Err(AuthError(StatusCode::FORBIDDEN, None));
         }
         Err(error) => return Err(error),
     };
@@ -1698,7 +1702,7 @@ async fn authenticate_admin_token_request(
         }
         Ok(None) => pre_auth_fail("invalid_credential"),
         Err(error) => {
-            tracing::error!(%error, "admin token authentication database lookup failed");
+            crate::management::log_storage_error(&error);
             storage_unavailable().into_response()
         }
     }

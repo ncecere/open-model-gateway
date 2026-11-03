@@ -4,12 +4,12 @@
 //! => 413 text for every management operation. identity::authenticate_management => 401 for
 //! duplicate Authorization, mixed credential families, bad/missing/stale
 //! cookies or bearer credentials; 403 for unsafe browser Origin/CSRF; 429 for
-//! per-IP, replica and authenticated-token throttles; 500 for auth storage.
+//! per-IP, replica and authenticated-token throttles; 503 for auth storage (#439).
 //! management::authorization => 403 token-policy/scope/IP/role refusal, 404
 //! workspace/key hiding, 503 authorization/audit storage, and 501 for an
 //! otherwise-admitted Scope route not in TOKEN_READY_ROUTES.
 //! Logout is NOT mounted behind these management layers: it calls
-//! verify_session/verify_csrf itself (401/403/500, no bearer throttle).
+//! verify_session/verify_csrf itself (401/403, storage 503, no bearer throttle).
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 
