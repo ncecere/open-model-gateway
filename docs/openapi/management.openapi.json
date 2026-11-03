@@ -738,199 +738,6 @@
           }
         ]
       },
-      "ManagementMiddleware500Variant1": {
-        "content": {
-          "application/json": {
-            "schema": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/IdentityFailure"
-                },
-                {
-                  "$ref": "#/components/schemas/ManagementAuth500"
-                }
-              ]
-            }
-          }
-        },
-        "description": "Internal management error",
-        "headers": {
-          "Cache-Control": {
-            "schema": {
-              "const": "no-store"
-            }
-          },
-          "Referrer-Policy": {
-            "schema": {
-              "const": "no-referrer"
-            }
-          }
-        },
-        "x-omg-body-header-requirements": [
-          {
-            "headers": {
-              "Cache-Control": {
-                "required": true,
-                "schema": {
-                  "const": "no-store"
-                }
-              },
-              "Referrer-Policy": {
-                "required": true,
-                "schema": {
-                  "const": "no-referrer"
-                }
-              }
-            },
-            "schema": {
-              "$ref": "#/components/schemas/ManagementAuth500"
-            }
-          }
-        ]
-      },
-      "ManagementMiddleware500Variant2": {
-        "content": {
-          "application/json": {
-            "schema": {
-              "$ref": "#/components/schemas/ManagementAuth500"
-            }
-          }
-        },
-        "description": "Serving-layer response 500; see x-omg-middleware-responses",
-        "headers": {
-          "Cache-Control": {
-            "schema": {
-              "const": "no-store"
-            }
-          },
-          "Referrer-Policy": {
-            "schema": {
-              "const": "no-referrer"
-            }
-          }
-        },
-        "x-omg-body-header-requirements": [
-          {
-            "headers": {
-              "Cache-Control": {
-                "required": true,
-                "schema": {
-                  "const": "no-store"
-                }
-              },
-              "Referrer-Policy": {
-                "required": true,
-                "schema": {
-                  "const": "no-referrer"
-                }
-              }
-            },
-            "schema": {
-              "$ref": "#/components/schemas/ManagementAuth500"
-            }
-          }
-        ]
-      },
-      "ManagementMiddleware500Variant3": {
-        "content": {
-          "application/json": {
-            "schema": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                },
-                {
-                  "$ref": "#/components/schemas/ManagementAuth500"
-                }
-              ]
-            }
-          }
-        },
-        "description": "Handler validation, object visibility or conflict refusal.",
-        "headers": {
-          "Cache-Control": {
-            "schema": {
-              "const": "no-store"
-            }
-          },
-          "Referrer-Policy": {
-            "schema": {
-              "const": "no-referrer"
-            }
-          }
-        },
-        "x-omg-body-header-requirements": [
-          {
-            "headers": {
-              "Cache-Control": {
-                "required": true,
-                "schema": {
-                  "const": "no-store"
-                }
-              },
-              "Referrer-Policy": {
-                "required": true,
-                "schema": {
-                  "const": "no-referrer"
-                }
-              }
-            },
-            "schema": {
-              "$ref": "#/components/schemas/ManagementAuth500"
-            }
-          }
-        ]
-      },
-      "ManagementMiddleware500Variant4": {
-        "content": {
-          "application/json": {
-            "schema": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                },
-                {
-                  "$ref": "#/components/schemas/ManagementAuth500"
-                }
-              ]
-            }
-          }
-        },
-        "description": "Export serialization failure",
-        "headers": {
-          "Cache-Control": {
-            "schema": {
-              "const": "no-store"
-            }
-          },
-          "Referrer-Policy": {
-            "schema": {
-              "const": "no-referrer"
-            }
-          }
-        },
-        "x-omg-body-header-requirements": [
-          {
-            "headers": {
-              "Cache-Control": {
-                "required": true,
-                "schema": {
-                  "const": "no-store"
-                }
-              },
-              "Referrer-Policy": {
-                "required": true,
-                "schema": {
-                  "const": "no-referrer"
-                }
-              }
-            },
-            "schema": {
-              "$ref": "#/components/schemas/ManagementAuth500"
-            }
-          }
-        ]
-      },
       "ManagementMiddleware503Variant1": {
         "content": {
           "application/json": {
@@ -940,33 +747,203 @@
                   "$ref": "#/components/schemas/IdentityFailure"
                 },
                 {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ManagementAuth503"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ErrorEnvelope"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "description": "Management storage or report unavailable",
+        "headers": {
+          "Cache-Control": {
+            "schema": {
+              "const": "no-store"
+            }
+          },
+          "Referrer-Policy": {
+            "schema": {
+              "const": "no-referrer"
+            }
+          }
+        },
+        "x-omg-body-header-requirements": [
+          {
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Referrer-Policy": {
+                "required": true,
+                "schema": {
+                  "const": "no-referrer"
+                }
+              }
+            },
+            "schema": {
+              "$ref": "#/components/schemas/ManagementAuth503"
+            }
+          }
+        ]
+      },
+      "ManagementMiddleware503Variant2": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ManagementAuth503"
+            }
+          }
+        },
+        "description": "Serving-layer response 503; see x-omg-middleware-responses",
+        "headers": {
+          "Cache-Control": {
+            "schema": {
+              "const": "no-store"
+            }
+          },
+          "Referrer-Policy": {
+            "schema": {
+              "const": "no-referrer"
+            }
+          }
+        },
+        "x-omg-body-header-requirements": [
+          {
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Referrer-Policy": {
+                "required": true,
+                "schema": {
+                  "const": "no-referrer"
+                }
+              }
+            },
+            "schema": {
+              "$ref": "#/components/schemas/ManagementAuth503"
+            }
+          }
+        ]
+      },
+      "ManagementMiddleware503Variant3": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ManagementAuth503"
+                },
+                {
                   "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               ]
             }
           }
         },
-        "description": "Management storage or report unavailable"
-      },
-      "ManagementMiddleware503Variant2": {
-        "content": {
-          "application/json": {
+        "description": "Serving-layer response 503; see x-omg-middleware-responses",
+        "headers": {
+          "Cache-Control": {
             "schema": {
-              "$ref": "#/components/schemas/ErrorEnvelope"
+              "const": "no-store"
+            }
+          },
+          "Referrer-Policy": {
+            "schema": {
+              "const": "no-referrer"
             }
           }
         },
-        "description": "Serving-layer response 503; see x-omg-middleware-responses"
+        "x-omg-body-header-requirements": [
+          {
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Referrer-Policy": {
+                "required": true,
+                "schema": {
+                  "const": "no-referrer"
+                }
+              }
+            },
+            "schema": {
+              "$ref": "#/components/schemas/ManagementAuth503"
+            }
+          }
+        ]
       },
-      "ManagementMiddleware503Variant3": {
+      "ManagementMiddleware503Variant4": {
         "content": {
           "application/json": {
             "schema": {
-              "$ref": "#/components/schemas/ErrorEnvelope"
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ManagementAuth503"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ErrorEnvelope"
+                    }
+                  ]
+                }
+              ]
             }
           }
         },
-        "description": "Management storage unavailable"
+        "description": "Management storage unavailable",
+        "headers": {
+          "Cache-Control": {
+            "schema": {
+              "const": "no-store"
+            }
+          },
+          "Referrer-Policy": {
+            "schema": {
+              "const": "no-referrer"
+            }
+          }
+        },
+        "x-omg-body-header-requirements": [
+          {
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Referrer-Policy": {
+                "required": true,
+                "schema": {
+                  "const": "no-referrer"
+                }
+              }
+            },
+            "schema": {
+              "$ref": "#/components/schemas/ManagementAuth503"
+            }
+          }
+        ]
       }
     },
     "schemas": {
@@ -5523,7 +5500,7 @@
         ],
         "type": "object"
       },
-      "ManagementAuth500": {
+      "ManagementAuth503": {
         "additionalProperties": false,
         "properties": {
           "error": {
@@ -48743,7 +48720,7 @@
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
           "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant1"
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
           },
           "503": {
             "$ref": "#/components/responses/ManagementMiddleware503Variant1"
@@ -49018,7 +48995,7 @@
                 }
               }
             },
-            "description": "SSO unavailable or pending-attempt cap reached",
+            "description": "SSO unavailable or pending-attempt cap reached (with Retry-After), or authentication storage unavailable (no Retry-After, #439)",
             "headers": {
               "Retry-After": {
                 "schema": {
@@ -49090,8 +49067,8 @@
           "413": {
             "$ref": "#/components/responses/ManagementMiddleware413Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant1"
+          "503": {
+            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
           }
         },
         "security": [
@@ -49298,7 +49275,7 @@
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
           "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant1"
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
           },
           "503": {
             "$ref": "#/components/responses/ManagementMiddleware503Variant1"
@@ -49408,7 +49385,14 @@
             "$ref": "#/components/responses/ManagementMiddleware429Variant2"
           },
           "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant1"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityFailure"
+                }
+              }
+            },
+            "description": "Internal management error"
           },
           "503": {
             "$ref": "#/components/responses/ManagementMiddleware503Variant1"
@@ -49482,7 +49466,7 @@
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
           "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant1"
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
           },
           "503": {
             "$ref": "#/components/responses/ManagementMiddleware503Variant1"
@@ -49557,7 +49541,7 @@
             "$ref": "#/components/responses/ManagementMiddleware429Variant2"
           },
           "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant1"
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
           },
           "503": {
             "$ref": "#/components/responses/ManagementMiddleware503Variant1"
@@ -49626,7 +49610,7 @@
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
           "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant1"
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
           },
           "503": {
             "$ref": "#/components/responses/ManagementMiddleware503Variant1"
@@ -49696,7 +49680,7 @@
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
           "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant1"
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
           },
           "503": {
             "$ref": "#/components/responses/ManagementMiddleware503Variant1"
@@ -49796,7 +49780,7 @@
             "$ref": "#/components/responses/ManagementMiddleware429Variant2"
           },
           "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant1"
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
           },
           "503": {
             "$ref": "#/components/responses/ManagementMiddleware503Variant1"
@@ -49883,7 +49867,7 @@
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
           "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant1"
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
           },
           "503": {
             "$ref": "#/components/responses/ManagementMiddleware503Variant1"
@@ -49949,7 +49933,7 @@
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
           "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant1"
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
           },
           "503": {
             "$ref": "#/components/responses/ManagementMiddleware503Variant1"
@@ -50032,10 +50016,10 @@
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
           "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant1"
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
           },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -50103,10 +50087,10 @@
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
           "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant1"
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
           },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -50157,10 +50141,10 @@
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
           "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant1"
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
           },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -50209,10 +50193,10 @@
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
           "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant1"
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
           },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -50264,10 +50248,10 @@
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
           "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant1"
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
           },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -50333,10 +50317,10 @@
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
           "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant1"
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
           },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -50399,7 +50383,7 @@
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
           "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant1"
+            "$ref": "#/paths/~1api~1v1~1me/get/responses/500"
           },
           "503": {
             "$ref": "#/components/responses/ManagementMiddleware503Variant1"
@@ -50487,11 +50471,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -50584,11 +50565,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -50683,11 +50661,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -50778,11 +50753,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -50893,10 +50865,17 @@
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
           "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant3"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Handler validation, object visibility or conflict refusal."
           },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -50981,11 +50960,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -51115,11 +51091,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -51172,11 +51145,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -51282,11 +51252,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -51370,11 +51337,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -51456,11 +51420,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -51585,11 +51546,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -51644,11 +51602,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -51734,11 +51689,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -51842,11 +51794,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -51928,11 +51877,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -52032,11 +51978,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -52120,11 +52063,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -52226,11 +52166,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant3"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -52356,11 +52293,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -52466,11 +52400,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -52558,11 +52489,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -52678,11 +52606,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -52804,11 +52729,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -52924,11 +52846,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -53027,11 +52946,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -53128,11 +53044,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -53257,11 +53170,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -53380,11 +53290,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -53509,11 +53416,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -53606,11 +53510,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -53737,11 +53638,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -53830,11 +53728,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -53922,11 +53817,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -54062,11 +53954,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -54284,11 +54173,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -54435,11 +54321,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -54555,11 +54438,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -54658,11 +54538,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -54787,11 +54664,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -54890,9 +54764,6 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "502": {
             "content": {
               "application/json": {
@@ -54904,7 +54775,7 @@
             "description": "Catalog unavailable"
           },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -55021,11 +54892,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -55150,11 +55018,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -55253,11 +55118,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -55382,11 +55244,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -55485,11 +55344,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -55586,11 +55442,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -55715,11 +55568,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -55838,11 +55688,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -55943,11 +55790,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -56070,11 +55914,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -56173,11 +56014,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -56232,11 +56070,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -56288,11 +56123,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -56406,11 +56238,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -56491,11 +56320,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -56611,11 +56437,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -56714,11 +56537,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -56938,11 +56758,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -57138,11 +56955,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -57360,11 +57174,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -57578,11 +57389,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -57800,11 +57608,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -58016,11 +57821,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -58138,11 +57940,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -58361,11 +58160,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -58481,11 +58277,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -58588,11 +58381,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -58689,11 +58479,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -58790,11 +58577,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -58919,11 +58703,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -59022,11 +58803,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -59151,11 +58929,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -59254,11 +59029,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -59383,11 +59155,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -59478,11 +59247,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -59598,11 +59364,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -59722,11 +59485,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -59839,11 +59599,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -59993,11 +59750,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -60131,11 +59885,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -60200,11 +59951,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -60296,11 +60044,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -60423,11 +60168,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -60513,11 +60255,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -60623,11 +60362,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -60714,11 +60450,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -60841,11 +60574,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -60929,11 +60659,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -61021,11 +60748,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -61143,11 +60867,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -61232,11 +60953,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -61361,11 +61079,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -61481,11 +61196,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -61584,11 +61296,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -61685,11 +61394,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -61814,11 +61520,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -61909,11 +61612,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -62036,11 +61736,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -62125,11 +61822,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -62213,11 +61907,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -62349,11 +62040,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -62457,11 +62145,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -62567,11 +62252,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -62747,11 +62429,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -62801,11 +62480,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -62858,11 +62534,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -62950,11 +62623,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant3"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -63009,11 +62679,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -63109,11 +62776,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -63203,11 +62867,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant3"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -63262,11 +62923,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -63362,11 +63020,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -63421,11 +63076,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -63540,11 +63192,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -63599,11 +63248,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -63709,11 +63355,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -63768,11 +63411,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -63825,11 +63465,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -63935,11 +63572,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -64029,11 +63663,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant3"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -64267,11 +63898,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -64444,11 +64072,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -64548,11 +64173,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -64675,11 +64297,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -64785,11 +64404,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -64878,11 +64494,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -65007,11 +64620,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -65123,10 +64733,17 @@
             "$ref": "#/components/responses/ManagementMiddleware429Variant4"
           },
           "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant4"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Export serialization failure"
           },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -65223,11 +64840,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -65356,11 +64970,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -65471,11 +65082,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -65574,11 +65182,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -65671,11 +65276,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -65804,11 +65406,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -65901,11 +65500,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -66034,11 +65630,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -66159,11 +65752,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -66269,11 +65859,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -66362,11 +65949,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -66491,11 +66075,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -66594,11 +66175,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -66685,11 +66263,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -66814,11 +66389,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -66947,11 +66519,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -67048,11 +66617,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -67169,11 +66735,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -67298,11 +66861,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -67409,11 +66969,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -67542,11 +67099,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -67653,11 +67207,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -67756,11 +67307,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -67847,11 +67395,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -67976,11 +67521,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -68062,11 +67604,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -68184,11 +67723,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -68273,11 +67809,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -68377,11 +67910,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -68475,11 +68005,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -68575,11 +68102,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -68720,11 +68244,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -68799,11 +68320,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -68921,11 +68439,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -69006,11 +68521,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -69089,11 +68601,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -69219,11 +68728,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -69325,11 +68831,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -69446,11 +68949,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -69567,11 +69067,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -69656,11 +69153,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -69755,11 +69249,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -69909,11 +69400,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -70131,11 +69619,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -70216,11 +69701,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -70461,11 +69943,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -70604,11 +70083,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -70714,11 +70190,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -70844,11 +70317,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -70935,11 +70405,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -71036,11 +70503,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -71155,11 +70619,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -71375,11 +70836,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -71477,11 +70935,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -71578,11 +71033,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -71696,11 +71148,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -71796,11 +71245,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -71878,11 +71324,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -71991,11 +71434,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -72105,11 +71545,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -72223,11 +71660,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant5"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -72323,11 +71757,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -72411,11 +71842,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -72537,11 +71965,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -72636,11 +72061,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -72724,11 +72146,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -72850,11 +72269,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -72980,11 +72396,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant5"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -73070,11 +72483,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -73268,11 +72678,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -73360,11 +72767,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -73470,11 +72874,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -73592,11 +72993,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -73692,11 +73090,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -73815,11 +73210,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -73937,11 +73329,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -74041,11 +73430,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -74139,11 +73525,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -74231,11 +73614,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -74353,11 +73733,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
           }
         },
         "security": [
@@ -74455,11 +73832,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -74584,11 +73958,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -74674,11 +74045,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -74763,11 +74131,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -74900,11 +74265,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -75009,11 +74371,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -75120,11 +74479,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -75301,11 +74657,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -75522,11 +74875,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -75728,11 +75078,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -75832,11 +75179,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -75950,11 +75294,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -76080,11 +75421,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -76283,11 +75621,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -76466,11 +75801,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -76546,11 +75878,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -76830,11 +76159,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -77069,11 +76395,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -77248,11 +76571,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -77353,11 +76673,8 @@
           "429": {
             "$ref": "#/components/responses/ManagementMiddleware429Variant1"
           },
-          "500": {
-            "$ref": "#/components/responses/ManagementMiddleware500Variant2"
-          },
           "503": {
-            "$ref": "#/components/responses/ManagementMiddleware503Variant2"
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
           }
         },
         "security": [
@@ -77388,11 +76705,11 @@
   },
   "x-omg-middleware-contracts": {
     "logout": {
-      "authentication": "own session/Origin/CSRF verification (401/403/500); not management bearer middleware, no bearer throttle",
+      "authentication": "own session/Origin/CSRF verification (401/403; storage 503); not management bearer middleware, no bearer throttle",
       "body_limit": "413 text/plain before handler extraction"
     },
     "management": {
-      "authentication": "exclusive credential family; duplicate/mixed-header refusal and live session/token checks (401); unsafe browser Origin/CSRF (403); bearer per-IP/replica/per-token throttles before policy (429); authentication storage (500)",
+      "authentication": "exclusive credential family; duplicate/mixed-header refusal and live session/token checks (401); unsafe browser Origin/CSRF (403); bearer per-IP/replica/per-token throttles before policy (429); authentication storage (503, #439)",
       "authorization": "live role, token policy/scope/IP and workspace/key boundary; storage/audit refusal (503); readiness (501 only if Scope is not token-ready)",
       "body_limit": "413 text/plain before handler extraction; upload routers use their own caps"
     },

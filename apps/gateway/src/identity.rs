@@ -381,7 +381,7 @@ async fn verify_id_token<'t>(
     token: &'t EnterpriseIdToken,
     nonce: &Nonce,
 ) -> Result<&'t EnterpriseClaims, AuthError> {
-    let unavailable = || AuthError(StatusCode::SERVICE_UNAVAILABLE);
+    let unavailable = || AuthError(StatusCode::SERVICE_UNAVAILABLE, None);
     let keys = provider.jwks.current().await.ok_or_else(unavailable)?;
     match token.claims(&provider.verifier(keys), nonce) {
         Ok(claims) => Ok(claims),
@@ -785,26 +785,41 @@ pub fn router(state: IdentityState) -> Router<Store> {
         .merge(scim)
 }
 
+/// A refused authentication or sign-in step. The optional message overrides
+/// the status's default text (storage failures, #439).
 #[derive(Debug)]
-struct AuthError(StatusCode);
+struct AuthError(StatusCode, Option<&'static str>);
 impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
-        let message = match self.0 {
+        let message = self.1.unwrap_or(match self.0 {
             StatusCode::UNAUTHORIZED => "Authentication required",
             StatusCode::FORBIDDEN => "Request verification failed",
             StatusCode::CONFLICT => "Account linking requires operator approval",
             StatusCode::SERVICE_UNAVAILABLE => "Login unavailable",
+            // Only a failed OS RNG during sign-in is a 500 now; storage failures
+            // carry the same text with 503 (`storage_unavailable`, #439).
             StatusCode::INTERNAL_SERVER_ERROR => "Authentication service unavailable",
             _ => "Login verification failed",
-        };
+        });
         private((self.0, Json(serde_json::json!({"error": message}))).into_response())
     }
 }
-fn internal(_: sqlx::Error) -> AuthError {
-    AuthError(StatusCode::INTERNAL_SERVER_ERROR)
+/// Storage failed while authenticating or signing in: the retryable 503 every
+/// other management storage failure answers (#439), never details. A failed
+/// OS RNG stays a 500 (`random_token`).
+fn internal(error: sqlx::Error) -> AuthError {
+    // SQLSTATE and kind only, never values (the management storage logger).
+    crate::management::log_storage_error(&error);
+    storage_unavailable()
+}
+fn storage_unavailable() -> AuthError {
+    AuthError(
+        StatusCode::SERVICE_UNAVAILABLE,
+        Some("Authentication service unavailable"),
+    )
 }
 fn invalid() -> AuthError {
-    AuthError(StatusCode::BAD_REQUEST)
+    AuthError(StatusCode::BAD_REQUEST, None)
 }
 fn private(mut response: Response) -> Response {
     response
@@ -818,7 +833,7 @@ fn private(mut response: Response) -> Response {
 /// 256-bit OS CSPRNG token; an RNG failure fails the request closed (500, no
 /// state stored, nothing signed in).
 fn random_token() -> Result<String, AuthError> {
-    crate::entropy::hex_token().map_err(|_| AuthError(StatusCode::INTERNAL_SERVER_ERROR))
+    crate::entropy::hex_token().map_err(|_| AuthError(StatusCode::INTERNAL_SERVER_ERROR, None))
 }
 fn hash(value: &str) -> Vec<u8> {
     Sha256::digest(value.as_bytes()).to_vec()
@@ -945,7 +960,7 @@ async fn login(
     let provider = state
         .provider
         .as_ref()
-        .ok_or(AuthError(StatusCode::SERVICE_UNAVAILABLE))?;
+        .ok_or(AuthError(StatusCode::SERVICE_UNAVAILABLE, None))?;
     let client = throttle::client_ip(peer, &headers, &provider.config.trusted_proxies);
     if let Err(wait) = provider
         .login_limiter
@@ -985,7 +1000,7 @@ async fn login(
     let verifier = {
         use base64::Engine as _;
         let bytes = crate::entropy::bytes::<32>()
-            .map_err(|_| AuthError(StatusCode::INTERNAL_SERVER_ERROR))?;
+            .map_err(|_| AuthError(StatusCode::INTERNAL_SERVER_ERROR, None))?;
         PkceCodeVerifier::new(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
     };
     let challenge = PkceCodeChallenge::from_code_verifier_sha256(&verifier);
@@ -1106,7 +1121,7 @@ async fn callback(
     let provider = state
         .provider
         .as_ref()
-        .ok_or(AuthError(StatusCode::SERVICE_UNAVAILABLE))?;
+        .ok_or(AuthError(StatusCode::SERVICE_UNAVAILABLE, None))?;
     // Before the attempt is consumed: a throttled callback leaves it usable.
     let client = throttle::client_ip(peer, &headers, &provider.config.trusted_proxies);
     if let Err(wait) = provider
@@ -1173,7 +1188,7 @@ async fn callback(
     let groups = claims
         .additional_claims()
         .groups(&provider.config.groups_claim)
-        .ok_or(AuthError(StatusCode::FORBIDDEN))?;
+        .ok_or(AuthError(StatusCode::FORBIDDEN, None))?;
     // Presentation only: the verified token's display name (or none) replaces the stored one.
     let display_name = claims
         .name()
@@ -1190,7 +1205,7 @@ async fn callback(
     .await
     {
         Ok(id) => id,
-        Err(AuthError(status)) if status == StatusCode::FORBIDDEN => {
+        Err(AuthError(StatusCode::FORBIDDEN, _)) => {
             // A denied sign-in (no platform role) still records who tried under the
             // linked identity, so Admin › Users shows a name rather than a bare row.
             sqlx::query("UPDATE users u SET display_name=$3 FROM oidc_identities i WHERE i.issuer=$1 AND i.subject=$2 AND u.id=i.user_id AND u.cleaned_at IS NULL AND u.display_name IS DISTINCT FROM $3")
@@ -1204,7 +1219,7 @@ async fn callback(
                 return denied_browser_callback(&state, &headers, provider.config.secure_cookies)
                     .await;
             }
-            return Err(AuthError(status));
+            return Err(AuthError(StatusCode::FORBIDDEN, None));
         }
         Err(error) => return Err(error),
     };
@@ -1235,7 +1250,7 @@ async fn callback(
         if wants_html(&headers) {
             return denied_browser_callback(&state, &headers, provider.config.secure_cookies).await;
         }
-        return Err(AuthError(StatusCode::UNAUTHORIZED));
+        return Err(AuthError(StatusCode::UNAUTHORIZED, None));
     }
     // Validated again on the way out; anything else lands on "/" (Home).
     let target = return_to
@@ -1329,17 +1344,17 @@ async fn resolve_identity_with(
                     .map_err(internal)?
             {
                 tx.rollback().await.map_err(internal)?;
-                return Err(AuthError(StatusCode::FORBIDDEN));
+                return Err(AuthError(StatusCode::FORBIDDEN, None));
             }
             if reason.as_deref() != Some("entitlement_loss") {
                 tx.commit().await.map_err(internal)?;
-                return Err(AuthError(StatusCode::FORBIDDEN));
+                return Err(AuthError(StatusCode::FORBIDDEN, None));
             }
             let reentitled: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM oidc_group_mappings WHERE issuer=$1 AND enabled AND target_kind='platform' AND group_value=ANY($2))")
                 .bind(issuer).bind(groups).fetch_one(&mut *tx).await.map_err(internal)?;
             if !reentitled {
                 tx.commit().await.map_err(internal)?;
-                return Err(AuthError(StatusCode::FORBIDDEN));
+                return Err(AuthError(StatusCode::FORBIDDEN, None));
             }
             rebind = true;
             None
@@ -1367,7 +1382,7 @@ async fn resolve_identity_with(
             let (id, active, allowed) = sqlx::query_as::<_, (Uuid, bool, bool)>("SELECT id,disabled_at IS NULL AND cleaned_at IS NULL,oidc_link_allowed FROM users WHERE lower(email)=$1 FOR UPDATE")
                 .bind(&email).fetch_one(&mut *tx).await.map_err(internal)?;
             if !active {
-                return Err(AuthError(StatusCode::FORBIDDEN));
+                return Err(AuthError(StatusCode::FORBIDDEN, None));
             }
             let linked: bool =
                 sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM oidc_identities WHERE user_id=$1)")
@@ -1376,7 +1391,7 @@ async fn resolve_identity_with(
                     .await
                     .map_err(internal)?;
             if !allowed || linked {
-                return Err(AuthError(StatusCode::CONFLICT));
+                return Err(AuthError(StatusCode::CONFLICT, None));
             }
             sqlx::query("UPDATE users SET oidc_link_allowed=false WHERE id=$1")
                 .bind(id)
@@ -1419,7 +1434,7 @@ async fn resolve_identity_with(
     // Entitlement loss MUST commit session/key revocation before returning the 403.
     tx.commit().await.map_err(internal)?;
     if !active {
-        return Err(AuthError(StatusCode::FORBIDDEN));
+        return Err(AuthError(StatusCode::FORBIDDEN, None));
     }
     Ok(id)
 }
@@ -1440,11 +1455,11 @@ async fn verify_session(
     headers: &HeaderMap,
 ) -> Result<VerifiedSession, AuthError> {
     let token = cookie(headers, SESSION)
-        .map_err(|_| AuthError(StatusCode::UNAUTHORIZED))?
-        .ok_or(AuthError(StatusCode::UNAUTHORIZED))?;
+        .map_err(|_| AuthError(StatusCode::UNAUTHORIZED, None))?
+        .ok_or(AuthError(StatusCode::UNAUTHORIZED, None))?;
     let token_hash = hash(&token);
     let row = sqlx::query_as::<_, (Uuid, String, String, Vec<u8>, Uuid, bool)>("SELECT u.id,s.verified_email,p.role,s.csrf_hash,s.id,s.last_seen_at IS NULL OR s.last_seen_at<now()-make_interval(secs=>$2) FROM browser_sessions s JOIN users u ON u.id=s.user_id JOIN effective_platform_roles p ON p.user_id=u.id WHERE s.token_hash=$1 AND s.verified_email IS NOT NULL AND s.revoked_at IS NULL AND s.expires_at>now() AND (s.idle_expires_at IS NULL OR s.idle_expires_at>now()) AND u.disabled_at IS NULL AND u.cleaned_at IS NULL")
-        .bind(&token_hash).bind(f64::from(LAST_SEEN_EVERY_SECONDS)).fetch_optional(&state.store.pool).await.map_err(internal)?.ok_or(AuthError(StatusCode::UNAUTHORIZED))?;
+        .bind(&token_hash).bind(f64::from(LAST_SEEN_EVERY_SECONDS)).fetch_optional(&state.store.pool).await.map_err(internal)?.ok_or(AuthError(StatusCode::UNAUTHORIZED, None))?;
     if row.5 {
         // At most one write per session per interval, not one per request.
         // Best effort: a failed write (say, a primary briefly read-only during
@@ -1482,7 +1497,7 @@ fn verify_csrf(
     headers: &HeaderMap,
     expected: &[u8],
 ) -> Result<(), AuthError> {
-    let forbidden = || AuthError(StatusCode::FORBIDDEN);
+    let forbidden = || AuthError(StatusCode::FORBIDDEN, None);
     let origin = state
         .provider
         .as_ref()
@@ -1564,7 +1579,7 @@ pub async fn authenticate_management(
     let authorization_count = headers.get_all(header::AUTHORIZATION).iter().count();
     if authorization_count > 0 {
         if authorization_count > 1 || raw_cookie_present(&headers, SESSION) {
-            return AuthError(StatusCode::UNAUTHORIZED).into_response();
+            return AuthError(StatusCode::UNAUTHORIZED, None).into_response();
         }
         return authenticate_admin_token_request(&state, peer, &headers, request, next).await;
     }
@@ -1604,7 +1619,7 @@ async fn authenticate_admin_token_request(
 ) -> Response {
     let pre_auth_fail = |reason: &'static str| {
         crate::metrics::METRICS.auth_throttled("admin_token", reason);
-        AuthError(StatusCode::UNAUTHORIZED).into_response()
+        AuthError(StatusCode::UNAUTHORIZED, None).into_response()
     };
     // Free, format-only rejections (not even shaped like `omg_admin_...`)
     // never consume the rate limiter below: there is nothing here for a
@@ -1687,8 +1702,8 @@ async fn authenticate_admin_token_request(
         }
         Ok(None) => pre_auth_fail("invalid_credential"),
         Err(error) => {
-            tracing::error!(%error, "admin token authentication database lookup failed");
-            AuthError(StatusCode::INTERNAL_SERVER_ERROR).into_response()
+            crate::management::log_storage_error(&error);
+            storage_unavailable().into_response()
         }
     }
 }
