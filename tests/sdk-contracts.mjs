@@ -239,6 +239,22 @@ for (const [beta, denied] of [["context-1m-2025-08-07", "context-1m-2025-08-07"]
   const expected = `Unexpected value(s) \`${denied}\` for the \`anthropic-beta\` header. Please consult our documentation at docs.anthropic.com or try again without the header.`;
   await assert.rejects(ordinaryAnthropic.messages.create({ model: "company/smart", max_tokens: 32, messages }, { headers: { "anthropic-beta": beta } }), (e) => e.status === 400 && e.message.includes(expected));
 }
+// #430: the current SDK major sends anthropic-version 2026-10-21 by default.
+const versions = [];
+const versionAnthropic = new Anthropic({ apiKey: key, baseURL: base, maxRetries: 0,
+  fetch: (url, init) => { versions.push(new Headers(init?.headers).get("anthropic-version")); return fetch(url, init); } });
+assert.equal((await versionAnthropic.messages.create({ model: "company/smart", max_tokens: 32, messages })).type, "message");
+assert.equal(await versionAnthropic.messages.stream({ model: "company/smart", max_tokens: 32, messages }).finalText(), "Hello from fixture");
+// A caller can still pin the previous version explicitly.
+assert.equal((await versionAnthropic.messages.create({ model: "company/smart", max_tokens: 32, messages }, { headers: { "anthropic-version": "2023-06-01" } })).type, "message");
+assert.deepEqual(versions, ["2026-10-21", "2026-10-21", "2023-06-01"]);
+// 2026-10-21 removes the sampling parameters: refused (never dropped), even at defaults; 2023-06-01 keeps them.
+for (const [field, value] of [["temperature", 1], ["temperature", null], ["top_p", 1], ["top_k", 5]]) {
+  await assert.rejects(versionAnthropic.messages.create({ model: "company/smart", max_tokens: 32, messages, [field]: value }),
+    (e) => e.status === 400 && e.error?.error?.type === "invalid_request_error" && e.message.includes(field));
+}
+assert.equal((await versionAnthropic.messages.create({ model: "company/smart", max_tokens: 32, messages, temperature: 0.5 }, { headers: { "anthropic-version": "2023-06-01" } })).type, "message");
+await assert.rejects(versionAnthropic.messages.create({ model: "company/smart", max_tokens: 32, messages }, { headers: { "anthropic-version": "2026-10-22" } }), (e) => e.status === 400);
 console.log("OpenAI Chat, Responses, and Anthropic Messages SDK contracts passed (JSON + streaming helpers, bounded open betas/cache/thinking grammar)");
 // Files API (gateway-owned store): the official SDK's multipart order works.
 const jsonl = '{"custom_id":"a","method":"POST","url":"/v1/chat/completions","body":{}}\n';

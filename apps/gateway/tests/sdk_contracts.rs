@@ -179,11 +179,19 @@ async fn real_client_sdks_accept_all_three_protocols(pool: sqlx::PgPool) {
         "SDK contracts failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    // Thirty-three priced calls, including beta/cache/thinking SDK grammar.
-    // Malformed/stateful/error-marked followups leave no attempts or dispatch.
+    // Thirty-seven priced calls, including beta/cache/thinking SDK grammar
+    // and the four anthropic-version calls (#430). Malformed/stateful/
+    // error-marked followups and version refusals leave no attempts or dispatch.
     let recorded = recorded.lock().unwrap().clone();
-    assert_eq!(recorded.len(), 33);
-    for r in &recorded[31..] {
+    assert_eq!(recorded.len(), 37);
+    // 2026-10-21 (create, stream), pinned 2023-06-01, then 2023-06-01 with
+    // temperature: only the last carries a sampling parameter.
+    for (i, r) in recorded.iter().enumerate().skip(33) {
+        let options = r.messages_options.as_ref().unwrap();
+        assert_eq!(r.temperature, (i == 36).then_some(0.5), "request {i}");
+        assert_eq!((options.top_p, options.top_k), (None, None), "request {i}");
+    }
+    for r in &recorded[31..33] {
         let options = r.messages_options.as_ref().unwrap();
         assert_eq!(
             options.beta_headers,
@@ -261,18 +269,18 @@ async fn real_client_sdks_accept_all_three_protocols(pool: sqlx::PgPool) {
         assert_eq!(r.messages[3].content.as_deref(), Some("sun"));
     }
     let attempts: (i64, i64) = sqlx::query_as("SELECT count(*),count(*) FILTER(WHERE state='succeeded') FROM inference_executions WHERE workload_kind='generation'").fetch_one(&pool).await.unwrap();
-    assert_eq!(attempts, (33, 33));
+    assert_eq!(attempts, (37, 37));
     let holds: Vec<(i64, i64, i64)> = sqlx::query_as("SELECT r.reserved_tokens,l.amount_microusd,p.output_token_limit FROM governance_reservations r JOIN deployment_prices p ON p.id=r.price_id JOIN monetary_ledger l ON l.execution_id=r.execution_id JOIN inference_executions e ON e.id=r.execution_id WHERE l.kind='hold' AND e.workload_kind='generation' ORDER BY r.admitted_at").fetch_all(&pool).await.unwrap();
-    assert_eq!(holds.len(), 33);
+    assert_eq!(holds.len(), 37);
     for (i, (tokens, amount, ceiling)) in holds.into_iter().enumerate() {
         let cap = [
             100, 100, 7, 7, 7, 7, 7, 100, 100, 100, 100, 100, 100, 100, 100, 100, 32, 32, 100, 100,
-            100, 100, 32, 32, 32, 32, 32, 32, 100, 100, 32, 32, 32,
+            100, 100, 32, 32, 32, 32, 32, 32, 100, 100, 32, 32, 32, 32, 32, 32, 32,
         ][i];
         assert_eq!((tokens, amount, ceiling), (1000 + cap, 1000 + cap, 100));
     }
     let settlements: Vec<(i64, i64, i64)> = sqlx::query_as("SELECT r.actual_microusd,r.input_tokens,r.output_tokens FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id WHERE r.state='settled' AND e.workload_kind='generation'").fetch_all(&pool).await.unwrap();
-    assert_eq!(settlements, vec![(7, 3, 4); 33]);
+    assert_eq!(settlements, vec![(7, 3, 4); 37]);
     let ledger: (i64, i64) = sqlx::query_as("SELECT count(*),sum(l.amount_microusd)::bigint FROM monetary_ledger l JOIN inference_executions e ON e.id=l.execution_id WHERE l.kind='settlement' AND e.workload_kind='generation'").fetch_one(&pool).await.unwrap();
-    assert_eq!(ledger, (33, 33 * 7));
+    assert_eq!(ledger, (37, 37 * 7));
 }
