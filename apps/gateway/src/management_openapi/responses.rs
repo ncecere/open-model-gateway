@@ -132,6 +132,57 @@ fn resolved<'a>(document: &'a Value, value: &'a Value) -> Result<&'a Value> {
     Ok(value)
 }
 
+/// The validator cache key: the schema's serialized content. A node of the
+/// committed artifact (immutable and `'static`, so its address is stable and
+/// never reused) has its key serialized once and remembered by address; any
+/// other value is serialized on every call, so a temporary can never match an
+/// entry by address. Serializing per call cost ~88 % of the slice 3 fixture's
+/// validation time (#444).
+pub(super) fn cache_key(schema: &Value) -> Result<std::sync::Arc<str>> {
+    static NODES: std::sync::OnceLock<std::collections::HashSet<usize>> =
+        std::sync::OnceLock::new();
+    static KEYS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<str>>>,
+    > = std::sync::OnceLock::new();
+    fn walk(value: &Value, out: &mut std::collections::HashSet<usize>) {
+        out.insert(std::ptr::from_ref(value) as usize);
+        match value {
+            Value::Array(items) => items.iter().for_each(|v| walk(v, out)),
+            Value::Object(map) => map.values().for_each(|v| walk(v, out)),
+            _ => {}
+        }
+    }
+    let serialize = || -> Result<std::sync::Arc<str>> {
+        KEY_SERIALIZATIONS.with(|n| n.set(n.get() + 1));
+        Ok(serde_json::to_string(schema)?.into())
+    };
+    let address = std::ptr::from_ref(schema) as usize;
+    let nodes = NODES.get_or_init(|| {
+        let mut nodes = std::collections::HashSet::new();
+        walk(artifact(), &mut nodes);
+        nodes
+    });
+    if !nodes.contains(&address) {
+        return serialize();
+    }
+    let keys = KEYS.get_or_init(Default::default);
+    if let Some(key) = keys.lock().unwrap().get(&address) {
+        return Ok(key.clone());
+    }
+    let key = serialize()?;
+    keys.lock().unwrap().insert(address, key.clone());
+    Ok(key)
+}
+
+thread_local! {
+    /// How many validator cache keys THIS thread serialized (#444 regression
+    /// control; per thread, so concurrently running tests cannot disturb it).
+    static KEY_SERIALIZATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+pub(crate) fn key_serializations() -> usize {
+    KEY_SERIALIZATIONS.with(std::cell::Cell::get)
+}
+
 pub(crate) fn validator(
     document: &Value,
     schema: &Value,
@@ -155,9 +206,11 @@ pub(crate) fn validator(
         return compile(document, schema);
     }
     static CACHE: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::BTreeMap<String, std::sync::Arc<jsonschema::Validator>>>,
+        std::sync::Mutex<
+            std::collections::BTreeMap<std::sync::Arc<str>, std::sync::Arc<jsonschema::Validator>>,
+        >,
     > = std::sync::OnceLock::new();
-    let key = serde_json::to_string(schema)?;
+    let key = cache_key(schema)?;
     let mut cache = CACHE.get_or_init(Default::default).lock().unwrap();
     if let Some(validator) = cache.get(&key) {
         return Ok(validator.clone());

@@ -13,6 +13,8 @@ pub mod videos;
 
 #[cfg(all(test, feature = "integration-tests"))]
 mod nullable_tests;
+#[cfg(all(test, feature = "integration-tests"))]
+mod streamed_413_tests;
 
 use crate::inference::error::InferenceError;
 use axum::{

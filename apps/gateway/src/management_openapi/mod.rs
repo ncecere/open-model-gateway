@@ -15,6 +15,7 @@ pub(crate) mod responses;
 mod settings_tests;
 mod setup_review_tests;
 pub(crate) mod validation;
+mod validator_cache_tests;
 mod wiring_tests;
 
 #[cfg(test)]
