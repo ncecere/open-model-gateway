@@ -37,14 +37,14 @@ pub(super) fn apply(document: &mut Value) -> Result<()> {
     for (code, message) in [
         (401, "Authentication required"),
         (403, "Request verification failed"),
-        (500, "Authentication service unavailable"),
+        (503, "Authentication service unavailable"),
     ] {
         schemas.insert(format!("ManagementAuth{code}"),json!({"type":"object","required":["error"],"additionalProperties":false,"properties":{"error":{"const":message}}}));
     }
     schemas.insert("ManagementAuthThrottle".into(),json!({"type":"object","required":["error"],"additionalProperties":false,"properties":{"error":{"const":"Too many sign-in attempts; try again shortly"}}}));
     document["x-omg-middleware-contracts"] = json!({
-        "management":{"authentication":"exclusive credential family; duplicate/mixed-header refusal and live session/token checks (401); unsafe browser Origin/CSRF (403); bearer per-IP/replica/per-token throttles before policy (429); authentication storage (500)","authorization":"live role, token policy/scope/IP and workspace/key boundary; storage/audit refusal (503); readiness (501 only if Scope is not token-ready)","body_limit":"413 text/plain before handler extraction; upload routers use their own caps"},
-        "logout":{"authentication":"own session/Origin/CSRF verification (401/403/500); not management bearer middleware, no bearer throttle","body_limit":"413 text/plain before handler extraction"},
+        "management":{"authentication":"exclusive credential family; duplicate/mixed-header refusal and live session/token checks (401); unsafe browser Origin/CSRF (403); bearer per-IP/replica/per-token throttles before policy (429); authentication storage (503, #439)","authorization":"live role, token policy/scope/IP and workspace/key boundary; storage/audit refusal (503); readiness (501 only if Scope is not token-ready)","body_limit":"413 text/plain before handler extraction; upload routers use their own caps"},
+        "logout":{"authentication":"own session/Origin/CSRF verification (401/403; storage 503); not management bearer middleware, no bearer throttle","body_limit":"413 text/plain before handler extraction"},
         "public":{"authentication":"anonymous handler; its own identity-flow statuses remain fragment-owned","body_limit":"413 text/plain before handler extraction"}
     });
     let snapshot = document.clone();
@@ -78,7 +78,7 @@ pub(super) fn apply(document: &mut Value) -> Result<()> {
             // operation inventory. Newly completed areas inherit them directly.
             let mut additions = vec![(413, json!({"type":"string"}), false)];
             if managed || logout {
-                for code in [401, 403, 500] {
+                for code in [401, 403, 503] {
                     additions.push((
                         code,
                         json!({"$ref":format!("#/components/schemas/ManagementAuth{code}")}),
@@ -91,11 +91,6 @@ pub(super) fn apply(document: &mut Value) -> Result<()> {
                     429,
                     json!({"$ref":"#/components/schemas/ManagementAuthThrottle"}),
                     true,
-                ));
-                additions.push((
-                    503,
-                    json!({"$ref":"#/components/schemas/ErrorEnvelope"}),
-                    false,
                 ));
                 if access.starts_with("Workspace") {
                     additions.push((
@@ -117,7 +112,9 @@ pub(super) fn apply(document: &mut Value) -> Result<()> {
                 }
             }
             for (code, schema, private) in additions {
-                let body_schema = if managed && code == 403 {
+                // 403 and 503 come from authentication (private headers) or
+                // from the handler/authorization layer (ErrorEnvelope).
+                let body_schema = if managed && (code == 403 || code == 503) {
                     json!({"anyOf":[schema,{"$ref":"#/components/schemas/ErrorEnvelope"}]})
                 } else {
                     schema.clone()

@@ -730,7 +730,7 @@ async fn disabled_login_and_bearer_rejection_do_not_need_database() {
     );
     assert!(matches!(
         verify_session(&state, &headers).await,
-        Err(AuthError(StatusCode::UNAUTHORIZED))
+        Err(AuthError(StatusCode::UNAUTHORIZED, None))
     ));
 }
 
@@ -1214,7 +1214,7 @@ mod database {
             .unwrap();
         assert!(matches!(
             verify_session(&state, &headers).await,
-            Err(AuthError(StatusCode::UNAUTHORIZED))
+            Err(AuthError(StatusCode::UNAUTHORIZED, None))
         ));
         // A disabled user, then a revoked session (a revocation is final, #145).
         sqlx::query("UPDATE browser_sessions SET expires_at=now()+interval '1 hour'")
@@ -1252,7 +1252,7 @@ mod database {
             .unwrap();
         assert!(matches!(
             verify_session(&state, &cookie_header(SESSION, &session)).await,
-            Err(AuthError(StatusCode::UNAUTHORIZED))
+            Err(AuthError(StatusCode::UNAUTHORIZED, None))
         ));
         let app = crate::management::router(state.clone()).with_state(state.store.clone());
         let response = app

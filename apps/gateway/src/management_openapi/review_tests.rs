@@ -19,13 +19,26 @@ fn management_openapi_review_middleware_inventory_is_shared_by_all_protected_rou
             );
             let statuses: &[&str] = match route.access {
                 Access::Anonymous => &[],
-                Access::BrowserLogout => &["401", "403", "500"],
-                _ => &["401", "403", "429", "500", "503"],
+                Access::BrowserLogout => &["401", "403", "503"],
+                _ => &["401", "403", "429", "503"],
             };
             for status in statuses {
                 assert!(
                     op["responses"].get(status).is_some(),
                     "missing middleware {status}: {method} {}",
+                    route.path
+                );
+            }
+            // #439: authentication storage failure is a 503 with its own body.
+            if !statuses.is_empty() {
+                let reference = op["responses"]["503"]["$ref"].as_str().unwrap_or_default();
+                let response = reference
+                    .strip_prefix('#')
+                    .and_then(|pointer| document.pointer(pointer))
+                    .unwrap_or(&op["responses"]["503"]);
+                assert!(
+                    response.to_string().contains("ManagementAuth503"),
+                    "503 lacks the authentication storage body: {method} {}",
                     route.path
                 );
             }
