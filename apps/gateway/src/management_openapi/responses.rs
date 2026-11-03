@@ -132,6 +132,12 @@ fn resolved<'a>(document: &'a Value, value: &'a Value) -> Result<&'a Value> {
     Ok(value)
 }
 
+/// How many validator cache keys were serialized (#444 regression control).
+static KEY_SERIALIZATIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+pub(crate) fn key_serializations() -> usize {
+    KEY_SERIALIZATIONS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub(crate) fn validator(
     document: &Value,
     schema: &Value,
@@ -157,6 +163,7 @@ pub(crate) fn validator(
     static CACHE: std::sync::OnceLock<
         std::sync::Mutex<std::collections::BTreeMap<String, std::sync::Arc<jsonschema::Validator>>>,
     > = std::sync::OnceLock::new();
+    KEY_SERIALIZATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let key = serde_json::to_string(schema)?;
     let mut cache = CACHE.get_or_init(Default::default).lock().unwrap();
     if let Some(validator) = cache.get(&key) {
