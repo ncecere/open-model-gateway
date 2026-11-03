@@ -475,8 +475,9 @@ async fn api_version_2026_10_21_refuses_sampling_parameters_before_admission() {
                 error["error"]["type"], "invalid_request_error",
                 "{name}: {field}"
             );
+            let message = error["error"]["message"].as_str().unwrap();
             assert!(
-                error["error"]["message"].as_str().unwrap().contains(field),
+                message.contains(field) && message.contains("2026-10-21"),
                 "{name}: {field}"
             );
         }
@@ -544,5 +545,81 @@ async fn unsupported_api_versions_are_refused_before_admission() {
         }
         assert_eq!(repository.starts.load(Ordering::SeqCst), 0, "{name}");
         assert!(captures.lock().unwrap().is_empty(), "{name}");
+    }
+}
+
+/// 1x1 PNG.
+const PIXEL: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+#[tokio::test]
+async fn an_accepted_body_is_forwarded_identically_under_both_versions() {
+    for (name, _mock, captures, app, repository) in version_routes().await {
+        let native = name == "native";
+        let mut user = vec![
+            json!({"type":"text","text":"look","cache_control":{"type":"ephemeral","ttl":"5m"}}),
+        ];
+        if native {
+            user.push(json!({"type":"image","source":{"type":"base64","media_type":"image/png","data":PIXEL}}));
+        }
+        let body = json!({"model":"m","max_tokens":4096,
+            "system":[{"type":"text","text":"instructions","cache_control":{"type":"ephemeral"}}],
+            "thinking":{"type":"enabled","budget_tokens":1024},"output_config":{"effort":"high"},
+            "stop_sequences":["END"],
+            "tools":[{"name":"weather","description":"d","input_schema":{"type":"object"}}],
+            "tool_choice":{"type":"auto"},
+            "messages":[{"role":"user","content":user},
+                {"role":"assistant","content":[{"type":"tool_use","id":"c","name":"weather","input":{"city":"x"}}]},
+                {"role":"user","content":[{"type":"tool_result","tool_use_id":"c","content":[{"type":"text","text":"sun"}]}]}]});
+        for version in ["2023-06-01", "2026-10-21"] {
+            let response = app
+                .clone()
+                .oneshot(versioned(version, body.clone()))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{name} {version}");
+        }
+        assert_eq!(repository.starts.load(Ordering::SeqCst), 2, "{name}");
+        let captures = captures.lock().unwrap();
+        assert_eq!(captures.len(), 2, "{name}");
+        assert_eq!(
+            captures[0].1, captures[1].1,
+            "{name}: forwarded bodies differ"
+        );
+        for header in ["anthropic-version", "anthropic-beta", "content-type"] {
+            let values = |i: usize| {
+                captures[i]
+                    .0
+                    .get_all(header)
+                    .iter()
+                    .map(|v| v.as_bytes().to_vec())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(values(0), values(1), "{name}: {header}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn api_version_2023_06_01_maps_and_nulls_sampling_on_every_route() {
+    for (name, _mock, captures, app, repository) in version_routes().await {
+        let message = json!([{"role":"user","content":"hi"}]);
+        for body in [
+            json!({"model":"m","max_tokens":32,"temperature":0.2,"top_p":0.9,"messages":message}),
+            json!({"model":"m","max_tokens":32,"temperature":null,"top_p":null,"top_k":null,"messages":message}),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(versioned("2023-06-01", body))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{name}");
+        }
+        assert_eq!(repository.starts.load(Ordering::SeqCst), 2, "{name}");
+        let captures = captures.lock().unwrap();
+        assert_eq!(captures[0].1["temperature"], 0.2, "{name}");
+        assert_eq!(captures[0].1["top_p"], 0.9, "{name}");
+        for field in ["temperature", "top_p", "top_k"] {
+            assert!(captures[1].1.get(field).is_none(), "{name}: {field}");
+        }
     }
 }

@@ -693,7 +693,7 @@
                 "2026-10-21"
               ]
             },
-            "description": "Exactly one occurrence with the literal version 2023-06-01 or 2026-10-21. Under 2026-10-21 the request must not contain temperature, top_p or top_k (400 naming the field, even at a default value or null; the positional array form always carries those positions, so it is refused under 2026-10-21). Native Anthropic routes send 2023-06-01 upstream for either version.",
+            "description": "Exactly one occurrence with the literal version 2023-06-01 or 2026-10-21. Under 2026-10-21 the request must not contain temperature, top_p or top_k (400, even at a default value or null; a well-typed value or null names the field and the version; the positional array form always carries those positions, so it is refused under 2026-10-21). Native Anthropic routes send 2023-06-01 upstream for either version.",
             "x-omg-max-occurrences": 1
           },
           {
@@ -2789,7 +2789,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Only under anthropic-version 2023-06-01; under 2026-10-21 the key is refused with 400 naming the field, even at a default value or null."
+              "description": "Only under anthropic-version 2023-06-01; under 2026-10-21 the key is refused with 400 (naming the field and the version for a well-typed value or null), even at a default value."
             },
             "top_p": {
               "oneOf": [
@@ -2802,7 +2802,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Only under anthropic-version 2023-06-01; under 2026-10-21 the key is refused with 400 naming the field, even at a default value or null."
+              "description": "Only under anthropic-version 2023-06-01; under 2026-10-21 the key is refused with 400 (naming the field and the version for a well-typed value or null), even at a default value."
             },
             "top_k": {
               "oneOf": [
@@ -2815,7 +2815,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Only under anthropic-version 2023-06-01; under 2026-10-21 the key is refused with 400 naming the field, even at a default value or null."
+              "description": "Only under anthropic-version 2023-06-01; under 2026-10-21 the key is refused with 400 (naming the field and the version for a well-typed value or null), even at a default value."
             },
             "stop_sequences": {
               "oneOf": [
@@ -3138,7 +3138,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Only under anthropic-version 2023-06-01; under 2026-10-21 the key is refused with 400 naming the field, even at a default value or null."
+              "description": "Only under anthropic-version 2023-06-01; under 2026-10-21 the key is refused with 400 (naming the field and the version for a well-typed value or null), even at a default value."
             },
             {
               "oneOf": [
@@ -3151,7 +3151,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Only under anthropic-version 2023-06-01; under 2026-10-21 the key is refused with 400 naming the field, even at a default value or null."
+              "description": "Only under anthropic-version 2023-06-01; under 2026-10-21 the key is refused with 400 (naming the field and the version for a well-typed value or null), even at a default value."
             },
             {
               "oneOf": [
@@ -3164,7 +3164,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Only under anthropic-version 2023-06-01; under 2026-10-21 the key is refused with 400 naming the field, even at a default value or null."
+              "description": "Only under anthropic-version 2023-06-01; under 2026-10-21 the key is refused with 400 (naming the field and the version for a well-typed value or null), even at a default value."
             },
             {
               "oneOf": [

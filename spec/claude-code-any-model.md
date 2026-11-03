@@ -16,7 +16,7 @@ One Claude-compatible `/v1/messages`, also reached as `/v1/messages?beta=true`. 
 
 | Claude Code sends | Anthropic routes | Other routes |
 |---|---|---|
-| `anthropic-version`, `anthropic-beta` headers | Forwarded (beta values verbatim) | Accepted and not forwarded |
+| `anthropic-version` (`2023-06-01` or `2026-10-21`), `anthropic-beta` headers | Version validated and sent as `2023-06-01`; beta values forwarded verbatim | Accepted and not forwarded |
 | Block-form `system`, `cache_control` anywhere, 1-hour `ttl` | Preserved exactly | Text kept, cache hints dropped (they only affect caching and cost, not output) |
 | `thinking` (`adaptive` or `enabled` with budget), `output_config.effort` | Forwarded | Mapped to the provider's reasoning control where one exists (for example OpenAI `reasoning_effort`); otherwise dropped, since it doesn't change what the model must do |
 | `thinking`/`redacted_thinking` blocks in assistant history | Forwarded with signatures | Removed from history (they are only valid for the model that produced them) |
@@ -24,7 +24,7 @@ One Claude-compatible `/v1/messages`, also reached as `/v1/messages?beta=true`. 
 | `output_config.format` (structured output), tool `strict` | Forwarded | Mapped to JSON-schema output/strict tools where supported; otherwise a 400 |
 | `context_management`, `defer_loading`, task budget | Forwarded | Dropped; Claude Code then manages context itself |
 | Server tools (web search, code execution) | **400 for now** (their extra charges aren't priced yet) | 400 |
-| `temperature`, `top_p`, `top_k`, `stop_sequences`, `metadata.user_id` | Forwarded, except `metadata.user_id`: it stays a gateway client label and is not sent upstream (decided in #70 PR 1 to keep the no-caller-steering invariant) | Mapped where supported |
+| `temperature`, `top_p`, `top_k` (refused under `2026-10-21`), `stop_sequences`, `metadata.user_id` | Forwarded, except `metadata.user_id`: it stays a gateway client label and is not sent upstream (decided in #70 PR 1 to keep the no-caller-steering invariant) | Mapped where supported |
 | Anything not in this table | 400 naming the field (new Claude Code fields get added to the table deliberately) | 400 |
 
 Inference keys are consumed by the gateway and never forwarded. Each provider credential stays the gateway's own.

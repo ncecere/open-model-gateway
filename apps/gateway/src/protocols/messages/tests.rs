@@ -59,10 +59,7 @@ fn version_2026_10_21_refuses_sampling_keys_and_2023_06_01_keeps_them() {
         (json!({"top_k":null}), "top_k"),
     ] {
         let request = wire(extra);
-        assert!(matches!(
-            request.check_version(ApiVersion::V2026_10_21),
-            Err(InferenceError::InvalidField(f)) if f == field
-        ));
+        assert_eq!(request.check_version(ApiVersion::V2026_10_21), Err(field));
         assert!(request.check_version(ApiVersion::V2023_06_01).is_ok());
     }
     assert!(
@@ -90,6 +87,98 @@ fn version_2026_10_21_refuses_sampling_keys_and_2023_06_01_keeps_them() {
     ] {
         assert!(wire(extra).normalize().is_err());
     }
+}
+#[test]
+fn documents_and_citations_stay_refused_under_both_versions() {
+    // 2026-10-21 changes the meaning of these blocks; the claim that a
+    // 2026-10-21 request can be sent upstream as 2023-06-01 rests on them
+    // being outside the grammar under both versions.
+    let doc =
+        json!({"type":"document","source":{"type":"text","media_type":"text/plain","data":"d"}});
+    let cited = |citations: Value| json!({"type":"text","text":"t","citations":citations});
+    let search = json!({"type":"search_result","source":"s","title":"t","content":[{"type":"text","text":"t"}]});
+    let messages = [
+        json!([{"role":"user","content":"hi"},{"role":"assistant","content":[doc.clone()]}]),
+        json!([{"role":"user","content":[doc.clone()]}]),
+        json!([{"role":"user","content":[cited(json!([{"type":"char_location","cited_text":"t","document_index":0,"start_char_index":0,"end_char_index":1}]))]}]),
+        json!([{"role":"user","content":[cited(json!([]))]}]),
+        json!([{"role":"user","content":"hi"},{"role":"assistant","content":[cited(json!([]))]}]),
+        json!([{"role":"user","content":[search.clone()]}]),
+        json!([{"role":"user","content":"hi"},{"role":"assistant","content":[{"type":"tool_use","id":"c","name":"f","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c","content":[doc.clone()]}]}]),
+        json!([{"role":"user","content":"hi"},{"role":"assistant","content":[{"type":"tool_use","id":"c","name":"f","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c","content":[cited(json!([]))]}]}]),
+    ];
+    for (i, messages) in messages.into_iter().enumerate() {
+        let body = json!({"model":"m","max_tokens":32,"messages":messages});
+        for version in [ApiVersion::V2023_06_01, ApiVersion::V2026_10_21] {
+            let refused = serde_json::from_value::<Request>(body.clone())
+                .map_err(|_| InferenceError::InvalidRequest)
+                .and_then(|r| {
+                    r.check_version(version)
+                        .map_err(InferenceError::InvalidField)?;
+                    r.normalize()
+                });
+            assert!(refused.is_err(), "case {i} accepted under {version:?}");
+        }
+    }
+    for system in [json!([doc]), json!([cited(json!([]))])] {
+        let body = json!({"model":"m","max_tokens":32,"system":system,"messages":[{"role":"user","content":"hi"}]});
+        assert!(parse(body).is_err());
+    }
+}
+#[test]
+fn positional_request_form_follows_the_version_rules() {
+    let messages = json!([{"role":"user","content":"hi"}]);
+    // model, messages, system, max_tokens, stream, temperature, top_p, top_k,
+    // stop_sequences, tools, tool_choice, metadata, thinking, output_config,
+    // context_management: every position must be present.
+    let full = json!([
+        "m",
+        messages,
+        null,
+        32,
+        false,
+        null,
+        null,
+        null,
+        null,
+        [],
+        null,
+        null,
+        null,
+        null,
+        null
+    ]);
+    let request = serde_json::from_value::<Request>(full).unwrap();
+    assert_eq!(
+        request.check_version(ApiVersion::V2026_10_21),
+        Err("temperature")
+    );
+    assert!(request.check_version(ApiVersion::V2023_06_01).is_ok());
+    let r = request.normalize().unwrap();
+    assert_eq!(r.temperature, None);
+    let options = r.messages_options.unwrap();
+    assert_eq!((options.top_p, options.top_k), (None, None));
+    let short = json!(["m", messages, null, 32, false]);
+    assert!(serde_json::from_value::<Request>(short).is_err());
+}
+#[test]
+fn batch_lines_keep_the_2023_06_01_rules() {
+    let line = |extra: Value| {
+        let mut v =
+            json!({"model":"m","max_tokens":32,"messages":[{"role":"user","content":"hi"}]});
+        v.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        batch_request(v)
+    };
+    let r = line(json!({"temperature":0.5,"top_p":0.9,"top_k":5})).unwrap();
+    assert_eq!(r.temperature, Some(0.5));
+    let options = r.messages_options.unwrap();
+    assert_eq!((options.top_p, options.top_k), (Some(0.9), Some(5)));
+    let r = line(json!({"temperature":null,"top_p":null,"top_k":null})).unwrap();
+    assert_eq!(r.temperature, None);
+    assert!(line(json!({"stream":true})).is_err());
+    assert!(line(json!({"temperature":1.5})).is_err());
 }
 fn parse(v: Value) -> Result<ChatRequest> {
     serde_json::from_value::<Request>(v)

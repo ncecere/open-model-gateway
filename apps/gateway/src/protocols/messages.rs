@@ -43,6 +43,7 @@ fn version(headers: &HeaderMap) -> Option<ApiVersion> {
         _ => None,
     }
 }
+/// Kept for the header tests written against the boolean form.
 #[cfg(test)]
 fn valid_version(headers: &HeaderMap) -> bool {
     version(headers).is_some()
@@ -55,6 +56,15 @@ fn beta_headers(headers: &HeaderMap) -> std::result::Result<Vec<String>, BetaHea
         .collect::<std::result::Result<Vec<_>, _>>()?;
     crate::providers::messages::validate_beta_headers(values.iter().copied())?;
     Ok(values.into_iter().map(str::to_owned).collect())
+}
+/// A field the client's `anthropic-version` does not allow: the message names
+/// the version, so a client that upgraded the header knows what to remove.
+fn version_error_response(field: &'static str) -> Response {
+    let message = format!("{field}: not supported with anthropic-version 2026-10-21");
+    super::error_with_body(
+        InferenceError::InvalidField(field),
+        json!({"type":"error","error":{"type":"invalid_request_error","message":message}}),
+    )
 }
 fn beta_error_response(tokens: &[String]) -> Response {
     // Exact Anthropic wording triggers Claude Code's retry without rejected
@@ -93,8 +103,8 @@ pub async fn handle(
         }
         Err(e) => return rejection(e),
     };
-    if let Err(e) = wire.check_version(version) {
-        return error_response(e);
+    if let Err(field) = wire.check_version(version) {
+        return version_error_response(field);
     }
     // Anthropic bounds metadata.user_id to 256 characters.
     if wire

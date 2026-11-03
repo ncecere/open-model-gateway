@@ -69,6 +69,9 @@ fn cache(block: &Value, options: &mut MessagesOptions) -> Result<()> {
     }
     Ok(())
 }
+// Version note (#430): `document`, `search_result` and `citations` are not in
+// this grammar. anthropic-version 2026-10-21 changes their meaning, so adding
+// any of them needs a version-aware rule (see `Request::check_version`).
 fn text_blocks(value: &Value, options: &mut MessagesOptions, images: bool) -> Result<Vec<String>> {
     if let Value::String(s) = value {
         return Ok(vec![s.clone()]);
@@ -244,7 +247,12 @@ impl Request {
     /// Version-specific request rules, checked before the shared grammar.
     /// `2026-10-21` removes the sampling parameters: any occurrence, even a
     /// default value or `null`, is refused rather than dropped.
-    pub(super) fn check_version(&self, version: ApiVersion) -> Result<()> {
+    /// Returns the first refused field. Ill-typed values never get here: they
+    /// fail deserialization with the generic 400 under either version.
+    pub(super) fn check_version(
+        &self,
+        version: ApiVersion,
+    ) -> std::result::Result<(), &'static str> {
         if version == ApiVersion::V2026_10_21 {
             for (field, sent) in [
                 ("temperature", self.temperature.is_some()),
@@ -252,7 +260,7 @@ impl Request {
                 ("top_k", self.top_k.is_some()),
             ] {
                 if sent {
-                    return Err(invalid(field));
+                    return Err(field);
                 }
             }
         }
