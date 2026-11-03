@@ -81,7 +81,7 @@ pub(super) struct Parsed {
     pub fingerprint: Vec<u8>,
     pub lines: Vec<Line>,
 }
-pub(super) fn bounded(s: &str, max: usize) -> bool {
+pub(in crate::management) fn bounded(s: &str, max: usize) -> bool {
     !s.is_empty() && s.len() <= max && !s.chars().any(char::is_control)
 }
 pub(super) fn timestamp(s: &str) -> Result<DateTime<Utc>, ApiError> {

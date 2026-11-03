@@ -20,7 +20,7 @@ use std::cell::RefCell;
 const ORIGIN: &str = "http://127.0.0.1:3000";
 const ISSUER: &str = "https://issuer.example.test";
 /// The issuer of the generated vector runs: the trailing slash puts the
-/// vectors' generated fill in the PATH, where a 2048-byte multibyte value is
+/// vectors' generated fill in the PATH, where a 2048-character multibyte value is
 /// valid (in the host it would form a non-ASCII label over the URL parser's
 /// 1000-character limit, a documented divergence probed separately).
 const VECTOR_ISSUER: &str = "https://issuer.example.test/";
@@ -2593,7 +2593,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
 
     // Handler-derived probes the derived vectors cannot generate. Each pins the
     // schema's verdict AND the handler's verdict on the same input, so every
-    // documented divergence (a byte limit against a character limit, trimming,
+    // documented divergence (trimming,
     // lower-casing, the stored row deciding a merge) stays visible.
     let probe_mapping = create_mapping_row(
         c,
@@ -2607,8 +2607,9 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
     let platform_with = |issuer: &str, group: &str| json!({"issuer":issuer,"group_value":group,"target_kind":"platform","platform_role":"user","workspace_id":null,"workspace_role":null,"enabled":true});
     let development = std::env::var("GATEWAY_ENV").as_deref() == Ok("development");
     c.guarded("issuer probes", async {
-        let long_path = format!("https://issuer.example.test/{}", "\u{e9}".repeat(1011));
-        let exact_path = format!("https://issuer.example.test/{}", "\u{e9}".repeat(1010));
+        // 28 ASCII characters of prefix: 2048 and 2049 characters in all (#405).
+        let long_path = format!("https://issuer.example.test/{}", "\u{e9}".repeat(2021));
+        let exact_path = format!("https://issuer.example.test/{}", "\u{e9}".repeat(2020));
         // A non-ASCII host label is limited to 1000 characters by the URL parser
         // (idna uts46.rs); ASCII labels are not, and a long non-ASCII PATH is fine.
         let label_1000 = format!("https://{}.example.test", "\u{e9}".repeat(1000));
@@ -2789,13 +2790,13 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
                 development,
             ),
             (
-                "multibyte path above 2048 bytes",
+                "multibyte path above 2048 characters",
                 long_path.as_str(),
-                true,
+                false,
                 false,
             ),
             (
-                "multibyte path of exactly 2048 bytes",
+                "multibyte path of exactly 2048 characters",
                 exact_path.as_str(),
                 true,
                 true,
@@ -2842,8 +2843,9 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
     })
     .await;
     c.guarded("group value probes", async {
-        let wide = "\u{20ac}".repeat(171);
-        let exact = "\u{20ac}".repeat(170);
+        // Characters, as maxLength counts (#405): three-byte characters agree.
+        let wide = "\u{20ac}".repeat(513);
+        let exact = "\u{20ac}".repeat(512);
         for (method, path) in [
             ("POST", mappings.to_owned()),
             ("POST", format!("{mappings}/preview")),
@@ -2852,9 +2854,9 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
                 &admin,
                 method,
                 &path,
-                "group value above 512 bytes",
+                "group value above 512 characters",
                 platform_with(ISSUER, &wide),
-                true,
+                false,
                 false,
             )
             .await;
@@ -2863,7 +2865,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             &admin,
             "POST",
             &format!("{mappings}/preview"),
-            "group value of exactly 510 bytes",
+            "group value of exactly 512 characters",
             platform_with(ISSUER, &exact),
             true,
             true,
@@ -2873,9 +2875,9 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             &admin,
             "PATCH",
             &probe_path,
-            "patched group value above 512 bytes",
+            "patched group value above 512 characters",
             json!({"group_value":wide}),
-            true,
+            false,
             false,
         )
         .await;
@@ -2883,9 +2885,9 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             &admin,
             "POST",
             &probe_preview,
-            "previewed group value above 512 bytes",
+            "previewed group value above 512 characters",
             json!({"group_value":wide}),
-            true,
+            false,
             false,
         )
         .await;
@@ -2952,10 +2954,11 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         }
     })
     .await;
-    // Email: the handler counts UTF-8 bytes of the trimmed, lower-cased text.
+    // Email: the handler counts the characters of the trimmed, lower-cased text
+    // (#405); U+0130 lower-cases to two characters.
     c.guarded("email probes", async {
-        let wide = format!("{}@t.test", "\u{e9}".repeat(157));
-        let expanding = format!("{}@{}", "\u{130}".repeat(100), "a".repeat(20));
+        let wide = format!("{}@t.test", "\u{e9}".repeat(314));
+        let expanding = format!("{}@{}", "\u{130}".repeat(150), "a".repeat(20));
         type Body = Box<dyn Fn(&str) -> Value>;
         let targets: Vec<(&str, &str, String, Body)> = vec![
             (
@@ -2999,9 +3002,9 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
                 who,
                 method,
                 path,
-                &format!("{name} email above 320 bytes in fewer characters"),
+                &format!("{name} email of 321 multibyte characters"),
                 body(&wide),
-                true,
+                false,
                 false,
             )
             .await;
@@ -3018,10 +3021,10 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         }
     })
     .await;
-    // Workspace names: UTF-8 bytes of the value as sent.
+    // Workspace names: characters of the value as sent (#405).
     c.guarded("workspace name probes", async {
         let owner_id = f.owner.user_id;
-        let wide = "\u{20ac}".repeat(41);
+        let wide = "\u{20ac}".repeat(121);
         let targets: Vec<(&str, &str, String, &Browser, Value)> = vec![
             (
                 "create",
@@ -3050,9 +3053,9 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
                 who,
                 method,
                 &path,
-                &format!("workspace {name} above 120 bytes in fewer characters"),
+                &format!("workspace {name} above 120 multibyte characters"),
                 body,
-                true,
+                false,
                 false,
             )
             .await;

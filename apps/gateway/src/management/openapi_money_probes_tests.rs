@@ -33,8 +33,9 @@ enum Want {
     Agree,
     Pinned(Handler, bool),
 }
-fn mb(bytes: usize) -> String {
-    "\u{e9}".repeat(bytes / 2)
+/// `count` two-byte characters.
+fn mb(count: usize) -> String {
+    "\u{e9}".repeat(count)
 }
 fn unique() -> String {
     Uuid::new_v4().simple().to_string()
@@ -179,37 +180,37 @@ impl Vx<'_> {
     }
 
     // -----------------------------------------------------------------
-    // UTF-8 byte limits: the handler counts bytes (valid_name, bounded(),
-    // the report filters); the schema states them as x-omg-max-bytes (its
-    // maxLength counts characters, #405). The probes prove it against the real
-    // handler: a multibyte value of exactly the limit in bytes is accepted by
-    // both, two bytes more is refused by both.
+    // Character limits: the handler counts characters (valid_name, bounded(),
+    // the report filters), as the schema's maxLength does (#405). The probes
+    // prove it against the real handler with two-byte characters: a value of
+    // exactly the limit is accepted by both, one character more is refused by
+    // both, and the database stores the accepted value (no byte CHECK left).
     // -----------------------------------------------------------------
     async fn multibyte(&self) {
         let centers = "/api/v1/platform/cost-centers";
         for (label, name, code, over) in [
             (
-                "cost center name at 120 bytes",
+                "cost center name at 120 characters",
                 format!("{}{}", mb(88), unique()),
                 format!("c-{}", unique()),
                 false,
             ),
             (
-                "cost center name at 122 bytes",
-                format!("{}{}", mb(90), unique()),
+                "cost center name at 121 characters",
+                format!("{}{}", mb(89), unique()),
                 format!("c-{}", unique()),
                 true,
             ),
             (
-                "cost center code at 120 bytes",
+                "cost center code at 120 characters",
                 format!("n-{}", unique()),
                 format!("{}{}", mb(88), unique()),
                 false,
             ),
             (
-                "cost center code at 122 bytes",
+                "cost center code at 121 characters",
                 format!("n-{}", unique()),
-                format!("{}{}", mb(90), unique()),
+                format!("{}{}", mb(89), unique()),
                 true,
             ),
         ] {
@@ -229,7 +230,7 @@ impl Vx<'_> {
             )
             .await;
         }
-        // Provider mapping text: 200 / 256 / 4096 / 512 bytes.
+        // Provider mapping text: 200 / 256 / 4096 / 512 characters.
         let mappings = "/api/v1/platform/provider-cost-mappings";
         type Set = fn(&mut Value, String);
         let fields: [(&str, usize, Set); 5] = [
@@ -251,17 +252,17 @@ impl Vx<'_> {
         for (label, limit, set) in fields {
             for (extra, want) in [
                 (0, Want::Pinned(Handler::Status(200), true)),
-                (2, Want::Pinned(Handler::Refuse, false)),
+                (1, Want::Pinned(Handler::Refuse, false)),
             ] {
                 let mut body = self.base_mapping(&format!("mb-{}", unique()));
                 // A unique ASCII prefix: a fixed value could equal an account the
-                // generated vectors already created (409, not a byte verdict).
+                // generated vectors already created (409, not a length verdict).
                 set(
                     &mut body,
                     format!("{}{}", &unique()[..8], mb(limit + extra - 8)),
                 );
                 self.probe(
-                    &format!("{label} at {} bytes", limit + extra),
+                    &format!("{label} at {} characters", limit + extra),
                     self.admin,
                     "POST",
                     mappings,
@@ -272,16 +273,16 @@ impl Vx<'_> {
                 .await;
             }
         }
-        // The upstream model counts bytes as well.
+        // The upstream model counts characters as well.
         for (extra, want) in [
             (0, Want::Pinned(Handler::Status(200), true)),
-            (2, Want::Pinned(Handler::Refuse, false)),
+            (1, Want::Pinned(Handler::Refuse, false)),
         ] {
             let mut body = self.base_mapping(&format!("mb-{}", unique()));
             body["bindings"][0]["model_mappings"] =
                 json!([{"provider_model":"provider-model","upstream_model":mb(512 + extra)}]);
             self.probe(
-                &format!("model mapping upstream_model at {} bytes", 512 + extra),
+                &format!("model mapping upstream_model at {} characters", 512 + extra),
                 self.admin,
                 "POST",
                 mappings,
@@ -291,12 +292,12 @@ impl Vx<'_> {
             )
             .await;
         }
-        // Report filters: at most 200 bytes after percent-decoding.
+        // Report filters: at most 200 characters after percent-decoding.
         let template = "/api/v1/platform/cost-report";
         for name in ["model", "provider"] {
             for (characters, want) in [
-                (100, Want::Pinned(Handler::Status(200), true)),
-                (101, Want::Pinned(Handler::Refuse, false)),
+                (200, Want::Pinned(Handler::Status(200), true)),
+                (201, Want::Pinned(Handler::Refuse, false)),
             ] {
                 self.probe_query(
                     &format!("{name} filter of {characters} two-byte characters"),

@@ -490,10 +490,9 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "x-omg-max-bytes": 200
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             },
-            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). No control characters."
+            "description": "Exact public model / provider label. At most 200 characters after percent-decoding, as maxLength counts (#405). No control characters."
           },
           {
             "name": "provider",
@@ -503,10 +502,9 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "x-omg-max-bytes": 200
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             },
-            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). No control characters."
+            "description": "Exact public model / provider label. At most 200 characters after percent-decoding, as maxLength counts (#405). No control characters."
           },
           {
             "name": "accounting_status",
@@ -998,7 +996,7 @@
     "POST /api/v1/platform/report-schedules": {
       "access": "PlatformWrite",
       "operation": {
-        "description": "Browser-only, live-authorized schedule scope. Foreign personal scopes are hidden with 404. Deleted schedules disappear; expired runs retain metadata and null snapshot; CSV expires with 410. Rules the schemas cannot express: recipient_user_ids holds 1-50 DISTINCT users, and distinctness compares PARSED UUIDs (the schema's uniqueItems compares strings, so two spellings of one UUID that differ only in letter case pass the schema and are refused with 400); every recipient must be eligible for the scope (admin/auditor for the platform scope, an owner or admin of the workspace, the owner for a personal workspace). timezone must be a known IANA zone of at most 64 UTF-8 bytes. A personal workspace refuses cost_center_id (the cost-center refusal in `create()` of src/management/scheduled_reports.rs). state=active needs a validated operator public URL (409). Scope limits: 100 platform, 50 per workspace, 10 personal schedules (409).",
+        "description": "Browser-only, live-authorized schedule scope. Foreign personal scopes are hidden with 404. Deleted schedules disappear; expired runs retain metadata and null snapshot; CSV expires with 410. Rules the schemas cannot express: recipient_user_ids holds 1-50 DISTINCT users, and distinctness compares PARSED UUIDs (the schema's uniqueItems compares strings, so two spellings of one UUID that differ only in letter case pass the schema and are refused with 400); every recipient must be eligible for the scope (admin/auditor for the platform scope, an owner or admin of the workspace, the owner for a personal workspace). timezone must be a known IANA zone of at most 64 characters. A personal workspace refuses cost_center_id (the cost-center refusal in `create()` of src/management/scheduled_reports.rs). state=active needs a validated operator public URL (409). Scope limits: 100 platform, 50 per workspace, 10 personal schedules (409).",
         "requestBody": {
           "required": true,
           "content": {
@@ -1185,7 +1183,7 @@
     "PATCH /api/v1/platform/report-schedules/{id}": {
       "access": "PlatformWrite",
       "operation": {
-        "description": "Browser-only, live-authorized schedule scope. Foreign personal scopes are hidden with 404. Deleted schedules disappear; expired runs retain metadata and null snapshot; CSV expires with 410. Rules the schemas cannot express: recipient_user_ids holds 1-50 DISTINCT users, and distinctness compares PARSED UUIDs (the schema's uniqueItems compares strings, so two spellings of one UUID that differ only in letter case pass the schema and are refused with 400); every recipient must be eligible for the scope (admin/auditor for the platform scope, an owner or admin of the workspace, the owner for a personal workspace). timezone must be a known IANA zone of at most 64 UTF-8 bytes. A personal workspace refuses cost_center_id (the cost-center refusal in `create()` of src/management/scheduled_reports.rs). state=active needs a validated operator public URL (409). Scope limits: 100 platform, 50 per workspace, 10 personal schedules (409).",
+        "description": "Browser-only, live-authorized schedule scope. Foreign personal scopes are hidden with 404. Deleted schedules disappear; expired runs retain metadata and null snapshot; CSV expires with 410. Rules the schemas cannot express: recipient_user_ids holds 1-50 DISTINCT users, and distinctness compares PARSED UUIDs (the schema's uniqueItems compares strings, so two spellings of one UUID that differ only in letter case pass the schema and are refused with 400); every recipient must be eligible for the scope (admin/auditor for the platform scope, an owner or admin of the workspace, the owner for a personal workspace). timezone must be a known IANA zone of at most 64 characters. A personal workspace refuses cost_center_id (the cost-center refusal in `create()` of src/management/scheduled_reports.rs). state=active needs a validated operator public URL (409). Scope limits: 100 platform, 50 per workspace, 10 personal schedules (409).",
         "requestBody": {
           "required": true,
           "content": {
@@ -1597,7 +1595,7 @@
     "POST /api/v1/platform/provider-cost-imports": {
       "access": "PlatformWrite",
       "operation": {
-        "description": "Browser-only Anthropic Cost Report v1 evidence. Upload application/json BYTES, not a reserialized JSON Value: page RawValue preserves duplicate keys for server-side typed rejection. Original amounts are decimal cents; conversion residuals are signed fractional micro-USD strings, while amount_microusd is a signed integer string. No invoice verification. Rules the schemas cannot express (parse()): the pages form one chain - every page but the last has has_more=true and a distinct non-empty next_page cursor, the last has has_more=false and next_page=null; buckets are consecutive one-day buckets starting at request.starting_at and ending at request.ending_at, at most request.limit per page; starting_at and ending_at are UTC midnights, the span is at most 31 days, ending_at is not in the future, and exported_at is at or after ending_at and not in the future. Duplicate rows (same bucket and dimensions), non-USD currency and more than 50000 lines are refused. supersedes must name the single latest overlapping import of the same period (409 otherwise); a repeated identical export is returned idempotently. The caps of 31 pages per upload and 31 buckets per page (the schema's maxItems) cannot be isolated from the 31-day span rule by a test: every page must hold at least one bucket (empty pages are refused), so 32 pages or 32 buckets in a page always span more than 31 days and are refused for both reasons. Text limits count UTF-8 bytes (see #405). amount is decimal cents whose whole part is bounded by the i128 micro-USD conversion.",
+        "description": "Browser-only Anthropic Cost Report v1 evidence. Upload application/json BYTES, not a reserialized JSON Value: page RawValue preserves duplicate keys for server-side typed rejection. Original amounts are decimal cents; conversion residuals are signed fractional micro-USD strings, while amount_microusd is a signed integer string. No invoice verification. Rules the schemas cannot express (parse()): the pages form one chain - every page but the last has has_more=true and a distinct non-empty next_page cursor, the last has has_more=false and next_page=null; buckets are consecutive one-day buckets starting at request.starting_at and ending at request.ending_at, at most request.limit per page; starting_at and ending_at are UTC midnights, the span is at most 31 days, ending_at is not in the future, and exported_at is at or after ending_at and not in the future. Duplicate rows (same bucket and dimensions), non-USD currency and more than 50000 lines are refused. supersedes must name the single latest overlapping import of the same period (409 otherwise); a repeated identical export is returned idempotently. The caps of 31 pages per upload and 31 buckets per page (the schema's maxItems) cannot be isolated from the 31-day span rule by a test: every page must hold at least one bucket (empty pages are refused), so 32 pages or 32 buckets in a page always span more than 31 days and are refused for both reasons. Text limits count characters (#405). amount is decimal cents whose whole part is bounded by the i128 micro-USD conversion.",
         "x-omg-raw-byte-body": true,
         "requestBody": {
           "required": true,
@@ -1985,7 +1983,7 @@
             }
           }
         },
-        "description": "Browser-only, Platform Admin write. Creates an immutable, attested mapping of provider workspaces to OMG connections, deployments and workspaces, with per-binding model aliases. Rules the schemas cannot express (create_mapping): effective_end must be after effective_start; bindings must not overlap in time when they share a provider_workspace_id, or share a connection with the same deployment (a binding without a deployment overlaps every deployment of that connection); provider_model is unique within a binding; attested must be true; an exclusive binding needs workspace_id and non_omg_traffic=false; at most 1000 bindings and 100 model mappings per binding. The connection must be an anthropic provider connection, a given deployment must belong to it, a given workspace must exist (400 otherwise), and supersedes must name the account's latest mapping (409 otherwise). Personal workspaces may be bound: Platform Admins see the binding identity, never the workspace's requests. Text limits count UTF-8 bytes (see #405)."
+        "description": "Browser-only, Platform Admin write. Creates an immutable, attested mapping of provider workspaces to OMG connections, deployments and workspaces, with per-binding model aliases. Rules the schemas cannot express (create_mapping): effective_end must be after effective_start; bindings must not overlap in time when they share a provider_workspace_id, or share a connection with the same deployment (a binding without a deployment overlaps every deployment of that connection); provider_model is unique within a binding; attested must be true; an exclusive binding needs workspace_id and non_omg_traffic=false; at most 1000 bindings and 100 model mappings per binding. The connection must be an anthropic provider connection, a given deployment must belong to it, a given workspace must exist (400 otherwise), and supersedes must name the account's latest mapping (409 otherwise). Personal workspaces may be bound: Platform Admins see the binding identity, never the workspace's requests. Text limits count characters (#405)."
       },
       "scope": null,
       "token_policy": "Denied"
@@ -2500,10 +2498,9 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "x-omg-max-bytes": 200
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             },
-            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). No control characters."
+            "description": "Exact public model / provider label. At most 200 characters after percent-decoding, as maxLength counts (#405). No control characters."
           },
           {
             "name": "provider",
@@ -2513,10 +2510,9 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "x-omg-max-bytes": 200
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             },
-            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). No control characters."
+            "description": "Exact public model / provider label. At most 200 characters after percent-decoding, as maxLength counts (#405). No control characters."
           },
           {
             "name": "accounting_status",
@@ -2732,10 +2728,9 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "x-omg-max-bytes": 200
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             },
-            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). No control characters."
+            "description": "Exact public model / provider label. At most 200 characters after percent-decoding, as maxLength counts (#405). No control characters."
           },
           {
             "name": "provider",
@@ -2745,10 +2740,9 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "x-omg-max-bytes": 200
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             },
-            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). No control characters."
+            "description": "Exact public model / provider label. At most 200 characters after percent-decoding, as maxLength counts (#405). No control characters."
           },
           {
             "name": "accounting_status",
@@ -3536,10 +3530,9 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "x-omg-max-bytes": 200
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             },
-            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). No control characters."
+            "description": "Exact public model / provider label. At most 200 characters after percent-decoding, as maxLength counts (#405). No control characters."
           },
           {
             "name": "provider",
@@ -3549,10 +3542,9 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
-              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "x-omg-max-bytes": 200
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
             },
-            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). No control characters."
+            "description": "Exact public model / provider label. At most 200 characters after percent-decoding, as maxLength counts (#405). No control characters."
           },
           {
             "name": "accounting_status",
@@ -3736,7 +3728,7 @@
     "POST /api/v1/workspaces/{ws}/report-schedules": {
       "access": "WorkspaceReportAdmin",
       "operation": {
-        "description": "Browser-only, live-authorized schedule scope. Foreign personal scopes are hidden with 404. Deleted schedules disappear; expired runs retain metadata and null snapshot; CSV expires with 410. Rules the schemas cannot express: recipient_user_ids holds 1-50 DISTINCT users, and distinctness compares PARSED UUIDs (the schema's uniqueItems compares strings, so two spellings of one UUID that differ only in letter case pass the schema and are refused with 400); every recipient must be eligible for the scope (admin/auditor for the platform scope, an owner or admin of the workspace, the owner for a personal workspace). timezone must be a known IANA zone of at most 64 UTF-8 bytes. A personal workspace refuses cost_center_id (the cost-center refusal in `create()` of src/management/scheduled_reports.rs). state=active needs a validated operator public URL (409). Scope limits: 100 platform, 50 per workspace, 10 personal schedules (409).",
+        "description": "Browser-only, live-authorized schedule scope. Foreign personal scopes are hidden with 404. Deleted schedules disappear; expired runs retain metadata and null snapshot; CSV expires with 410. Rules the schemas cannot express: recipient_user_ids holds 1-50 DISTINCT users, and distinctness compares PARSED UUIDs (the schema's uniqueItems compares strings, so two spellings of one UUID that differ only in letter case pass the schema and are refused with 400); every recipient must be eligible for the scope (admin/auditor for the platform scope, an owner or admin of the workspace, the owner for a personal workspace). timezone must be a known IANA zone of at most 64 characters. A personal workspace refuses cost_center_id (the cost-center refusal in `create()` of src/management/scheduled_reports.rs). state=active needs a validated operator public URL (409). Scope limits: 100 platform, 50 per workspace, 10 personal schedules (409).",
         "requestBody": {
           "required": true,
           "content": {
@@ -3923,7 +3915,7 @@
     "PATCH /api/v1/workspaces/{ws}/report-schedules/{id}": {
       "access": "WorkspaceReportAdmin",
       "operation": {
-        "description": "Browser-only, live-authorized schedule scope. Foreign personal scopes are hidden with 404. Deleted schedules disappear; expired runs retain metadata and null snapshot; CSV expires with 410. Rules the schemas cannot express: recipient_user_ids holds 1-50 DISTINCT users, and distinctness compares PARSED UUIDs (the schema's uniqueItems compares strings, so two spellings of one UUID that differ only in letter case pass the schema and are refused with 400); every recipient must be eligible for the scope (admin/auditor for the platform scope, an owner or admin of the workspace, the owner for a personal workspace). timezone must be a known IANA zone of at most 64 UTF-8 bytes. A personal workspace refuses cost_center_id (the cost-center refusal in `create()` of src/management/scheduled_reports.rs). state=active needs a validated operator public URL (409). Scope limits: 100 platform, 50 per workspace, 10 personal schedules (409).",
+        "description": "Browser-only, live-authorized schedule scope. Foreign personal scopes are hidden with 404. Deleted schedules disappear; expired runs retain metadata and null snapshot; CSV expires with 410. Rules the schemas cannot express: recipient_user_ids holds 1-50 DISTINCT users, and distinctness compares PARSED UUIDs (the schema's uniqueItems compares strings, so two spellings of one UUID that differ only in letter case pass the schema and are refused with 400); every recipient must be eligible for the scope (admin/auditor for the platform scope, an owner or admin of the workspace, the owner for a personal workspace). timezone must be a known IANA zone of at most 64 characters. A personal workspace refuses cost_center_id (the cost-center refusal in `create()` of src/management/scheduled_reports.rs). state=active needs a validated operator public URL (409). Scope limits: 100 platform, 50 per workspace, 10 personal schedules (409).",
         "requestBody": {
           "required": true,
           "content": {

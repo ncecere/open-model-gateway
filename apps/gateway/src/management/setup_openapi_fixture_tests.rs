@@ -3887,26 +3887,26 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         )
         .await;
     }
-    // Names are counted in bytes by the handler and in characters by the schema.
+    // Names and descriptions count characters in the handler and the schema (#405).
     for (label, body, expected) in [
         (
-            "a name of 61 two-byte characters",
-            json!({"name":"\u{e9}".repeat(61)}),
+            "a name of 121 two-byte characters",
+            json!({"name":"\u{e9}".repeat(121)}),
             BOTH_REFUSE,
         ),
         (
-            "a name of 60 two-byte characters",
-            json!({"name":"\u{e9}".repeat(60)}),
+            "a name of 120 two-byte characters",
+            json!({"name":"\u{e9}".repeat(120)}),
             BOTH_ACCEPT,
         ),
         (
-            "a description of 1001 two-byte characters",
-            json!({"name":"Bytes","description":"\u{e9}".repeat(1001)}),
+            "a description of 2001 two-byte characters",
+            json!({"name":"Characters","description":"\u{e9}".repeat(2001)}),
             BOTH_REFUSE,
         ),
         (
-            "a description of 1000 two-byte characters",
-            json!({"name":"Bytes","description":"\u{e9}".repeat(1000)}),
+            "a description of 2000 two-byte characters",
+            json!({"name":"Characters","description":"\u{e9}".repeat(2000)}),
             BOTH_ACCEPT,
         ),
     ] {

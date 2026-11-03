@@ -847,7 +847,7 @@ async fn pin(
     );
 }
 
-/// Settings and rule bodies at the byte, spelling and range rules the derived
+/// Settings and rule bodies at the length, spelling and range rules the derived
 /// vectors cannot generate (multibyte text, alternative IP spellings, a float
 /// port, more distinct thresholds than the handler allows).
 pub(super) async fn pinned(g: &Gateway, pool: &PgPool, mail_port: u16) {
@@ -860,7 +860,7 @@ pub(super) async fn pinned(g: &Gateway, pool: &PgPool, mail_port: u16) {
         body[field] = value;
         body
     };
-    // Names are limited in BYTES by the handler, in characters by the schema.
+    // Names count characters in the handler and the schema alike (#405).
     let rows = [
         (
             "name of 120 ASCII characters",
@@ -868,14 +868,14 @@ pub(super) async fn pinned(g: &Gateway, pool: &PgPool, mail_port: u16) {
             (true, true),
         ),
         (
-            "name of 100 two-byte characters",
-            with("display_name", json!("\u{e9}".repeat(100))),
-            (false, true),
+            "name of 120 two-byte characters",
+            with("display_name", json!("\u{e9}".repeat(120))),
+            (true, true),
         ),
         (
-            "name of 60 two-byte characters",
-            with("display_name", json!("\u{e9}".repeat(60))),
-            (true, true),
+            "name of 121 two-byte characters",
+            with("display_name", json!("\u{e9}".repeat(121))),
+            (false, false),
         ),
         (
             "URL of 2048 ASCII bytes",
@@ -1096,11 +1096,16 @@ pub(super) async fn pinned(g: &Gateway, pool: &PgPool, mail_port: u16) {
             edit(&relay, "port", json!(25.0)),
             (false, true),
         ),
-        // Byte limits the schema cannot count.
+        // Character limits, as the schema counts (#405).
         (
-            "username of 200 two-byte characters",
-            edit(&credentials, "username", json!("\u{e9}".repeat(200))),
-            (false, true),
+            "username of 256 two-byte characters",
+            edit(&credentials, "username", json!("\u{e9}".repeat(256))),
+            (true, true),
+        ),
+        (
+            "username of 257 two-byte characters",
+            edit(&credentials, "username", json!("\u{e9}".repeat(257))),
+            (false, false),
         ),
         (
             "username of 256 ASCII bytes",
@@ -1133,7 +1138,7 @@ pub(super) async fn pinned(g: &Gateway, pool: &PgPool, mail_port: u16) {
         )
         .await;
     }
-    // Rule bodies: the name limit is in bytes, the distinct thresholds at most five.
+    // Rule bodies: the name limit counts characters (#405), the distinct thresholds at most five.
     let rules = format!("{ALERTS}/rules");
     let rule_template = "/api/v1/platform/alerts/rules";
     let rule = full(
@@ -1141,9 +1146,14 @@ pub(super) async fn pinned(g: &Gateway, pool: &PgPool, mail_port: u16) {
     );
     let rows = [
         (
-            "rule name of 100 two-byte characters",
-            edit(&rule, "name", json!("\u{e9}".repeat(100))),
-            (false, true),
+            "rule name of 120 two-byte characters",
+            edit(&rule, "name", json!("\u{e9}".repeat(120))),
+            (true, true),
+        ),
+        (
+            "rule name of 121 two-byte characters",
+            edit(&rule, "name", json!("\u{e9}".repeat(121))),
+            (false, false),
         ),
         (
             "six distinct thresholds",
