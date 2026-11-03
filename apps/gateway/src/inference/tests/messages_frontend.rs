@@ -361,3 +361,191 @@ async fn unknown_field_is_named_and_refused_before_admission() {
     assert_eq!(repository.starts.load(Ordering::SeqCst), 0);
     assert!(captures.lock().unwrap().is_empty());
 }
+
+fn versioned(version: &str, body: Value) -> Request<Body> {
+    let mut request = wire(body);
+    request.headers_mut().remove("anthropic-beta");
+    request
+        .headers_mut()
+        .insert("anthropic-version", version.parse().unwrap());
+    request
+}
+fn native_message() -> Value {
+    json!({"id":"private","type":"message","role":"assistant","model":"private","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":3,"output_tokens":1}})
+}
+fn translated_message() -> Value {
+    json!({"id":"private","object":"chat.completion","model":"private","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1}})
+}
+/// Both adapter classes behind the same frontend: native Anthropic and a
+/// translated (OpenAI) route.
+async fn version_routes() -> Vec<(&'static str, Mock, Captures, Router, Arc<MemoryRepository>)> {
+    let mut routes = vec![];
+    for native in [true, false] {
+        let captures = Captures::default();
+        let response = if native {
+            native_message()
+        } else {
+            translated_message()
+        };
+        let mock = upstream(200, response, captures.clone()).await;
+        let (app, repository) = if native {
+            frontend_adapter(Arc::new(
+                crate::providers::anthropic::AnthropicAdapter::for_test(
+                    Arc::new(Resolver),
+                    mock.url.clone(),
+                ),
+            ))
+        } else {
+            frontend(mock.url.clone())
+        };
+        let name = if native { "native" } else { "translated" };
+        routes.push((name, mock, captures, app, repository));
+    }
+    routes
+}
+
+#[tokio::test]
+async fn api_version_2026_10_21_is_served_and_sent_upstream_as_2023_06_01() {
+    for (name, _mock, captures, app, repository) in version_routes().await {
+        let response = app
+            .oneshot(versioned(
+                "2026-10-21",
+                json!({"model":"m","max_tokens":32,"messages":[{"role":"user","content":"hi"}]}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{name}");
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let output: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(output["type"], "message", "{name}");
+        assert_eq!(output["content"][0]["text"], "hello", "{name}");
+        assert_eq!(repository.starts.load(Ordering::SeqCst), 1, "{name}");
+        let captures = captures.lock().unwrap();
+        assert_eq!(captures.len(), 1, "{name}");
+        let (headers, body) = &captures[0];
+        if name == "native" {
+            // The forwarded request means the same under both versions.
+            assert_eq!(headers["anthropic-version"], "2023-06-01");
+            assert_eq!(headers.get_all("anthropic-version").iter().count(), 1);
+        } else {
+            assert!(!headers.contains_key("anthropic-version"));
+        }
+        for field in ["temperature", "top_p", "top_k"] {
+            assert!(body.get(field).is_none(), "{name}: {field}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn api_version_2026_10_21_refuses_sampling_parameters_before_admission() {
+    let sent = [
+        ("temperature", json!(1.0)),
+        ("temperature", json!(1)),
+        ("temperature", json!(0.2)),
+        ("temperature", Value::Null),
+        ("top_p", json!(1.0)),
+        ("top_p", json!(0.9)),
+        ("top_p", Value::Null),
+        ("top_k", json!(5)),
+        ("top_k", Value::Null),
+    ];
+    for (name, _mock, captures, app, repository) in version_routes().await {
+        for (field, value) in &sent {
+            let mut body =
+                json!({"model":"m","max_tokens":32,"messages":[{"role":"user","content":"hi"}]});
+            body[*field] = value.clone();
+            let response = app
+                .clone()
+                .oneshot(versioned("2026-10-21", body))
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "{name}: {field}"
+            );
+            let bytes = axum::body::to_bytes(response.into_body(), 2048)
+                .await
+                .unwrap();
+            let error: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(error["type"], "error", "{name}: {field}");
+            assert_eq!(
+                error["error"]["type"], "invalid_request_error",
+                "{name}: {field}"
+            );
+            assert!(
+                error["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains(field),
+                "{name}: {field}"
+            );
+        }
+        assert_eq!(repository.starts.load(Ordering::SeqCst), 0, "{name}");
+        assert!(captures.lock().unwrap().is_empty(), "{name}");
+    }
+}
+
+#[tokio::test]
+async fn api_version_2023_06_01_keeps_sampling_parameters() {
+    for (name, _mock, captures, app, repository) in version_routes().await {
+        let response = app
+            .oneshot(versioned(
+                "2023-06-01",
+                json!({"model":"m","max_tokens":32,"temperature":0.2,"top_p":0.9,"top_k":5,"messages":[{"role":"user","content":"hi"}]}),
+            ))
+            .await
+            .unwrap();
+        // Translated routes refuse top_k as before (no OpenAI equivalent).
+        let captures = captures.lock().unwrap();
+        if name == "native" {
+            assert_eq!(response.status(), StatusCode::OK, "{name}");
+            assert_eq!(repository.starts.load(Ordering::SeqCst), 1, "{name}");
+            let (headers, body) = &captures[0];
+            assert_eq!(headers["anthropic-version"], "2023-06-01");
+            assert_eq!(body["temperature"], 0.2);
+            assert_eq!(body["top_p"], 0.9);
+            assert_eq!(body["top_k"], 5);
+        } else {
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{name}");
+            assert!(captures.is_empty(), "{name}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn unsupported_api_versions_are_refused_before_admission() {
+    for (name, _mock, captures, app, repository) in version_routes().await {
+        let body = json!({"model":"m","max_tokens":32,"messages":[{"role":"user","content":"hi"}]});
+        let mut cases: Vec<Request<Body>> = [
+            "2026-10-22",
+            "2024-01-01",
+            "2023-06-01,2026-10-21",
+            "2026-10-21,2023-06-01",
+            "latest",
+        ]
+        .into_iter()
+        .map(|v| versioned(v, body.clone()))
+        .collect();
+        let mut both = versioned("2026-10-21", body.clone());
+        both.headers_mut()
+            .append("anthropic-version", "2023-06-01".parse().unwrap());
+        cases.push(both);
+        let mut missing = versioned("2026-10-21", body.clone());
+        missing.headers_mut().remove("anthropic-version");
+        cases.push(missing);
+        for request in cases {
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{name}");
+            let bytes = axum::body::to_bytes(response.into_body(), 2048)
+                .await
+                .unwrap();
+            let error: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(error["error"]["type"], "invalid_request_error", "{name}");
+        }
+        assert_eq!(repository.starts.load(Ordering::SeqCst), 0, "{name}");
+        assert!(captures.lock().unwrap().is_empty(), "{name}");
+    }
+}
