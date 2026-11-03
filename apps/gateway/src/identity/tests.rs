@@ -1040,6 +1040,96 @@ mod database {
         (id, session, csrf)
     }
 
+    /// #439: a storage failure while authenticating a management request is the
+    /// retryable 503 every other management storage failure answers, never a
+    /// 500, for a browser session and for an admin token alike.
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn authentication_storage_failure_is_service_unavailable(pool: sqlx::PgPool) {
+        let mock = MockProvider::start(None).await;
+        let state = mock.state(pool.clone()).await;
+        let (user, session, csrf) = seed(&pool).await;
+        sqlx::query(
+            "INSERT INTO platform_role_grants(user_id,role,source) VALUES($1,'admin','manual')",
+        )
+        .bind(user)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let mut tx = crate::db::begin(&pool).await.unwrap();
+        crate::governance::locks::exclusive(&mut tx, [crate::governance::locks::Scope::User(user)])
+            .await
+            .unwrap();
+        let token = crate::admin_tokens::create_admin_token(
+            &mut tx,
+            user,
+            "Storage failure probe",
+            &["platform:read".to_owned()],
+            30,
+            None,
+        )
+        .await
+        .unwrap()
+        .token;
+        tx.commit().await.unwrap();
+        let app = router(state.clone())
+            .merge(crate::management::router(state.clone()))
+            .with_state(state.store.clone());
+        let requests = || {
+            [
+                Request::builder()
+                    .uri("/api/v1/me")
+                    .header(header::COOKIE, format!("{SESSION}={session}"))
+                    .body(Body::empty())
+                    .unwrap(),
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/me/sessions/revoke-others")
+                    .header(header::COOKIE, format!("{SESSION}={session}"))
+                    .header("origin", "https://gateway.example.test")
+                    .header("x-csrf-token", &csrf)
+                    .body(Body::empty())
+                    .unwrap(),
+                Request::builder()
+                    .uri("/api/v1/platform/users")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            ]
+        };
+        // Positive control while storage works.
+        for request in requests() {
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert!(
+                !response.status().is_server_error(),
+                "control: {}",
+                response.status()
+            );
+        }
+        pool.close().await;
+        for request in requests() {
+            let label = format!("{} {}", request.method(), request.uri());
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "{label}"
+            );
+            assert_eq!(
+                response.headers()[header::CACHE_CONTROL],
+                "no-store",
+                "{label}"
+            );
+            let body = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Value>(&body).unwrap(),
+                json!({"error":"Authentication service unavailable"}),
+                "{label}"
+            );
+        }
+    }
+
     /// Real session/CSRF middleware and handlers against PostgreSQL; the IdP is
     /// mocked and the verified session is seeded, not a demo/browser sign-in.
     #[sqlx::test(migrations = "./enterprise_migrations")]
