@@ -18,6 +18,168 @@ fn version_is_exact_and_beta_is_accepted() {
     );
     assert!(valid_version(&h));
 }
+#[test]
+fn both_supported_versions_are_recognized_exactly() {
+    let mut h = HeaderMap::new();
+    for (value, expected) in [
+        ("2023-06-01", Some(ApiVersion::V2023_06_01)),
+        ("2026-10-21", Some(ApiVersion::V2026_10_21)),
+        ("2026-10-22", None),
+        ("2026-10-21,2023-06-01", None),
+        ("2026-10-21 ", None),
+        ("2026-10-2", None),
+        ("", None),
+    ] {
+        h.insert("anthropic-version", value.parse().unwrap());
+        assert_eq!(version(&h), expected, "{value:?}");
+    }
+    h.insert("anthropic-version", "2026-10-21".parse().unwrap());
+    h.append("anthropic-version", "2026-10-21".parse().unwrap());
+    assert_eq!(version(&h), None);
+    h.insert("anthropic-version", "2026-10-21".parse().unwrap());
+    h.insert("anthropic-beta", "x".repeat(1025).parse().unwrap());
+    assert_eq!(version(&h), None);
+}
+#[test]
+fn version_2026_10_21_refuses_sampling_keys_and_2023_06_01_keeps_them() {
+    let base = json!({"model":"m","max_tokens":32,"messages":[{"role":"user","content":"hi"}]});
+    let wire = |extra: Value| {
+        let mut v = base.clone();
+        v.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::from_value::<Request>(v).unwrap()
+    };
+    for (extra, field) in [
+        (json!({"temperature":1.0}), "temperature"),
+        (json!({"temperature":null}), "temperature"),
+        (json!({"top_p":1.0}), "top_p"),
+        (json!({"top_p":null}), "top_p"),
+        (json!({"top_k":40}), "top_k"),
+        (json!({"top_k":null}), "top_k"),
+    ] {
+        let request = wire(extra);
+        assert_eq!(request.check_version(ApiVersion::V2026_10_21), Err(field));
+        assert!(request.check_version(ApiVersion::V2023_06_01).is_ok());
+    }
+    assert!(
+        wire(json!({}))
+            .check_version(ApiVersion::V2026_10_21)
+            .is_ok()
+    );
+    // 2023-06-01: `null` stays absent and values keep their bounds.
+    let r = wire(json!({"temperature":null,"top_p":null,"top_k":null}))
+        .normalize()
+        .unwrap();
+    assert_eq!(r.temperature, None);
+    let options = r.messages_options.unwrap();
+    assert_eq!((options.top_p, options.top_k), (None, None));
+    let r = wire(json!({"temperature":0.5,"top_p":0.9,"top_k":7}))
+        .normalize()
+        .unwrap();
+    assert_eq!(r.temperature, Some(0.5));
+    let options = r.messages_options.unwrap();
+    assert_eq!((options.top_p, options.top_k), (Some(0.9), Some(7)));
+    for extra in [
+        json!({"temperature":1.5}),
+        json!({"top_p":-0.1}),
+        json!({"top_k":0}),
+    ] {
+        assert!(wire(extra).normalize().is_err());
+    }
+}
+#[test]
+fn documents_and_citations_stay_refused_under_both_versions() {
+    // 2026-10-21 changes the meaning of these blocks; the claim that a
+    // 2026-10-21 request can be sent upstream as 2023-06-01 rests on them
+    // being outside the grammar under both versions.
+    let doc =
+        json!({"type":"document","source":{"type":"text","media_type":"text/plain","data":"d"}});
+    let cited = |citations: Value| json!({"type":"text","text":"t","citations":citations});
+    let search = json!({"type":"search_result","source":"s","title":"t","content":[{"type":"text","text":"t"}]});
+    let messages = [
+        json!([{"role":"user","content":"hi"},{"role":"assistant","content":[doc.clone()]}]),
+        json!([{"role":"user","content":[doc.clone()]}]),
+        json!([{"role":"user","content":[cited(json!([{"type":"char_location","cited_text":"t","document_index":0,"start_char_index":0,"end_char_index":1}]))]}]),
+        json!([{"role":"user","content":[cited(json!([]))]}]),
+        json!([{"role":"user","content":"hi"},{"role":"assistant","content":[cited(json!([]))]}]),
+        json!([{"role":"user","content":[search.clone()]}]),
+        json!([{"role":"user","content":"hi"},{"role":"assistant","content":[{"type":"tool_use","id":"c","name":"f","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c","content":[doc.clone()]}]}]),
+        json!([{"role":"user","content":"hi"},{"role":"assistant","content":[{"type":"tool_use","id":"c","name":"f","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c","content":[cited(json!([]))]}]}]),
+    ];
+    for (i, messages) in messages.into_iter().enumerate() {
+        let body = json!({"model":"m","max_tokens":32,"messages":messages});
+        for version in [ApiVersion::V2023_06_01, ApiVersion::V2026_10_21] {
+            let refused = serde_json::from_value::<Request>(body.clone())
+                .map_err(|_| InferenceError::InvalidRequest)
+                .and_then(|r| {
+                    r.check_version(version)
+                        .map_err(InferenceError::InvalidField)?;
+                    r.normalize()
+                });
+            assert!(refused.is_err(), "case {i} accepted under {version:?}");
+        }
+    }
+    for system in [json!([doc]), json!([cited(json!([]))])] {
+        let body = json!({"model":"m","max_tokens":32,"system":system,"messages":[{"role":"user","content":"hi"}]});
+        assert!(parse(body).is_err());
+    }
+}
+#[test]
+fn positional_request_form_follows_the_version_rules() {
+    let messages = json!([{"role":"user","content":"hi"}]);
+    // model, messages, system, max_tokens, stream, temperature, top_p, top_k,
+    // stop_sequences, tools, tool_choice, metadata, thinking, output_config,
+    // context_management: every position must be present.
+    let full = json!([
+        "m",
+        messages,
+        null,
+        32,
+        false,
+        null,
+        null,
+        null,
+        null,
+        [],
+        null,
+        null,
+        null,
+        null,
+        null
+    ]);
+    let request = serde_json::from_value::<Request>(full).unwrap();
+    assert_eq!(
+        request.check_version(ApiVersion::V2026_10_21),
+        Err("temperature")
+    );
+    assert!(request.check_version(ApiVersion::V2023_06_01).is_ok());
+    let r = request.normalize().unwrap();
+    assert_eq!(r.temperature, None);
+    let options = r.messages_options.unwrap();
+    assert_eq!((options.top_p, options.top_k), (None, None));
+    let short = json!(["m", messages, null, 32, false]);
+    assert!(serde_json::from_value::<Request>(short).is_err());
+}
+#[test]
+fn batch_lines_keep_the_2023_06_01_rules() {
+    let line = |extra: Value| {
+        let mut v =
+            json!({"model":"m","max_tokens":32,"messages":[{"role":"user","content":"hi"}]});
+        v.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        batch_request(v)
+    };
+    let r = line(json!({"temperature":0.5,"top_p":0.9,"top_k":5})).unwrap();
+    assert_eq!(r.temperature, Some(0.5));
+    let options = r.messages_options.unwrap();
+    assert_eq!((options.top_p, options.top_k), (Some(0.9), Some(5)));
+    let r = line(json!({"temperature":null,"top_p":null,"top_k":null})).unwrap();
+    assert_eq!(r.temperature, None);
+    assert!(line(json!({"stream":true})).is_err());
+    assert!(line(json!({"temperature":1.5})).is_err());
+}
 fn parse(v: Value) -> Result<ChatRequest> {
     serde_json::from_value::<Request>(v)
         .map_err(|_| InferenceError::InvalidRequest)?

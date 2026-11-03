@@ -13,9 +13,14 @@ pub struct Request {
     max_tokens: u32,
     #[serde(default)]
     pub(super) stream: bool,
-    temperature: Option<f64>,
-    top_p: Option<f64>,
-    top_k: Option<u32>,
+    // Outer `Some` = the key was sent (even as `null`); 2026-10-21 refuses the
+    // key itself (#430). 2023-06-01 keeps treating `null` as absent.
+    #[serde(default, deserialize_with = "present")]
+    temperature: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "present")]
+    top_p: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "present")]
+    top_k: Option<Option<u32>>,
     stop_sequences: Option<Vec<String>>,
     #[serde(default)]
     tools: Vec<Value>,
@@ -35,6 +40,13 @@ pub(super) struct WireMetadata {
 struct WireMessage {
     role: String,
     content: Value,
+}
+fn present<'de, D, T>(deserializer: D) -> std::result::Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 fn invalid(field: &'static str) -> InferenceError {
     InferenceError::InvalidField(field)
@@ -57,6 +69,9 @@ fn cache(block: &Value, options: &mut MessagesOptions) -> Result<()> {
     }
     Ok(())
 }
+// Version note (#430): `document`, `search_result` and `citations` are not in
+// this grammar. anthropic-version 2026-10-21 changes their meaning, so adding
+// any of them needs a version-aware rule (see `Request::check_version`).
 fn text_blocks(value: &Value, options: &mut MessagesOptions, images: bool) -> Result<Vec<String>> {
     if let Value::String(s) = value {
         return Ok(vec![s.clone()]);
@@ -229,18 +244,43 @@ fn context(value: &Value) -> Result<()> {
     Ok(())
 }
 impl Request {
+    /// Version-specific request rules, checked before the shared grammar.
+    /// `2026-10-21` removes the sampling parameters: any occurrence, even a
+    /// default value or `null`, is refused rather than dropped.
+    /// Returns the first refused field. Ill-typed values never get here: they
+    /// fail deserialization with the generic 400 under either version.
+    pub(super) fn check_version(
+        &self,
+        version: ApiVersion,
+    ) -> std::result::Result<(), &'static str> {
+        if version == ApiVersion::V2026_10_21 {
+            for (field, sent) in [
+                ("temperature", self.temperature.is_some()),
+                ("top_p", self.top_p.is_some()),
+                ("top_k", self.top_k.is_some()),
+            ] {
+                if sent {
+                    return Err(field);
+                }
+            }
+        }
+        Ok(())
+    }
     pub(super) fn normalize(self) -> Result<ChatRequest> {
+        let temperature = self.temperature.flatten();
+        let top_p = self.top_p.flatten();
+        let top_k = self.top_k.flatten();
         if self.messages.is_empty()
             || self.messages.len() > 4096
             || self.max_tokens == 0
-            || self.temperature.is_some_and(|v| !(0.0..=1.0).contains(&v))
+            || temperature.is_some_and(|v| !(0.0..=1.0).contains(&v))
         {
             return Err(InferenceError::InvalidRequest);
         }
-        if self.top_p.is_some_and(|v| !(0.0..=1.0).contains(&v)) {
+        if top_p.is_some_and(|v| !(0.0..=1.0).contains(&v)) {
             return Err(invalid("top_p"));
         }
-        if self.top_k == Some(0) {
+        if top_k == Some(0) {
             return Err(invalid("top_k"));
         }
         if self
@@ -271,8 +311,8 @@ impl Request {
             return Err(invalid("metadata.user_id"));
         }
         let mut options = MessagesOptions {
-            top_p: self.top_p,
-            top_k: self.top_k,
+            top_p,
+            top_k,
             stop_sequences: self.stop_sequences,
             system: self.system.clone(),
             thinking: self.thinking,
@@ -497,7 +537,7 @@ impl Request {
             tools,
             tool_choice,
             max_output_tokens: Some(self.max_tokens),
-            temperature: self.temperature,
+            temperature,
             stream: self.stream,
             messages_options: Some(Box::new(options)),
         })
