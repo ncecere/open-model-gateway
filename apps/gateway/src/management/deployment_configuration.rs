@@ -198,7 +198,8 @@ pub(super) struct ApplyInput {
 pub(super) struct RestoreInput {
     change_id: Uuid,
 }
-/// A decimal revision as the preview reports it: no sign, no padding.
+/// A decimal revision: digits only (no sign), at most 19 of them, leading
+/// zeros accepted, within the signed 64-bit range.
 fn revision(raw: &str) -> Result<i64, ApiError> {
     if raw.is_empty() || raw.len() > 19 || !raw.bytes().all(|b| b.is_ascii_digit()) {
         return Err(invalid());
@@ -211,7 +212,7 @@ fn revision_conflict() -> ManagementError {
     ManagementError::detailed(
         StatusCode::CONFLICT,
         "revision_conflict",
-        "The deployment changed since this preview; review the current configuration again.".into(),
+        "This route's enablement changed since the preview; review it again.".into(),
         json!({}),
     )
 }
@@ -325,22 +326,24 @@ pub(super) async fn apply(
             .execute(&mut *tx)
             .await?;
     }
-    // The revision is the precondition of the write itself as well.
-    if sqlx::query("UPDATE deployments SET enabled=$2 WHERE id=$1 AND revision=$3")
-        .bind(id)
-        .bind(input.enabled)
-        .bind(expected)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected()
-        != 1
-    {
-        return Err(missing().into());
-    }
-    let (change_id, revision): (Uuid, i64) = sqlx::query_as(
-        "SELECT id,revision FROM configuration_changes WHERE deployment_id=$1 ORDER BY revision DESC LIMIT 1",
+    // The revision is the precondition of the write itself as well (the
+    // catalog lock already excludes every other deployment writer).
+    let Some(revision) = sqlx::query_scalar::<_, i64>(
+        "UPDATE deployments SET enabled=$2 WHERE id=$1 AND revision=$3 RETURNING revision",
     )
     .bind(id)
+    .bind(input.enabled)
+    .bind(expected)
+    .fetch_optional(&mut *tx)
+    .await?
+    else {
+        return Err(revision_conflict());
+    };
+    let change_id: Uuid = sqlx::query_scalar(
+        "SELECT id FROM configuration_changes WHERE deployment_id=$1 AND revision=$2",
+    )
+    .bind(id)
+    .bind(revision)
     .fetch_one(&mut *tx)
     .await?;
     tx.commit().await?;

@@ -183,6 +183,45 @@ async fn restore_is_a_new_change_linked_to_its_source(pool: PgPool) {
     let (_, history) = call(&f.s, &f.auditor, "GET", &path(d, "history"), Value::Null).await;
     assert_eq!(history["data"][0]["restored_from"], source.to_string());
     assert!(history["data"][2]["restored_from"].is_null());
+    // The link belongs to the restore only: the next change carries none.
+    let (status, _) = call(
+        &f.s,
+        &f.admin,
+        "PATCH",
+        &format!("/api/v1/platform/deployments/{d}"),
+        json!({"enabled":false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (restored_from, metadata): (Option<Uuid>, Value) = sqlx::query_as("SELECT c.restored_from,a.metadata FROM configuration_changes c JOIN audit_events a ON (a.id,a.created_at)=(c.audit_event_id,c.audit_created_at) WHERE c.deployment_id=$1 AND c.revision=4").bind(d).fetch_one(&pool).await.unwrap();
+    assert!(restored_from.is_none());
+    assert!(metadata.get("restored_from").is_none());
+    let metadata: Value = sqlx::query_scalar("SELECT a.metadata FROM configuration_changes c JOIN audit_events a ON (a.id,a.created_at)=(c.audit_event_id,c.audit_created_at) WHERE c.deployment_id=$1 AND c.revision=3").bind(d).fetch_one(&pool).await.unwrap();
+    assert_eq!(metadata["restored_from"], source.to_string());
+    // Within one transaction too: the trigger consumes the setting.
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT set_config('omg.configuration_restore',$1,true)")
+        .bind(source.to_string())
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    for enabled in [true, false] {
+        sqlx::query("UPDATE deployments SET enabled=$2 WHERE id=$1")
+            .bind(d)
+            .bind(enabled)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+    }
+    tx.commit().await.unwrap();
+    let links: Vec<Option<Uuid>> = sqlx::query_scalar(
+        "SELECT restored_from FROM configuration_changes WHERE deployment_id=$1 AND revision IN (5,6) ORDER BY revision",
+    )
+    .bind(d)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(links, vec![Some(source), None]);
     // The link is immutable like the rest of the snapshot.
     assert!(
         sqlx::query("UPDATE configuration_changes SET restored_from=NULL WHERE deployment_id=$1")
@@ -238,6 +277,15 @@ async fn restore_refuses_unsafe_sources_and_unauthorized_actors(pool: PgPool) {
         "POST",
         &path(d, "restore-preview"),
         json!({"change_id":legacy}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["reason"], "restore_values_unavailable");
+    let (status, body) = apply(
+        &f,
+        &f.admin,
+        d,
+        json!({"enabled":true,"expected_revision":"2","restore_of":legacy}),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
@@ -301,4 +349,71 @@ async fn restore_refuses_unsafe_sources_and_unauthorized_actors(pool: PgPool) {
         );
     }
     assert_eq!(changes(&pool, d).await.len(), 2);
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn concurrent_applies_at_one_revision_commit_once(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let d = create(&f, &pool, "concurrent").await;
+    let body = json!({"enabled":false,"expected_revision":"1"});
+    let (a, b) = tokio::join!(
+        apply(&f, &f.admin, d, body.clone()),
+        apply(&f, &f.admin, d, body.clone())
+    );
+    let mut outcomes = vec![
+        (
+            a.0,
+            a.1["outcome"].as_str().map(str::to_owned),
+            a.1["error"]["reason"].as_str().map(str::to_owned),
+        ),
+        (
+            b.0,
+            b.1["outcome"].as_str().map(str::to_owned),
+            b.1["error"]["reason"].as_str().map(str::to_owned),
+        ),
+    ];
+    outcomes.sort();
+    assert_eq!(
+        outcomes,
+        vec![
+            (StatusCode::OK, Some("applied".into()), None),
+            (StatusCode::CONFLICT, None, Some("revision_conflict".into())),
+        ]
+    );
+    assert_eq!(changes(&pool, d).await.len(), 2);
+    // A writer holding the catalog lock blocks the apply, which then sees the
+    // new revision and refuses.
+    let mut held = pool.begin().await.unwrap();
+    crate::management::resources::catalog_lock(&mut held, true)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE deployments SET enabled=true WHERE id=$1")
+        .bind(d)
+        .execute(&mut *held)
+        .await
+        .unwrap();
+    let waiting = {
+        let f_s = f.s.clone();
+        let admin = f.admin.clone();
+        tokio::spawn(async move {
+            call(
+                &f_s,
+                &admin,
+                "POST",
+                &path(d, "apply"),
+                json!({"enabled":true,"expected_revision":"2"}),
+            )
+            .await
+        })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(
+        !waiting.is_finished(),
+        "the apply must wait for the catalog lock"
+    );
+    held.commit().await.unwrap();
+    let (status, body) = waiting.await.unwrap();
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["reason"], "revision_conflict");
+    assert_eq!(changes(&pool, d).await.len(), 3);
 }

@@ -4225,7 +4225,7 @@
             }
           },
           "409": {
-            "description": "revision_conflict (the deployment changed since the preview) or restore_source_mismatch (the restored change recorded a different value)",
+            "description": "revision_conflict (this route's enablement changed since the preview; changes to sibling routes, the model, the connection or catalogs do not refuse it), restore_source_mismatch (the restored change recorded a different value) or restore_values_unavailable (restore_of names a legacy event recorded without values)",
             "content": {
               "application/json": {
                 "schema": {

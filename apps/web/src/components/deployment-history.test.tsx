@@ -96,7 +96,7 @@ describe("deployment History", () => {
     let unchanged = true;
     const fetch = vi.fn().mockImplementation((url: string) => Promise.resolve(
       url.endsWith("/restore-preview") ? Response.json(unchanged ? { ...restorePreview, diff: [] } : restorePreview)
-        : url.endsWith("/configuration/apply") ? Response.json({ error: { code: "409", reason: "revision_conflict", message: "The deployment changed since this preview; review the current configuration again." } }, { status: 409 })
+        : url.endsWith("/configuration/apply") ? Response.json({ error: { code: "409", reason: "revision_conflict", message: "This route's enablement changed since the preview; review it again." } }, { status: 409 })
           : Response.json({ data: [created], next_cursor: null })));
     vi.stubGlobal("fetch", fetch);
     const user = restoreView();
@@ -108,7 +108,7 @@ describe("deployment History", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /^Continue to confirmation$/ }).hasAttribute("disabled")).toBe(false));
     await user.click(screen.getByRole("button", { name: /^Continue to confirmation$/ }));
     await user.click(await screen.findByRole("button", { name: /^Restore configuration$/ }));
-    await screen.findByText("The deployment changed since this preview; review the current configuration again.");
+    await screen.findByText("This route's enablement changed since the preview; review it again.");
     expect(screen.getByRole("dialog", { name: /^Restore Upstream\?$/ })).toBeTruthy();
   });
 });

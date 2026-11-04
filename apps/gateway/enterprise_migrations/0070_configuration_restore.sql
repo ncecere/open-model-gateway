@@ -48,6 +48,9 @@ BEGIN
         action_code := 'configuration.updated';
         resource_code := 'deployments';
         restore := nullif(current_setting('omg.configuration_restore',true),'')::uuid;
+        -- Consumed by this change: a later change in the same transaction never
+        -- inherits the link.
+        PERFORM set_config('omg.configuration_restore','',true);
     END IF;
     INSERT INTO public.audit_events(id,created_at,actor_user_id,admin_token_id,action,resource_type,resource_id,metadata)
     VALUES(event_id,event_time,
