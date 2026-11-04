@@ -46,12 +46,21 @@ BEGIN
    RAISE EXCEPTION 'ineligible target' USING ERRCODE='23514';
   END IF;
   -- Backstop for the handler's checks: a current member of an enabled shared
-  -- workspace, for an enabled model.
+  -- workspace, for an enabled model. Catalog eligibility is the handler's
+  -- check (and approval's recheck); a request selects nothing by itself.
   IF NEW.target_kind='model_selection' AND (
      NOT EXISTS(SELECT FROM workspaces WHERE id=NEW.workspace_id AND kind IN ('team','project') AND disabled_at IS NULL)
      OR NOT EXISTS(SELECT FROM effective_workspace_memberships e WHERE e.workspace_id=NEW.workspace_id AND e.user_id=NEW.requester)
      OR NOT EXISTS(SELECT FROM models WHERE id=NEW.model_id AND enabled)) THEN
    RAISE EXCEPTION 'ineligible target' USING ERRCODE='23514';
+  END IF;
+  -- A queue bound for model requests: at most 5 pending per requester and
+  -- workspace, and 100 pending per workspace (a membership request is one
+  -- per requester and workspace by its unique index).
+  IF NEW.target_kind='model_selection' AND (
+     (SELECT count(*) FROM access_requests WHERE requester=NEW.requester AND workspace_id=NEW.workspace_id AND target_kind='model_selection' AND status='pending' AND expires_at>t)>=5
+     OR (SELECT count(*) FROM access_requests WHERE workspace_id=NEW.workspace_id AND target_kind='model_selection' AND status='pending' AND expires_at>t)>=100) THEN
+   RAISE EXCEPTION 'request cap' USING ERRCODE='P0083',DETAIL='60';
   END IF;
   IF (SELECT count(*) FROM access_requests WHERE requester=NEW.requester AND status='pending' AND expires_at>t)>=20 THEN
    RAISE EXCEPTION 'request cap' USING ERRCODE='P0083',DETAIL='60';

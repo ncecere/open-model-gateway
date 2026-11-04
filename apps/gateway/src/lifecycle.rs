@@ -182,11 +182,12 @@ pub async fn expire_access_requests_fenced(
     let mut tx = crate::db::begin(&store.pool).await?;
     crate::leases::fence(&mut tx, fence).await?;
     lock(&mut tx).await?;
-    let expired: Vec<(Uuid,Uuid)>=sqlx::query_as("UPDATE access_requests SET status='expired',decided_by=NULL WHERE id IN (SELECT id FROM access_requests WHERE status='pending' AND expires_at<=clock_timestamp() ORDER BY expires_at,id LIMIT 100 FOR UPDATE SKIP LOCKED) AND status='pending' RETURNING id,workspace_id")
+    let expired: Vec<(Uuid,Uuid,String)>=sqlx::query_as("UPDATE access_requests SET status='expired',decided_by=NULL WHERE id IN (SELECT id FROM access_requests WHERE status='pending' AND expires_at<=clock_timestamp() ORDER BY expires_at,id LIMIT 100 FOR UPDATE SKIP LOCKED) AND status='pending' RETURNING id,workspace_id,target_kind")
         .fetch_all(&mut *tx).await?;
-    for (id, ws) in &expired {
-        sqlx::query("INSERT INTO audit_events(id,workspace_id,action,resource_type,resource_id,metadata) VALUES($1,$2,'access_request.expired','access_request',$3,'{\"kind\":\"workspace_membership\",\"outcome\":\"expired\"}'::jsonb)")
-            .bind(Uuid::now_v7()).bind(ws).bind(id).execute(&mut *tx).await?;
+    for (id, ws, kind) in &expired {
+        // The request's own kind (#83 slice B): a membership or model request.
+        sqlx::query("INSERT INTO audit_events(id,workspace_id,action,resource_type,resource_id,metadata) VALUES($1,$2,'access_request.expired','access_request',$3,jsonb_build_object('kind',$4::text,'outcome','expired'))")
+            .bind(Uuid::now_v7()).bind(ws).bind(id).bind(kind).execute(&mut *tx).await?;
     }
     tx.commit().await?;
     Ok(expired.len() as u64)

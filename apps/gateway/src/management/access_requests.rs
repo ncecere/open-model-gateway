@@ -124,6 +124,13 @@ async fn eligible_target(tx: &mut Transaction<'_, Postgres>, ws: Uuid) -> Result
     }
     Ok(())
 }
+fn kind_of(model: Option<Uuid>) -> &'static str {
+    if model.is_some() {
+        "model_selection"
+    } else {
+        "workspace_membership"
+    }
+}
 async fn effective_member(
     tx: &mut Transaction<'_, Postgres>,
     ws: Uuid,
@@ -163,10 +170,10 @@ async fn expire(
     u: &BrowserPrincipal,
     ids: &[Uuid],
 ) -> Result<(), ApiError> {
-    let rows:Vec<(Uuid,Uuid)>=sqlx::query_as("UPDATE access_requests SET status='expired',decided_by=NULL WHERE id=ANY($1) AND status='pending' AND expires_at<=clock_timestamp() RETURNING id,workspace_id")
+    let rows:Vec<(Uuid,Uuid,String)>=sqlx::query_as("UPDATE access_requests SET status='expired',decided_by=NULL WHERE id=ANY($1) AND status='pending' AND expires_at<=clock_timestamp() RETURNING id,workspace_id,target_kind")
         .bind(ids).fetch_all(&mut **tx).await?;
-    for (id, ws) in rows {
-        event(tx, u, ws, id, "expired").await?;
+    for (id, ws, kind) in rows {
+        event(tx, u, ws, id, &kind, "expired").await?;
     }
     Ok(())
 }
@@ -175,12 +182,9 @@ async fn event(
     u: &BrowserPrincipal,
     ws: Uuid,
     id: Uuid,
+    kind: &str,
     outcome: &str,
 ) -> Result<(), ApiError> {
-    let kind: String = sqlx::query_scalar("SELECT target_kind FROM access_requests WHERE id=$1")
-        .bind(id)
-        .fetch_one(&mut **tx)
-        .await?;
     audit(
         tx,
         u,
@@ -288,6 +292,11 @@ async fn create(
         tx.commit().await?;
         return Ok(result);
     }
+    // A model request from a non-member is refused before any exclusive
+    // authority lock (rechecked under the locks below).
+    if b.model_id.is_some() && !effective_member(&mut tx, b.workspace_id, u.user_id).await? {
+        return Err(missing().into());
+    }
     scope_locks(&mut tx, b.workspace_id, &[u.user_id]).await?;
     resources::platform_role_snapshot(&mut tx, u.user_id).await?;
     if let Some(model) = b.model_id {
@@ -314,7 +323,15 @@ async fn create(
     expire(&mut tx, &u, &due).await?;
     let id:Uuid=sqlx::query_scalar("INSERT INTO access_requests(requester,workspace_id,model_id,reason,idempotency_digest,payload_digest) VALUES($1,$2,$3,$4,$5,$6) RETURNING id")
         .bind(u.user_id).bind(b.workspace_id).bind(b.model_id).bind(b.reason).bind(digest).bind(payload).fetch_one(&mut *tx).await.map_err(insertion_error)?;
-    event(&mut tx, &u, b.workspace_id, id, "created").await?;
+    event(
+        &mut tx,
+        &u,
+        b.workspace_id,
+        id,
+        kind_of(b.model_id),
+        "created",
+    )
+    .await?;
     let result = one(&mut tx, id).await?;
     tx.commit().await?;
     Ok(result)
@@ -413,8 +430,8 @@ async fn withdraw(
     resources::platform_role_snapshot(&mut tx, u.user_id).await?;
     let ws = owned(&mut tx, u.user_id, id).await?;
     expire(&mut tx, &u, &[id]).await?;
-    let status: String =
-        sqlx::query_scalar("SELECT status FROM access_requests WHERE id=$1 FOR UPDATE")
+    let (status, kind): (String, String) =
+        sqlx::query_as("SELECT status,target_kind FROM access_requests WHERE id=$1 FOR UPDATE")
             .bind(id)
             .fetch_one(&mut *tx)
             .await?;
@@ -428,7 +445,7 @@ async fn withdraw(
             .bind(u.user_id)
             .execute(&mut *tx)
             .await?;
-        event(&mut tx, &u, ws, id, "withdrawn").await?;
+        event(&mut tx, &u, ws, id, &kind, "withdrawn").await?;
     }
     let result = one(&mut tx, id).await?;
     tx.commit().await?;
@@ -514,30 +531,19 @@ async fn decision(
     if let (true, Some(model)) = (approve, model) {
         // The requester must still be entitled and a member; the model still
         // eligible and not already usable. Otherwise the request stays pending.
-        if resources::platform_role_snapshot(&mut tx, requester)
-            .await
-            .is_err()
-            || !effective_member(&mut tx, ws, requester).await?
-        {
-            return Err(ApiError(
-                StatusCode::CONFLICT,
-                "Requester is no longer eligible",
-            ));
+        let ineligible = || ApiError(StatusCode::CONFLICT, "Requester is no longer eligible");
+        match resources::platform_role_snapshot(&mut tx, requester).await {
+            Ok(_) => {}
+            Err(e) if e.0 == StatusCode::FORBIDDEN => return Err(ineligible()),
+            Err(e) => return Err(e),
         }
-        catalogs::apply_model_request(&mut tx, ws, model).await?;
+        if !effective_member(&mut tx, ws, requester).await? {
+            return Err(ineligible());
+        }
+        catalogs::apply_model_request(&mut tx, u, ws, model).await?;
         sqlx::query("INSERT INTO access_request_applications(request_id,workspace_id,requester,model_id) VALUES($1,$2,$3,$4)")
             .bind(id).bind(ws).bind(requester).bind(model).execute(&mut *tx).await?;
-        audit(
-            &mut tx,
-            u,
-            Some(ws),
-            "model.granted",
-            "model",
-            Some(model),
-            json!({"source":"catalog"}),
-        )
-        .await?;
-        event(&mut tx, u, ws, id, "applied").await?;
+        event(&mut tx, u, ws, id, kind_of(Some(model)), "applied").await?;
     } else if approve {
         if let Err(e) = eligible_target(&mut tx, ws).await {
             return Err(if e.0 == StatusCode::NOT_FOUND {
@@ -549,7 +555,7 @@ async fn decision(
         let grant = members::apply_membership_request(&mut tx, ws, requester, submitted_at).await?;
         sqlx::query("INSERT INTO access_request_applications(request_id,workspace_id,requester,membership_grant_id) VALUES($1,$2,$3,$4)")
             .bind(id).bind(ws).bind(requester).bind(grant).execute(&mut *tx).await?;
-        event(&mut tx, u, ws, id, "applied").await?;
+        event(&mut tx, u, ws, id, kind_of(None), "applied").await?;
     }
     sqlx::query("UPDATE access_requests SET status=$2,decided_by=$3 WHERE id=$1")
         .bind(id)
@@ -557,7 +563,7 @@ async fn decision(
         .bind(u.user_id)
         .execute(&mut *tx)
         .await?;
-    event(&mut tx, u, ws, id, outcome).await?;
+    event(&mut tx, u, ws, id, kind_of(model), outcome).await?;
     let result = one(&mut tx, id).await?;
     tx.commit().await?;
     Ok(result)

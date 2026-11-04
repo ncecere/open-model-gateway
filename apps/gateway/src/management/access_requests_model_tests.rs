@@ -435,3 +435,190 @@ async fn concurrent_approvals_select_once(pool: PgPool) {
         .unwrap();
     assert_eq!(applications, i64::from(final_status == "approved"));
 }
+
+async fn backdate(pool: &PgPool, id: &Value) {
+    sqlx::raw_sql("ALTER TABLE access_requests DISABLE TRIGGER access_requests_guard")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE access_requests SET created_at=clock_timestamp()-interval '8 days',expires_at=clock_timestamp()-interval '1 day' WHERE id=$1::uuid")
+        .bind(id.as_str().unwrap())
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql("ALTER TABLE access_requests ENABLE TRIGGER access_requests_guard")
+        .execute(pool)
+        .await
+        .unwrap();
+}
+async fn expired_kinds(pool: &PgPool, id: &Value) -> Vec<Value> {
+    sqlx::query_scalar("SELECT metadata FROM audit_events WHERE action='access_request.expired' AND resource_id=$1::uuid")
+        .bind(id.as_str().unwrap())
+        .fetch_all(pool)
+        .await
+        .unwrap()
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn model_requests_expire_with_their_kind_and_are_bounded(pool: PgPool) {
+    let f = fixture(&pool).await;
+    // Expired by the maintenance worker and by a read: both audit the kind.
+    let m = eligible_model(&pool, "company/expires").await;
+    let (_, req) = ask(&f, &f.member, f.team, m, "expire-worker").await;
+    backdate(&pool, &req["id"]).await;
+    assert_eq!(
+        crate::lifecycle::expire_access_requests_fenced(&f.s, None)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(status_of(&pool, &req["id"]).await, "expired");
+    assert_eq!(
+        expired_kinds(&pool, &req["id"]).await,
+        vec![json!({"kind":"model_selection","outcome":"expired"})]
+    );
+    let m2 = eligible_model(&pool, "company/expires-read").await;
+    let (_, req2) = ask(&f, &f.member, f.team, m2, "expire-read").await;
+    backdate(&pool, &req2["id"]).await;
+    let (_, read) = call(
+        &f.s,
+        &f.member,
+        "GET",
+        &format!("{MINE}/{}", req2["id"].as_str().unwrap()),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(read["status"], "expired");
+    assert_eq!(
+        expired_kinds(&pool, &req2["id"]).await,
+        vec![json!({"kind":"model_selection","outcome":"expired"})]
+    );
+    // An expired request cannot be approved.
+    assert_eq!(
+        decide(&f, &f.owner, &req2["id"], "approve", false).await.0,
+        StatusCode::CONFLICT
+    );
+    // At most five pending model requests per requester and workspace.
+    for n in 0..5 {
+        let m = eligible_model(&pool, &format!("company/cap-{n}")).await;
+        assert_eq!(
+            ask(&f, &f.member, f.team, m, &format!("cap-{n}")).await.0,
+            StatusCode::OK
+        );
+    }
+    let over = eligible_model(&pool, "company/cap-over").await;
+    let (status, body) = ask(&f, &f.member, f.team, over, "cap-over").await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    // The four-element positional form, with the model last.
+    let peer = user(&pool, "positional", "user").await;
+    member(&pool, f.team, peer.user_id, "member").await;
+    let (status, positional) = call(
+        &f.s,
+        &peer,
+        "POST",
+        MINE,
+        json!([f.team, null, "positional", over]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{positional}");
+    assert_eq!(positional["model_id"], over.to_string());
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn approval_races_revocation_and_lost_authority(pool: PgPool) {
+    let f = fixture(&pool).await;
+    // Approval against removal of the requester's membership, both orders:
+    // either the selection commits first and stays, or the removal wins and
+    // approval is 409 with the request still pending.
+    for n in 0..2 {
+        let requester = user(&pool, &format!("race-member-{n}"), "user").await;
+        member(&pool, f.team, requester.user_id, "member").await;
+        let m = eligible_model(&pool, &format!("company/race-{n}")).await;
+        let (_, req) = ask(&f, &requester, f.team, m, &format!("race-{n}")).await;
+        let revoke = async {
+            if n == 1 {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            let (status, _) = call(
+                &f.s,
+                &f.owner,
+                "DELETE",
+                &format!(
+                    "/api/v1/workspaces/{}/members/{}",
+                    f.team, requester.user_id
+                ),
+                Value::Null,
+            )
+            .await;
+            status
+        };
+        let (approved, revoked) =
+            tokio::join!(decide(&f, &f.owner, &req["id"], "approve", false), revoke);
+        assert_eq!(revoked, StatusCode::OK);
+        let final_status = status_of(&pool, &req["id"]).await;
+        match approved.0 {
+            StatusCode::OK => {
+                assert!(final_status == "approved" && selected(&pool, f.team, m).await)
+            }
+            StatusCode::CONFLICT => {
+                assert!(final_status == "pending" && !selected(&pool, f.team, m).await)
+            }
+            other => panic!("{other} {:?}", approved.1),
+        }
+    }
+    // An admin demoted to member loses the queue and the decision at once.
+    let admin = user(&pool, "demoted-admin", "user").await;
+    member(&pool, f.team, admin.user_id, "admin").await;
+    let m = eligible_model(&pool, "company/demoted").await;
+    let (_, req) = ask(&f, &f.member, f.team, m, "demoted").await;
+    let queue = format!("/api/v1/workspaces/{}/access-requests", f.team);
+    assert_eq!(
+        call(&f.s, &admin, "GET", &queue, Value::Null).await.0,
+        StatusCode::OK
+    );
+    sqlx::query(
+        "UPDATE workspace_membership_grants SET role='member' WHERE workspace_id=$1 AND user_id=$2",
+    )
+    .bind(f.team)
+    .bind(admin.user_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        call(&f.s, &admin, "GET", &queue, Value::Null).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        decide(&f, &admin, &req["id"], "approve", false).await.0,
+        StatusCode::FORBIDDEN
+    );
+    // Approved, the model retired from the workspace by catalog removal and
+    // offered again: the old approval never selects it again.
+    let (status, _) = decide(&f, &f.owner, &req["id"], "approve", false).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(selected(&pool, f.team, m).await);
+    let catalog: Uuid =
+        sqlx::query_scalar("SELECT catalog_id FROM catalog_models WHERE model_id=$1")
+            .bind(m)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let models = format!("/api/v1/platform/catalogs/{catalog}/models");
+    let (status, body) = call(&f.s, &f.admin, "PUT", &models, json!({"model_ids":[]})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        !selected(&pool, f.team, m).await,
+        "retired with its catalog"
+    );
+    let (status, body) = call(&f.s, &f.admin, "PUT", &models, json!({"model_ids":[m]})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, again) = decide(&f, &f.owner, &req["id"], "approve", false).await;
+    assert_eq!(
+        (status, again["status"].clone()),
+        (StatusCode::OK, json!("approved"))
+    );
+    assert!(
+        !selected(&pool, f.team, m).await,
+        "approval replay re-selected a retired model"
+    );
+}
