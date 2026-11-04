@@ -3352,7 +3352,7 @@
             }
           }
         },
-        "description": "Read-only configuration estimate; no reservation or authority to apply. Shared affected workspaces only; personal effects are omitted. Expected revision is not an enforced apply precondition.",
+        "description": "Read-only configuration estimate; no reservation or authority to apply. Shared affected workspaces only; personal effects are omitted. configuration/apply enforces the expected revision; the PATCH and DELETE routes do not.",
         "requestBody": {
           "required": true,
           "content": {
@@ -4177,6 +4177,196 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/put_api_v1_workspaces_by_ws_policyRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/platform/deployments/{id}/configuration/apply": {
+      "access": "PlatformWrite",
+      "operation": {
+        "responses": {
+          "200": {
+            "description": "Successful real handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_deployments_by_id_configuration_applyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Handler validation refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Hidden or missing resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "revision_conflict (the deployment changed since the preview) or restore_source_mismatch (the restored change recorded a different value)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Management storage unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Axum JSON extraction refusal (including unknown fields, missing required fields or invalid types)",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON content type required",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "Platform Admin, browser session only. Applies an enablement only at the previewed revision (#87): a stale revision is refused with 409 and nothing is written. A restore names its source change (restore_of); the new recorded change is linked to it. Requesting the current value records nothing (outcome unchanged). The PATCH and DELETE routes are unchanged and do not take a revision.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_deployments_by_id_configuration_applyRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/platform/deployments/{id}/configuration/restore-preview": {
+      "access": "PlatformWrite",
+      "operation": {
+        "responses": {
+          "200": {
+            "description": "Successful real handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_deployments_by_id_configuration_restore_previewResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Handler validation refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Hidden or missing deployment, or a change that is not a recorded change of this deployment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "restore_values_unavailable: the change was recorded without its values (a legacy event) and cannot be restored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Management storage unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Axum JSON extraction refusal (including unknown fields, missing required fields or invalid types)",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON content type required",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "Platform Admin, browser session only. Read-only preview of restoring the value a recorded change produced (#87); no reservation, no write and no authority to apply. Shared affected workspaces only; personal effects are omitted.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_deployments_by_id_configuration_restore_previewRequest"
               }
             }
           }

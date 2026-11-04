@@ -131,6 +131,8 @@ export type DeploymentConfigurationChange = {
   actor: { id: string | null; label: string; admin_token_id: string | null };
   action: string; schema_version: number | null; revision: string | null;
   values_available: boolean; before: { enabled: boolean } | null; after: { enabled: boolean } | null;
+  /** The recorded change this one restored (#87), or null. */
+  restored_from?: string | null;
 };
 export type DeploymentHistoryPage = { data: DeploymentConfigurationChange[]; next_cursor: string | null };
 /** Browser-only configuration observation, not an apply authorization or reservation. */
@@ -145,7 +147,11 @@ export type DeploymentPreview = {
   observed_at: string;
   dependency_versions: Record<string, string>;
   warnings: string[];
+  /** Present on a restore preview: the recorded change whose value it restores. */
+  restore?: { change_id: string; revision: string; created_at: string; enabled: boolean };
 };
+/** POST …/configuration/apply: applied at the reviewed revision, or unchanged. */
+export type DeploymentApplyResult = { outcome: "applied" | "unchanged"; target: { kind: "deployment"; id: string }; revision: string; change_id: string | null; restored_from: string | null };
 export type Catalog = { id: string; name: string; description: string | null; created_at?: string };
 export type CatalogAvailability = { mode: "inherit" | "replace"; catalog_ids: string[]; effective_catalog_ids: string[] };
 export type Grant = Pick<Model, "public_name" | "display_name"> & { model_id: string; sources?: ("catalog" | "direct")[]; source?: "catalog" | "direct"; catalog_ids?: string[]; selected: boolean; enabled: boolean; catalog_granted: boolean; direct_granted: boolean; available_from_catalog: boolean; supported_protocols: ModelProtocol[] };

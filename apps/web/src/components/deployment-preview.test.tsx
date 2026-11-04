@@ -52,8 +52,9 @@ describe("deployment configuration review", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole("button", { name: /^Disable$/ }));
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
-    expect(fetch.mock.calls[1][0]).toBe("/api/v1/platform/deployments/deployment");
-    expect(fetch.mock.calls[1][1]).toMatchObject({ method: "PATCH", body: JSON.stringify({ enabled: false }) });
+    // #87: the confirmation applies only at the previewed revision.
+    expect(fetch.mock.calls[1][0]).toBe("/api/v1/platform/deployments/deployment/configuration/apply");
+    expect(fetch.mock.calls[1][1]).toMatchObject({ method: "POST", body: JSON.stringify({ enabled: false, expected_revision: "catalog:12" }) });
   });
   it("enable review sends true and a failed apply stays in the existing confirmation", async () => {
     const fetch = vi.fn().mockResolvedValueOnce(Response.json({ ...impact, diff: [{ field: "enabled", before: false, after: true }], serving_routes_gained: [record.id], serving_routes_lost: [], models_losing_last_serving_route: [] })).mockResolvedValueOnce(Response.json({ error: { code: "403", message: "Live authority revoked" } }, { status: 403 }));
@@ -67,7 +68,7 @@ describe("deployment configuration review", () => {
     await user.click(screen.getByRole("button", { name: /^Enable$/ }));
     await screen.findByText("Live authority revoked");
     expect(screen.getByRole("dialog", { name: /^Enable Upstream\?$/ })).toBeTruthy();
-    expect(fetch.mock.calls[1][1].body).toBe(JSON.stringify({ enabled: true }));
+    expect(fetch.mock.calls[1][1].body).toBe(JSON.stringify({ enabled: true, expected_revision: "catalog:12" }));
   });
   it("cancel never applies and reopening obtains a new observation", async () => {
     const fetch = vi.fn().mockImplementation(() => Promise.resolve(Response.json(impact)));

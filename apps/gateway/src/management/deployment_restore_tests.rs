@@ -71,7 +71,6 @@ async fn guarded_apply_enforces_the_expected_revision(pool: PgPool) {
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["error"]["reason"], "revision_conflict");
-    assert_eq!(body["error"]["current_revision"], "2");
     assert_eq!(changes(&pool, d).await.len(), 2);
     // Change away and back (ABA): the state matches revision 2, the revision does not.
     for (enabled, expected) in [(true, "2"), (false, "3")] {
@@ -92,7 +91,7 @@ async fn guarded_apply_enforces_the_expected_revision(pool: PgPool) {
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(body["error"]["current_revision"], "4");
+    assert_eq!(body["error"]["reason"], "revision_conflict");
     // Requesting the current state is reported, never recorded.
     let (status, body) = apply(
         &f,

@@ -14,12 +14,12 @@ pub(super) struct HistoryQuery {
 // Snapshot IDs are their audit IDs; the composite identity prevents duplicate
 // legacy rows. A logical link preserves audit partition archival/detachment.
 const HISTORY: &str = "WITH entries AS (
- SELECT c.id,c.created_at,c.deployment_id,c.schema_version,c.revision,c.before_enabled,c.after_enabled,true values_available,
+ SELECT c.id,c.created_at,c.deployment_id,c.schema_version,c.revision,c.before_enabled,c.after_enabled,true values_available,c.restored_from,
  a.actor_user_id,a.admin_token_id,CASE WHEN c.before_enabled IS NULL THEN 'deployment.created' ELSE 'configuration.updated' END action
  FROM configuration_changes c LEFT JOIN audit_events a ON (a.id,a.created_at)=(c.audit_event_id,c.audit_created_at)
  WHERE c.deployment_id=$1 AND ($2::timestamptz IS NULL OR (c.created_at,c.id)<($2,$3)) AND ($4::uuid IS NULL OR c.id=$4)
  UNION ALL
- SELECT a.id,a.created_at,a.resource_id,NULL::smallint,NULL::bigint,NULL::boolean,NULL::boolean,false,
+ SELECT a.id,a.created_at,a.resource_id,NULL::smallint,NULL::bigint,NULL::boolean,NULL::boolean,false,NULL::uuid,
  a.actor_user_id,a.admin_token_id,a.action
  FROM audit_events a WHERE a.resource_id=$1 AND a.workspace_id IS NULL
  AND a.resource_type IN ('deployment','deployments') AND a.action IN ('deployment.created','configuration.updated')
@@ -31,7 +31,7 @@ SELECT jsonb_build_object(
  'action',e.action,'actor',jsonb_build_object('id',e.actor_user_id,'admin_token_id',e.admin_token_id,
  'label',CASE WHEN e.actor_user_id IS NULL THEN CASE WHEN e.values_available AND NOT EXISTS(SELECT FROM audit_events a WHERE (a.id,a.created_at)=(e.id,e.created_at)) THEN 'Actor unavailable' ELSE 'System' END
  ELSE coalesce(nullif(left(regexp_replace(u.display_name,'[[:cntrl:]]','','g'),160),''),nullif(left(regexp_replace(CASE WHEN u.cleaned_at IS NULL THEN u.email END,'[[:cntrl:]]','','g'),160),''),'User '||e.actor_user_id::text) END),
- 'schema_version',e.schema_version,'revision',e.revision::text,'values_available',e.values_available,
+ 'schema_version',e.schema_version,'revision',e.revision::text,'values_available',e.values_available,'restored_from',e.restored_from,
  'before',CASE WHEN e.values_available AND e.before_enabled IS NOT NULL THEN jsonb_build_object('enabled',e.before_enabled) ELSE NULL END,
  'after',CASE WHEN e.values_available THEN jsonb_build_object('enabled',e.after_enabled) ELSE NULL END),e.created_at,e.id
  FROM bounded e LEFT JOIN users u ON u.id=e.actor_user_id ORDER BY e.created_at DESC,e.id DESC";

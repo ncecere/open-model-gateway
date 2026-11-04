@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { DeploymentReviewDialog } from "./deployment-preview";
 import { platformPath, type DeploymentHistoryPage } from "../lib/api";
 import { auditActionLabels } from "../lib/people";
 import { Button, DateTime, ErrorNotice, Inline, Stack, useApi } from "./ui";
@@ -6,17 +7,20 @@ import { Tab, Tabs, TabsList, TabsPanel } from "./ui/tabs/tabs";
 import { DescriptionList } from "./ui/description-list/description-list";
 
 /** History is fetched only when its panel is opened; authorization stays in Rust. */
-export function DeploymentConfigurationTabs({ id, tab, children }: { id: string; tab?: string; children: ReactNode }) {
+/** `restore`: offered to Platform Admins only; the server still authorizes every step. */
+type Restore = { record: { id: string; enabled: boolean }; name: string };
+export function DeploymentConfigurationTabs({ id, tab, restore, children }: { id: string; tab?: string; restore?: Restore; children: ReactNode }) {
   return <Tabs defaultValue={tab === "history" ? "history" : "configuration"}>
     <TabsList variant="pills" aria-label="Route configuration"><Tab value="configuration">Configuration</Tab><Tab value="history">History</Tab></TabsList>
     <TabsPanel value="configuration">{children}</TabsPanel>
-    <TabsPanel value="history"><DeploymentHistory key={id} id={id} /></TabsPanel>
+    <TabsPanel value="history"><DeploymentHistory key={id} id={id} restore={restore} /></TabsPanel>
   </Tabs>;
 }
 
 /** Cursor positions, not offsets or current-row reconstruction. Each page reauthorizes. */
-export function DeploymentHistory({ id }: { id: string }) {
+export function DeploymentHistory({ id, restore }: { id: string; restore?: Restore }) {
   const [cursors, setCursors] = useState<(string | null)[]>([null]);
+  const [restoring, setRestoring] = useState<{ change: string; returnFocus: HTMLElement } | null>(null);
   const cursor = cursors[cursors.length - 1];
   const path = `${platformPath}/deployments/${encodeURIComponent(id)}/configuration/history?limit=25${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
   const q = useApi<DeploymentHistoryPage>(path);
@@ -33,6 +37,8 @@ export function DeploymentHistory({ id }: { id: string }) {
           <p>{change.values_available && change.after ? `${change.before ? change.before.enabled ? "Enabled" : "Disabled" : "Not configured"} → ${change.after.enabled ? "Enabled" : "Disabled"}` : "Values unavailable"}</p>
           <p>{change.actor.label}{change.actor.admin_token_id && " · Admin API token"}</p>
           {change.revision !== null && <p>Revision {change.revision}</p>}
+          {change.restored_from && <p>Restored the configuration of change <code>{change.restored_from}</code></p>}
+          {restore && change.values_available && change.after && <Inline gap={2}><Button variant="secondary" size="sm" onClick={event => setRestoring({ change: change.id, returnFocus: event.currentTarget })}>Restore this configuration</Button></Inline>}
           <details><summary>Change details</summary><DescriptionList items={[
             { label: "Change / audit ID", value: <code>{change.id}</code> },
             { label: "Deployment ID", value: <code>{change.target.id}</code> },
@@ -47,5 +53,6 @@ export function DeploymentHistory({ id }: { id: string }) {
       <Button variant="secondary" disabled={cursors.length === 1 || q.isFetching} onClick={() => setCursors(previous => previous.slice(0, -1))}>Newer changes</Button>
       <Button variant="secondary" disabled={!page?.next_cursor || q.isFetching} onClick={() => { if (page?.next_cursor) setCursors(previous => [...previous, page.next_cursor]); }}>Older changes</Button>
     </Inline>
+    {restore && restoring && <DeploymentReviewDialog record={restore.record} name={restore.name} restoreOf={restoring.change} returnFocus={restoring.returnFocus} onClose={() => setRestoring(null)} />}
   </Stack>;
 }
