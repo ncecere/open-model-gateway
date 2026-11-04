@@ -10994,7 +10994,8 @@
         "restored_from"
       ],
       "additionalProperties": false,
-      "oneOf": [
+      "description": "applied: a new recorded change (change_id), linked to restored_from for a restore. unchanged: the deployment already had the requested value; nothing is recorded.",
+      "anyOf": [
         {
           "properties": {
             "outcome": {
@@ -11019,8 +11020,7 @@
             }
           }
         }
-      ],
-      "description": "applied: a new recorded change (change_id), linked to restored_from for a restore. unchanged: the deployment already had the requested value; nothing is recorded."
+      ]
     },
     "post_api_v1_platform_deployments_by_id_configuration_applyRequest": {
       "$ref": "#/components/schemas/SetupApply"

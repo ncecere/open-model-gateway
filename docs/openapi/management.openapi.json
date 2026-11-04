@@ -31805,8 +31805,7 @@
       },
       "SetupApplyResult": {
         "additionalProperties": false,
-        "description": "applied: a new recorded change (change_id), linked to restored_from for a restore. unchanged: the deployment already had the requested value; nothing is recorded.",
-        "oneOf": [
+        "anyOf": [
           {
             "properties": {
               "change_id": {
@@ -31832,6 +31831,7 @@
             }
           }
         ],
+        "description": "applied: a new recorded change (change_id), linked to restored_from for a restore. unchanged: the deployment already had the requested value; nothing is recorded.",
         "properties": {
           "change_id": {
             "anyOf": [
