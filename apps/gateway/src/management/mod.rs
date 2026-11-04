@@ -575,11 +575,7 @@ fn ok() -> Json<Value> {
 fn identifier(id: Uuid) -> Json<Value> {
     Json(json!({"id":id}))
 }
-/// Management text limits count characters (Unicode scalar values), as the
-/// OpenAPI contract's `maxLength` and the web forms do, never UTF-8 bytes (#405).
-pub(crate) fn chars_at_most(s: &str, max: usize) -> bool {
-    s.chars().nth(max).is_none()
-}
+pub(crate) use crate::text::chars_at_most;
 /// A model or catalog description: at most 2000 characters of text without
 /// control characters, except the tab, line feed and carriage return of
 /// multi-line text (#428: NUL would reach PostgreSQL and surface as 503).

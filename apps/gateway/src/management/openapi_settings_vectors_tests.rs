@@ -23,7 +23,7 @@ fn carried(valid: &Value, all: Vec<(String, Value)>) -> Vec<(String, Value)> {
         .filter(|(pointer, _)| valid.pointer(pointer).is_some_and(Value::is_string))
         .collect()
 }
-/// A name of exactly `n` characters (120 bytes is the handler's limit for ASCII).
+/// A name of exactly `n` ASCII characters (the handler's limit is 120 characters).
 fn chars(n: usize) -> Value {
     json!("a".repeat(n))
 }

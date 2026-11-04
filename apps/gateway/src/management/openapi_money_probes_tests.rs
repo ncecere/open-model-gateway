@@ -316,6 +316,25 @@ impl Vx<'_> {
                 .await;
             }
         }
+        // Both filters at their limit in four-byte characters: the whole
+        // percent-encoded query (2 x 2400 bytes plus dates) is within the raw
+        // query bound, so the character limit alone decides (#405 review).
+        self.probe_query(
+            "model and provider filters of 200 four-byte characters each",
+            self.auditor,
+            template,
+            template,
+            format!(
+                "start_date={}&end_date={}&model={}&provider={}",
+                self.start,
+                self.end,
+                "%F0%9F%98%80".repeat(200),
+                "%F0%9F%98%80".repeat(200)
+            ),
+            ("model", "\u{1F600}".repeat(200)),
+            Want::Pinned(Handler::Status(200), true),
+        )
+        .await;
     }
 
     // -----------------------------------------------------------------

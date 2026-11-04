@@ -424,7 +424,7 @@ fn boolean(value: &Value) -> Result<bool, ScimError> {
 }
 
 fn email_valid(s: &str) -> bool {
-    s.len() <= 320
+    crate::text::chars_at_most(s, 320)
         && s.split('@').count() == 2
         && s.split('@').all(|part| !part.is_empty())
         && !s.chars().any(|c| c.is_whitespace() || c.is_control())
