@@ -1509,6 +1509,71 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         Some(json!({"enabled":true})),
     )
     .await;
+    // #87: the guarded apply (applied, then unchanged at the new revision) and
+    // a restore of the recorded enabled state, linked to its source.
+    let configuration = format!("/api/v1/platform/deployments/{deployment}/configuration");
+    let revision = j
+        .request(
+            "POST",
+            &format!("{configuration}/preview"),
+            Some(json!({"enabled":false})),
+        )
+        .await["expected_revision"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let applied = j
+        .request(
+            "POST",
+            &format!("{configuration}/apply"),
+            Some(json!({"enabled":false,"expected_revision":revision})),
+        )
+        .await;
+    assert_eq!(applied["outcome"], "applied");
+    let current = applied["revision"].as_str().unwrap().to_owned();
+    let unchanged = j
+        .request(
+            "POST",
+            &format!("{configuration}/apply"),
+            Some(json!({"enabled":false,"expected_revision":current,"restore_of":null})),
+        )
+        .await;
+    assert_eq!(unchanged["outcome"], "unchanged");
+    let recorded = j
+        .request("GET", &format!("{configuration}/history?limit=100"), None)
+        .await;
+    let source = recorded["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["after"]["enabled"] == true)
+        .map(id)
+        .unwrap();
+    let restore = j
+        .request(
+            "POST",
+            &format!("{configuration}/restore-preview"),
+            Some(json!({"change_id":source})),
+        )
+        .await;
+    assert_eq!(restore["restore"]["enabled"], true);
+    let restored = j
+        .request(
+            "POST",
+            &format!("{configuration}/apply"),
+            Some(json!({"enabled":true,"expected_revision":current,"restore_of":source})),
+        )
+        .await;
+    assert_eq!(restored["restored_from"], source.to_string());
+    // Restoring the recorded disable previews a lost serving route.
+    let lost = j
+        .request(
+            "POST",
+            &format!("{configuration}/restore-preview"),
+            Some(json!({"change_id":applied["change_id"]})),
+        )
+        .await;
+    assert_eq!(lost["serving_routes_lost"].as_array().unwrap().len(), 1);
     // The same change made with an admin token (catalog:write) records the token.
     let created = send(
         &j.client,
@@ -2909,8 +2974,56 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         &[],
     )
     .await;
+    // #87: apply and restore-preview vectors. Every vector reaches the handler;
+    // a stale revision (409) or an unknown source (404) is a domain verdict.
+    // The revision pattern is the exact signed 64-bit range: no derivable
+    // length bound, so the candidates straddle its upper end (one edit apart).
+    for (valid, pointer) in [
+        (
+            json!({"enabled":false,"expected_revision":"1","restore_of":null}),
+            "/expected_revision",
+        ),
+        (json!([false, "1", null]), "/1"),
+        // The uuid arm of restore_of: an unknown source is a 404 verdict.
+        (
+            json!({"enabled":false,"expected_revision":"1","restore_of":Uuid::new_v4()}),
+            "/expected_revision",
+        ),
+        (json!([false, "1", Uuid::new_v4()]), "/1"),
+    ] {
+        body_set_when_candidates(
+            &mut j,
+            a,
+            "POST",
+            "/api/v1/platform/deployments/{id}/configuration/apply",
+            &format!("/api/v1/platform/deployments/{vdep}/configuration/apply"),
+            valid,
+            (&|_| false, &[]),
+            &[
+                (pointer, json!("9223372036854775807")),
+                (pointer, json!("9223372036854775808")),
+            ],
+        )
+        .await;
+    }
+    body_set(
+        &mut j,
+        a,
+        "POST",
+        "/api/v1/platform/deployments/{id}/configuration/restore-preview",
+        &format!("/api/v1/platform/deployments/{vdep}/configuration/restore-preview"),
+        json!({"change_id":Uuid::new_v4()}),
+        &[],
+    )
+    .await;
     // The positional wire form (and null arms) of the remaining setup operations.
     for (method, template, path, body) in [
+        (
+            "POST",
+            "/api/v1/platform/deployments/{id}/configuration/restore-preview",
+            format!("/api/v1/platform/deployments/{vdep}/configuration/restore-preview"),
+            json!([Uuid::new_v4()]),
+        ),
         (
             "POST",
             "/api/v1/platform/deployments/{id}/configuration/preview",

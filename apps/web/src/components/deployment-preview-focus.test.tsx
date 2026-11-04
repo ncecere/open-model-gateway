@@ -107,7 +107,11 @@ describe("menu-originated deployment review focus", () => {
       expect(destination.isConnected).toBe(true);
       expect(document.activeElement?.isConnected).toBe(true);
       expect(fetch).toHaveBeenCalledTimes(outcome === "cancel" ? 1 : 3);
-      if (outcome === "success") expect(fetch.mock.calls[1][1].method).toBe(routeMenu || reviewButton ? "PATCH" : "DELETE");
+      // #87: a toggle applies at the previewed revision; retire keeps DELETE.
+      if (outcome === "success") {
+        expect(fetch.mock.calls[1][1].method).toBe(routeMenu || reviewButton ? "POST" : "DELETE");
+        if (routeMenu || reviewButton) expect(String(fetch.mock.calls[1][0])).toMatch(/\/configuration\/apply$/);
+      }
     });
   }
   it("passes deployment actions through the header classifier at 390px, merging sibling actions into one menu", async () => {

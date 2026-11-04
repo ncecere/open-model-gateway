@@ -56,9 +56,10 @@ mod tests {
         eprintln!(
             "management OpenAPI: {operations} operations; {placeholders} incomplete request/response schemas remaining (#81)"
         );
-        // #81 is complete: 251 operations and zero placeholders (a new route fails until its fragment is complete).
+        // #81 is complete: zero placeholders (a new route fails until its fragment is complete).
+        // 253 operations: #87 added apply and restore-preview.
         assert_eq!(
-            operations, 251,
+            operations, 253,
             "review route additions and update this progress baseline"
         );
         assert_eq!(

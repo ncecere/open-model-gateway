@@ -280,6 +280,28 @@ async fn every_json_management_write_rejects_unknown_fields_after_valid_control(
         &f.admin,
         json!({"enabled":false})
     );
+    // #87: the existing route is enabled at revision 1 (recorded at insert).
+    case!(
+        "deployment_configuration::apply",
+        "POST",
+        format!("{platform}/deployments/{deployment}/configuration/apply"),
+        &f.admin,
+        json!({"enabled":true,"expected_revision":"1"})
+    );
+    let created_change: Uuid = sqlx::query_scalar(
+        "SELECT id FROM configuration_changes WHERE deployment_id=$1 AND revision=1",
+    )
+    .bind(deployment)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    case!(
+        "deployment_configuration::restore_preview",
+        "POST",
+        format!("{platform}/deployments/{deployment}/configuration/restore-preview"),
+        &f.admin,
+        json!({"change_id":created_change})
+    );
     case!(
         "resources::update_deployment",
         "PATCH",

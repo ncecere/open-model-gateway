@@ -4084,6 +4084,9 @@
                   "precondition_failed",
                   "price_meters_incomplete",
                   "report_schedule_limit_reached",
+                  "restore_source_mismatch",
+                  "restore_values_unavailable",
+                  "revision_conflict",
                   "route_unsupported_capability",
                   "setting_locked_by_environment",
                   "stacked_budgets_require_budgets_field",
@@ -31738,6 +31741,158 @@
         ],
         "description": "A spend spike of this Team/Project, raised by one of its rules."
       },
+      "SetupApply": {
+        "description": "Closed serde object or existing positional struct array in declared field order. The deployment's current revision must equal expected_revision, otherwise 409 revision_conflict and nothing is written.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "expected_revision": {
+                "description": "The expected_revision of the preview being applied: a decimal deployment enablement revision (a signed 64-bit counter; leading zeros are accepted). Not a monetary amount.",
+                "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6]|9223372036854775807)$",
+                "type": "string"
+              },
+              "restore_of": {
+                "anyOf": [
+                  {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "A recorded change of this deployment whose value (after.enabled) equals enabled: the new change is linked to it as a restore. Another deployment's change is as unknown as a missing one (404); a different value is refused with 409 restore_source_mismatch."
+              }
+            },
+            "required": [
+              "enabled",
+              "expected_revision"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 3,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "boolean"
+              },
+              {
+                "description": "The expected_revision of the preview being applied: a decimal deployment enablement revision (a signed 64-bit counter; leading zeros are accepted). Not a monetary amount.",
+                "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6]|9223372036854775807)$",
+                "type": "string"
+              },
+              {
+                "anyOf": [
+                  {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            ],
+            "type": "array"
+          }
+        ]
+      },
+      "SetupApplyResult": {
+        "additionalProperties": false,
+        "anyOf": [
+          {
+            "properties": {
+              "change_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "applied"
+              }
+            }
+          },
+          {
+            "properties": {
+              "change_id": {
+                "type": "null"
+              },
+              "outcome": {
+                "const": "unchanged"
+              },
+              "restored_from": {
+                "type": "null"
+              }
+            }
+          }
+        ],
+        "description": "applied: a new recorded change (change_id), linked to restored_from for a restore. unchanged: the deployment already had the requested value; nothing is recorded.",
+        "properties": {
+          "change_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "outcome": {
+            "enum": [
+              "applied",
+              "unchanged"
+            ]
+          },
+          "restored_from": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "description": "The deployment's enablement revision after the request: a nonnegative integer counter as a decimal string. Not a monetary amount.",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "target": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "kind": {
+                "const": "deployment"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "outcome",
+          "target",
+          "revision",
+          "change_id",
+          "restored_from"
+        ],
+        "type": "object"
+      },
       "SetupBudgetInput": {
         "description": "Closed serde object or existing positional struct array in declared field order. Handler semantic validation is additional.",
         "oneOf": [
@@ -33402,6 +33557,9 @@
               "before": {
                 "type": "null"
               },
+              "restored_from": {
+                "type": "null"
+              },
               "revision": {
                 "type": "null"
               },
@@ -33503,6 +33661,18 @@
             "format": "uuid",
             "type": "string"
           },
+          "restored_from": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The recorded change this change restored (#87), or null."
+          },
           "revision": {
             "anyOf": [
               {
@@ -33556,7 +33726,8 @@
           "revision",
           "values_available",
           "before",
-          "after"
+          "after",
+          "restored_from"
         ],
         "type": "object"
       },
@@ -39569,6 +39740,242 @@
         ],
         "type": "object"
       },
+      "SetupRestore": {
+        "description": "Closed serde object or existing positional struct array. change_id is a recorded change of this deployment (configuration history id).",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_id": {
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "change_id"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "format": "uuid",
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          }
+        ]
+      },
+      "SetupRestorePreview": {
+        "additionalProperties": false,
+        "description": "A preview of setting enabled to the value the source change recorded; like every preview it writes nothing and authorizes nothing. Apply it through configuration/apply with restore_of.",
+        "properties": {
+          "affected_workspaces": {
+            "additionalProperties": false,
+            "properties": {
+              "data": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "team",
+                        "project"
+                      ]
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "limit": {
+                "const": 100
+              },
+              "total": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "data",
+              "total",
+              "limit",
+              "truncated"
+            ],
+            "type": "object"
+          },
+          "dependency_versions": {
+            "additionalProperties": false,
+            "properties": {
+              "access": {
+                "description": "Exact nonnegative integer decimal string. Monetary fields are micro-USD, never floating-point JSON numbers.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              },
+              "catalog": {
+                "description": "Exact nonnegative integer decimal string. Monetary fields are micro-USD, never floating-point JSON numbers.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "catalog",
+              "access"
+            ],
+            "type": "object"
+          },
+          "diff": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "after": {
+                  "type": "boolean"
+                },
+                "before": {
+                  "type": "boolean"
+                },
+                "field": {
+                  "const": "enabled"
+                }
+              },
+              "required": [
+                "field",
+                "before",
+                "after"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "expected_revision": {
+            "description": "Exact nonnegative integer decimal string. Monetary fields are micro-USD, never floating-point JSON numbers.",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "models_losing_last_serving_route": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "public_name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "public_name"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "restore": {
+            "additionalProperties": false,
+            "properties": {
+              "change_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "created_at": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "revision": {
+                "description": "The source change's revision: a nonnegative integer counter as a decimal string. Not a monetary amount.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "change_id",
+              "revision",
+              "created_at",
+              "enabled"
+            ],
+            "type": "object"
+          },
+          "serving_routes_gained": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "serving_routes_lost": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "target": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "kind": {
+                "const": "deployment"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "target",
+          "expected_revision",
+          "diff",
+          "serving_routes_gained",
+          "serving_routes_lost",
+          "models_losing_last_serving_route",
+          "affected_workspaces",
+          "observed_at",
+          "dependency_versions",
+          "warnings",
+          "restore"
+        ],
+        "type": "object"
+      },
       "SetupRestrictedBudgetWindow": {
         "additionalProperties": false,
         "properties": {
@@ -45027,11 +45434,23 @@
       "post_api_v1_platform_deployments_by_deployment_pricesResponse": {
         "$ref": "#/components/schemas/SetupIdentifier"
       },
+      "post_api_v1_platform_deployments_by_id_configuration_applyRequest": {
+        "$ref": "#/components/schemas/SetupApply"
+      },
+      "post_api_v1_platform_deployments_by_id_configuration_applyResponse": {
+        "$ref": "#/components/schemas/SetupApplyResult"
+      },
       "post_api_v1_platform_deployments_by_id_configuration_previewRequest": {
         "$ref": "#/components/schemas/SetupEnabled"
       },
       "post_api_v1_platform_deployments_by_id_configuration_previewResponse": {
         "$ref": "#/components/schemas/SetupPreview"
+      },
+      "post_api_v1_platform_deployments_by_id_configuration_restore_previewRequest": {
+        "$ref": "#/components/schemas/SetupRestore"
+      },
+      "post_api_v1_platform_deployments_by_id_configuration_restore_previewResponse": {
+        "$ref": "#/components/schemas/SetupRestorePreview"
       },
       "post_api_v1_platform_legal_holdsRequest": {
         "oneOf": [
@@ -55468,6 +55887,132 @@
         "x-omg-token-policy": "Scope"
       }
     },
+    "/api/v1/platform/deployments/{id}/configuration/apply": {
+      "post": {
+        "description": "Platform Admin, browser session only. Applies an enablement only at the previewed revision (#87): a stale revision is refused with 409 and nothing is written. A restore names its source change (restore_of); the new recorded change is linked to it. Requesting the current value records nothing (outcome unchanged). The PATCH and DELETE routes are unchanged and do not take a revision.",
+        "operationId": "post_api_v1_platform_deployments_by_id_configuration_apply",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_deployments_by_id_configuration_applyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_deployments_by_id_configuration_applyResponse"
+                }
+              }
+            },
+            "description": "Successful real handler representation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Handler validation refusal"
+          },
+          "401": {
+            "$ref": "#/components/responses/ManagementMiddleware401Variant2"
+          },
+          "403": {
+            "$ref": "#/components/responses/ManagementMiddleware403Variant3"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Hidden or missing resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "revision_conflict (this route's enablement changed since the preview; changes to sibling routes, the model, the connection or catalogs do not refuse it), restore_source_mismatch (the restored change recorded a different value) or restore_values_unavailable (restore_of names a legacy event recorded without values)"
+          },
+          "413": {
+            "$ref": "#/components/responses/ManagementMiddleware413Variant1"
+          },
+          "415": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "JSON content type required"
+          },
+          "422": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Axum JSON extraction refusal (including unknown fields, missing required fields or invalid types)"
+          },
+          "429": {
+            "$ref": "#/components/responses/ManagementMiddleware429Variant1"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
+          }
+        },
+        "security": [
+          {
+            "browserSession": [],
+            "csrfToken": [],
+            "origin": []
+          }
+        ],
+        "x-omg-access": "PlatformWrite",
+        "x-omg-middleware-responses": {
+          "$ref": "#/x-omg-middleware-contracts/management"
+        },
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_deployments_by_id_configuration_applyRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_deployments_by_id_configuration_applyResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
     "/api/v1/platform/deployments/{id}/configuration/history": {
       "get": {
         "description": "Live role and workspace authority remain required. Inference keys never authorize management. No provider credential values are returned.",
@@ -55686,7 +56231,7 @@
     },
     "/api/v1/platform/deployments/{id}/configuration/preview": {
       "post": {
-        "description": "Read-only configuration estimate; no reservation or authority to apply. Shared affected workspaces only; personal effects are omitted. Expected revision is not an enforced apply precondition.",
+        "description": "Read-only configuration estimate; no reservation or authority to apply. Shared affected workspaces only; personal effects are omitted. configuration/apply enforces the expected revision; the PATCH and DELETE routes do not.",
         "operationId": "post_api_v1_platform_deployments_by_id_configuration_preview",
         "parameters": [
           {
@@ -55806,6 +56351,132 @@
         },
         "x-omg-response-schema": {
           "$ref": "#/components/schemas/post_api_v1_platform_deployments_by_id_configuration_previewResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/api/v1/platform/deployments/{id}/configuration/restore-preview": {
+      "post": {
+        "description": "Platform Admin, browser session only. Read-only preview of restoring the value a recorded change produced (#87); no reservation, no write and no authority to apply. Shared affected workspaces only; personal effects are omitted.",
+        "operationId": "post_api_v1_platform_deployments_by_id_configuration_restore_preview",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_deployments_by_id_configuration_restore_previewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_deployments_by_id_configuration_restore_previewResponse"
+                }
+              }
+            },
+            "description": "Successful real handler representation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Handler validation refusal"
+          },
+          "401": {
+            "$ref": "#/components/responses/ManagementMiddleware401Variant2"
+          },
+          "403": {
+            "$ref": "#/components/responses/ManagementMiddleware403Variant3"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Hidden or missing deployment, or a change that is not a recorded change of this deployment"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "restore_values_unavailable: the change was recorded without its values (a legacy event) and cannot be restored"
+          },
+          "413": {
+            "$ref": "#/components/responses/ManagementMiddleware413Variant1"
+          },
+          "415": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "JSON content type required"
+          },
+          "422": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Axum JSON extraction refusal (including unknown fields, missing required fields or invalid types)"
+          },
+          "429": {
+            "$ref": "#/components/responses/ManagementMiddleware429Variant1"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
+          }
+        },
+        "security": [
+          {
+            "browserSession": [],
+            "csrfToken": [],
+            "origin": []
+          }
+        ],
+        "x-omg-access": "PlatformWrite",
+        "x-omg-middleware-responses": {
+          "$ref": "#/x-omg-middleware-contracts/management"
+        },
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_deployments_by_id_configuration_restore_previewRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_deployments_by_id_configuration_restore_previewResponse"
         },
         "x-omg-token-policy": "Denied"
       }

@@ -535,6 +535,26 @@ BEGIN
  BEGIN DELETE FROM configuration_changes WHERE deployment_id=d; RAISE EXCEPTION 'history deletion allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  BEGIN TRUNCATE configuration_changes; RAISE EXCEPTION 'history truncation allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  BEGIN UPDATE deployments SET revision=0 WHERE id=d; RAISE EXCEPTION 'revision rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ -- #87: restore links under the runtime role. Revision 1 recorded false,
+ -- revision 2 true; the link is consumed by the change that records it.
+ PERFORM set_config('omg.configuration_restore',(SELECT id::text FROM configuration_changes WHERE deployment_id=d AND revision=1),true);
+ UPDATE deployments SET enabled=false WHERE id=d;
+ IF (SELECT restored_from FROM configuration_changes WHERE deployment_id=d AND revision=3) IS DISTINCT FROM (SELECT id FROM configuration_changes WHERE deployment_id=d AND revision=1) OR current_setting('omg.configuration_restore',true)<>'' THEN RAISE EXCEPTION 'restore link not recorded or not consumed'; END IF;
+ BEGIN
+  PERFORM set_config('omg.configuration_restore',(SELECT id::text FROM configuration_changes WHERE deployment_id=d AND revision=1),true);
+  UPDATE deployments SET enabled=true WHERE id=d;
+  RAISE EXCEPTION 'restore link to a different value allowed';
+ EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+ INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model) VALUES(gen_random_uuid(),m,pc,'restore-probe-other');
+ BEGIN
+  PERFORM set_config('omg.configuration_restore',(SELECT c.id::text FROM configuration_changes c JOIN deployments o ON o.id=c.deployment_id WHERE o.upstream_model='restore-probe-other' AND o.provider_connection_id=pc),true);
+  UPDATE deployments SET enabled=true WHERE id=d;
+  RAISE EXCEPTION 'restore link to another deployment allowed';
+ EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+ changed := gen_random_uuid();
+ BEGIN INSERT INTO configuration_changes(id,created_at,audit_event_id,audit_created_at,target_kind,deployment_id,schema_version,before_enabled,after_enabled,revision,restored_from) VALUES(changed,now(),changed,now(),'deployment',d,1,true,false,3,(SELECT id FROM configuration_changes WHERE deployment_id=d AND revision=1)); RAISE EXCEPTION 'forged restore row allowed'; EXCEPTION WHEN foreign_key_violation OR unique_violation THEN NULL; END;
+ BEGIN UPDATE configuration_changes SET restored_from=NULL WHERE deployment_id=d; RAISE EXCEPTION 'restore link rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ UPDATE deployments SET enabled=true WHERE id=d;
  -- Bedrock identity modes (0008): reference shapes, identity/endpoint replacement, immutable region.
  INSERT INTO provider_connections(id,name,provider,credential_ref,region) VALUES(gen_random_uuid(),'Rollback Bedrock','bedrock','aws:role:arn:aws:iam::123456789012:role/gateway/bedrock;external_id=probe-external;session_name=gateway-probe','us-east-1');
  UPDATE provider_connections SET credential_ref='aws:profile:bedrock-prod',endpoint='https://vpce-0probe.bedrock-runtime.us-east-1.vpce.amazonaws.com' WHERE name='Rollback Bedrock';

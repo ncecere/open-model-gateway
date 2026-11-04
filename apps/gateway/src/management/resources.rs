@@ -316,7 +316,7 @@ pub(crate) async fn catalog_tx<'a>(
 }
 /// Transaction-local attribution for database-enforced deployment history.
 /// Only called after live authorization; empty token explicitly clears context.
-async fn configuration_actor(
+pub(super) async fn configuration_actor(
     tx: &mut Transaction<'_, Postgres>,
     u: &impl Actor,
 ) -> Result<(), ApiError> {
@@ -686,6 +686,14 @@ pub(super) fn platform_routes() -> Router<Store> {
         .route(
             "/api/v1/platform/deployments/{id}/configuration/preview",
             post(super::deployment_configuration::preview),
+        )
+        .route(
+            "/api/v1/platform/deployments/{id}/configuration/apply",
+            post(super::deployment_configuration::apply),
+        )
+        .route(
+            "/api/v1/platform/deployments/{id}/configuration/restore-preview",
+            post(super::deployment_configuration::restore_preview),
         )
         .route(
             "/api/v1/platform/deployments/{id}/configuration/history",

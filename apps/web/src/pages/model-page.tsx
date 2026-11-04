@@ -359,7 +359,7 @@ export function RoutePage({ session, route: d, path, tab }: { session: Session; 
       <StatTile label="Priority / weight" value={routing.data ? `${routing.data.routing.priority} / ${routing.data.routing.weight}` : routing.isPending ? "…" : null} hint={routing.data ? passiveHealth(routing.data.health) : undefined} />
       <StatTile label="Data policy" value={<DataPolicyBadge policy={policy.policy} label={policy.label} size="md" />} hint={policy.detail} />
     </StatTileGrid>
-    <DeploymentConfigurationTabs key={d.id} id={d.id} tab={tab}>
+    <DeploymentConfigurationTabs key={d.id} id={d.id} tab={tab} restore={writable ? { record: d, name: d.upstream_model } : undefined}>
       <SectionNavLayout nav={<SectionNav items={sections.map(({ id, label, icon }) => ({ id, label, icon }))} />}>
         <div className={m.sections}>{sections.map(section => <Card key={section.id} id={section.id} title={section.title} titleAs="h2" description={section.description} actions={section.actions}><SectionHeadings>{section.content}</SectionHeadings></Card>)}</div>
       </SectionNavLayout>

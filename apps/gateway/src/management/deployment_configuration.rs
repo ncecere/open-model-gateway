@@ -107,7 +107,7 @@ impl PreviewSnapshot {
                 "Configuration estimate, not a reservation. Apply revalidates live configuration and authority; this preview does not authorize a commit.",
                 "Serving eligibility is configuration-only, not a price, health, quota or admission guarantee. Existing admitted requests may finish.",
                 "Affected workspace details and counts cover active shared workspaces with current model selections only. Personal workspace effects are omitted.",
-                "The expected revision is the deployment enablement revision. Existing apply routes do not enforce preview preconditions."
+                "The expected revision is the deployment enablement revision. The configuration apply route refuses a stale revision; the existing PATCH and DELETE routes do not enforce it."
             ]
         })
     }
@@ -181,4 +181,173 @@ impl DeploymentChange {
         }
         Ok(())
     }
+}
+
+/// A guarded apply: the enablement to write and the revision it was reviewed
+/// against, optionally restoring a recorded change (#87).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ApplyInput {
+    enabled: bool,
+    expected_revision: String,
+    #[serde(default)]
+    restore_of: Option<Uuid>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RestoreInput {
+    change_id: Uuid,
+}
+/// A decimal revision: digits only (no sign), at most 19 of them, leading
+/// zeros accepted, within the signed 64-bit range.
+fn revision(raw: &str) -> Result<i64, ApiError> {
+    if raw.is_empty() || raw.len() > 19 || !raw.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(invalid());
+    }
+    raw.parse().map_err(|_| invalid())
+}
+/// The caller previews again for the current revision; the error carries only
+/// the shared envelope.
+fn revision_conflict() -> ManagementError {
+    ManagementError::detailed(
+        StatusCode::CONFLICT,
+        "revision_conflict",
+        "This route's enablement changed since the preview; review it again.".into(),
+        json!({}),
+    )
+}
+/// A recorded snapshot of this deployment. Another deployment's change is as
+/// unknown as a missing one; a legacy event without values cannot be restored.
+async fn source(
+    tx: &mut Transaction<'_, Postgres>,
+    deployment: Uuid,
+    change: Uuid,
+) -> Result<(bool, i64, chrono::DateTime<chrono::Utc>), ManagementError> {
+    if let Some(row) = sqlx::query_as(
+        "SELECT after_enabled,revision,created_at FROM configuration_changes WHERE id=$1 AND deployment_id=$2",
+    )
+    .bind(change)
+    .bind(deployment)
+    .fetch_optional(&mut **tx)
+    .await?
+    {
+        return Ok(row);
+    }
+    let legacy: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT FROM audit_events WHERE id=$1 AND resource_id=$2 AND workspace_id IS NULL AND resource_type IN ('deployment','deployments') AND action IN ('deployment.created','configuration.updated'))",
+    )
+    .bind(change)
+    .bind(deployment)
+    .fetch_one(&mut **tx)
+    .await?;
+    if legacy {
+        return Err(ManagementError::detailed(
+            StatusCode::CONFLICT,
+            "restore_values_unavailable",
+            "This change was recorded without its values, so it cannot be restored.".into(),
+            json!({}),
+        ));
+    }
+    Err(missing().into())
+}
+
+/// Preview of restoring the configuration a recorded change produced. Like
+/// every preview it writes nothing and authorizes nothing.
+pub(super) async fn restore_preview(
+    State(s): State<Store>,
+    Extension(u): Extension<ManagementPrincipal>,
+    Path(id): Path<Uuid>,
+    Json(input): Json<RestoreInput>,
+) -> DetailedResult {
+    if u.token_id().is_some() {
+        return Err(denied().into());
+    }
+    let mut tx = resources::read_snapshot(&s).await?;
+    resources::require_platform_admin(
+        &resources::platform_role_snapshot(&mut tx, u.user_id()).await?,
+    )?;
+    let (enabled, source_revision, created_at) = source(&mut tx, id, input.change_id).await?;
+    let change = DeploymentChange::prepare(&mut tx, &u, id, &Enabled { enabled }).await?;
+    let snapshot = PreviewSnapshot::load(&mut tx, change).await?;
+    tx.commit().await?;
+    let mut preview = snapshot.evaluate();
+    preview["restore"] = json!({"change_id":input.change_id,"revision":source_revision.to_string(),"created_at":created_at,"enabled":enabled});
+    Ok(Json(preview))
+}
+
+/// Apply an enablement only at the reviewed revision. A restore additionally
+/// names its source, which must hold the applied value; the new change is
+/// linked to it. Requesting the current value records nothing.
+pub(super) async fn apply(
+    State(s): State<Store>,
+    Extension(u): Extension<ManagementPrincipal>,
+    Path(id): Path<Uuid>,
+    Json(input): Json<ApplyInput>,
+) -> DetailedResult {
+    if u.token_id().is_some() {
+        return Err(denied().into());
+    }
+    let expected = revision(&input.expected_revision)?;
+    let mut tx = resources::catalog_tx(&s, &u, true).await?;
+    resources::configuration_actor(&mut tx, &u).await?;
+    let change = DeploymentChange::prepare(
+        &mut tx,
+        &u,
+        id,
+        &Enabled {
+            enabled: input.enabled,
+        },
+    )
+    .await?;
+    if change.before.revision != expected {
+        return Err(revision_conflict());
+    }
+    if let Some(restore) = input.restore_of {
+        let (value, _, _) = source(&mut tx, id, restore).await?;
+        if value != input.enabled {
+            return Err(ManagementError::detailed(
+                StatusCode::CONFLICT,
+                "restore_source_mismatch",
+                "The restored change recorded a different value.".into(),
+                json!({}),
+            ));
+        }
+    }
+    let target = json!({"kind":"deployment","id":id});
+    if change.before.enabled == input.enabled {
+        tx.commit().await?;
+        return Ok(Json(
+            json!({"outcome":"unchanged","target":target,"revision":expected.to_string(),"change_id":null,"restored_from":null}),
+        ));
+    }
+    if let Some(restore) = input.restore_of {
+        sqlx::query("SELECT set_config('omg.configuration_restore',$1,true)")
+            .bind(restore.to_string())
+            .execute(&mut *tx)
+            .await?;
+    }
+    // The revision is the precondition of the write itself as well (the
+    // catalog lock already excludes every other deployment writer).
+    let Some(revision) = sqlx::query_scalar::<_, i64>(
+        "UPDATE deployments SET enabled=$2 WHERE id=$1 AND revision=$3 RETURNING revision",
+    )
+    .bind(id)
+    .bind(input.enabled)
+    .bind(expected)
+    .fetch_optional(&mut *tx)
+    .await?
+    else {
+        return Err(revision_conflict());
+    };
+    let change_id: Uuid = sqlx::query_scalar(
+        "SELECT id FROM configuration_changes WHERE deployment_id=$1 AND revision=$2",
+    )
+    .bind(id)
+    .bind(revision)
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Json(
+        json!({"outcome":"applied","target":target,"revision":revision.to_string(),"change_id":change_id,"restored_from":input.restore_of}),
+    ))
 }
