@@ -4,7 +4,7 @@ Notes for changes on `main` after [v0.11.0](v0.11.0.md). They become the next re
 
 ## New features
 
-- **Request a model for your workspace** (#83, slice B). A member of a Team or Project can ask for a model from the workspace's catalog to be selected for the workspace (`POST /me/access-requests` with `model_id`). An owner or admin of that workspace approves or denies it in the workspace's request queue; approving rechecks the requester's membership and the model's availability and selects the model exactly as an admin selection would. Platform authority alone cannot decide these requests, and the requester never can. API only in this slice; the dashboard follows. Requires migration **0072** and the updated runtime grants.
+- **Request a model for your workspace** (#83, slice B). A member of a Team or Project can ask for a model from the workspace's catalog to be selected for the workspace (`POST /me/access-requests` with `model_id`). An owner or admin of that workspace approves or denies it in the workspace's request queue; approving rechecks the requester's membership and the model's availability and selects the model exactly as an admin selection would. Platform authority alone cannot decide these requests, and the requester never can. In the dashboard, members see **Request** on models available to add on the workspace's **Models** page, and owners/admins decide in Workspace Settings › **Access requests**; the Admin page lists model requests without actions. At most 5 model requests can be pending per requester and workspace, and 100 per workspace. Requires migration **0072** and the updated runtime grants.
 
 ## Behaviour changes
 

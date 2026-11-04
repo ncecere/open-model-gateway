@@ -18,7 +18,7 @@ beforeEach(() => {
 afterEach(() => { cleanup(); abortRequests(); document.cookie = "omg_csrf=; Max-Age=0; Path=/"; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 const target = (patch: Partial<AccessRequestTarget> = {}): AccessRequestTarget => ({ id: "ws-research", name: "Research", kind: "team", ...patch });
-const request = (patch: Partial<AccessRequest> = {}): AccessRequest => ({ id: "req-1", requester: "outsider", requester_display_name: "Outsider Person", requester_email: "outsider@demo.invalid", target_kind: "workspace", workspace_id: "ws-research", workspace_name_at_request: "Research", requested_role: "member", status: "pending", reason: "Need it for an incident", created_at: "2026-10-14T08:00:00Z", expires_at: "2026-10-21T08:00:00Z", decided_by: null, decided_at: null, membership_grant_id: null, ...patch });
+const request = (patch: Partial<AccessRequest> = {}): AccessRequest => ({ id: "req-1", requester: "outsider", requester_display_name: "Outsider Person", requester_email: "outsider@demo.invalid", target_kind: "workspace_membership", workspace_id: "ws-research", workspace_name_at_request: "Research", model_id: null, model_name_at_request: "", requested_role: "member", status: "pending", reason: "Need it for an incident", created_at: "2026-10-14T08:00:00Z", expires_at: "2026-10-21T08:00:00Z", decided_by: null, decided_at: null, membership_grant_id: null, ...patch });
 function mount(node: React.ReactElement) { const client = testClient(); const user = userEvent.setup(); const mounted = render(<QueryClientProvider client={client}><ActionProvider>{node}</ActionProvider></QueryClientProvider>); return { client, user, mounted }; }
 function serve(routes: Record<string, (init?: RequestInit) => Response | Promise<Response>>) {
   const fetch = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
@@ -178,5 +178,35 @@ describe("Admin access requests (#83 slice A): platform queue, Auditor read-only
     mount(<PlatformAccessRequestsPage session={auditor} />);
     await screen.findByText("Outsider Person");
     expect(screen.queryByRole("button", { name: /^Actions for/ })).toBeNull();
+  });
+});
+
+describe("Model requests (#83 slice B)", () => {
+  const modelRequest = (patch: Partial<AccessRequest> = {}) => request({ id: "req-m", target_kind: "model_selection", model_id: "m-1", model_name_at_request: "company/smart", requested_role: null, ...patch });
+  it("says what approving a model request does, and approves it on the workspace path", async () => {
+    const fetch = serve({
+      [`${workspaceAccessRequestsPath(team.id)}*`]: init => init?.method === "POST" ? Response.json(modelRequest({ status: "approved", decided_by: "me" })) : Response.json({ data: [modelRequest()] }),
+    });
+    const { user } = mount(<WorkspaceAccessRequestQueue session={session} workspace={team} />);
+    await screen.findByText("Use company/smart");
+    await user.click(screen.getByRole("button", { name: "Actions for Outsider Person" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Approve…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Approve this request?" });
+    expect(within(dialog).getByText(/Adds company\/smart to this workspace/)).toBeTruthy();
+    expect(within(dialog).queryByText(/member access/)).toBeNull();
+    await user.click(within(dialog).getByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(writes(fetch)).toEqual([`POST ${workspaceAccessRequestsPath(team.id)}/req-m/approve`]));
+  });
+  it("lists model requests on the platform page without decision actions", async () => {
+    serve({ [platformAccessRequestsPath]: () => Response.json({ data: [modelRequest()] }) });
+    mount(<PlatformAccessRequestsPage session={admin} />);
+    await screen.findByText("Use company/smart");
+    expect(screen.queryByRole("button", { name: /^Actions for/ })).toBeNull();
+  });
+  it("shows the requested model in My requests", async () => {
+    serve({ [accessRequestTargetsPath]: () => Response.json({ data: [] }), [myAccessRequestsPath]: () => Response.json({ data: [modelRequest()] }) });
+    const { user } = mount(<AccessRequestsPage tab="mine" onTabChange={() => {}} />);
+    await screen.findByText("Use company/smart");
+    expect(user).toBeTruthy();
   });
 });

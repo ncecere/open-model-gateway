@@ -21,6 +21,7 @@ import { useState, type ReactNode } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { api, platformPath, wsPath, type Collection, type Grant, type Provider, type ServerPolicy, type Session, type Workspace } from "../lib/api";
+import { myAccessRequestsPath, newIdempotencyKey, reasonError, type AccessRequest } from "../lib/access-requests";
 import type { DashboardSearch } from "../lib/permissions";
 import { permissions } from "../lib/permissions";
 import { catalogSorts, catalogTypeTabs, eligibilityLabels, readinessLabels, readinessText, filterCatalog, modelReadiness, notServingReason, modelWorkload, protocolLabel, retiredWorkloads, sortCatalog, typeCounts, type CatalogFilters, type CatalogModel, type CatalogSort, type Eligibility, type Readiness, type WorkspaceCatalogModel } from "../lib/model-setup";
@@ -298,10 +299,21 @@ export function WorkspaceModels({ session, workspace }: { session: Session; work
   const ofType = (list: WorkspaceRow[]) => search.type ? list.filter(r => r.workload === search.type) : list;
   const shown = ofType(filtered), loading = catalog.isPending, known = !loading && !catalog.isError;
   const available = rows.filter(r => r.eligibility === "available_from_catalog");
+  // #83: a member who cannot add models asks the workspace's owners/admins instead.
+  const canRequest = !canSelect && workspace.kind !== "personal";
+  const mine = useChoices<AccessRequest>(myAccessRequestsPath, canRequest);
+  const requested = new Set((mine.data ?? []).filter(q => q.status === "pending" && q.workspace_id === workspace.id && q.model_id).map(q => q.model_id!));
+  const request = (r: WorkspaceRow) => {
+    const idempotencyKey = newIdempotencyKey();
+    ask({ title: `Ask for ${r.display_name}?`, description: "An owner or admin of this workspace reviews your request. You'll see the outcome in My requests.",
+      fields: [{ name: "reason", label: "Reason", type: "textarea", placeholder: "What do you need it for?", validate: reasonError }],
+      submitLabel: "Send request", successNotice: "Request sent.",
+      run: (v, signal) => api<AccessRequest>(myAccessRequestsPath, { method: "POST", body: { workspace_id: workspace.id, model_id: r.model_id, idempotency_key: idempotencyKey, reason: v.reason || undefined }, signal }) });
+  };
   const select = (r: WorkspaceRow) => ask({ title: `Add ${r.display_name}?`, description: addModelText(workspace), submitLabel: "Add model", successNotice: `Added ${r.display_name}.`, run: (_, signal) => api(grantPath, { method: "POST", body: { model_id: r.model_id }, signal }) });
   const remove = (r: WorkspaceRow) => ask({ title: `Remove ${r.display_name}?`, description: r.selection?.direct_granted ? "A Platform Admin also assigned it, so it stays available." : "Keys can't call it any more. Adding it back doesn't restore it on keys limited to selected models.", danger: true, submitLabel: "Remove model", successNotice: `Removed ${r.display_name}.`, run: (_, signal) => api(`${grantPath}/${enc(r.model_id)}`, { method: "DELETE", signal }) });
   // "Add" is the row's one visible action; Remove lives in the row's ⋯ menu (a dozen identical buttons were noise).
-  const actions = (r: WorkspaceRow) => !canSelect ? null : r.eligibility === "available_from_catalog" ? <Button size="sm" variant="secondary" onClick={() => select(r)}>Add</Button> : r.selection?.catalog_granted ? <ActionMenu label={`Actions for ${r.display_name}`} actions={[{ label: "Remove from workspace…", danger: true, onSelect: () => remove(r) }]} /> : null;
+  const actions = (r: WorkspaceRow) => canRequest && r.eligibility === "available_from_catalog" ? (requested.has(r.model_id) ? <Button size="sm" variant="secondary" disabled>Requested</Button> : <Button size="sm" variant="secondary" disabled={!mine.data} onClick={() => request(r)}>Request</Button>) : !canSelect ? null : r.eligibility === "available_from_catalog" ? <Button size="sm" variant="secondary" onClick={() => select(r)}>Add</Button> : r.selection?.catalog_granted ? <ActionMenu label={`Actions for ${r.display_name}`} actions={[{ label: "Remove from workspace…", danger: true, onSelect: () => remove(r) }]} /> : null;
   const eligibilities = ["selected", "direct", "available_from_catalog"] as const;
   const facets: ToolbarFacet[] = [
     { id: "eligibility", label: "Show", type: "toggle", multiple: true, allLabel: "All", options: eligibilities.map(e => ({ value: e, label: eligibilityLabels[e] })) },

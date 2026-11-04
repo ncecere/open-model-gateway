@@ -1,6 +1,7 @@
 /*
- * Self-service membership requests (#83, slice A): join a discoverable Team/Project as
- * `member`. Browser-only routes (docs/management-api.md#self-service-membership-requests-83-slice-a).
+ * Self-service access requests (#83): join a discoverable Team/Project as `member` (slice A),
+ * or, as a member, ask for a catalog model to be selected for the workspace (slice B).
+ * Browser-only routes (docs/management-api.md#self-service-access-requests-83).
  * Reasons are bounded plain text and are always rendered as text, never HTML. Server
  * capabilities are presentation only: Rust rechecks authority, discoverability, membership
  * and stale-request conflicts on every write.
@@ -32,10 +33,13 @@ export type AccessRequest = {
   requester: string;
   requester_display_name?: string | null;
   requester_email?: string | null;
-  target_kind: "workspace";
+  target_kind: "workspace_membership" | "model_selection";
   workspace_id: string;
   workspace_name_at_request: string;
-  requested_role: "member";
+  /** The requested model (model_selection) and its public name when requested (frozen). */
+  model_id: string | null;
+  model_name_at_request: string;
+  requested_role: "member" | null;
   status: AccessRequestStatus;
   reason: string | null;
   created_at: string;
@@ -57,6 +61,10 @@ export const discoverablePath = (ws: string) => `${API}/platform/workspaces/${en
 
 export const accessRequestStatusLabels: Record<AccessRequestStatus, string> = { pending: "Pending", approved: "Approved", denied: "Denied", withdrawn: "Withdrawn", expired: "Expired" };
 export const accessRequestStatusTone: Record<AccessRequestStatus, "warning" | "success" | "danger" | "neutral"> = { pending: "warning", approved: "success", denied: "danger", withdrawn: "neutral", expired: "neutral" };
+
+export const isModelRequest = (r: Pick<AccessRequest, "target_kind">) => r.target_kind === "model_selection";
+/** What was asked for, in a row's words. */
+export const requestSubject = (r: AccessRequest) => isModelRequest(r) ? `Use ${r.model_name_at_request || "a model"}` : "Join as member";
 
 /** A fresh requester-scoped idempotency key: visible ASCII, well within the server's 1–128-byte bound. */
 export const newIdempotencyKey = () => crypto.randomUUID();

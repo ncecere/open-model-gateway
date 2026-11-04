@@ -4994,7 +4994,7 @@
         }
       },
       "additionalProperties": false,
-      "description": "Decision response of an approve call: requester-private projection (no requester identity) after the decision. decided_by and decided_at are always set, and the applied membership grant is always present."
+      "description": "Decision response of an approve call on the workspace path: requester-private projection (no requester identity) after the decision. decided_by and decided_at are always set. A membership request carries the applied membership grant; an approved model-selection request has membership_grant_id null (the model is selected for the workspace instead)."
     },
     "AccessDeniedRequest": {
       "type": "object",
@@ -5076,7 +5076,7 @@
         }
       },
       "additionalProperties": false,
-      "description": "Decision response of a deny call: requester-private projection (no requester identity) after the decision. decided_by and decided_at are always set; a denial never carries a membership grant."
+      "description": "Decision response of a deny call on the workspace path: requester-private projection (no requester identity) after the decision. decided_by and decided_at are always set; a denial never carries a membership grant."
     },
     "AccessBudgetWindow": {
       "oneOf": [
