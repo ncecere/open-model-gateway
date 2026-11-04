@@ -18,6 +18,7 @@ pub(crate) const IDENTITY_SELF_SERVICE_AREAS: &[&str] = &[
 pub(crate) const SLICE3_AREAS: &[&str] = &[
     "platform/catalog-defaults",
     "platform/catalogs",
+    "platform/deployment-bulk-operations",
     "platform/deployments",
     "platform/model-setup",
     "platform/models",
@@ -1222,7 +1223,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(count, 253);
+        assert_eq!(count, 255);
     }
     #[test]
     fn management_openapi_response_rejects_incomplete_completed_slot() {

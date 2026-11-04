@@ -28,6 +28,8 @@ import { parseCheckboxValues, type Field } from "../lib/forms";
 import { ResourceLink } from "../components/navigation-link";
 import { DeploymentReviewDialog, DeploymentStatusActions } from "../components/deployment-preview";
 import { DeploymentConfigurationTabs } from "../components/deployment-history";
+import { BulkDisableDialog, type BulkTarget } from "../components/deployment-bulk";
+import { Checkbox } from "../components/ui/checkbox/checkbox";
 import { LabBadge, LabIcon, ProviderIcon, TitleWithIcon, WithIcon } from "../components/provider-icon";
 import { Alert, Badge, Button, DateTime, ErrorNotice, useAction, useApi, useApiScope, useChoices, useCollection } from "../components/ui";
 import { Badge as BitopBadge } from "../components/ui/badge/badge";
@@ -128,6 +130,9 @@ export function ModelPage({ session, model, path, tab }: ModelPageProps) {
   useSectionFromTab(modelSectionFor(tab));
   const edit = () => ask({ title: `Edit ${model.display_name}`, description: "Changing the API model name changes what clients must send.", fields: modelEditFields(model), submitLabel: "Save model", run: (v, signal) => api(path, { method: "PATCH", body: modelEditBody(v), signal }) });
   const addRoute = () => { if (connections.data) ask(deploymentCreateAction({ model, providers: connections.data })); };
+  // #88: explicit selection of this model's routes (at most 50), disabled together, never "all matching".
+  const [selected, setSelected] = useState<Map<string, BulkTarget>>(new Map()), [bulk, setBulk] = useState(false);
+  const selection: RouteSelection = { selected, toggle: (row, on) => setSelected(previous => { const next = new Map(previous); if (on) next.set(row.id, { id: row.id, name: row.route.upstream_model, model: { id: model.id, name: model.display_name } }); else next.delete(row.id); return next; }) };
   // The lab logo is left of the title like the list rows (ui-principles 11); the lab badge keeps just its name.
   const labIds = [model.public_name, model.display_name, ...set.rows.map(row => row.route.upstream_model)];
   const r = model.readiness, serving = [...set.tiers.primary, ...set.tiers.fallback, ...set.tiers.unknown], servingPrices = serving.map(asPrice);
@@ -138,7 +143,7 @@ export function ModelPage({ session, model, path, tab }: ModelPageProps) {
   const editAvailability = () => { if (membership.data && catalogs.data) ask({ title: "Edit availability", description: catalogRemovalHelp, fields: [catalogField(membership.data.catalog_ids, catalogs.data)], submitLabel: "Save availability", successNotice: "Availability saved.", run: (v, signal) => api(`${path}/catalogs`, { method: "PUT", body: { catalog_ids: parseCheckboxValues(v.catalog_ids) }, signal }) }); };
   const sections: (SectionNavItem & { title: string; description?: ReactNode; actions?: ReactNode; content: ReactNode })[] = [
     { id: "overview", label: "Overview", icon: <LayoutDashboard aria-hidden />, title: "Overview", actions: sectionEdit("Edit model details", edit), content: <ModelOverview model={model} policy={policy} writable={writable} profiles={connections.data} /> },
-    { id: "routes", label: "Routes", icon: <RouteIcon aria-hidden />, title: "Routes", description: "Tried in order; fallback follows the routing policy.", actions: writable && <Button size="sm" variant="secondary" disabled={!connections.data} onClick={addRoute}><Plus aria-hidden />Add route</Button>, content: <RoutesTable set={set} model={model} workload={workload} writable={writable} /> },
+    { id: "routes", label: "Routes", icon: <RouteIcon aria-hidden />, title: "Routes", description: "Tried in order; fallback follows the routing policy.", actions: writable && <>{selected.size > 0 && <Button size="sm" variant="secondary" onClick={() => setBulk(true)}>{`Disable selected (${selected.size})`}</Button>}<Button size="sm" variant="secondary" disabled={!connections.data} onClick={addRoute}><Plus aria-hidden />Add route</Button></>, content: <>{<RoutesTable set={set} model={model} workload={workload} writable={writable} selection={writable ? selection : undefined} />}{bulk && <BulkDisableDialog targets={[...selected.values()]} onClose={() => setBulk(false)} onDone={disabled => setSelected(previous => { const next = new Map(previous); for (const id of disabled) next.delete(id); return next; })} />}</> },
     { id: "pricing", label: "Pricing", icon: <CircleDollarSign aria-hidden />, title: "Pricing", description: "Estimates, not invoices. A missing rate is unknown, not free.", content: <RoutePricing set={set} model={model} workload={workload} writable={writable} /> },
     { id: "routing", label: "Routing policy", icon: <Split aria-hidden />, title: "Routing policy", description: modelRoutingHelp, actions: sectionEdit("Edit routing policy", editRouting, !set.policy.data), content: <><RoutingPolicySummary query={set.policy} />{set.tiers.tieNote && <Alert tone="warning">{set.tiers.tieNote}</Alert>}</> },
     { id: "availability", label: "Availability", icon: <Library aria-hidden />, title: "Availability", description: "Through catalogs, or by direct assignment.", actions: sectionEdit("Edit availability", editAvailability, !membership.data || !catalogs.data || !catalogs.data.length), content: <ModelAvailability model={model} membership={membership} catalogs={catalogs} /> },
@@ -196,12 +201,16 @@ export function ModelReadinessChecklist({ model, writable, onJump, policy }: { m
 }
 
 export type RouteSet = ReturnType<typeof useModelRoutes>;
-export function RoutesTable({ set, model, workload, writable }: { set: RouteSet; model: Model; workload: WorkloadKind; writable: boolean }) {
+/** Routes chosen for one bulk disable (#88). */
+export type RouteSelection = { selected: ReadonlyMap<string, unknown>; toggle: (row: RouteRow, on: boolean) => void };
+const BULK_LIMIT = 50;
+export function RoutesTable({ set, model, workload, writable, selection }: { set: RouteSet; model: Model; workload: WorkloadKind; writable: boolean; selection?: RouteSelection }) {
   if (set.list.isError) return <ErrorNotice error={set.list.error} retry={() => void set.list.refetch()} />;
   if (!set.list.data) return <p role="status">Loading routes…</p>;
   if (!set.rows.length) return <p className={s.muted}>No routes yet.{writable ? " Add a route on a connection so requests can be served." : ""}</p>;
-  const { primary, fallback, unknown, inactive } = set.tiers, { columns, meters } = routeColumns(workload), span = columns.length;
+  const { primary, fallback, unknown, inactive } = set.tiers, { columns, meters } = routeColumns(workload, selection !== undefined), span = columns.length;
   const row = (r: RouteRow) => { const connection = `${r.route.provider_name ?? r.detail?.provider_name ?? "Unknown connection"}${r.detail?.region ? ` · ${r.detail.region}` : ""}`; return <Tr key={r.id}>
+    {selection && <Td><Checkbox label={<span className="sr-only">{`Select ${r.route.upstream_model}`}</span>} checked={selection.selected.has(r.id)} disabled={!selection.selected.has(r.id) && selection.selected.size >= BULK_LIMIT} onCheckedChange={on => selection.toggle(r, on === true)} /></Td>}
     <Th scope="row"><span className={m.routeName}><span className={m.routeLine}><ProviderIcon profile={r.detail?.provider} size="sm" /><span className={m.truncate} title={r.route.upstream_model}><ResourceLink search={{ page: "deployment-detail", record: r.id }}>{r.route.upstream_model}</ResourceLink></span></span><span className={m.truncateNote} title={connection}>{connection}</span></span></Th>
     {meters.map(meter => <Td key={meter} numeric><MeterCell row={r} meter={meter} /></Td>)}
     <Td>{r.routing ? <><span className={s.primary}>{r.routing.routing.priority}</span><span className={s.secondary}>Weight {r.routing.routing.weight}</span></> : <span className={s.muted}>Unknown</span>}</Td>
@@ -225,9 +234,9 @@ type RouteMeter = Parameters<typeof basePrice>[1];
  * the row actions (pinned to the end). Fixed widths except the route, which takes the rest and truncates; every row
  * (route, divider, not serving) spans exactly these columns.
  */
-export function routeColumns(workload: WorkloadKind): { columns: TableColumn[]; meters: RouteMeter[] } {
+export function routeColumns(workload: WorkloadKind, selectable = false): { columns: TableColumn[]; meters: RouteMeter[] } {
   const meters = HEADLINE_METERS[workload].slice(0, 2);
-  return { meters, columns: ["Route", ...meters.map(meter => ({ label: METER_SPECS[meter].sku, numeric: true, width: "7rem" })), { label: "Priority", width: "5.5rem" }, { label: "Data policy", width: "9rem" }, { label: "Status", width: "8rem" }, { label: "Actions", hideLabel: true, width: "3.5rem", stickyEnd: true }] };
+  return { meters, columns: [...(selectable ? [{ label: "Select", hideLabel: true, width: "2.75rem" }] : []), "Route", ...meters.map(meter => ({ label: METER_SPECS[meter].sku, numeric: true, width: "7rem" })), { label: "Priority", width: "5.5rem" }, { label: "Data policy", width: "9rem" }, { label: "Status", width: "8rem" }, { label: "Actions", hideLabel: true, width: "3.5rem", stickyEnd: true }] };
 }
 /** The base rate on one line and its compact unit under it ("$0.10" / "/M tokens"); tiers are noted, the full text is in the tooltip. */
 function MeterCell({ row, meter }: { row: RouteRow; meter: RouteMeter }) {

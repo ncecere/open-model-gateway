@@ -303,6 +303,13 @@ async fn every_json_management_write_rejects_unknown_fields_after_valid_control(
         json!({"change_id":created_change})
     );
     case!(
+        "deployment_bulk::create",
+        "POST",
+        format!("{platform}/deployment-bulk-operations"),
+        &f.admin,
+        json!({"action":"disable","idempotency_key":"matrix-bulk","items":[{"id":Uuid::new_v4(),"expected_revision":"1"}]})
+    );
+    case!(
         "resources::update_deployment",
         "PATCH",
         format!("{platform}/deployments/{deployment}"),

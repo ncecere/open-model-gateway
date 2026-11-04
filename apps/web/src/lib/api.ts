@@ -133,6 +133,8 @@ export type DeploymentConfigurationChange = {
   values_available: boolean; before: { enabled: boolean } | null; after: { enabled: boolean } | null;
   /** The recorded change this one restored (#87), or null. */
   restored_from?: string | null;
+  /** The bulk operation that made this change (#88), or null. */
+  bulk_operation_id?: string | null;
 };
 export type DeploymentHistoryPage = { data: DeploymentConfigurationChange[]; next_cursor: string | null };
 /** Browser-only configuration observation, not an apply authorization or reservation. */
@@ -150,6 +152,8 @@ export type DeploymentPreview = {
   /** Present on a restore preview: the recorded change whose value it restores. */
   restore?: { change_id: string; revision: string; created_at: string; enabled: boolean };
 };
+/** POST /platform/deployment-bulk-operations and its status route (#88). */
+export type DeploymentBulkOperation = { operation_id: string; idempotency_key: string; completed: boolean; replayed: boolean; items: { id: string; expected_revision: string; outcome: "committed" | "unchanged" | "refused" | "conflict" | "unattempted" | null; reason: "not_found" | "forbidden" | "revision_conflict" | null; revision: string | null; change_id: string | null }[] };
 /** POST …/configuration/apply: applied at the reviewed revision, or unchanged. */
 export type DeploymentApplyResult = { outcome: "applied" | "unchanged"; target: { kind: "deployment"; id: string }; revision: string; change_id: string | null; restored_from: string | null };
 export type Catalog = { id: string; name: string; description: string | null; created_at?: string };

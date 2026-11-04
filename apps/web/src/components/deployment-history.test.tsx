@@ -77,10 +77,11 @@ describe("deployment History", () => {
     const fetch = vi.fn().mockImplementation((url: string) => Promise.resolve(
       url.endsWith("/restore-preview") ? Response.json(restorePreview)
         : url.endsWith("/configuration/apply") ? Response.json({ outcome: "applied", target: { kind: "deployment", id: "route" }, revision: "4", change_id: "new", restored_from: "created" })
-          : Response.json({ data: [{ ...created, restored_from: null }, { ...change, id: "restored", restored_from: "created" }], next_cursor: null })));
+          : Response.json({ data: [{ ...created, restored_from: null }, { ...change, id: "restored", restored_from: "created", bulk_operation_id: "bulk-op" }], next_cursor: null })));
     vi.stubGlobal("fetch", fetch);
     const user = restoreView();
     await screen.findByText(/Restored the configuration of change/);
+    expect(screen.getByText("bulk-op")).toBeTruthy();
     await user.click(screen.getAllByRole("button", { name: "Restore this configuration" })[0]);
     await screen.findByText(/Restores the configuration recorded at revision 1/);
     const preview = fetch.mock.calls.find(([url]) => String(url).endsWith("/restore-preview"))!;

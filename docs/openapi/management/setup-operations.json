@@ -1110,7 +1110,7 @@
             }
           }
         },
-        "description": "Compare 2–4 distinct model UUIDs, comma separated. Platform telemetry aggregates shared workspaces only; no personal activity details.",
+        "description": "Compare 2\u20134 distinct model UUIDs, comma separated. Platform telemetry aggregates shared workspaces only; no personal activity details.",
         "parameters": [
           {
             "in": "query",
@@ -3780,7 +3780,7 @@
             }
           }
         },
-        "description": "Compare 2–4 distinct visible models. Shared administrators see workspace telemetry, members their own activity. Foreign personal workspaces are hidden with 404.",
+        "description": "Compare 2\u20134 distinct visible models. Shared administrators see workspace telemetry, members their own activity. Foreign personal workspaces are hidden with 404.",
         "parameters": [
           {
             "in": "query",
@@ -4371,6 +4371,158 @@
             }
           }
         }
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/platform/deployment-bulk-operations": {
+      "access": "PlatformWrite",
+      "operation": {
+        "responses": {
+          "200": {
+            "description": "Successful real handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_deployment_bulk_operationsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Handler validation refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "idempotency_key_reused (this actor used the key for different targets) or bulk_incomplete (the key's operation is still in progress; read its status, never replay)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Management storage unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Axum JSON extraction refusal (including unknown fields, missing required fields or invalid types)",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON content type required",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "Platform Admin, browser session only. Disables 1 to 50 explicit deployments, each at its reviewed revision, in independent transactions with live authorization, and returns each target's outcome (#88). The same actor and idempotency key never apply twice: a replay returns the recorded outcomes. Dropping the request stops unstarted targets; committed ones stay committed and recorded, and once the request's lease lapses (30 seconds) a replay or status read completes the operation with the rest unattempted. A failure stops the remaining targets, which are recorded unattempted. One audit event lists the targets and outcomes when the operation completes; each committed change names the operation.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_deployment_bulk_operationsRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/platform/deployment-bulk-operations/{idempotency_key}": {
+      "access": "PlatformWrite",
+      "operation": {
+        "responses": {
+          "200": {
+            "description": "Successful real handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_deployment_bulk_operations_by_idempotency_keyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Handler validation refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No operation of the calling actor with this key (another actor's key is as unknown as a missing one)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Management storage unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Platform Admin, browser session only. The calling actor's own bulk operation with this idempotency key and its per-target outcomes (#88). An operation whose request's lease has lapsed is completed by this read, its undecided targets unattempted; otherwise a null outcome means not decided yet.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "idempotency_key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+              "description": "Caller-chosen idempotency key, unique per actor: 1 to 128 ASCII letters, digits, dots, underscores, colons or hyphens."
+            }
+          }
+        ]
       },
       "scope": null,
       "token_policy": "Denied"

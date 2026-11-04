@@ -128,3 +128,19 @@ describe("menu-originated deployment review focus", () => {
     expect(other).toHaveBeenCalledOnce();
   });
 });
+
+describe("route selection for bulk disable (#88)", () => {
+  it("offers a labelled checkbox per route only when a selection is given, and caps it at 50", async () => {
+    const toggle = vi.fn();
+    const table = (selected: ReadonlyMap<string, unknown>) => <QueryClientProvider client={testClient()}><ActionProvider><RoutesTable set={routeSet(true)} model={model} workload="generation" writable selection={{ selected, toggle }} /></ActionProvider></QueryClientProvider>;
+    const { rerender } = render(table(new Map()));
+    const box = screen.getByRole("checkbox", { name: "Select Upstream" });
+    await userEvent.setup().click(box);
+    expect(toggle).toHaveBeenCalledWith(expect.objectContaining({ id: record.id }), true);
+    rerender(table(new Map(Array.from({ length: 50 }, (_, i) => [`other-${i}`, {}]))));
+    expect(screen.getByRole("checkbox", { name: "Select Upstream" }).hasAttribute("disabled") || screen.getByRole("checkbox", { name: "Select Upstream" }).getAttribute("aria-disabled") === "true").toBe(true);
+    cleanup();
+    render(<QueryClientProvider client={testClient()}><ActionProvider><RoutesTable set={routeSet(true)} model={model} workload="generation" writable /></ActionProvider></QueryClientProvider>);
+    expect(screen.queryByRole("checkbox")).toBeNull();
+  });
+});

@@ -200,7 +200,7 @@ pub(super) struct RestoreInput {
 }
 /// A decimal revision: digits only (no sign), at most 19 of them, leading
 /// zeros accepted, within the signed 64-bit range.
-fn revision(raw: &str) -> Result<i64, ApiError> {
+pub(super) fn revision(raw: &str) -> Result<i64, ApiError> {
     if raw.is_empty() || raw.len() > 19 || !raw.bytes().all(|b| b.is_ascii_digit()) {
         return Err(invalid());
     }

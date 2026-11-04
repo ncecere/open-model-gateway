@@ -237,11 +237,17 @@ async fn deployment_preview_browser_only_origin_csrf_and_live_roles(pool: PgPool
     let (status, created) = call(&f.s, &f.admin, "POST", "/api/v1/platform/admin-tokens", json!({"name":"Preview denied","scopes":["platform:read","catalog:write"],"expires_in_days":1})).await;
     assert_eq!(status, StatusCode::OK, "{created}");
     // #87: apply and restore-preview share the preview's browser-only policy.
-    for action in ["preview", "apply", "restore-preview"] {
-        let path = format!(
-            "/api/v1/platform/deployments/{}/configuration/{action}",
-            Uuid::new_v4()
-        );
+    // #88: the bulk routes share the same browser-only policy.
+    let paths = ["preview", "apply", "restore-preview"]
+        .map(|action| {
+            format!(
+                "/api/v1/platform/deployments/{}/configuration/{action}",
+                Uuid::new_v4()
+            )
+        })
+        .into_iter()
+        .chain(["/api/v1/platform/deployment-bulk-operations".to_owned()]);
+    for path in paths {
         // An authorized empty body reaches typed extraction; refusals happen first.
         assert_eq!(
             request(&app, "POST", &path, Some(&admin), None, true, ORIGIN).await,

@@ -47,6 +47,14 @@ GRANT SELECT ON public.installation,public.users,public.oidc_identities,
  TO gateway_runtime;
 -- #86: append-only deployment configuration evidence; revision is trigger-only.
 GRANT SELECT,INSERT ON public.configuration_changes TO gateway_runtime;
+-- #88: bulk operations are created incomplete and items undecided (column
+-- INSERT); the runtime moves the lease, records each outcome once and
+-- completes once (triggers enforce the order and bindings).
+GRANT SELECT ON public.configuration_bulk_operations,public.configuration_bulk_items TO gateway_runtime;
+GRANT INSERT(id,actor_user_id,idempotency_key,payload_digest,action,item_count) ON public.configuration_bulk_operations TO gateway_runtime;
+GRANT INSERT(operation_id,position,deployment_id,expected_revision) ON public.configuration_bulk_items TO gateway_runtime;
+GRANT UPDATE(lease_until,completed_at) ON public.configuration_bulk_operations TO gateway_runtime;
+GRANT UPDATE(outcome,reason,change_id,revision,decided_at) ON public.configuration_bulk_items TO gateway_runtime;
 -- Aged unknown-hold review queue (#101 A): reviewed, no grant change. Its
 -- read-only snapshot uses the existing SELECT on workspaces, keys, executions,
 -- reservations, monetary_ledger and deployment_prices; no new write operation.

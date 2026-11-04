@@ -104,6 +104,7 @@ export const auditActionLabels: Record<string, string> = {
   "catalog.created": "Created catalog", "catalog.updated": "Changed catalog", "catalog.deleted": "Deleted catalog", "catalog.models_replaced": "Changed catalog models",
   "catalog.override_replaced": "Replaced workspace catalogs", "catalog.override_reset": "Reset workspace catalogs", "catalog.type_defaults_replaced": "Changed default catalogs",
   "configuration.updated": "Changed configuration",
+  "configuration.bulk_disabled": "Bulk disabled routes",
   "cost_center.created": "Created cost center", "cost_center.updated": "Changed cost center", "cost_center.archived": "Archived cost center",
   "deployment.created": "Added route",
   "file.uploaded": "Uploaded file", "file.deleted": "Deleted file",
