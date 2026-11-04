@@ -192,7 +192,7 @@ describe("Model requests (#83 slice B)", () => {
     await user.click(screen.getByRole("button", { name: "Actions for Outsider Person" }));
     await user.click(await screen.findByRole("menuitem", { name: "Approve…" }));
     const dialog = await screen.findByRole("dialog", { name: "Approve this request?" });
-    expect(within(dialog).getByText(/Adds company\/smart to this workspace/)).toBeTruthy();
+    expect(within(dialog).getByText(/Adds the model requested as company\/smart to this workspace/)).toBeTruthy();
     expect(within(dialog).queryByText(/member access/)).toBeNull();
     await user.click(within(dialog).getByRole("button", { name: "Approve" }));
     await waitFor(() => expect(writes(fetch)).toEqual([`POST ${workspaceAccessRequestsPath(team.id)}/req-m/approve`]));

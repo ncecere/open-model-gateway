@@ -102,7 +102,7 @@ export function WorkspaceAccessRequestQueue({ session, workspace }: { session: S
   const ask = useAction(), writable = permissions(session, workspace).manageTeam;
   const decide = (r: AccessRequest, approve: boolean) => ask({
     title: approve ? "Approve this request?" : "Deny this request?", danger: !approve,
-    description: !approve ? "The requester can send a new request later." : isModelRequest(r) ? `Adds ${r.model_name_at_request} to this workspace. Members' keys can call it, unless a key is limited to other models.` : "Grants member access to this workspace.",
+    description: !approve ? "The requester can send a new request later." : isModelRequest(r) ? `Adds the model requested as ${r.model_name_at_request} to this workspace. Members' keys can call it, unless a key is limited to other models.` : "Grants member access to this workspace.",
     submitLabel: approve ? "Approve" : "Deny", successNotice: approve ? "Request approved." : "Request denied.",
     run: (_, signal) => api<AccessRequest>(workspaceAccessRequestDecisionPath(workspace.id, r.id, approve), { method: "POST", signal }),
   });
@@ -137,8 +137,8 @@ export function PlatformAccessRequestsPage({ session }: { session: Session }) {
   // nothing new (docs/management-api.md#self-service-access-requests-83).
   const columns: DataTableColumn<AccessRequest>[] = [
     { id: "requester", header: "Requester", accessor: requesterLabel, rowHeader: true, hideable: false, cell: r => <PersonIdentity person={{ display_name: r.requester_display_name, email: r.requester_email ?? null }} self={r.requester === session.user.id} /> },
-    { id: "reason", header: "Reason", accessor: r => r.reason ?? "", cell: r => <ReasonCell reason={r.reason} /> },
     { id: "request", header: "Request", accessor: requestSubject, cell: r => requestSubject(r) },
+    { id: "reason", header: "Reason", accessor: r => r.reason ?? "", cell: r => <ReasonCell reason={r.reason} /> },
     { id: "workspace", header: "Workspace", accessor: r => r.workspace_id, cell: r => <Id value={r.workspace_id} /> },
     { id: "status", header: "Status", accessor: r => r.status, cell: r => <StatusCell status={r.status} /> },
     { id: "created", header: "Submitted", accessor: r => r.created_at, cell: r => <span className={s.secondary}>{new Date(r.created_at).toLocaleString()}</span> },
@@ -147,6 +147,6 @@ export function PlatformAccessRequestsPage({ session }: { session: Session }) {
     <Heading title="Access requests" description="Requests across every Team and Project. Model requests are decided by the workspace's own owners and admins, so they are shown here without actions." />
     <DirectoryTable<AccessRequest> path={platformAccessRequestsPath} label="Access requests" storageKey="platform-access-requests" columns={columns} rowKey={r => r.id} rowLabel={requesterLabel}
       rowActions={r => isModelRequest(r) ? [] : decisionActions(r, session.user.id, writable, decide)}
-      empty={{ icon: <Inbox />, title: "No access requests yet.", description: "Requests to join a Team or Project appear here." }} />
+      empty={{ icon: <Inbox />, title: "No access requests yet.", description: "Requests to join a Team or Project, or for a model, appear here." }} />
   </Stack>;
 }

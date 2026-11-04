@@ -508,7 +508,8 @@ async fn model_requests_expire_with_their_kind_and_are_bounded(pool: PgPool) {
     }
     let over = eligible_model(&pool, "company/cap-over").await;
     let (status, body) = ask(&f, &f.member, f.team, over, "cap-over").await;
-    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["reason"], "model_request_queue_full");
     // The four-element positional form, with the model last.
     let peer = user(&pool, "positional", "user").await;
     member(&pool, f.team, peer.user_id, "member").await;
@@ -621,4 +622,65 @@ async fn approval_races_revocation_and_lost_authority(pool: PgPool) {
         !selected(&pool, f.team, m).await,
         "approval replay re-selected a retired model"
     );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn the_model_queue_is_bounded_per_workspace_with_its_own_error(pool: PgPool) {
+    let f = fixture(&pool).await;
+    // 20 members fill the workspace's 100 pending model requests.
+    let mut models = Vec::new();
+    for n in 0..101 {
+        models.push(eligible_model(&pool, &format!("company/queue-{n}")).await);
+    }
+    for r in 0..20 {
+        let who = user(&pool, &format!("queue-member-{r}"), "user").await;
+        member(&pool, f.team, who.user_id, "member").await;
+        for k in 0..5 {
+            let (status, body) =
+                ask(&f, &who, f.team, models[r * 5 + k], &format!("q-{r}-{k}")).await;
+            assert_eq!(status, StatusCode::OK, "{r} {k} {body}");
+        }
+    }
+    // Another member is told the queue is full (not to retry in a minute),
+    // before any authority lock.
+    let (status, body) = ask(&f, &f.member, f.team, models[100], "q-full").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["reason"], "model_request_queue_full");
+    // The caller's pending requests for one workspace (a read-only filter).
+    let (status, pending) = call(
+        &f.s,
+        &f.member,
+        "GET",
+        &format!("{MINE}?status=pending&workspace_id={}", f.team),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(
+        (status, pending["data"].as_array().unwrap().len()),
+        (StatusCode::OK, 0)
+    );
+    let (status, _) = call(
+        &f.s,
+        &f.member,
+        "GET",
+        &format!("{MINE}?status=approved"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // A decision frees a slot.
+    let first: Uuid = sqlx::query_scalar("SELECT id FROM access_requests WHERE workspace_id=$1 AND status='pending' ORDER BY created_at LIMIT 1").bind(f.team).fetch_one(&pool).await.unwrap();
+    let (status, _) = decide(&f, &f.owner, &json!(first.to_string()), "deny", false).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = ask(&f, &f.member, f.team, models[100], "q-after").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, pending) = call(
+        &f.s,
+        &f.member,
+        "GET",
+        &format!("{MINE}?status=pending&workspace_id={}", f.team),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(pending["data"][0]["model_id"], models[100].to_string());
 }

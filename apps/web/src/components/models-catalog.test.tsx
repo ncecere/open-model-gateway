@@ -173,7 +173,7 @@ describe("Workspace Models (eligible catalog)", () => {
     document.cookie = "omg_csrf=test-csrf; Path=/";
     vi.stubGlobal("fetch", vi.fn().mockImplementation((path: string, init?: RequestInit) => {
       if (path.startsWith("/api/v1/me/access-requests") && init?.method === "POST") { posted.push(JSON.parse(String(init.body))); pending = true; return Promise.resolve(Response.json({})); }
-      if (path.startsWith("/api/v1/me/access-requests")) return Promise.resolve(Response.json({ data: pending ? [{ id: "r", status: "pending", workspace_id: member.id, model_id: "avail", target_kind: "model_selection" }] : [] }));
+      if (path.startsWith(`/api/v1/me/access-requests?status=pending&workspace_id=${member.id}`)) return Promise.resolve(Response.json({ data: pending ? [{ id: "r", status: "pending", workspace_id: member.id, model_id: "avail", target_kind: "model_selection" }] : [] }));
       if (path.startsWith(`/api/v1/workspaces/${member.id}/catalog`)) return Promise.resolve(Response.json({ data: catalog }));
       if (path.startsWith(`/api/v1/workspaces/${member.id}/models`)) return Promise.resolve(Response.json({ data: [grant] }));
       return Promise.reject(new Error(`Unexpected ${path}`));

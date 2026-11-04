@@ -816,6 +816,30 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
     assert_eq!(body(&r)["target_kind"], "model_selection");
     assert!(body(&r)["requested_role"].is_null());
     observed.observe(&r);
+    // The caller's own history, filtered: one workspace, pending only.
+    query_vectors_fixed(
+        &mut observed,
+        "GET",
+        "/api/v1/me/access-requests",
+        &[
+            ("limit", "50"),
+            ("offset", "0"),
+            ("status", "pending"),
+            ("workspace_id", &f.team.to_string()),
+        ],
+        async |query| {
+            send(
+                &client,
+                base,
+                Some(&requester),
+                "GET",
+                &target("/api/v1/me/access-requests", &query),
+                None,
+            )
+            .await
+        },
+    )
+    .await;
     let (status, decided) = call(
         &f.s,
         &f.owner,
@@ -996,7 +1020,12 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         &mut observed,
         "GET",
         "/api/v1/me/access-requests",
-        &[("limit", "50"), ("offset", "0")],
+        &[
+            ("limit", "50"),
+            ("offset", "0"),
+            ("status", "pending"),
+            ("workspace_id", &f.team.to_string()),
+        ],
         async |query| {
             send(
                 &client,

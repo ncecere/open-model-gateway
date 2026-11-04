@@ -56,11 +56,15 @@ BEGIN
   END IF;
   -- A queue bound for model requests: at most 5 pending per requester and
   -- workspace, and 100 pending per workspace (a membership request is one
-  -- per requester and workspace by its unique index).
+  -- per requester and workspace by its unique index). Not a rate limit: a
+  -- slot frees when an owner/admin decides or the request expires, so it has
+  -- its own code. The per-requester lock above does not serialize different
+  -- requesters; the workspace count relies on the handler holding the
+  -- workspace's exclusive authority lock (scope_locks) for every insert.
   IF NEW.target_kind='model_selection' AND (
      (SELECT count(*) FROM access_requests WHERE requester=NEW.requester AND workspace_id=NEW.workspace_id AND target_kind='model_selection' AND status='pending' AND expires_at>t)>=5
      OR (SELECT count(*) FROM access_requests WHERE workspace_id=NEW.workspace_id AND target_kind='model_selection' AND status='pending' AND expires_at>t)>=100) THEN
-   RAISE EXCEPTION 'request cap' USING ERRCODE='P0083',DETAIL='60';
+   RAISE EXCEPTION 'model request queue full' USING ERRCODE='P0084';
   END IF;
   IF (SELECT count(*) FROM access_requests WHERE requester=NEW.requester AND status='pending' AND expires_at>t)>=20 THEN
    RAISE EXCEPTION 'request cap' USING ERRCODE='P0083',DETAIL='60';

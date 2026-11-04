@@ -4279,6 +4279,7 @@
                   "logo_invalid_image",
                   "logo_too_large",
                   "logo_unsupported_type",
+                  "model_request_queue_full",
                   "period_change_not_allowed",
                   "personal_alerts_built_in",
                   "personal_limits_platform_controlled",
@@ -50587,6 +50588,23 @@
               "maximum": 100000,
               "minimum": 0,
               "type": "integer"
+            }
+          },
+          {
+            "description": "#83: only pending, unexpired requests, read from a snapshot that expires nothing.",
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "const": "pending"
+            }
+          },
+          {
+            "description": "#83: only the caller's requests for this workspace.",
+            "in": "query",
+            "name": "workspace_id",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
             }
           }
         ],
