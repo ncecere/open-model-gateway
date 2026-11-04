@@ -551,7 +551,7 @@ fn platform_role_valid(r: &str) -> bool {
     matches!(r, "user" | "auditor" | "admin")
 }
 pub(super) fn email_valid(s: &str) -> bool {
-    s.len() <= 320
+    super::chars_at_most(s, 320)
         && s.split('@').count() == 2
         && s.split('@').all(|s| !s.is_empty())
         && !s.chars().any(|c| c.is_whitespace() || c.is_control())
@@ -907,14 +907,14 @@ pub(super) fn mapping_valid(b: &MappingInput) -> bool {
             && u.password().is_none()
             && u.query().is_none()
             && u.fragment().is_none()
-    }) && b.issuer.len() <= 2048
+    }) && super::chars_at_most(&b.issuer, 2048)
         // The URL parser strips or percent-encodes control characters and
         // whitespace, but the raw issuer is what is stored and matched against the
         // IdP's `iss`: a NUL would reach PostgreSQL (503), and anything the parser
         // strips could never match. Same rule as the settings URLs (settings.rs).
         && !b.issuer.chars().any(|c| c.is_control() || c.is_whitespace())
         && !b.group_value.is_empty()
-        && b.group_value.len() <= 512
+        && super::chars_at_most(&b.group_value, 512)
         && !b.group_value.chars().any(char::is_control)
         && match b.target_kind.as_str() {
             "platform" => {

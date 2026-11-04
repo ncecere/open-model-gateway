@@ -987,6 +987,30 @@ fn generic_group_claim_is_strict_and_supports_custom_paths() {
     }
     let claims: SignedClaims = serde_json::from_value(json!({"groups":[]})).unwrap();
     assert_eq!(claims.groups("groups"), Some(vec![]));
+    // #405: a group value counts characters, so every value a mapping can hold
+    // (512 characters of any width) is matchable; 1024 characters is the bound.
+    for glyph in ["a", "\u{4e2d}", "\u{1F600}"] {
+        let claims: SignedClaims =
+            serde_json::from_value(json!({"groups":[glyph.repeat(1024)]})).unwrap();
+        assert_eq!(
+            claims.groups("groups").map(|g| g.len()),
+            Some(1),
+            "{glyph:?}"
+        );
+        let claims: SignedClaims =
+            serde_json::from_value(json!({"groups":[glyph.repeat(1025)]})).unwrap();
+        assert_eq!(claims.groups("groups"), None, "{glyph:?}");
+    }
+}
+
+/// #405: the sign-in email bound counts characters, like every management email.
+#[test]
+fn sign_in_email_counts_characters() {
+    for glyph in ["a", "\u{e9}", "\u{1F600}"] {
+        let email = |n: usize| format!("{}@t.test", glyph.repeat(n - 7));
+        assert!(sign_in_email_valid(&email(320)), "{glyph:?} 320");
+        assert!(!sign_in_email_valid(&email(321)), "{glyph:?} 321");
+    }
 }
 
 /// #33: a private or metadata issuer stops startup before any request,

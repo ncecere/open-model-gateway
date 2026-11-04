@@ -228,8 +228,7 @@
               "minLength": 1,
               "maxLength": 120,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
-              "x-omg-max-bytes": 120
+              "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank."
             },
             "description": {
               "type": [
@@ -237,8 +236,7 @@
                 "null"
               ],
               "maxLength": 2000,
-              "description": "At most 2000 UTF-8 bytes (x-omg-max-bytes; maxLength counts characters), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
-              "x-omg-max-bytes": 2000,
+              "description": "At most 2000 characters (description_valid counts characters, as maxLength does; #405), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
               "pattern": "^[^\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F]*$"
             }
           },
@@ -255,8 +253,7 @@
               "minLength": 1,
               "maxLength": 120,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
-              "x-omg-max-bytes": 120
+              "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank."
             },
             {
               "type": [
@@ -264,8 +261,7 @@
                 "null"
               ],
               "maxLength": 2000,
-              "description": "At most 2000 UTF-8 bytes (x-omg-max-bytes; maxLength counts characters), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
-              "x-omg-max-bytes": 2000,
+              "description": "At most 2000 characters (description_valid counts characters, as maxLength does; #405), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
               "pattern": "^[^\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F]*$"
             }
           ],
@@ -517,8 +513,7 @@
               "minLength": 1,
               "maxLength": 120,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
-              "x-omg-max-bytes": 120
+              "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank."
             },
             "description": {
               "type": [
@@ -526,8 +521,7 @@
                 "null"
               ],
               "maxLength": 2000,
-              "description": "At most 2000 UTF-8 bytes (x-omg-max-bytes; maxLength counts characters), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
-              "x-omg-max-bytes": 2000,
+              "description": "At most 2000 characters (description_valid counts characters, as maxLength does; #405), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
               "pattern": "^[^\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F]*$"
             },
             "enabled": {
@@ -589,8 +583,7 @@
               "minLength": 1,
               "maxLength": 120,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
-              "x-omg-max-bytes": 120
+              "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank."
             },
             {
               "type": [
@@ -598,8 +591,7 @@
                 "null"
               ],
               "maxLength": 2000,
-              "description": "At most 2000 UTF-8 bytes (x-omg-max-bytes; maxLength counts characters), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
-              "x-omg-max-bytes": 2000,
+              "description": "At most 2000 characters (description_valid counts characters, as maxLength does; #405), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
               "pattern": "^[^\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F]*$"
             },
             {
@@ -673,17 +665,15 @@
               "minLength": 1,
               "maxLength": 120,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
-              "x-omg-max-bytes": 120
+              "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank."
             },
             "description": {
-              "description": "At most 2000 UTF-8 bytes (x-omg-max-bytes; maxLength counts characters), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
+              "description": "At most 2000 characters (description_valid counts characters, as maxLength does; #405), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
               "type": [
                 "string",
                 "null"
               ],
               "maxLength": 2000,
-              "x-omg-max-bytes": 2000,
               "pattern": "^[^\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F]*$"
             },
             "enabled": {
@@ -758,17 +748,15 @@
               "minLength": 1,
               "maxLength": 120,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
-              "x-omg-max-bytes": 120
+              "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank."
             },
             {
-              "description": "At most 2000 UTF-8 bytes (x-omg-max-bytes; maxLength counts characters), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
+              "description": "At most 2000 characters (description_valid counts characters, as maxLength does; #405), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
               "type": [
                 "string",
                 "null"
               ],
               "maxLength": 2000,
-              "x-omg-max-bytes": 2000,
               "pattern": "^[^\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F]*$"
             },
             {
@@ -870,8 +858,7 @@
               "minLength": 1,
               "maxLength": 512,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-              "description": "Non-blank upstream model identifier without control characters, at most 512 UTF-8 bytes. Bedrock connections additionally require a model or inference-profile ID valid for the connection's region. The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
-              "x-omg-max-bytes": 512
+              "description": "Non-blank upstream model identifier without control characters, at most 512 characters (#405). Bedrock connections additionally require a model or inference-profile ID valid for the connection's region. The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank."
             },
             "enabled": {
               "type": "boolean"
@@ -901,8 +888,7 @@
               "minLength": 1,
               "maxLength": 512,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-              "description": "Non-blank upstream model identifier without control characters, at most 512 UTF-8 bytes. Bedrock connections additionally require a model or inference-profile ID valid for the connection's region. The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
-              "x-omg-max-bytes": 512
+              "description": "Non-blank upstream model identifier without control characters, at most 512 characters (#405). Bedrock connections additionally require a model or inference-profile ID valid for the connection's region. The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank."
             },
             {
               "type": "boolean"
@@ -6597,8 +6583,7 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 64,
-              "description": "An IANA zone known to the server, at most 64 UTF-8 BYTES (compile() checks len() in bytes; maxLength counts characters, and real zone names are ASCII). Another length-valid name is refused by the handler (unknown zone).",
-              "x-omg-max-bytes": 64
+              "description": "An IANA zone known to the server, at most 64 characters (compile() counts characters, as maxLength does; #405). Another length-valid name is refused by the handler (unknown zone)."
             },
             "days": {
               "type": "array",
@@ -6641,8 +6626,7 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 64,
-              "description": "An IANA zone known to the server, at most 64 UTF-8 BYTES (compile() checks len() in bytes; maxLength counts characters, and real zone names are ASCII). Another length-valid name is refused by the handler (unknown zone).",
-              "x-omg-max-bytes": 64
+              "description": "An IANA zone known to the server, at most 64 characters (compile() counts characters, as maxLength does; #405). Another length-valid name is refused by the handler (unknown zone)."
             },
             {
               "type": "array",
@@ -7108,8 +7092,7 @@
               "minLength": 1,
               "maxLength": 512,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-              "description": "Non-blank upstream model identifier without control characters, at most 512 UTF-8 bytes. Bedrock connections additionally require a model or inference-profile ID valid for the connection's region. The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
-              "x-omg-max-bytes": 512
+              "description": "Non-blank upstream model identifier without control characters, at most 512 characters (#405). Bedrock connections additionally require a model or inference-profile ID valid for the connection's region. The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank."
             },
             "enabled": {
               "type": "boolean"
@@ -7134,8 +7117,7 @@
               "minLength": 1,
               "maxLength": 512,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-              "description": "Non-blank upstream model identifier without control characters, at most 512 UTF-8 bytes. Bedrock connections additionally require a model or inference-profile ID valid for the connection's region. The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
-              "x-omg-max-bytes": 512
+              "description": "Non-blank upstream model identifier without control characters, at most 512 characters (#405). Bedrock connections additionally require a model or inference-profile ID valid for the connection's region. The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank."
             },
             {
               "type": "boolean"
@@ -9541,8 +9523,7 @@
               "minLength": 1,
               "maxLength": 120,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
-              "x-omg-max-bytes": 120
+              "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank."
             },
             "provider": {
               "enum": [
@@ -9906,8 +9887,7 @@
               "minLength": 1,
               "maxLength": 120,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-              "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
-              "x-omg-max-bytes": 120
+              "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank."
             },
             {
               "enum": [

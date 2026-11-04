@@ -111,11 +111,9 @@ impl LogQuery {
         if !(1..=93).contains(&(end - start).num_days()) || end > tomorrow {
             return Err(invalid());
         }
-        if self
-            .model
-            .as_deref()
-            .is_some_and(|m| m.is_empty() || m.len() > 200 || m.chars().any(char::is_control))
-        {
+        if self.model.as_deref().is_some_and(|m| {
+            m.is_empty() || !super::chars_at_most(m, 200) || m.chars().any(char::is_control)
+        }) {
             return Err(invalid());
         }
         let status = self

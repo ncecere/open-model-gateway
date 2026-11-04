@@ -512,6 +512,20 @@ fn price_refused(b: &Value) -> bool {
         || (version == Some(&json!(3))
             && crate::management::governance::batch_meters_refused(standard, batch))
 }
+/// A batch-scheduling body whose window names a well-formed (1 to 64
+/// characters, #405) zone other than UTC: the vectors only ever send UTC as a
+/// real zone, so the handler refuses any other as unknown. The window may be an
+/// object or positional, inside an object or positional body.
+fn unknown_zone(b: &Value) -> bool {
+    let window = if b.is_array() { &b[4] } else { &b["window"] };
+    let zone = if window.is_array() {
+        &window[0]
+    } else {
+        &window["timezone"]
+    };
+    zone.as_str()
+        .is_some_and(|z| (1..=64).contains(&z.chars().count()) && z != "UTC")
+}
 /// Body boundary vectors with a state-dependent domain refusal (see [`judged_when`]).
 async fn body_set_when(
     j: &mut Journey<'_>,
@@ -2884,7 +2898,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
     // An IANA zone must be known to the server: another length-valid name is a domain refusal.
     // The HH:MM window times have no derivable length bounds: candidates one edit
     // apart (a valid time, the same time missing its last digit).
-    body_set_when_candidates(&mut j, a, "PUT", "/api/v1/platform/deployments/{deployment}/batch-scheduling", &format!("/api/v1/platform/deployments/{vdep}/batch-scheduling"), json!({"max_concurrency":3,"yield_live_threshold":5,"window":{"timezone":"UTC","days":["mon","fri"],"start":"23:00","end":"06:00"}}), (&|b| b["window"]["timezone"].as_str().is_some_and(|z| (1..=64).contains(&z.len()) && z != "UTC"), &[]), &[("/window/start", json!("23:00")), ("/window/start", json!("23:0")), ("/window/end", json!("06:00")), ("/window/end", json!("06:0"))]).await;
+    body_set_when_candidates(&mut j, a, "PUT", "/api/v1/platform/deployments/{deployment}/batch-scheduling", &format!("/api/v1/platform/deployments/{vdep}/batch-scheduling"), json!({"max_concurrency":3,"yield_live_threshold":5,"window":{"timezone":"UTC","days":["mon","fri"],"start":"23:00","end":"06:00"}}), (&|b| unknown_zone(b), &[]), &[("/window/start", json!("23:00")), ("/window/start", json!("23:0")), ("/window/end", json!("06:00")), ("/window/end", json!("06:0"))]).await;
     body_set(
         &mut j,
         a,
@@ -3172,19 +3186,7 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
                     // An IANA zone must be known to the server: another length-valid
                     // name (every window here is UTC) is a domain refusal, read from
                     // the handler's window message.
-                    let window = if body.is_array() {
-                        &body[4]
-                    } else {
-                        &body["window"]
-                    };
-                    let zone = if window.is_array() {
-                        &window[0]
-                    } else {
-                        &window["timezone"]
-                    };
-                    let unknown_zone = zone
-                        .as_str()
-                        .is_some_and(|z| (1..=64).contains(&z.len()) && z != "UTC");
+                    let unknown_zone = unknown_zone(&body);
                     if schema_valid
                         && captured.status == StatusCode::BAD_REQUEST
                         && (matches!(message.as_deref(), Some(METRICS_URL | PRIORITY_ROUTE))
@@ -3887,26 +3889,26 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         )
         .await;
     }
-    // Names are counted in bytes by the handler and in characters by the schema.
+    // Names and descriptions count characters in the handler and the schema (#405).
     for (label, body, expected) in [
         (
-            "a name of 61 two-byte characters",
-            json!({"name":"\u{e9}".repeat(61)}),
+            "a name of 121 two-byte characters",
+            json!({"name":"\u{e9}".repeat(121)}),
             BOTH_REFUSE,
         ),
         (
-            "a name of 60 two-byte characters",
-            json!({"name":"\u{e9}".repeat(60)}),
+            "a name of 120 two-byte characters",
+            json!({"name":"\u{e9}".repeat(120)}),
             BOTH_ACCEPT,
         ),
         (
-            "a description of 1001 two-byte characters",
-            json!({"name":"Bytes","description":"\u{e9}".repeat(1001)}),
+            "a description of 2001 two-byte characters",
+            json!({"name":"Characters","description":"\u{e9}".repeat(2001)}),
             BOTH_REFUSE,
         ),
         (
-            "a description of 1000 two-byte characters",
-            json!({"name":"Bytes","description":"\u{e9}".repeat(1000)}),
+            "a description of 2000 two-byte characters",
+            json!({"name":"Characters","description":"\u{e9}".repeat(2000)}),
             BOTH_ACCEPT,
         ),
     ] {

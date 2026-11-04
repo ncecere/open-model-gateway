@@ -1004,13 +1004,11 @@ fn upload_valid(root: bool, request: bool, run: usize) -> Value {
 /// The time-zone database is not enumerable in a schema: a well-formed but
 /// unknown zone is refused by the handler although the schema (length 1..64)
 /// accepts it. Only that refusal is decided; every other status stands. The
-/// handler measures the zone in UTF-8 BYTES (`timezone.len() > 64`, #405), so
-/// a multibyte zone longer than 64 bytes is NOT decided here: it stays a
-/// plain refusal that the schema (which counts characters) would have to match.
+/// handler counts the zone's characters, as the schema does (#405).
 fn zone_verdict(captured: Captured, input: &Value, known: bool) -> Probe {
     let length_ok = input["timezone"]
         .as_str()
-        .is_some_and(|z| (1..=64).contains(&z.len()));
+        .is_some_and(|z| (1..=64).contains(&z.chars().count()));
     if !known && length_ok && captured.status == StatusCode::BAD_REQUEST {
         Probe::decided(captured, true)
     } else {

@@ -7,6 +7,7 @@
  * The server stays authoritative for validation and authority.
  */
 import { API, platformPath, wsPath } from "./api";
+import { characterCount } from "./forms";
 import { dollarsToMicroUsd, formatMicroUsd, microUsdToDollars } from "./governance";
 
 export type AlertKind = "budget_threshold" | "spend_threshold" | "spend_spike" | "error_rate" | "provider_failing" | "batch_failed" | "batch_stalled" | "admission_ceiling";
@@ -115,7 +116,7 @@ export function percentToFactor(percent: number): string {
 const intIn = (text: string, min: number, max: number) => /^\d{1,6}$/.test(text.trim()) && Number(text) >= min && Number(text) <= max;
 export function parseEmails(text: string): string[] | string {
   const list = [...new Set(text.split(/[\s,;]+/).map(e => e.trim().toLowerCase()).filter(Boolean))];
-  if (list.some(e => e.length > 320 || !/^[^\s@]+@[^\s@]+$/.test(e))) return "Enter email addresses separated by commas.";
+  if (list.some(e => characterCount(e) > 320 || !/^[^\s@]+@[^\s@]+$/.test(e))) return "Enter email addresses separated by commas.";
   return list.length > 10 ? "Use at most 10 addresses." : list;
 }
 
@@ -123,7 +124,7 @@ export type RuleErrors = Partial<Record<keyof RuleDraft, string>>;
 export function ruleErrors(d: RuleDraft): RuleErrors {
   const e: RuleErrors = {};
   const name = d.name.trim();
-  if (!name) e.name = "Enter a name."; else if (name.length > 120) e.name = "Use at most 120 characters.";
+  if (!name) e.name = "Enter a name."; else if (characterCount(name) > 120) e.name = "Use at most 120 characters.";
   if (d.kind === "budget_threshold") {
     if (!d.layers.length) e.layers = "Choose at least one budget.";
     const t = parseThresholds(d.thresholds); if (typeof t === "string") e.thresholds = t;

@@ -74,7 +74,9 @@ impl Filters {
     fn parse(raw: Option<String>, details: bool, csv: bool) -> Result<Self, ApiError> {
         let mut params = HashMap::new();
         if let Some(raw) = raw {
-            if raw.len() > 4096 {
+            // The raw (percent-encoded) query: every filter at its character
+            // limit in four-byte characters still fits (#405).
+            if raw.len() > 16_384 {
                 return Err(invalid());
             }
             for pair in raw.split('&') {
@@ -138,11 +140,9 @@ impl Filters {
         let cost_center = if unallocated { None } else { uuid(cc)? };
         let model = params.remove("model");
         let provider = params.remove("provider");
-        if model
-            .iter()
-            .chain(provider.iter())
-            .any(|s| s.is_empty() || s.len() > 200 || s.chars().any(char::is_control))
-        {
+        if model.iter().chain(provider.iter()).any(|s| {
+            s.is_empty() || !crate::text::chars_at_most(s, 200) || s.chars().any(char::is_control)
+        }) {
             return Err(invalid());
         }
         let status = params.remove("accounting_status");

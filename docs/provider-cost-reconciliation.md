@@ -84,7 +84,7 @@ Example with placeholder IDs, based on the documented format:
 
 JSON extraction failures return static messages, with no uploaded field names or values in responses or rejection logs. Statuses remain 400 for malformed JSON/body failures, 413 for an oversized body, 415 for a missing/unsupported JSON content type, and 422 for invalid typed fields. The upload body limit is handled without echoing its content.
 
-Limits are **5 MiB per upload and 50,000 lines**. Raw response-page nesting is capped at 16 levels; fixed typed envelopes reject other shapes. Dimension/cursor strings are at most 4096 UTF-8 bytes, account IDs 200, evidence references 256 and timestamps 40. References are opaque text: never URLs fetched by the gateway, filesystem paths opened by it, or executable instructions. Unknown JSON fields and duplicate JSON object keys are rejected. Only USD is supported. Evidence is retained append-only, with no deletion path in this slice; only upload material appropriate for permanent financial history.
+Limits are **5 MiB per upload and 50,000 lines**. Raw response-page nesting is capped at 16 levels; fixed typed envelopes reject other shapes. Dimension/cursor strings are at most 4096 characters, account IDs 200, evidence references 256 and timestamps 40 (text limits count characters, #405). References are opaque text: never URLs fetched by the gateway, filesystem paths opened by it, or executable instructions. Unknown JSON fields and duplicate JSON object keys are rejected. Only USD is supported. Evidence is retained append-only, with no deletion path in this slice; only upload material appropriate for permanent financial history.
 
 ### Exact money and revision identity
 
@@ -127,7 +127,7 @@ A changed report needs `supersedes` naming the **current exact-coverage revision
 
 Connections must be Anthropic connections; an optional deployment must belong to the connection. Effective intervals use `[start,end)`. `exclusive:true` requires an OMG workspace, `non_omg_traffic:false`, an attestation and evidence reference. Historical credential ownership is **not** inferred from current settings. A nonexclusive binding may identify external traffic; actual charges then remain shared/unallocated even if the observed OMG traffic has only one workspace.
 
-Provider `workspace_id:null` means the provider's default/missing identifier, not OMG Unallocated and not a wildcard over provider workspaces. Overlapping provider-workspace bindings or overlapping reverse ownership of a connection/deployment are refused. Mapping revisions allow at most 1000 bindings and 100 explicit model mappings per binding. A model mapping is `{"provider_model":"…","upstream_model":"…"}`; both names are bounded to 512 bytes. The set can be empty to record explicitly unmapped coverage.
+Provider `workspace_id:null` means the provider's default/missing identifier, not OMG Unallocated and not a wildcard over provider workspaces. Overlapping provider-workspace bindings or overlapping reverse ownership of a connection/deployment are refused. Mapping revisions allow at most 1000 bindings and 100 explicit model mappings per binding. A model mapping is `{"provider_model":"…","upstream_model":"…"}`; both names are bounded to 512 characters. The set can be empty to record explicitly unmapped coverage.
 
 Every new revision must supersede the latest mapping revision for that account. Old revisions stay readable and can be selected explicitly for historical snapshots. Actor, evidence references and bindings are immutable.
 

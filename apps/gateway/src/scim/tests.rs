@@ -1492,3 +1492,13 @@ mod database {
         );
     }
 }
+
+/// #405: SCIM accepts every email the management API accepts (characters).
+#[test]
+fn scim_email_counts_characters() {
+    for glyph in ["a", "\u{e9}", "\u{1F600}"] {
+        let email = |n: usize| format!("{}@t.test", glyph.repeat(n - 7));
+        assert!(email_valid(&email(320)), "{glyph:?} 320");
+        assert!(!email_valid(&email(321)), "{glyph:?} 321");
+    }
+}

@@ -1283,7 +1283,7 @@ pub(super) async fn insert_deployment(
     b: DeploymentInput,
 ) -> Result<Uuid, ManagementError> {
     if b.upstream_model.trim().is_empty()
-        || b.upstream_model.len() > 512
+        || !super::chars_at_most(&b.upstream_model, 512)
         || b.upstream_model.chars().any(char::is_control)
     {
         return Err(invalid().into());

@@ -7,6 +7,7 @@
  * call inference or issue inference keys.
  */
 import type { StatusPillProps } from "../components/templates/status-pill";
+import { characterCount } from "./forms";
 
 export const adminTokenScopes = [
   { value: "platform:read", label: "Read", description: "Read platform metadata: users, models, connections, usage and audit history." },
@@ -51,7 +52,7 @@ export function adminTokenExpiryError(raw: string): string | undefined {
 export function adminTokenNameError(raw: string): string | undefined {
   const value = raw.trim();
   if (!value) return "Enter a name.";
-  if (new TextEncoder().encode(value).length > 120) return "Use at most 120 characters.";
+  if (characterCount(value) > 120) return "Use at most 120 characters.";
   return undefined;
 }
 /** At least one scope is required; a default of platform:read only (read-only) is fine. */

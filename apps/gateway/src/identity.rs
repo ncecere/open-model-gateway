@@ -136,7 +136,9 @@ impl SignedClaims {
                     // #428: a control character would reach PostgreSQL as a
                     // bound group value; refuse the claim like any malformed one.
                     .filter(|s| {
-                        !s.is_empty() && s.len() <= 1024 && !s.chars().any(char::is_control)
+                        !s.is_empty()
+                            && crate::text::chars_at_most(s, 1024)
+                            && !s.chars().any(char::is_control)
                     })
                     .map(str::to_owned)
             })
@@ -806,6 +808,14 @@ impl IntoResponse for AuthError {
 }
 /// Storage failed while authenticating or signing in: the retryable 503 every
 /// other management storage failure answers (#439), never details. A failed
+/// The lower-cased email an IdP asserts: at most 320 characters, the bound every
+/// management email uses (#405), so a provisioned account can sign in.
+fn sign_in_email_valid(email: &str) -> bool {
+    !email.is_empty()
+        && crate::text::chars_at_most(email, 320)
+        && email.contains('@')
+        && !email.chars().any(|c| c.is_whitespace() || c.is_control())
+}
 /// OS RNG stays a 500 (`random_token`).
 fn internal(error: sqlx::Error) -> AuthError {
     // The sanitized management storage diagnostic: kind, SQLSTATE and object
@@ -1148,7 +1158,7 @@ async fn callback(
     }
     let code = query
         .code
-        .filter(|code| !code.is_empty() && code.len() <= 8192)
+        .filter(|code| !code.is_empty() && crate::text::chars_at_most(code, 8192))
         .ok_or_else(invalid)?;
     let transport = |request| provider.http.clone().send(request);
     let tokens = provider
@@ -1175,12 +1185,7 @@ async fn callback(
     let email = claims
         .email()
         .map(|email| email.as_str().to_lowercase())
-        .filter(|email| {
-            !email.is_empty()
-                && email.len() <= 320
-                && email.contains('@')
-                && !email.chars().any(|c| c.is_whitespace() || c.is_control())
-        })
+        .filter(|email| sign_in_email_valid(email))
         .ok_or_else(invalid)?;
     let subject = claims.subject().as_str();
     if subject.is_empty() || subject.len() > 2048 || subject.chars().any(char::is_control) {

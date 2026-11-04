@@ -63,5 +63,6 @@ pub(crate) mod special_use;
 pub mod startup;
 pub mod store;
 pub mod telemetry;
+pub(crate) mod text;
 pub mod visibility;
 pub mod web;

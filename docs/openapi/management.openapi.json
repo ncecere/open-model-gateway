@@ -5835,20 +5835,18 @@
             "additionalProperties": false,
             "properties": {
               "code": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). Not blank: the white space class is str::trim's White_Space set, spelled out.",
+                "description": "At most 120 characters, as maxLength counts (#405). Not blank: the white space class is str::trim's White_Space set, spelled out.",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                "type": "string",
-                "x-omg-max-bytes": 120
+                "type": "string"
               },
               "name": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). Not blank: the white space class is str::trim's White_Space set, spelled out.",
+                "description": "At most 120 characters, as maxLength counts (#405). Not blank: the white space class is str::trim's White_Space set, spelled out.",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                "type": "string",
-                "x-omg-max-bytes": 120
+                "type": "string"
               }
             },
             "required": [
@@ -5863,20 +5861,18 @@
             "minItems": 2,
             "prefixItems": [
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). Not blank: the white space class is str::trim's White_Space set, spelled out.",
+                "description": "At most 120 characters, as maxLength counts (#405). Not blank: the white space class is str::trim's White_Space set, spelled out.",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                "type": "string",
-                "x-omg-max-bytes": 120
+                "type": "string"
               },
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). Not blank: the white space class is str::trim's White_Space set, spelled out.",
+                "description": "At most 120 characters, as maxLength counts (#405). Not blank: the white space class is str::trim's White_Space set, spelled out.",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                "type": "string",
-                "x-omg-max-bytes": 120
+                "type": "string"
               }
             ],
             "type": "array"
@@ -10559,12 +10555,11 @@
                 "type": "string"
               },
               "evidence_reference": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 256 characters, as maxLength counts (#405).",
                 "maxLength": 256,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 256
+                "type": "string"
               },
               "exclusive": {
                 "type": "boolean"
@@ -10580,15 +10575,14 @@
                 "type": "boolean"
               },
               "provider_workspace_id": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 4096 characters, as maxLength counts (#405).",
                 "maxLength": 4096,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 4096
+                ]
               },
               "workspace_id": {
                 "format": "uuid",
@@ -10631,15 +10625,14 @@
             "minItems": 11,
             "prefixItems": [
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 4096 characters, as maxLength counts (#405).",
                 "maxLength": 4096,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 4096
+                ]
               },
               {
                 "format": "uuid",
@@ -10680,12 +10673,11 @@
                 "description": "Only attested historical scopes are accepted (create_mapping refuses attested=false)."
               },
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 256 characters, as maxLength counts (#405).",
                 "maxLength": 256,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 256
+                "type": "string"
               },
               {
                 "items": {
@@ -10703,15 +10695,14 @@
             "minItems": 11,
             "prefixItems": [
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 4096 characters, as maxLength counts (#405).",
                 "maxLength": 4096,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 4096
+                ]
               },
               {
                 "format": "uuid",
@@ -10749,12 +10740,11 @@
                 "description": "Only attested historical scopes are accepted (create_mapping refuses attested=false)."
               },
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 256 characters, as maxLength counts (#405).",
                 "maxLength": 256,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 256
+                "type": "string"
               },
               {
                 "items": {
@@ -11248,106 +11238,97 @@
                 "type": "string"
               },
               "context_window": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 4096 characters, as maxLength counts (#405).",
                 "maxLength": 4096,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 4096
+                ]
               },
               "cost_type": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 4096 characters, as maxLength counts (#405).",
                 "maxLength": 4096,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 4096
+                ]
               },
               "currency": {
                 "const": "USD"
               },
               "description": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 4096 characters, as maxLength counts (#405).",
                 "maxLength": 4096,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 4096
+                ]
               },
               "inference_geo": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 4096 characters, as maxLength counts (#405).",
                 "maxLength": 4096,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 4096
+                ]
               },
               "model": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 4096 characters, as maxLength counts (#405).",
                 "maxLength": 4096,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 4096
+                ]
               },
               "service_tier": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 4096 characters, as maxLength counts (#405).",
                 "maxLength": 4096,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 4096
+                ]
               },
               "speed": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 4096 characters, as maxLength counts (#405).",
                 "maxLength": 4096,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 4096
+                ]
               },
               "token_type": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 4096 characters, as maxLength counts (#405).",
                 "maxLength": 4096,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 4096
+                ]
               },
               "workspace_id": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 4096 characters, as maxLength counts (#405).",
                 "maxLength": 4096,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 4096
+                ]
               }
             },
             "required": [
@@ -11371,103 +11352,94 @@
                 "const": "USD"
               },
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 4096 characters, as maxLength counts (#405).",
                 "maxLength": 4096,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 4096
+                ]
               },
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 4096 characters, as maxLength counts (#405).",
                 "maxLength": 4096,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 4096
+                ]
               },
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 4096 characters, as maxLength counts (#405).",
                 "maxLength": 4096,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 4096
+                ]
               },
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 4096 characters, as maxLength counts (#405).",
                 "maxLength": 4096,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 4096
+                ]
               },
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 4096 characters, as maxLength counts (#405).",
                 "maxLength": 4096,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 4096
+                ]
               },
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 4096 characters, as maxLength counts (#405).",
                 "maxLength": 4096,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 4096
+                ]
               },
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 4096 characters, as maxLength counts (#405).",
                 "maxLength": 4096,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 4096
+                ]
               },
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 4096 characters, as maxLength counts (#405).",
                 "maxLength": 4096,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 4096
+                ]
               },
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 4096 characters, as maxLength counts (#405).",
                 "maxLength": 4096,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 4096
+                ]
               }
             ],
             "type": "array"
@@ -11691,12 +11663,11 @@
             "additionalProperties": false,
             "properties": {
               "account_id": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 200 characters, as maxLength counts (#405).",
                 "maxLength": 200,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 200
+                "type": "string"
               },
               "bindings": {
                 "items": {
@@ -11706,12 +11677,11 @@
                 "type": "array"
               },
               "evidence_reference": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 256 characters, as maxLength counts (#405).",
                 "maxLength": 256,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 256
+                "type": "string"
               },
               "supersedes": {
                 "anyOf": [
@@ -11738,12 +11708,11 @@
             "minItems": 4,
             "prefixItems": [
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 200 characters, as maxLength counts (#405).",
                 "maxLength": 200,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 200
+                "type": "string"
               },
               {
                 "anyOf": [
@@ -11757,12 +11726,11 @@
                 ]
               },
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 256 characters, as maxLength counts (#405).",
                 "maxLength": 256,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 256
+                "type": "string"
               },
               {
                 "items": {
@@ -11834,20 +11802,18 @@
             "additionalProperties": false,
             "properties": {
               "provider_model": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 512 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 512 characters, as maxLength counts (#405).",
                 "maxLength": 512,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 512
+                "type": "string"
               },
               "upstream_model": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 512 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 512 characters, as maxLength counts (#405).",
                 "maxLength": 512,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 512
+                "type": "string"
               }
             },
             "required": [
@@ -11862,20 +11828,18 @@
             "minItems": 2,
             "prefixItems": [
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 512 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 512 characters, as maxLength counts (#405).",
                 "maxLength": 512,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 512
+                "type": "string"
               },
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 512 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 512 characters, as maxLength counts (#405).",
                 "maxLength": 512,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 512
+                "type": "string"
               }
             ],
             "type": "array"
@@ -11927,12 +11891,11 @@
                 "const": true
               },
               "next_page": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 4096 characters, as maxLength counts (#405).",
                 "maxLength": 4096,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 4096
+                "type": "string"
               }
             },
             "required": [
@@ -11981,12 +11944,11 @@
                 "const": true
               },
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 4096 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 4096 characters, as maxLength counts (#405).",
                 "maxLength": 4096,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 4096
+                "type": "string"
               }
             ],
             "type": "array"
@@ -12616,20 +12578,18 @@
             "additionalProperties": false,
             "properties": {
               "account_id": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 200 characters, as maxLength counts (#405).",
                 "maxLength": 200,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 200
+                "type": "string"
               },
               "evidence_reference": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 256 characters, as maxLength counts (#405).",
                 "maxLength": 256,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 256
+                "type": "string"
               },
               "exported_at": {
                 "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide. Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00.",
@@ -12675,20 +12635,18 @@
             "minItems": 6,
             "prefixItems": [
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 200 characters, as maxLength counts (#405).",
                 "maxLength": 200,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 200
+                "type": "string"
               },
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 256 characters, as maxLength counts (#405).",
                 "maxLength": 256,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 256
+                "type": "string"
               },
               {
                 "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide. Stricter than the handler (documented): the schema takes RFC 3339 with a T separator; chrono's parse (parse_from_rfc3339, DateTime<Utc> FromStr) also accepts a space separator, and the mapping instants a UTC suffix and offsets such as +00.",
@@ -13108,11 +13066,10 @@
                 "type": "string"
               },
               "timezone": {
-                "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. The handler measures the zone in UTF-8 BYTES (validate(): timezone.len() > 64), stated as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. At most 64 characters, as maxLength counts (#405).",
                 "maxLength": 64,
                 "minLength": 1,
-                "type": "string",
-                "x-omg-max-bytes": 64
+                "type": "string"
               }
             },
             "required": [
@@ -13136,11 +13093,10 @@
                 "type": "string"
               },
               {
-                "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. The handler measures the zone in UTF-8 BYTES (validate(): timezone.len() > 64), stated as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. At most 64 characters, as maxLength counts (#405).",
                 "maxLength": 64,
                 "minLength": 1,
-                "type": "string",
-                "x-omg-max-bytes": 64
+                "type": "string"
               },
               {
                 "description": "Local delivery time HH:MM, 24 hour.",
@@ -13218,11 +13174,10 @@
                 "type": "string"
               },
               "timezone": {
-                "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. The handler measures the zone in UTF-8 BYTES (validate(): timezone.len() > 64), stated as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. At most 64 characters, as maxLength counts (#405).",
                 "maxLength": 64,
                 "minLength": 1,
-                "type": "string",
-                "x-omg-max-bytes": 64
+                "type": "string"
               }
             },
             "required": [],
@@ -13241,11 +13196,10 @@
                 "type": "string"
               },
               {
-                "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. The handler measures the zone in UTF-8 BYTES (validate(): timezone.len() > 64), stated as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. At most 64 characters, as maxLength counts (#405).",
                 "maxLength": 64,
                 "minLength": 1,
-                "type": "string",
-                "x-omg-max-bytes": 64
+                "type": "string"
               },
               {
                 "description": "Local delivery time HH:MM, 24 hour.",
@@ -32188,22 +32142,20 @@
             "additionalProperties": false,
             "properties": {
               "description": {
-                "description": "At most 2000 UTF-8 bytes (x-omg-max-bytes; maxLength counts characters), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
+                "description": "At most 2000 characters (description_valid counts characters, as maxLength does; #405), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
                 "maxLength": 2000,
                 "pattern": "^[^\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F]*$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 2000
+                ]
               },
               "name": {
-                "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
+                "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-                "type": "string",
-                "x-omg-max-bytes": 120
+                "type": "string"
               }
             },
             "required": [
@@ -32217,22 +32169,20 @@
             "minItems": 2,
             "prefixItems": [
               {
-                "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
+                "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-                "type": "string",
-                "x-omg-max-bytes": 120
+                "type": "string"
               },
               {
-                "description": "At most 2000 UTF-8 bytes (x-omg-max-bytes; maxLength counts characters), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
+                "description": "At most 2000 characters (description_valid counts characters, as maxLength does; #405), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
                 "maxLength": 2000,
                 "pattern": "^[^\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F]*$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 2000
+                ]
               }
             ],
             "type": "array"
@@ -32656,12 +32606,11 @@
                 "type": "string"
               },
               "upstream_model": {
-                "description": "Non-blank upstream model identifier without control characters, at most 512 UTF-8 bytes. Bedrock connections additionally require a model or inference-profile ID valid for the connection's region. The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
+                "description": "Non-blank upstream model identifier without control characters, at most 512 characters (#405). Bedrock connections additionally require a model or inference-profile ID valid for the connection's region. The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
                 "maxLength": 512,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-                "type": "string",
-                "x-omg-max-bytes": 512
+                "type": "string"
               }
             },
             "required": [
@@ -32686,12 +32635,11 @@
                 "type": "string"
               },
               {
-                "description": "Non-blank upstream model identifier without control characters, at most 512 UTF-8 bytes. Bedrock connections additionally require a model or inference-profile ID valid for the connection's region. The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
+                "description": "Non-blank upstream model identifier without control characters, at most 512 characters (#405). Bedrock connections additionally require a model or inference-profile ID valid for the connection's region. The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
                 "maxLength": 512,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-                "type": "string",
-                "x-omg-max-bytes": 512
+                "type": "string"
               },
               {
                 "type": "boolean"
@@ -34078,22 +34026,20 @@
             "additionalProperties": false,
             "properties": {
               "description": {
-                "description": "At most 2000 UTF-8 bytes (x-omg-max-bytes; maxLength counts characters), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
+                "description": "At most 2000 characters (description_valid counts characters, as maxLength does; #405), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
                 "maxLength": 2000,
                 "pattern": "^[^\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F]*$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 2000
+                ]
               },
               "display_name": {
-                "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
+                "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-                "type": "string",
-                "x-omg-max-bytes": 120
+                "type": "string"
               },
               "enabled": {
                 "type": "boolean"
@@ -34157,22 +34103,20 @@
                 "type": "string"
               },
               {
-                "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
+                "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-                "type": "string",
-                "x-omg-max-bytes": 120
+                "type": "string"
               },
               {
-                "description": "At most 2000 UTF-8 bytes (x-omg-max-bytes; maxLength counts characters), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
+                "description": "At most 2000 characters (description_valid counts characters, as maxLength does; #405), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
                 "maxLength": 2000,
                 "pattern": "^[^\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F]*$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 2000
+                ]
               },
               {
                 "type": "boolean"
@@ -34456,25 +34400,23 @@
             "additionalProperties": false,
             "properties": {
               "description": {
-                "description": "At most 2000 UTF-8 bytes (x-omg-max-bytes; maxLength counts characters), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
+                "description": "At most 2000 characters (description_valid counts characters, as maxLength does; #405), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
                 "maxLength": 2000,
                 "pattern": "^[^\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F]*$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 2000
+                ]
               },
               "display_name": {
-                "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
+                "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 120
+                ]
               },
               "enabled": {
                 "anyOf": [
@@ -34555,25 +34497,23 @@
                 ]
               },
               {
-                "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
+                "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 120
+                ]
               },
               {
-                "description": "At most 2000 UTF-8 bytes (x-omg-max-bytes; maxLength counts characters), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
+                "description": "At most 2000 characters (description_valid counts characters, as maxLength does; #405), or null. No control character except tab, line feed and carriage return (description_valid, #428): any other is refused with 400.",
                 "maxLength": 2000,
                 "pattern": "^[^\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F]*$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 2000
+                ]
               },
               {
                 "anyOf": [
@@ -39751,12 +39691,11 @@
                 "type": "string"
               },
               "upstream_model": {
-                "description": "Non-blank upstream model identifier without control characters, at most 512 UTF-8 bytes. Bedrock connections additionally require a model or inference-profile ID valid for the connection's region. The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
+                "description": "Non-blank upstream model identifier without control characters, at most 512 characters (#405). Bedrock connections additionally require a model or inference-profile ID valid for the connection's region. The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
                 "maxLength": 512,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-                "type": "string",
-                "x-omg-max-bytes": 512
+                "type": "string"
               }
             },
             "required": [
@@ -39776,12 +39715,11 @@
                 "type": "string"
               },
               {
-                "description": "Non-blank upstream model identifier without control characters, at most 512 UTF-8 bytes. Bedrock connections additionally require a model or inference-profile ID valid for the connection's region. The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
+                "description": "Non-blank upstream model identifier without control characters, at most 512 characters (#405). Bedrock connections additionally require a model or inference-profile ID valid for the connection's region. The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
                 "maxLength": 512,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-                "type": "string",
-                "x-omg-max-bytes": 512
+                "type": "string"
               },
               {
                 "type": "boolean"
@@ -40514,11 +40452,10 @@
                 "type": "string"
               },
               "timezone": {
-                "description": "An IANA zone known to the server, at most 64 UTF-8 BYTES (compile() checks len() in bytes; maxLength counts characters, and real zone names are ASCII). Another length-valid name is refused by the handler (unknown zone).",
+                "description": "An IANA zone known to the server, at most 64 characters (compile() counts characters, as maxLength does; #405). Another length-valid name is refused by the handler (unknown zone).",
                 "maxLength": 64,
                 "minLength": 1,
-                "type": "string",
-                "x-omg-max-bytes": 64
+                "type": "string"
               }
             },
             "required": [
@@ -40535,11 +40472,10 @@
             "minItems": 4,
             "prefixItems": [
               {
-                "description": "An IANA zone known to the server, at most 64 UTF-8 BYTES (compile() checks len() in bytes; maxLength counts characters, and real zone names are ASCII). Another length-valid name is refused by the handler (unknown zone).",
+                "description": "An IANA zone known to the server, at most 64 characters (compile() counts characters, as maxLength does; #405). Another length-valid name is refused by the handler (unknown zone).",
                 "maxLength": 64,
                 "minLength": 1,
-                "type": "string",
-                "x-omg-max-bytes": 64
+                "type": "string"
               },
               {
                 "description": "At most seven days follows from uniqueItems over the seven day names.",
@@ -43763,20 +43699,18 @@
             "additionalProperties": false,
             "properties": {
               "code": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). Not blank: the white space class is str::trim's White_Space set, spelled out.",
+                "description": "At most 120 characters, as maxLength counts (#405). Not blank: the white space class is str::trim's White_Space set, spelled out.",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                "type": "string",
-                "x-omg-max-bytes": 120
+                "type": "string"
               },
               "name": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). Not blank: the white space class is str::trim's White_Space set, spelled out.",
+                "description": "At most 120 characters, as maxLength counts (#405). Not blank: the white space class is str::trim's White_Space set, spelled out.",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                "type": "string",
-                "x-omg-max-bytes": 120
+                "type": "string"
               }
             },
             "required": [
@@ -43791,20 +43725,18 @@
             "minItems": 2,
             "prefixItems": [
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). Not blank: the white space class is str::trim's White_Space set, spelled out.",
+                "description": "At most 120 characters, as maxLength counts (#405). Not blank: the white space class is str::trim's White_Space set, spelled out.",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                "type": "string",
-                "x-omg-max-bytes": 120
+                "type": "string"
               },
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). Not blank: the white space class is str::trim's White_Space set, spelled out.",
+                "description": "At most 120 characters, as maxLength counts (#405). Not blank: the white space class is str::trim's White_Space set, spelled out.",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                "type": "string",
-                "x-omg-max-bytes": 120
+                "type": "string"
               }
             ],
             "type": "array"
@@ -43889,19 +43821,17 @@
             "type": "boolean"
           },
           "group_value": {
-            "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The byte limit is stated by x-omg-max-bytes (maxLength counts characters).",
+            "description": "OIDC group value: 1 to 512 characters of the value as sent (directory.rs mapping_valid, without trimming, as maxLength counts; #405), no control characters.",
             "maxLength": 512,
             "minLength": 1,
             "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-            "type": "string",
-            "x-omg-max-bytes": 512
+            "type": "string"
           },
           "issuer": {
-            "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; x-omg-max-bytes states the byte limit and maxLength counts characters). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the handler refuses any control character or whitespace (#427), as the schema does; the parser also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) the path admits any character but ?, #, control characters and whitespace (the parser percent-encodes non-ASCII text in the path), and the schema accepts them there too; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). The schema accepts only ASCII host names. The parser also accepts internationalized (non-ASCII) host names, each label of at most 1000 characters (idna uts46.rs refuses a longer one), which the schema refuses: a documented divergence pinned by HTTP probes (a 1000-character non-ASCII label and a short non-ASCII host with a long path are accepted by the handler and refused by the schema; a 1001-character label is refused by both). Non-ASCII text is accepted in the path, up to the 2048-byte limit.",
+            "description": "An https URL without credentials, query or fragment, at most 2048 characters (directory.rs mapping_valid counts characters, as maxLength does; #405). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the handler refuses any control character or whitespace (#427), as the schema does; the parser also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) the path admits any character but ?, #, control characters and whitespace (the parser percent-encodes non-ASCII text in the path), and the schema accepts them there too; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). The schema accepts only ASCII host names. The parser also accepts internationalized (non-ASCII) host names, each label of at most 1000 characters (idna uts46.rs refuses a longer one), which the schema refuses: a documented divergence pinned by HTTP probes (a 1000-character non-ASCII label and a short non-ASCII host with a long path are accepted by the handler and refused by the schema; a 1001-character label is refused by both). Non-ASCII text is accepted in the path, up to the 2048-character limit.",
             "maxLength": 2048,
             "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[\\u0021-\\u0022\\u0024\\u0026-\\u002E\\u0030-\\u0039\\u003B\\u003D\\u0041-\\u005A\\u005F-\\u007B\\u007D-\\u007E]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^?#\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
-            "type": "string",
-            "x-omg-max-bytes": 2048
+            "type": "string"
           },
           "platform_role": {
             "anyOf": [
@@ -44180,11 +44110,10 @@
                 "type": "string"
               },
               "timezone": {
-                "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. The handler measures the zone in UTF-8 BYTES (validate(): timezone.len() > 64), stated as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. At most 64 characters, as maxLength counts (#405).",
                 "maxLength": 64,
                 "minLength": 1,
-                "type": "string",
-                "x-omg-max-bytes": 64
+                "type": "string"
               }
             },
             "required": [],
@@ -44203,11 +44132,10 @@
                 "type": "string"
               },
               {
-                "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. The handler measures the zone in UTF-8 BYTES (validate(): timezone.len() > 64), stated as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. At most 64 characters, as maxLength counts (#405).",
                 "maxLength": 64,
                 "minLength": 1,
-                "type": "string",
-                "x-omg-max-bytes": 64
+                "type": "string"
               },
               {
                 "description": "Local delivery time HH:MM, 24 hour.",
@@ -44257,14 +44185,13 @@
                 ]
               },
               "email": {
-                "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 UTF-8 bytes of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 grows from 2 to 3 bytes). x-omg-max-bytes states the byte limit on the value as sent and maxLength its character count. The schema does not trim or lower-case, so it refuses a padded value the handler accepts and accepts a lower-case-expanding value the handler refuses.",
+                "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 characters of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 becomes two characters). maxLength counts the characters of the value as sent. The schema does not trim or lower-case, so it refuses a padded value the handler accepts and accepts a lower-case-expanding value the handler refuses.",
                 "maxLength": 320,
                 "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000@\\u0000-\\u001f\\u007f-\\u009f]+[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 320
+                ]
               },
               "oidc_link_allowed": {
                 "anyOf": [
@@ -44286,14 +44213,13 @@
             "minItems": 3,
             "prefixItems": [
               {
-                "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 UTF-8 bytes of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 grows from 2 to 3 bytes). x-omg-max-bytes states the byte limit on the value as sent and maxLength its character count. The schema does not trim or lower-case, so it refuses a padded value the handler accepts and accepts a lower-case-expanding value the handler refuses.",
+                "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 characters of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 becomes two characters). maxLength counts the characters of the value as sent. The schema does not trim or lower-case, so it refuses a padded value the handler accepts and accepts a lower-case-expanding value the handler refuses.",
                 "maxLength": 320,
                 "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000@\\u0000-\\u001f\\u007f-\\u009f]+[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 320
+                ]
               },
               {
                 "anyOf": [
@@ -44343,14 +44269,13 @@
                 ]
               },
               "name": {
-                "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 UTF-8 bytes of the value as sent (the handler counts bytes, without trimming). The byte limit is stated by x-omg-max-bytes (maxLength counts characters).",
+                "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 characters of the value as sent (counted without trimming, as maxLength counts; #405).",
                 "maxLength": 120,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 120
+                ]
               }
             },
             "required": [],
@@ -44362,14 +44287,13 @@
             "minItems": 2,
             "prefixItems": [
               {
-                "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 UTF-8 bytes of the value as sent (the handler counts bytes, without trimming). The byte limit is stated by x-omg-max-bytes (maxLength counts characters).",
+                "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 characters of the value as sent (counted without trimming, as maxLength counts; #405).",
                 "maxLength": 120,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
                 "type": [
                   "string",
                   "null"
-                ],
-                "x-omg-max-bytes": 120
+                ]
               },
               {
                 "anyOf": [
@@ -44400,11 +44324,10 @@
             "description": "A name is given (a string); the visibility is optional (null is absence).",
             "properties": {
               "name": {
-                "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 UTF-8 bytes of the value as sent (the handler counts bytes, without trimming). The byte limit is stated by x-omg-max-bytes (maxLength counts characters).",
+                "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 characters of the value as sent (counted without trimming, as maxLength counts; #405).",
                 "maxLength": 120,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                "type": "string",
-                "x-omg-max-bytes": 120
+                "type": "string"
               },
               "object_visibility": {
                 "enum": [
@@ -44444,11 +44367,10 @@
             "minItems": 2,
             "prefixItems": [
               {
-                "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 UTF-8 bytes of the value as sent (the handler counts bytes, without trimming). The byte limit is stated by x-omg-max-bytes (maxLength counts characters).",
+                "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 characters of the value as sent (counted without trimming, as maxLength counts; #405).",
                 "maxLength": 120,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                "type": "string",
-                "x-omg-max-bytes": 120
+                "type": "string"
               },
               {
                 "enum": [
@@ -44576,11 +44498,10 @@
                 "type": "string"
               },
               "timezone": {
-                "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. The handler measures the zone in UTF-8 BYTES (validate(): timezone.len() > 64), stated as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. At most 64 characters, as maxLength counts (#405).",
                 "maxLength": 64,
                 "minLength": 1,
-                "type": "string",
-                "x-omg-max-bytes": 64
+                "type": "string"
               }
             },
             "required": [],
@@ -44599,11 +44520,10 @@
                 "type": "string"
               },
               {
-                "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. The handler measures the zone in UTF-8 BYTES (validate(): timezone.len() > 64), stated as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. At most 64 characters, as maxLength counts (#405).",
                 "maxLength": 64,
                 "minLength": 1,
-                "type": "string",
-                "x-omg-max-bytes": 64
+                "type": "string"
               },
               {
                 "description": "Local delivery time HH:MM, 24 hour.",
@@ -45048,20 +44968,18 @@
             "additionalProperties": false,
             "properties": {
               "code": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). Not blank: the white space class is str::trim's White_Space set, spelled out.",
+                "description": "At most 120 characters, as maxLength counts (#405). Not blank: the white space class is str::trim's White_Space set, spelled out.",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                "type": "string",
-                "x-omg-max-bytes": 120
+                "type": "string"
               },
               "name": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). Not blank: the white space class is str::trim's White_Space set, spelled out.",
+                "description": "At most 120 characters, as maxLength counts (#405). Not blank: the white space class is str::trim's White_Space set, spelled out.",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                "type": "string",
-                "x-omg-max-bytes": 120
+                "type": "string"
               }
             },
             "required": [
@@ -45076,20 +44994,18 @@
             "minItems": 2,
             "prefixItems": [
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). Not blank: the white space class is str::trim's White_Space set, spelled out.",
+                "description": "At most 120 characters, as maxLength counts (#405). Not blank: the white space class is str::trim's White_Space set, spelled out.",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                "type": "string",
-                "x-omg-max-bytes": 120
+                "type": "string"
               },
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 120 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). Not blank: the white space class is str::trim's White_Space set, spelled out.",
+                "description": "At most 120 characters, as maxLength counts (#405). Not blank: the white space class is str::trim's White_Space set, spelled out.",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                "type": "string",
-                "x-omg-max-bytes": 120
+                "type": "string"
               }
             ],
             "type": "array"
@@ -45273,19 +45189,17 @@
                 "type": "boolean"
               },
               "group_value": {
-                "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The byte limit is stated by x-omg-max-bytes (maxLength counts characters).",
+                "description": "OIDC group value: 1 to 512 characters of the value as sent (directory.rs mapping_valid, without trimming, as maxLength counts; #405), no control characters.",
                 "maxLength": 512,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 512
+                "type": "string"
               },
               "issuer": {
-                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; x-omg-max-bytes states the byte limit and maxLength counts characters). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the handler refuses any control character or whitespace (#427), as the schema does; the parser also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) the path admits any character but ?, #, control characters and whitespace (the parser percent-encodes non-ASCII text in the path), and the schema accepts them there too; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). The schema accepts only ASCII host names. The parser also accepts internationalized (non-ASCII) host names, each label of at most 1000 characters (idna uts46.rs refuses a longer one), which the schema refuses: a documented divergence pinned by HTTP probes (a 1000-character non-ASCII label and a short non-ASCII host with a long path are accepted by the handler and refused by the schema; a 1001-character label is refused by both). Non-ASCII text is accepted in the path, up to the 2048-byte limit.",
+                "description": "An https URL without credentials, query or fragment, at most 2048 characters (directory.rs mapping_valid counts characters, as maxLength does; #405). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the handler refuses any control character or whitespace (#427), as the schema does; the parser also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) the path admits any character but ?, #, control characters and whitespace (the parser percent-encodes non-ASCII text in the path), and the schema accepts them there too; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). The schema accepts only ASCII host names. The parser also accepts internationalized (non-ASCII) host names, each label of at most 1000 characters (idna uts46.rs refuses a longer one), which the schema refuses: a documented divergence pinned by HTTP probes (a 1000-character non-ASCII label and a short non-ASCII host with a long path are accepted by the handler and refused by the schema; a 1001-character label is refused by both). Non-ASCII text is accepted in the path, up to the 2048-character limit.",
                 "maxLength": 2048,
                 "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[\\u0021-\\u0022\\u0024\\u0026-\\u002E\\u0030-\\u0039\\u003B\\u003D\\u0041-\\u005A\\u005F-\\u007B\\u007D-\\u007E]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^?#\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
-                "type": "string",
-                "x-omg-max-bytes": 2048
+                "type": "string"
               },
               "platform_role": {
                 "$ref": "#/components/schemas/IdentityRole"
@@ -45316,19 +45230,17 @@
                 "type": "boolean"
               },
               "group_value": {
-                "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The byte limit is stated by x-omg-max-bytes (maxLength counts characters).",
+                "description": "OIDC group value: 1 to 512 characters of the value as sent (directory.rs mapping_valid, without trimming, as maxLength counts; #405), no control characters.",
                 "maxLength": 512,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 512
+                "type": "string"
               },
               "issuer": {
-                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; x-omg-max-bytes states the byte limit and maxLength counts characters). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the handler refuses any control character or whitespace (#427), as the schema does; the parser also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) the path admits any character but ?, #, control characters and whitespace (the parser percent-encodes non-ASCII text in the path), and the schema accepts them there too; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). The schema accepts only ASCII host names. The parser also accepts internationalized (non-ASCII) host names, each label of at most 1000 characters (idna uts46.rs refuses a longer one), which the schema refuses: a documented divergence pinned by HTTP probes (a 1000-character non-ASCII label and a short non-ASCII host with a long path are accepted by the handler and refused by the schema; a 1001-character label is refused by both). Non-ASCII text is accepted in the path, up to the 2048-byte limit.",
+                "description": "An https URL without credentials, query or fragment, at most 2048 characters (directory.rs mapping_valid counts characters, as maxLength does; #405). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the handler refuses any control character or whitespace (#427), as the schema does; the parser also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) the path admits any character but ?, #, control characters and whitespace (the parser percent-encodes non-ASCII text in the path), and the schema accepts them there too; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). The schema accepts only ASCII host names. The parser also accepts internationalized (non-ASCII) host names, each label of at most 1000 characters (idna uts46.rs refuses a longer one), which the schema refuses: a documented divergence pinned by HTTP probes (a 1000-character non-ASCII label and a short non-ASCII host with a long path are accepted by the handler and refused by the schema; a 1001-character label is refused by both). Non-ASCII text is accepted in the path, up to the 2048-character limit.",
                 "maxLength": 2048,
                 "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[\\u0021-\\u0022\\u0024\\u0026-\\u002E\\u0030-\\u0039\\u003B\\u003D\\u0041-\\u005A\\u005F-\\u007B\\u007D-\\u007E]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^?#\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
-                "type": "string",
-                "x-omg-max-bytes": 2048
+                "type": "string"
               },
               "platform_role": {
                 "type": "null"
@@ -45362,19 +45274,17 @@
             "minItems": 7,
             "prefixItems": [
               {
-                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; x-omg-max-bytes states the byte limit and maxLength counts characters). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the handler refuses any control character or whitespace (#427), as the schema does; the parser also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) the path admits any character but ?, #, control characters and whitespace (the parser percent-encodes non-ASCII text in the path), and the schema accepts them there too; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). The schema accepts only ASCII host names. The parser also accepts internationalized (non-ASCII) host names, each label of at most 1000 characters (idna uts46.rs refuses a longer one), which the schema refuses: a documented divergence pinned by HTTP probes (a 1000-character non-ASCII label and a short non-ASCII host with a long path are accepted by the handler and refused by the schema; a 1001-character label is refused by both). Non-ASCII text is accepted in the path, up to the 2048-byte limit.",
+                "description": "An https URL without credentials, query or fragment, at most 2048 characters (directory.rs mapping_valid counts characters, as maxLength does; #405). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the handler refuses any control character or whitespace (#427), as the schema does; the parser also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) the path admits any character but ?, #, control characters and whitespace (the parser percent-encodes non-ASCII text in the path), and the schema accepts them there too; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). The schema accepts only ASCII host names. The parser also accepts internationalized (non-ASCII) host names, each label of at most 1000 characters (idna uts46.rs refuses a longer one), which the schema refuses: a documented divergence pinned by HTTP probes (a 1000-character non-ASCII label and a short non-ASCII host with a long path are accepted by the handler and refused by the schema; a 1001-character label is refused by both). Non-ASCII text is accepted in the path, up to the 2048-character limit.",
                 "maxLength": 2048,
                 "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[\\u0021-\\u0022\\u0024\\u0026-\\u002E\\u0030-\\u0039\\u003B\\u003D\\u0041-\\u005A\\u005F-\\u007B\\u007D-\\u007E]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^?#\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
-                "type": "string",
-                "x-omg-max-bytes": 2048
+                "type": "string"
               },
               {
-                "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The byte limit is stated by x-omg-max-bytes (maxLength counts characters).",
+                "description": "OIDC group value: 1 to 512 characters of the value as sent (directory.rs mapping_valid, without trimming, as maxLength counts; #405), no control characters.",
                 "maxLength": 512,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 512
+                "type": "string"
               },
               {
                 "const": "platform"
@@ -45400,19 +45310,17 @@
             "minItems": 7,
             "prefixItems": [
               {
-                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; x-omg-max-bytes states the byte limit and maxLength counts characters). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the handler refuses any control character or whitespace (#427), as the schema does; the parser also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) the path admits any character but ?, #, control characters and whitespace (the parser percent-encodes non-ASCII text in the path), and the schema accepts them there too; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). The schema accepts only ASCII host names. The parser also accepts internationalized (non-ASCII) host names, each label of at most 1000 characters (idna uts46.rs refuses a longer one), which the schema refuses: a documented divergence pinned by HTTP probes (a 1000-character non-ASCII label and a short non-ASCII host with a long path are accepted by the handler and refused by the schema; a 1001-character label is refused by both). Non-ASCII text is accepted in the path, up to the 2048-byte limit.",
+                "description": "An https URL without credentials, query or fragment, at most 2048 characters (directory.rs mapping_valid counts characters, as maxLength does; #405). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the handler refuses any control character or whitespace (#427), as the schema does; the parser also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) the path admits any character but ?, #, control characters and whitespace (the parser percent-encodes non-ASCII text in the path), and the schema accepts them there too; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). The schema accepts only ASCII host names. The parser also accepts internationalized (non-ASCII) host names, each label of at most 1000 characters (idna uts46.rs refuses a longer one), which the schema refuses: a documented divergence pinned by HTTP probes (a 1000-character non-ASCII label and a short non-ASCII host with a long path are accepted by the handler and refused by the schema; a 1001-character label is refused by both). Non-ASCII text is accepted in the path, up to the 2048-character limit.",
                 "maxLength": 2048,
                 "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[\\u0021-\\u0022\\u0024\\u0026-\\u002E\\u0030-\\u0039\\u003B\\u003D\\u0041-\\u005A\\u005F-\\u007B\\u007D-\\u007E]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^?#\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
-                "type": "string",
-                "x-omg-max-bytes": 2048
+                "type": "string"
               },
               {
-                "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The byte limit is stated by x-omg-max-bytes (maxLength counts characters).",
+                "description": "OIDC group value: 1 to 512 characters of the value as sent (directory.rs mapping_valid, without trimming, as maxLength counts; #405), no control characters.",
                 "maxLength": 512,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 512
+                "type": "string"
               },
               {
                 "const": "workspace"
@@ -45506,19 +45414,17 @@
             "type": "boolean"
           },
           "group_value": {
-            "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The byte limit is stated by x-omg-max-bytes (maxLength counts characters).",
+            "description": "OIDC group value: 1 to 512 characters of the value as sent (directory.rs mapping_valid, without trimming, as maxLength counts; #405), no control characters.",
             "maxLength": 512,
             "minLength": 1,
             "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-            "type": "string",
-            "x-omg-max-bytes": 512
+            "type": "string"
           },
           "issuer": {
-            "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; x-omg-max-bytes states the byte limit and maxLength counts characters). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the handler refuses any control character or whitespace (#427), as the schema does; the parser also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) the path admits any character but ?, #, control characters and whitespace (the parser percent-encodes non-ASCII text in the path), and the schema accepts them there too; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). The schema accepts only ASCII host names. The parser also accepts internationalized (non-ASCII) host names, each label of at most 1000 characters (idna uts46.rs refuses a longer one), which the schema refuses: a documented divergence pinned by HTTP probes (a 1000-character non-ASCII label and a short non-ASCII host with a long path are accepted by the handler and refused by the schema; a 1001-character label is refused by both). Non-ASCII text is accepted in the path, up to the 2048-byte limit.",
+            "description": "An https URL without credentials, query or fragment, at most 2048 characters (directory.rs mapping_valid counts characters, as maxLength does; #405). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the handler refuses any control character or whitespace (#427), as the schema does; the parser also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) the path admits any character but ?, #, control characters and whitespace (the parser percent-encodes non-ASCII text in the path), and the schema accepts them there too; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). The schema accepts only ASCII host names. The parser also accepts internationalized (non-ASCII) host names, each label of at most 1000 characters (idna uts46.rs refuses a longer one), which the schema refuses: a documented divergence pinned by HTTP probes (a 1000-character non-ASCII label and a short non-ASCII host with a long path are accepted by the handler and refused by the schema; a 1001-character label is refused by both). Non-ASCII text is accepted in the path, up to the 2048-character limit.",
             "maxLength": 2048,
             "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[\\u0021-\\u0022\\u0024\\u0026-\\u002E\\u0030-\\u0039\\u003B\\u003D\\u0041-\\u005A\\u005F-\\u007B\\u007D-\\u007E]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^?#\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
-            "type": "string",
-            "x-omg-max-bytes": 2048
+            "type": "string"
           },
           "platform_role": {
             "anyOf": [
@@ -45569,19 +45475,17 @@
                 "type": "boolean"
               },
               "group_value": {
-                "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The byte limit is stated by x-omg-max-bytes (maxLength counts characters).",
+                "description": "OIDC group value: 1 to 512 characters of the value as sent (directory.rs mapping_valid, without trimming, as maxLength counts; #405), no control characters.",
                 "maxLength": 512,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 512
+                "type": "string"
               },
               "issuer": {
-                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; x-omg-max-bytes states the byte limit and maxLength counts characters). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the handler refuses any control character or whitespace (#427), as the schema does; the parser also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) the path admits any character but ?, #, control characters and whitespace (the parser percent-encodes non-ASCII text in the path), and the schema accepts them there too; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). The schema accepts only ASCII host names. The parser also accepts internationalized (non-ASCII) host names, each label of at most 1000 characters (idna uts46.rs refuses a longer one), which the schema refuses: a documented divergence pinned by HTTP probes (a 1000-character non-ASCII label and a short non-ASCII host with a long path are accepted by the handler and refused by the schema; a 1001-character label is refused by both). Non-ASCII text is accepted in the path, up to the 2048-byte limit.",
+                "description": "An https URL without credentials, query or fragment, at most 2048 characters (directory.rs mapping_valid counts characters, as maxLength does; #405). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the handler refuses any control character or whitespace (#427), as the schema does; the parser also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) the path admits any character but ?, #, control characters and whitespace (the parser percent-encodes non-ASCII text in the path), and the schema accepts them there too; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). The schema accepts only ASCII host names. The parser also accepts internationalized (non-ASCII) host names, each label of at most 1000 characters (idna uts46.rs refuses a longer one), which the schema refuses: a documented divergence pinned by HTTP probes (a 1000-character non-ASCII label and a short non-ASCII host with a long path are accepted by the handler and refused by the schema; a 1001-character label is refused by both). Non-ASCII text is accepted in the path, up to the 2048-character limit.",
                 "maxLength": 2048,
                 "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[\\u0021-\\u0022\\u0024\\u0026-\\u002E\\u0030-\\u0039\\u003B\\u003D\\u0041-\\u005A\\u005F-\\u007B\\u007D-\\u007E]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^?#\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
-                "type": "string",
-                "x-omg-max-bytes": 2048
+                "type": "string"
               },
               "platform_role": {
                 "$ref": "#/components/schemas/IdentityRole"
@@ -45612,19 +45516,17 @@
                 "type": "boolean"
               },
               "group_value": {
-                "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The byte limit is stated by x-omg-max-bytes (maxLength counts characters).",
+                "description": "OIDC group value: 1 to 512 characters of the value as sent (directory.rs mapping_valid, without trimming, as maxLength counts; #405), no control characters.",
                 "maxLength": 512,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 512
+                "type": "string"
               },
               "issuer": {
-                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; x-omg-max-bytes states the byte limit and maxLength counts characters). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the handler refuses any control character or whitespace (#427), as the schema does; the parser also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) the path admits any character but ?, #, control characters and whitespace (the parser percent-encodes non-ASCII text in the path), and the schema accepts them there too; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). The schema accepts only ASCII host names. The parser also accepts internationalized (non-ASCII) host names, each label of at most 1000 characters (idna uts46.rs refuses a longer one), which the schema refuses: a documented divergence pinned by HTTP probes (a 1000-character non-ASCII label and a short non-ASCII host with a long path are accepted by the handler and refused by the schema; a 1001-character label is refused by both). Non-ASCII text is accepted in the path, up to the 2048-byte limit.",
+                "description": "An https URL without credentials, query or fragment, at most 2048 characters (directory.rs mapping_valid counts characters, as maxLength does; #405). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the handler refuses any control character or whitespace (#427), as the schema does; the parser also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) the path admits any character but ?, #, control characters and whitespace (the parser percent-encodes non-ASCII text in the path), and the schema accepts them there too; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). The schema accepts only ASCII host names. The parser also accepts internationalized (non-ASCII) host names, each label of at most 1000 characters (idna uts46.rs refuses a longer one), which the schema refuses: a documented divergence pinned by HTTP probes (a 1000-character non-ASCII label and a short non-ASCII host with a long path are accepted by the handler and refused by the schema; a 1001-character label is refused by both). Non-ASCII text is accepted in the path, up to the 2048-character limit.",
                 "maxLength": 2048,
                 "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[\\u0021-\\u0022\\u0024\\u0026-\\u002E\\u0030-\\u0039\\u003B\\u003D\\u0041-\\u005A\\u005F-\\u007B\\u007D-\\u007E]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^?#\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
-                "type": "string",
-                "x-omg-max-bytes": 2048
+                "type": "string"
               },
               "platform_role": {
                 "type": "null"
@@ -45658,19 +45560,17 @@
             "minItems": 7,
             "prefixItems": [
               {
-                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; x-omg-max-bytes states the byte limit and maxLength counts characters). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the handler refuses any control character or whitespace (#427), as the schema does; the parser also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) the path admits any character but ?, #, control characters and whitespace (the parser percent-encodes non-ASCII text in the path), and the schema accepts them there too; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). The schema accepts only ASCII host names. The parser also accepts internationalized (non-ASCII) host names, each label of at most 1000 characters (idna uts46.rs refuses a longer one), which the schema refuses: a documented divergence pinned by HTTP probes (a 1000-character non-ASCII label and a short non-ASCII host with a long path are accepted by the handler and refused by the schema; a 1001-character label is refused by both). Non-ASCII text is accepted in the path, up to the 2048-byte limit.",
+                "description": "An https URL without credentials, query or fragment, at most 2048 characters (directory.rs mapping_valid counts characters, as maxLength does; #405). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the handler refuses any control character or whitespace (#427), as the schema does; the parser also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) the path admits any character but ?, #, control characters and whitespace (the parser percent-encodes non-ASCII text in the path), and the schema accepts them there too; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). The schema accepts only ASCII host names. The parser also accepts internationalized (non-ASCII) host names, each label of at most 1000 characters (idna uts46.rs refuses a longer one), which the schema refuses: a documented divergence pinned by HTTP probes (a 1000-character non-ASCII label and a short non-ASCII host with a long path are accepted by the handler and refused by the schema; a 1001-character label is refused by both). Non-ASCII text is accepted in the path, up to the 2048-character limit.",
                 "maxLength": 2048,
                 "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[\\u0021-\\u0022\\u0024\\u0026-\\u002E\\u0030-\\u0039\\u003B\\u003D\\u0041-\\u005A\\u005F-\\u007B\\u007D-\\u007E]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^?#\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
-                "type": "string",
-                "x-omg-max-bytes": 2048
+                "type": "string"
               },
               {
-                "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The byte limit is stated by x-omg-max-bytes (maxLength counts characters).",
+                "description": "OIDC group value: 1 to 512 characters of the value as sent (directory.rs mapping_valid, without trimming, as maxLength counts; #405), no control characters.",
                 "maxLength": 512,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 512
+                "type": "string"
               },
               {
                 "const": "platform"
@@ -45696,19 +45596,17 @@
             "minItems": 7,
             "prefixItems": [
               {
-                "description": "An https URL without credentials, query or fragment, at most 2048 UTF-8 bytes (directory.rs mapping_valid counts bytes; x-omg-max-bytes states the byte limit and maxLength counts characters). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the handler refuses any control character or whitespace (#427), as the schema does; the parser also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) the path admits any character but ?, #, control characters and whitespace (the parser percent-encodes non-ASCII text in the path), and the schema accepts them there too; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). The schema accepts only ASCII host names. The parser also accepts internationalized (non-ASCII) host names, each label of at most 1000 characters (idna uts46.rs refuses a longer one), which the schema refuses: a documented divergence pinned by HTTP probes (a 1000-character non-ASCII label and a short non-ASCII host with a long path are accepted by the handler and refused by the schema; a 1001-character label is refused by both). Non-ASCII text is accepted in the path, up to the 2048-byte limit.",
+                "description": "An https URL without credentials, query or fragment, at most 2048 characters (directory.rs mapping_valid counts characters, as maxLength does; #405). The handler accepts what the WHATWG URL parser (reqwest::Url::parse) accepts with scheme https, a host, no user info, no query and no fragment. The schema pattern is a deliberately narrower subset: the literal form https://host[:port][/path], a host without whitespace, control characters or / ? # @ : [ ] % < > ^ | \\, and a port of 0 to 65535 (an empty port is accepted, as by the parser). Remaining differences, each probed over HTTP: (1) the handler refuses any control character or whitespace (#427), as the schema does; the parser also accepts https:host, https:/host, https:///host and a backslash as the path separator (https://host\\path), none of which the schema accepts; (2) the parser percent-decodes the host (a host containing %75 is read as u), which the schema refuses with its % exclusion, and refuses what IDNA or IPv4 parsing refuses (a numeric host outside the IPv4 range, a bracketed host that is not an IPv6 address), which the schema accepts because it checks characters only; (3) leading zeros beyond five port digits (https://host:000080) are accepted by the parser and refused by the schema; (4) the path admits any character but ?, #, control characters and whitespace (the parser percent-encodes non-ASCII text in the path), and the schema accepts them there too; empty user info (https://@host) is accepted by the parser and the handler (the username is empty and there is no password) and refused by the schema's @ exclusion; (5) a development installation (GATEWAY_ENV=development) additionally accepts http on a loopback host, which the schema never does (the setting is process-wide, so it is probed only as a refusal outside development). The schema accepts only ASCII host names. The parser also accepts internationalized (non-ASCII) host names, each label of at most 1000 characters (idna uts46.rs refuses a longer one), which the schema refuses: a documented divergence pinned by HTTP probes (a 1000-character non-ASCII label and a short non-ASCII host with a long path are accepted by the handler and refused by the schema; a 1001-character label is refused by both). Non-ASCII text is accepted in the path, up to the 2048-character limit.",
                 "maxLength": 2048,
                 "pattern": "^[Hh][Tt][Tt][Pp][Ss]://(?:[\\u0021-\\u0022\\u0024\\u0026-\\u002E\\u0030-\\u0039\\u003B\\u003D\\u0041-\\u005A\\u005F-\\u007B\\u007D-\\u007E]+|\\[[0-9a-fA-F:.]+\\])(?::(?:[0-9]{0,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/[^?#\\u0000-\\u001f\\u007f-\\u009f\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
-                "type": "string",
-                "x-omg-max-bytes": 2048
+                "type": "string"
               },
               {
-                "description": "OIDC group value: 1 to 512 UTF-8 bytes of the value as sent (directory.rs mapping_valid counts bytes, without trimming), no control characters. The byte limit is stated by x-omg-max-bytes (maxLength counts characters).",
+                "description": "OIDC group value: 1 to 512 characters of the value as sent (directory.rs mapping_valid, without trimming, as maxLength counts; #405), no control characters.",
                 "maxLength": 512,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 512
+                "type": "string"
               },
               {
                 "const": "workspace"
@@ -45742,20 +45640,18 @@
             "additionalProperties": false,
             "properties": {
               "account_id": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 200 characters, as maxLength counts (#405).",
                 "maxLength": 200,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 200
+                "type": "string"
               },
               "evidence_reference": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 256 characters, as maxLength counts (#405).",
                 "maxLength": 256,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 256
+                "type": "string"
               },
               "exported_at": {
                 "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide.",
@@ -45797,20 +45693,18 @@
             "minItems": 6,
             "prefixItems": [
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 200 characters, as maxLength counts (#405).",
                 "maxLength": 200,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 200
+                "type": "string"
               },
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 256 characters, as maxLength counts (#405).",
                 "maxLength": 256,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 256
+                "type": "string"
               },
               {
                 "description": "At most 40 UTF-8 bytes (timestamp()); an RFC 3339 date-time is ASCII, so bytes and characters coincide.",
@@ -45850,12 +45744,11 @@
             "additionalProperties": false,
             "properties": {
               "account_id": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 200 characters, as maxLength counts (#405).",
                 "maxLength": 200,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 200
+                "type": "string"
               },
               "bindings": {
                 "items": {
@@ -45866,12 +45759,11 @@
                 "x-omg-unsendable-boundary": "At most 1000 bindings (create_mapping): the 1001-element vector is past the harness's 1000-item cap, so the maxItems boundary cannot be sent; the cap is pinned by the mapping_caps probe in openapi_money_probes_tests.rs."
               },
               "evidence_reference": {
-                "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 256 characters, as maxLength counts (#405).",
                 "maxLength": 256,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 256
+                "type": "string"
               },
               "supersedes": {
                 "format": "uuid",
@@ -45894,12 +45786,11 @@
             "minItems": 4,
             "prefixItems": [
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 200 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 200 characters, as maxLength counts (#405).",
                 "maxLength": 200,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 200
+                "type": "string"
               },
               {
                 "format": "uuid",
@@ -45909,12 +45800,11 @@
                 ]
               },
               {
-                "description": "UTF-8 bytes: the handler rejects values longer than 256 BYTES; the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "At most 256 characters, as maxLength counts (#405).",
                 "maxLength": 256,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "type": "string",
-                "x-omg-max-bytes": 256
+                "type": "string"
               },
               {
                 "items": {
@@ -46302,12 +46192,11 @@
                 ]
               },
               "name": {
-                "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
+                "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-                "type": "string",
-                "x-omg-max-bytes": 120
+                "type": "string"
               },
               "provider": {
                 "enum": [
@@ -46348,12 +46237,11 @@
             "minItems": 6,
             "prefixItems": [
               {
-                "description": "Non-blank text without control characters, at most 120 UTF-8 bytes (valid_name; maxLength counts characters, the handler counts bytes). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
+                "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-                "type": "string",
-                "x-omg-max-bytes": 120
+                "type": "string"
               },
               {
                 "enum": [
@@ -46467,11 +46355,10 @@
                 "type": "string"
               },
               "timezone": {
-                "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. The handler measures the zone in UTF-8 BYTES (validate(): timezone.len() > 64), stated as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. At most 64 characters, as maxLength counts (#405).",
                 "maxLength": 64,
                 "minLength": 1,
-                "type": "string",
-                "x-omg-max-bytes": 64
+                "type": "string"
               }
             },
             "required": [
@@ -46495,11 +46382,10 @@
                 "type": "string"
               },
               {
-                "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. The handler measures the zone in UTF-8 BYTES (validate(): timezone.len() > 64), stated as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. At most 64 characters, as maxLength counts (#405).",
                 "maxLength": 64,
                 "minLength": 1,
-                "type": "string",
-                "x-omg-max-bytes": 64
+                "type": "string"
               },
               {
                 "description": "Local delivery time HH:MM, 24 hour.",
@@ -46565,11 +46451,10 @@
             "additionalProperties": false,
             "properties": {
               "email": {
-                "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 UTF-8 bytes of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 grows from 2 to 3 bytes). x-omg-max-bytes states the byte limit on the value as sent and maxLength its character count. The schema does not trim or lower-case, so it refuses a padded value the handler accepts and accepts a lower-case-expanding value the handler refuses.",
+                "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 characters of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 becomes two characters). maxLength counts the characters of the value as sent. The schema does not trim or lower-case, so it refuses a padded value the handler accepts and accepts a lower-case-expanding value the handler refuses.",
                 "maxLength": 320,
                 "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000@\\u0000-\\u001f\\u007f-\\u009f]+[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string",
-                "x-omg-max-bytes": 320
+                "type": "string"
               },
               "platform_role": {
                 "$ref": "#/components/schemas/IdentityRole"
@@ -46587,11 +46472,10 @@
             "minItems": 2,
             "prefixItems": [
               {
-                "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 UTF-8 bytes of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 grows from 2 to 3 bytes). x-omg-max-bytes states the byte limit on the value as sent and maxLength its character count. The schema does not trim or lower-case, so it refuses a padded value the handler accepts and accepts a lower-case-expanding value the handler refuses.",
+                "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 characters of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 becomes two characters). maxLength counts the characters of the value as sent. The schema does not trim or lower-case, so it refuses a padded value the handler accepts and accepts a lower-case-expanding value the handler refuses.",
                 "maxLength": 320,
                 "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000@\\u0000-\\u001f\\u007f-\\u009f]+[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string",
-                "x-omg-max-bytes": 320
+                "type": "string"
               },
               {
                 "$ref": "#/components/schemas/IdentityRole"
@@ -46656,11 +46540,10 @@
                 ]
               },
               "name": {
-                "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 UTF-8 bytes of the value as sent (the handler counts bytes, without trimming). The byte limit is stated by x-omg-max-bytes (maxLength counts characters).",
+                "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 characters of the value as sent (counted without trimming, as maxLength counts; #405).",
                 "maxLength": 120,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                "type": "string",
-                "x-omg-max-bytes": 120
+                "type": "string"
               },
               "owner_user_id": {
                 "$ref": "#/components/schemas/IdentityUuid"
@@ -46679,11 +46562,10 @@
             "minItems": 3,
             "prefixItems": [
               {
-                "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 UTF-8 bytes of the value as sent (the handler counts bytes, without trimming). The byte limit is stated by x-omg-max-bytes (maxLength counts characters).",
+                "description": "Workspace name (mod.rs valid_name): not blank after trimming, no control characters and at most 120 characters of the value as sent (counted without trimming, as maxLength counts; #405).",
                 "maxLength": 120,
                 "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001f\\u007f-\\u009f][^\\u0000-\\u001f\\u007f-\\u009f]*$",
-                "type": "string",
-                "x-omg-max-bytes": 120
+                "type": "string"
               },
               {
                 "enum": [
@@ -46985,11 +46867,10 @@
             "additionalProperties": false,
             "properties": {
               "email": {
-                "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 UTF-8 bytes of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 grows from 2 to 3 bytes). x-omg-max-bytes states the byte limit on the value as sent and maxLength its character count. The schema does not trim or lower-case, so it refuses a padded value the handler accepts and accepts a lower-case-expanding value the handler refuses.",
+                "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 characters of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 becomes two characters). maxLength counts the characters of the value as sent. The schema does not trim or lower-case, so it refuses a padded value the handler accepts and accepts a lower-case-expanding value the handler refuses.",
                 "maxLength": 320,
                 "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000@\\u0000-\\u001f\\u007f-\\u009f]+[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string",
-                "x-omg-max-bytes": 320
+                "type": "string"
               },
               "role": {
                 "enum": [
@@ -47010,11 +46891,10 @@
             "minItems": 2,
             "prefixItems": [
               {
-                "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 UTF-8 bytes of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 grows from 2 to 3 bytes). x-omg-max-bytes states the byte limit on the value as sent and maxLength its character count. The schema does not trim or lower-case, so it refuses a padded value the handler accepts and accepts a lower-case-expanding value the handler refuses.",
+                "description": "The handler trims and lower-cases the value, then (directory.rs email_valid) requires exactly one '@' with a non-empty local part and domain, no whitespace or control characters and at most 320 characters of the TRIMMED, LOWER-CASED text (lower-casing can lengthen it: U+0130 becomes two characters). maxLength counts the characters of the value as sent. The schema does not trim or lower-case, so it refuses a padded value the handler accepts and accepts a lower-case-expanding value the handler refuses.",
                 "maxLength": 320,
                 "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000@\\u0000-\\u001f\\u007f-\\u009f]+@[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000@\\u0000-\\u001f\\u007f-\\u009f]+[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string",
-                "x-omg-max-bytes": 320
+                "type": "string"
               },
               {
                 "enum": [
@@ -47094,12 +46974,11 @@
                 ]
               },
               "name": {
-                "description": "At most 120 UTF-8 BYTES, at least one non-whitespace character, no control characters (management valid_name: s.len() <= 120). maxLength counts characters, so it is necessary but not sufficient: a name of fewer than 120 characters is still refused when its multibyte characters exceed 120 bytes.",
+                "description": "At most 120 characters, at least one non-whitespace character, no control characters (management valid_name counts characters, as maxLength does; #405).",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-                "type": "string",
-                "x-omg-max-bytes": 120
+                "type": "string"
               },
               "requests_per_minute": {
                 "anyOf": [
@@ -47141,12 +47020,11 @@
             "minItems": 9,
             "prefixItems": [
               {
-                "description": "At most 120 UTF-8 BYTES, at least one non-whitespace character, no control characters (management valid_name: s.len() <= 120). maxLength counts characters, so it is necessary but not sufficient: a name of fewer than 120 characters is still refused when its multibyte characters exceed 120 bytes.",
+                "description": "At most 120 characters, at least one non-whitespace character, no control characters (management valid_name counts characters, as maxLength does; #405).",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-                "type": "string",
-                "x-omg-max-bytes": 120
+                "type": "string"
               },
               {
                 "maximum": 365,
@@ -47371,11 +47249,10 @@
                 "type": "string"
               },
               "timezone": {
-                "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. The handler measures the zone in UTF-8 BYTES (validate(): timezone.len() > 64), stated as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. At most 64 characters, as maxLength counts (#405).",
                 "maxLength": 64,
                 "minLength": 1,
-                "type": "string",
-                "x-omg-max-bytes": 64
+                "type": "string"
               }
             },
             "required": [
@@ -47399,11 +47276,10 @@
                 "type": "string"
               },
               {
-                "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. The handler measures the zone in UTF-8 BYTES (validate(): timezone.len() > 64), stated as x-omg-max-bytes; maxLength counts characters and is never larger (see #405).",
+                "description": "IANA time-zone identifier known to the server; unknown identifiers are refused with 400. At most 64 characters, as maxLength counts (#405).",
                 "maxLength": 64,
                 "minLength": 1,
-                "type": "string",
-                "x-omg-max-bytes": 64
+                "type": "string"
               },
               {
                 "description": "Local delivery time HH:MM, 24 hour.",
@@ -47450,12 +47326,11 @@
             "additionalProperties": false,
             "properties": {
               "name": {
-                "description": "At most 120 UTF-8 BYTES, at least one non-whitespace character, no control characters (management valid_name: s.len() <= 120). maxLength counts characters, so it is necessary but not sufficient: a name of fewer than 120 characters is still refused when its multibyte characters exceed 120 bytes.",
+                "description": "At most 120 characters, at least one non-whitespace character, no control characters (management valid_name counts characters, as maxLength does; #405).",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-                "type": "string",
-                "x-omg-max-bytes": 120
+                "type": "string"
               }
             },
             "required": [
@@ -47469,12 +47344,11 @@
             "minItems": 1,
             "prefixItems": [
               {
-                "description": "At most 120 UTF-8 BYTES, at least one non-whitespace character, no control characters (management valid_name: s.len() <= 120). maxLength counts characters, so it is necessary but not sufficient: a name of fewer than 120 characters is still refused when its multibyte characters exceed 120 bytes.",
+                "description": "At most 120 characters, at least one non-whitespace character, no control characters (management valid_name counts characters, as maxLength does; #405).",
                 "maxLength": 120,
                 "minLength": 1,
                 "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
-                "type": "string",
-                "x-omg-max-bytes": 120
+                "type": "string"
               }
             ],
             "type": "array"
@@ -48761,15 +48635,14 @@
             }
           },
           {
-            "description": "The authorization code. A callback without a non-empty code of at most 8192 BYTES (UTF-8, identity.rs callback `code.len() <= 8192`) is refused 400 after consuming the attempt, so only a request carrying one can succeed. maxLength (characters) is only a necessary bound; the exact limit is the reviewed x-omg-max-bytes, which the HTTP vectors send multibyte values around.",
+            "description": "The authorization code. A callback without a non-empty code of at most 8192 characters (identity.rs callback, as maxLength counts; #405) is refused 400 after consuming the attempt, so only a request carrying one can succeed.",
             "in": "query",
             "name": "code",
             "required": true,
             "schema": {
               "maxLength": 8192,
               "minLength": 1,
-              "type": "string",
-              "x-omg-max-bytes": 8192
+              "type": "string"
             }
           },
           {
@@ -54086,7 +53959,7 @@
             }
           },
           {
-            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). No control characters.",
+            "description": "Exact public model / provider label. At most 200 characters after percent-decoding, as maxLength counts (#405). No control characters.",
             "in": "query",
             "name": "model",
             "required": false,
@@ -54094,12 +53967,11 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "type": "string",
-              "x-omg-max-bytes": 200
+              "type": "string"
             }
           },
           {
-            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). No control characters.",
+            "description": "Exact public model / provider label. At most 200 characters after percent-decoding, as maxLength counts (#405). No control characters.",
             "in": "query",
             "name": "provider",
             "required": false,
@@ -54107,8 +53979,7 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "type": "string",
-              "x-omg-max-bytes": 200
+              "type": "string"
             }
           },
           {
@@ -56596,7 +56467,7 @@
             }
           },
           {
-            "description": "Exact public model name: 1 to 200 UTF-8 bytes (maxLength counts characters and is necessary, not sufficient), no control characters (LogQuery::filters, logs.rs:114-120).",
+            "description": "Exact public model name: 1 to 200 characters (as maxLength counts; #405), no control characters (LogQuery::filters, logs.rs:114-120).",
             "in": "query",
             "name": "model",
             "required": false,
@@ -56604,8 +56475,7 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
-              "type": "string",
-              "x-omg-max-bytes": 200
+              "type": "string"
             }
           },
           {
@@ -56815,7 +56685,7 @@
             }
           },
           {
-            "description": "Exact public model name: 1 to 200 UTF-8 bytes (maxLength counts characters and is necessary, not sufficient), no control characters (LogQuery::filters, logs.rs:114-120).",
+            "description": "Exact public model name: 1 to 200 characters (as maxLength counts; #405), no control characters (LogQuery::filters, logs.rs:114-120).",
             "in": "query",
             "name": "model",
             "required": false,
@@ -56823,8 +56693,7 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
-              "type": "string",
-              "x-omg-max-bytes": 200
+              "type": "string"
             }
           },
           {
@@ -57012,7 +56881,7 @@
             }
           },
           {
-            "description": "Exact public model name: 1 to 200 UTF-8 bytes (maxLength counts characters and is necessary, not sufficient), no control characters (LogQuery::filters, logs.rs:114-120).",
+            "description": "Exact public model name: 1 to 200 characters (as maxLength counts; #405), no control characters (LogQuery::filters, logs.rs:114-120).",
             "in": "query",
             "name": "model",
             "required": false,
@@ -57020,8 +56889,7 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
-              "type": "string",
-              "x-omg-max-bytes": 200
+              "type": "string"
             }
           },
           {
@@ -57239,7 +57107,7 @@
             }
           },
           {
-            "description": "Exact public model name: 1 to 200 UTF-8 bytes (maxLength counts characters and is necessary, not sufficient), no control characters (LogQuery::filters, logs.rs:114-120).",
+            "description": "Exact public model name: 1 to 200 characters (as maxLength counts; #405), no control characters (LogQuery::filters, logs.rs:114-120).",
             "in": "query",
             "name": "model",
             "required": false,
@@ -57247,8 +57115,7 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
-              "type": "string",
-              "x-omg-max-bytes": 200
+              "type": "string"
             }
           },
           {
@@ -57446,7 +57313,7 @@
             }
           },
           {
-            "description": "Exact public model name: 1 to 200 UTF-8 bytes (maxLength counts characters and is necessary, not sufficient), no control characters (LogQuery::filters, logs.rs:114-120).",
+            "description": "Exact public model name: 1 to 200 characters (as maxLength counts; #405), no control characters (LogQuery::filters, logs.rs:114-120).",
             "in": "query",
             "name": "model",
             "required": false,
@@ -57454,8 +57321,7 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
-              "type": "string",
-              "x-omg-max-bytes": 200
+              "type": "string"
             }
           },
           {
@@ -57683,7 +57549,7 @@
             }
           },
           {
-            "description": "Exact public model name: 1 to 200 UTF-8 bytes (maxLength counts characters and is necessary, not sufficient), no control characters (LogQuery::filters, logs.rs:114-120).",
+            "description": "Exact public model name: 1 to 200 characters (as maxLength counts; #405), no control characters (LogQuery::filters, logs.rs:114-120).",
             "in": "query",
             "name": "model",
             "required": false,
@@ -57691,8 +57557,7 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
-              "type": "string",
-              "x-omg-max-bytes": 200
+              "type": "string"
             }
           },
           {
@@ -58316,11 +58181,10 @@
             "name": "ids",
             "required": true,
             "schema": {
-              "description": "Two to four DISTINCT model ids separated by commas (parse_ids). Each id may be hyphenated, simple (32 hex digits), braced or urn:uuid: and may have Unicode whitespace around it. Distinctness is not expressible in a pattern, and the same id in two spellings is a duplicate. The handler limits the raw value to 148 BYTES (4 * 37), stated by x-omg-max-bytes; maxLength counts characters and stays 148, the same bound. Padding: The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
+              "description": "Two to four DISTINCT model ids separated by commas (parse_ids). Each id may be hyphenated, simple (32 hex digits), braced or urn:uuid: and may have Unicode whitespace around it. Distinctness is not expressible in a pattern, and the same id in two spellings is a duplicate. The handler limits the raw value to 148 characters (4 * 37), the maxLength bound (#405). Padding: The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
               "maxLength": 148,
               "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32}|\\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\}|urn:uuid:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*(?:,[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32}|\\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\}|urn:uuid:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*){1,3}$",
-              "type": "string",
-              "x-omg-max-bytes": 148
+              "type": "string"
             }
           }
         ],
@@ -60068,7 +59932,7 @@
         "x-omg-token-policy": "Denied"
       },
       "post": {
-        "description": "Browser-only Anthropic Cost Report v1 evidence. Upload application/json BYTES, not a reserialized JSON Value: page RawValue preserves duplicate keys for server-side typed rejection. Original amounts are decimal cents; conversion residuals are signed fractional micro-USD strings, while amount_microusd is a signed integer string. No invoice verification. Rules the schemas cannot express (parse()): the pages form one chain - every page but the last has has_more=true and a distinct non-empty next_page cursor, the last has has_more=false and next_page=null; buckets are consecutive one-day buckets starting at request.starting_at and ending at request.ending_at, at most request.limit per page; starting_at and ending_at are UTC midnights, the span is at most 31 days, ending_at is not in the future, and exported_at is at or after ending_at and not in the future. Duplicate rows (same bucket and dimensions), non-USD currency and more than 50000 lines are refused. supersedes must name the single latest overlapping import of the same period (409 otherwise); a repeated identical export is returned idempotently. The caps of 31 pages per upload and 31 buckets per page (the schema's maxItems) cannot be isolated from the 31-day span rule by a test: every page must hold at least one bucket (empty pages are refused), so 32 pages or 32 buckets in a page always span more than 31 days and are refused for both reasons. Text limits count UTF-8 bytes (see #405). amount is decimal cents whose whole part is bounded by the i128 micro-USD conversion.",
+        "description": "Browser-only Anthropic Cost Report v1 evidence. Upload application/json BYTES, not a reserialized JSON Value: page RawValue preserves duplicate keys for server-side typed rejection. Original amounts are decimal cents; conversion residuals are signed fractional micro-USD strings, while amount_microusd is a signed integer string. No invoice verification. Rules the schemas cannot express (parse()): the pages form one chain - every page but the last has has_more=true and a distinct non-empty next_page cursor, the last has has_more=false and next_page=null; buckets are consecutive one-day buckets starting at request.starting_at and ending at request.ending_at, at most request.limit per page; starting_at and ending_at are UTC midnights, the span is at most 31 days, ending_at is not in the future, and exported_at is at or after ending_at and not in the future. Duplicate rows (same bucket and dimensions), non-USD currency and more than 50000 lines are refused. supersedes must name the single latest overlapping import of the same period (409 otherwise); a repeated identical export is returned idempotently. The caps of 31 pages per upload and 31 buckets per page (the schema's maxItems) cannot be isolated from the 31-day span rule by a test: every page must hold at least one bucket (empty pages are refused), so 32 pages or 32 buckets in a page always span more than 31 days and are refused for both reasons. Text limits count characters (#405). amount is decimal cents whose whole part is bounded by the i128 micro-USD conversion.",
         "operationId": "post_api_v1_platform_provider_cost_imports",
         "parameters": [],
         "requestBody": {
@@ -60474,7 +60338,7 @@
         "x-omg-token-policy": "Denied"
       },
       "post": {
-        "description": "Browser-only, Platform Admin write. Creates an immutable, attested mapping of provider workspaces to OMG connections, deployments and workspaces, with per-binding model aliases. Rules the schemas cannot express (create_mapping): effective_end must be after effective_start; bindings must not overlap in time when they share a provider_workspace_id, or share a connection with the same deployment (a binding without a deployment overlaps every deployment of that connection); provider_model is unique within a binding; attested must be true; an exclusive binding needs workspace_id and non_omg_traffic=false; at most 1000 bindings and 100 model mappings per binding. The connection must be an anthropic provider connection, a given deployment must belong to it, a given workspace must exist (400 otherwise), and supersedes must name the account's latest mapping (409 otherwise). Personal workspaces may be bound: Platform Admins see the binding identity, never the workspace's requests. Text limits count UTF-8 bytes (see #405).",
+        "description": "Browser-only, Platform Admin write. Creates an immutable, attested mapping of provider workspaces to OMG connections, deployments and workspaces, with per-binding model aliases. Rules the schemas cannot express (create_mapping): effective_end must be after effective_start; bindings must not overlap in time when they share a provider_workspace_id, or share a connection with the same deployment (a binding without a deployment overlaps every deployment of that connection); provider_model is unique within a binding; attested must be true; an exclusive binding needs workspace_id and non_omg_traffic=false; at most 1000 bindings and 100 model mappings per binding. The connection must be an anthropic provider connection, a given deployment must belong to it, a given workspace must exist (400 otherwise), and supersedes must name the account's latest mapping (409 otherwise). Personal workspaces may be bound: Platform Admins see the binding identity, never the workspace's requests. Text limits count characters (#405).",
         "operationId": "post_api_v1_platform_provider_cost_mappings",
         "parameters": [],
         "requestBody": {
@@ -61636,7 +61500,7 @@
         "x-omg-token-policy": "Denied"
       },
       "post": {
-        "description": "Browser-only, live-authorized schedule scope. Foreign personal scopes are hidden with 404. Deleted schedules disappear; expired runs retain metadata and null snapshot; CSV expires with 410. Rules the schemas cannot express: recipient_user_ids holds 1-50 DISTINCT users, and distinctness compares PARSED UUIDs (the schema's uniqueItems compares strings, so two spellings of one UUID that differ only in letter case pass the schema and are refused with 400); every recipient must be eligible for the scope (admin/auditor for the platform scope, an owner or admin of the workspace, the owner for a personal workspace). timezone must be a known IANA zone of at most 64 UTF-8 bytes. A personal workspace refuses cost_center_id (the cost-center refusal in `create()` of src/management/scheduled_reports.rs). state=active needs a validated operator public URL (409). Scope limits: 100 platform, 50 per workspace, 10 personal schedules (409).",
+        "description": "Browser-only, live-authorized schedule scope. Foreign personal scopes are hidden with 404. Deleted schedules disappear; expired runs retain metadata and null snapshot; CSV expires with 410. Rules the schemas cannot express: recipient_user_ids holds 1-50 DISTINCT users, and distinctness compares PARSED UUIDs (the schema's uniqueItems compares strings, so two spellings of one UUID that differ only in letter case pass the schema and are refused with 400); every recipient must be eligible for the scope (admin/auditor for the platform scope, an owner or admin of the workspace, the owner for a personal workspace). timezone must be a known IANA zone of at most 64 characters. A personal workspace refuses cost_center_id (the cost-center refusal in `create()` of src/management/scheduled_reports.rs). state=active needs a validated operator public URL (409). Scope limits: 100 platform, 50 per workspace, 10 personal schedules (409).",
         "operationId": "post_api_v1_platform_report_schedules",
         "parameters": [],
         "requestBody": {
@@ -61931,7 +61795,7 @@
         "x-omg-token-policy": "Denied"
       },
       "patch": {
-        "description": "Browser-only, live-authorized schedule scope. Foreign personal scopes are hidden with 404. Deleted schedules disappear; expired runs retain metadata and null snapshot; CSV expires with 410. Rules the schemas cannot express: recipient_user_ids holds 1-50 DISTINCT users, and distinctness compares PARSED UUIDs (the schema's uniqueItems compares strings, so two spellings of one UUID that differ only in letter case pass the schema and are refused with 400); every recipient must be eligible for the scope (admin/auditor for the platform scope, an owner or admin of the workspace, the owner for a personal workspace). timezone must be a known IANA zone of at most 64 UTF-8 bytes. A personal workspace refuses cost_center_id (the cost-center refusal in `create()` of src/management/scheduled_reports.rs). state=active needs a validated operator public URL (409). Scope limits: 100 platform, 50 per workspace, 10 personal schedules (409).",
+        "description": "Browser-only, live-authorized schedule scope. Foreign personal scopes are hidden with 404. Deleted schedules disappear; expired runs retain metadata and null snapshot; CSV expires with 410. Rules the schemas cannot express: recipient_user_ids holds 1-50 DISTINCT users, and distinctness compares PARSED UUIDs (the schema's uniqueItems compares strings, so two spellings of one UUID that differ only in letter case pass the schema and are refused with 400); every recipient must be eligible for the scope (admin/auditor for the platform scope, an owner or admin of the workspace, the owner for a personal workspace). timezone must be a known IANA zone of at most 64 characters. A personal workspace refuses cost_center_id (the cost-center refusal in `create()` of src/management/scheduled_reports.rs). state=active needs a validated operator public URL (409). Scope limits: 100 platform, 50 per workspace, 10 personal schedules (409).",
         "operationId": "patch_api_v1_platform_report_schedules_by_id",
         "parameters": [
           {
@@ -69539,7 +69403,7 @@
             }
           },
           {
-            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). No control characters.",
+            "description": "Exact public model / provider label. At most 200 characters after percent-decoding, as maxLength counts (#405). No control characters.",
             "in": "query",
             "name": "model",
             "required": false,
@@ -69547,12 +69411,11 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "type": "string",
-              "x-omg-max-bytes": 200
+              "type": "string"
             }
           },
           {
-            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). No control characters.",
+            "description": "Exact public model / provider label. At most 200 characters after percent-decoding, as maxLength counts (#405). No control characters.",
             "in": "query",
             "name": "provider",
             "required": false,
@@ -69560,8 +69423,7 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "type": "string",
-              "x-omg-max-bytes": 200
+              "type": "string"
             }
           },
           {
@@ -69841,7 +69703,7 @@
             }
           },
           {
-            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). No control characters.",
+            "description": "Exact public model / provider label. At most 200 characters after percent-decoding, as maxLength counts (#405). No control characters.",
             "in": "query",
             "name": "model",
             "required": false,
@@ -69849,12 +69711,11 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "type": "string",
-              "x-omg-max-bytes": 200
+              "type": "string"
             }
           },
           {
-            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). No control characters.",
+            "description": "Exact public model / provider label. At most 200 characters after percent-decoding, as maxLength counts (#405). No control characters.",
             "in": "query",
             "name": "provider",
             "required": false,
@@ -69862,8 +69723,7 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "type": "string",
-              "x-omg-max-bytes": 200
+              "type": "string"
             }
           },
           {
@@ -70680,7 +70540,7 @@
             }
           },
           {
-            "description": "Exact public model name: 1 to 200 UTF-8 bytes (maxLength counts characters and is necessary, not sufficient), no control characters (LogQuery::filters, logs.rs:114-120).",
+            "description": "Exact public model name: 1 to 200 characters (as maxLength counts; #405), no control characters (LogQuery::filters, logs.rs:114-120).",
             "in": "query",
             "name": "model",
             "required": false,
@@ -70688,8 +70548,7 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
-              "type": "string",
-              "x-omg-max-bytes": 200
+              "type": "string"
             }
           },
           {
@@ -72544,7 +72403,7 @@
             }
           },
           {
-            "description": "Exact public model name: 1 to 200 UTF-8 bytes (maxLength counts characters and is necessary, not sufficient), no control characters (LogQuery::filters, logs.rs:114-120).",
+            "description": "Exact public model name: 1 to 200 characters (as maxLength counts; #405), no control characters (LogQuery::filters, logs.rs:114-120).",
             "in": "query",
             "name": "model",
             "required": false,
@@ -72552,8 +72411,7 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
-              "type": "string",
-              "x-omg-max-bytes": 200
+              "type": "string"
             }
           },
           {
@@ -73372,11 +73230,10 @@
             "name": "ids",
             "required": true,
             "schema": {
-              "description": "Two to four DISTINCT model ids separated by commas (parse_ids). Each id may be hyphenated, simple (32 hex digits), braced or urn:uuid: and may have Unicode whitespace around it. Distinctness is not expressible in a pattern, and the same id in two spellings is a duplicate. The handler limits the raw value to 148 BYTES (4 * 37), stated by x-omg-max-bytes; maxLength counts characters and stays 148, the same bound. Padding: The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
+              "description": "Two to four DISTINCT model ids separated by commas (parse_ids). Each id may be hyphenated, simple (32 hex digits), braced or urn:uuid: and may have Unicode whitespace around it. Distinctness is not expressible in a pattern, and the same id in two spellings is a duplicate. The handler limits the raw value to 148 characters (4 * 37), the maxLength bound (#405). Padding: The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
               "maxLength": 148,
               "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32}|\\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\}|urn:uuid:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*(?:,[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32}|\\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\}|urn:uuid:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*){1,3}$",
-              "type": "string",
-              "x-omg-max-bytes": 148
+              "type": "string"
             }
           }
         ],
@@ -73856,7 +73713,7 @@
         "x-omg-token-policy": "Denied"
       },
       "post": {
-        "description": "Browser-only, live-authorized schedule scope. Foreign personal scopes are hidden with 404. Deleted schedules disappear; expired runs retain metadata and null snapshot; CSV expires with 410. Rules the schemas cannot express: recipient_user_ids holds 1-50 DISTINCT users, and distinctness compares PARSED UUIDs (the schema's uniqueItems compares strings, so two spellings of one UUID that differ only in letter case pass the schema and are refused with 400); every recipient must be eligible for the scope (admin/auditor for the platform scope, an owner or admin of the workspace, the owner for a personal workspace). timezone must be a known IANA zone of at most 64 UTF-8 bytes. A personal workspace refuses cost_center_id (the cost-center refusal in `create()` of src/management/scheduled_reports.rs). state=active needs a validated operator public URL (409). Scope limits: 100 platform, 50 per workspace, 10 personal schedules (409).",
+        "description": "Browser-only, live-authorized schedule scope. Foreign personal scopes are hidden with 404. Deleted schedules disappear; expired runs retain metadata and null snapshot; CSV expires with 410. Rules the schemas cannot express: recipient_user_ids holds 1-50 DISTINCT users, and distinctness compares PARSED UUIDs (the schema's uniqueItems compares strings, so two spellings of one UUID that differ only in letter case pass the schema and are refused with 400); every recipient must be eligible for the scope (admin/auditor for the platform scope, an owner or admin of the workspace, the owner for a personal workspace). timezone must be a known IANA zone of at most 64 characters. A personal workspace refuses cost_center_id (the cost-center refusal in `create()` of src/management/scheduled_reports.rs). state=active needs a validated operator public URL (409). Scope limits: 100 platform, 50 per workspace, 10 personal schedules (409).",
         "operationId": "post_api_v1_workspaces_by_ws_report_schedules",
         "parameters": [
           {
@@ -74155,7 +74012,7 @@
         "x-omg-token-policy": "Denied"
       },
       "patch": {
-        "description": "Browser-only, live-authorized schedule scope. Foreign personal scopes are hidden with 404. Deleted schedules disappear; expired runs retain metadata and null snapshot; CSV expires with 410. Rules the schemas cannot express: recipient_user_ids holds 1-50 DISTINCT users, and distinctness compares PARSED UUIDs (the schema's uniqueItems compares strings, so two spellings of one UUID that differ only in letter case pass the schema and are refused with 400); every recipient must be eligible for the scope (admin/auditor for the platform scope, an owner or admin of the workspace, the owner for a personal workspace). timezone must be a known IANA zone of at most 64 UTF-8 bytes. A personal workspace refuses cost_center_id (the cost-center refusal in `create()` of src/management/scheduled_reports.rs). state=active needs a validated operator public URL (409). Scope limits: 100 platform, 50 per workspace, 10 personal schedules (409).",
+        "description": "Browser-only, live-authorized schedule scope. Foreign personal scopes are hidden with 404. Deleted schedules disappear; expired runs retain metadata and null snapshot; CSV expires with 410. Rules the schemas cannot express: recipient_user_ids holds 1-50 DISTINCT users, and distinctness compares PARSED UUIDs (the schema's uniqueItems compares strings, so two spellings of one UUID that differ only in letter case pass the schema and are refused with 400); every recipient must be eligible for the scope (admin/auditor for the platform scope, an owner or admin of the workspace, the owner for a personal workspace). timezone must be a known IANA zone of at most 64 characters. A personal workspace refuses cost_center_id (the cost-center refusal in `create()` of src/management/scheduled_reports.rs). state=active needs a validated operator public URL (409). Scope limits: 100 platform, 50 per workspace, 10 personal schedules (409).",
         "operationId": "patch_api_v1_workspaces_by_ws_report_schedules_by_id",
         "parameters": [
           {
@@ -74719,7 +74576,7 @@
             }
           },
           {
-            "description": "Exact public model name: 1 to 200 UTF-8 bytes (maxLength counts characters and is necessary, not sufficient), no control characters (LogQuery::filters, logs.rs:114-120).",
+            "description": "Exact public model name: 1 to 200 characters (as maxLength counts; #405), no control characters (LogQuery::filters, logs.rs:114-120).",
             "in": "query",
             "name": "model",
             "required": false,
@@ -74727,8 +74584,7 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
-              "type": "string",
-              "x-omg-max-bytes": 200
+              "type": "string"
             }
           },
           {
@@ -74944,7 +74800,7 @@
             }
           },
           {
-            "description": "Exact public model name: 1 to 200 UTF-8 bytes (maxLength counts characters and is necessary, not sufficient), no control characters (LogQuery::filters, logs.rs:114-120).",
+            "description": "Exact public model name: 1 to 200 characters (as maxLength counts; #405), no control characters (LogQuery::filters, logs.rs:114-120).",
             "in": "query",
             "name": "model",
             "required": false,
@@ -74952,8 +74808,7 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
-              "type": "string",
-              "x-omg-max-bytes": 200
+              "type": "string"
             }
           },
           {
@@ -75482,15 +75337,14 @@
             }
           },
           {
-            "description": "Exact public model name: 1 to 200 UTF-8 bytes (maxLength counts characters and is necessary, not sufficient), no control characters (LogQuery::filters, logs.rs:114-120).",
+            "description": "Exact public model name: 1 to 200 characters (as maxLength counts; #405), no control characters (LogQuery::filters, logs.rs:114-120).",
             "in": "query",
             "name": "model",
             "schema": {
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "type": "string",
-              "x-omg-max-bytes": 200
+              "type": "string"
             }
           },
           {
@@ -75688,15 +75542,14 @@
             }
           },
           {
-            "description": "Exact public model name: 1 to 200 UTF-8 bytes (maxLength counts characters and is necessary, not sufficient), no control characters (LogQuery::filters, logs.rs:114-120).",
+            "description": "Exact public model name: 1 to 200 characters (as maxLength counts; #405), no control characters (LogQuery::filters, logs.rs:114-120).",
             "in": "query",
             "name": "model",
             "schema": {
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "type": "string",
-              "x-omg-max-bytes": 200
+              "type": "string"
             }
           },
           {
@@ -76014,7 +75867,7 @@
             }
           },
           {
-            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). No control characters.",
+            "description": "Exact public model / provider label. At most 200 characters after percent-decoding, as maxLength counts (#405). No control characters.",
             "in": "query",
             "name": "model",
             "required": false,
@@ -76022,12 +75875,11 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "type": "string",
-              "x-omg-max-bytes": 200
+              "type": "string"
             }
           },
           {
-            "description": "Exact public model / provider label. At most 200 UTF-8 BYTES after percent-decoding (the handler counts bytes); the schema states this as x-omg-max-bytes; maxLength counts characters and is never larger (see #405). No control characters.",
+            "description": "Exact public model / provider label. At most 200 characters after percent-decoding, as maxLength counts (#405). No control characters.",
             "in": "query",
             "name": "provider",
             "required": false,
@@ -76035,8 +75887,7 @@
               "maxLength": 200,
               "minLength": 1,
               "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-              "type": "string",
-              "x-omg-max-bytes": 200
+              "type": "string"
             }
           },
           {

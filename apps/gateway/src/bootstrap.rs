@@ -15,7 +15,7 @@ pub struct DevelopmentKeys {
 pub async fn provision_user(store: &Store, email: &str, platform_admin: bool) -> Result<Uuid> {
     let email = email.trim().to_lowercase();
     anyhow::ensure!(
-        email.len() <= 320
+        crate::text::chars_at_most(&email, 320)
             && email.contains('@')
             && !email.chars().any(|c| c.is_whitespace() || c.is_control()),
         "invalid email"

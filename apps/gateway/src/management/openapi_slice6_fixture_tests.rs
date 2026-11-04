@@ -2971,7 +2971,7 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
     )
     .await;
     body_vector(&w, &owner, "PUT", policy_template, &format!("{keypath}/policy"), "duplicate period", json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"budgets":repeated}), false).await;
-    // Names are limited in UTF-8 bytes; maxLength counts characters.
+    // Names count characters, as maxLength does (#405): multibyte text agrees.
     let sa_path = format!("{ws}/service-accounts");
     let sa_template = "/api/v1/workspaces/{ws}/service-accounts";
     body_vector(
@@ -2980,8 +2980,8 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
         "POST",
         keys_template,
         &keys_path,
-        "key name 120 bytes",
-        json!({"name":multibyte(60),"expires_in_days":30}),
+        "key name 120 two-byte characters",
+        json!({"name":multibyte(120),"expires_in_days":30}),
         true,
     )
     .await;
@@ -2991,19 +2991,8 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
         "POST",
         keys_template,
         &keys_path,
-        "key name 122 bytes",
-        json!({"name":multibyte(61),"expires_in_days":30}),
-        false,
-    )
-    .await;
-    body_vector(
-        &w,
-        &owner,
-        "POST",
-        sa_template,
-        &sa_path,
-        "service account name 120 bytes",
-        json!({"name":multibyte(60)}),
+        "key name 121 two-byte characters",
+        json!({"name":multibyte(121),"expires_in_days":30}),
         true,
     )
     .await;
@@ -3013,9 +3002,20 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
         "POST",
         sa_template,
         &sa_path,
-        "service account name 122 bytes",
-        json!({"name":multibyte(61)}),
-        false,
+        "service account name 120 two-byte characters",
+        json!({"name":multibyte(120)}),
+        true,
+    )
+    .await;
+    body_vector(
+        &w,
+        &owner,
+        "POST",
+        sa_template,
+        &sa_path,
+        "service account name 121 two-byte characters",
+        json!({"name":multibyte(121)}),
+        true,
     )
     .await;
     // Admin token allowlists.
@@ -3074,8 +3074,18 @@ async fn management_openapi_slice6_fixtures(pool: PgPool) {
     let uuid = "00000000-0000-4000-8000-000000000000";
     for (label, name, value, expressible) in [
         ("model control", "model", "a\u{1}b".to_owned(), true),
-        ("model 200 bytes", "model", multibyte(100), true),
-        ("model 202 bytes", "model", multibyte(101), false),
+        (
+            "model 200 multibyte characters",
+            "model",
+            multibyte(200),
+            true,
+        ),
+        (
+            "model 201 multibyte characters",
+            "model",
+            multibyte(201),
+            true,
+        ),
         ("session leading space", "session_id", " a".to_owned(), true),
         (
             "session trailing space",

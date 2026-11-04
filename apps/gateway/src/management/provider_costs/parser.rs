@@ -81,8 +81,8 @@ pub(super) struct Parsed {
     pub fingerprint: Vec<u8>,
     pub lines: Vec<Line>,
 }
-pub(super) fn bounded(s: &str, max: usize) -> bool {
-    !s.is_empty() && s.len() <= max && !s.chars().any(char::is_control)
+pub(in crate::management) fn bounded(s: &str, max: usize) -> bool {
+    !s.is_empty() && crate::text::chars_at_most(s, max) && !s.chars().any(char::is_control)
 }
 pub(super) fn timestamp(s: &str) -> Result<DateTime<Utc>, ApiError> {
     if s.len() > 40 {
@@ -154,7 +154,10 @@ fn bounded_page(raw: &str) -> Result<(), ApiError> {
     for b in raw.bytes() {
         if in_string {
             length += 1;
-            if length > 24_576 {
+            // The longest decoded text field is 4096 characters (#405); its
+            // JSON form is at most 12 bytes per character (a \\uXXXX
+            // surrogate pair) plus the quotes.
+            if length > 4096 * 12 + 2 {
                 return Err(invalid());
             }
             if escaped {

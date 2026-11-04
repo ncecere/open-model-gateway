@@ -8,6 +8,12 @@ describe("form validation", () => {
     expect(validateFields([nameField], { name: "Production" })).toEqual({});
     expect(validateFields([nameField], { name: "x".repeat(121) })).toHaveProperty("name");
   });
+  it("counts characters, not bytes or UTF-16 units, against maxLength (#405)", () => {
+    for (const glyph of ["\u00e9", "\u20ac", "\u{1F600}"]) {
+      expect(validateFields([nameField], { name: glyph.repeat(120) })).toEqual({});
+      expect(validateFields([nameField], { name: glyph.repeat(121) })).toHaveProperty("name", "Use at most 120 characters.");
+    }
+  });
   it.each(["", "0", "366", "1.5", "NaN", "Infinity", "-1"])("rejects invalid expiry %s", (expires_in_days) => {
     expect(validateFields([expiryField], { expires_in_days })).toHaveProperty("expires_in_days");
   });

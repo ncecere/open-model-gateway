@@ -3,6 +3,7 @@
  * strict validation (the server stays authoritative). See docs/settings.md.
  */
 import { API, ApiError, csrfCookie, type InstallationLogo } from "./api";
+import { characterCount } from "./forms";
 
 export const settingsPath = `${API}/platform/settings`;
 
@@ -128,7 +129,7 @@ export function httpsUrlError(value: string): string | undefined {
 export function nameError(value: string): string | undefined {
   const v = value.trim();
   if (!v) return "Enter a name.";
-  if (v.length > 120 || control.test(v)) return "Use at most 120 characters.";
+  if (characterCount(v) > 120 || control.test(v)) return "Use at most 120 characters.";
   return;
 }
 export function daysError(value: string, min: number, max: number, label: string): string | undefined {
@@ -157,9 +158,9 @@ export function emailErrors(d: EmailDraft): Partial<Record<keyof EmailDraft, str
   if (user && !ref) out.password_ref = "Enter the password reference for this username.";
   if (!user && ref) out.username = "Enter the username this password belongs to.";
   if (ref && !passwordRefPattern.test(ref)) out.password_ref = "Enter env: followed by the variable name, for example env:SMTP_PASSWORD.";
-  if (user.length > 256 || control.test(user)) out.username = "Use at most 256 characters.";
-  if (!emailPattern.test(d.from_address.trim()) || d.from_address.trim().length > 320) out.from_address = "Enter an email address, such as gateway@example.com.";
-  if (d.from_name.trim().length > 120 || control.test(d.from_name)) out.from_name = "Use at most 120 characters.";
+  if (characterCount(user) > 256 || control.test(user)) out.username = "Use at most 256 characters.";
+  if (!emailPattern.test(d.from_address.trim()) || characterCount(d.from_address.trim()) > 320) out.from_address = "Enter an email address, such as gateway@example.com.";
+  if (characterCount(d.from_name.trim()) > 120 || control.test(d.from_name)) out.from_name = "Use at most 120 characters.";
   return out;
 }
 export const emailBody = (d: EmailDraft) => ({ host: d.host.trim(), port: Number(d.port.trim()), tls: d.tls, username: d.username.trim() || null, password_ref: d.password_ref.trim() || null, from_address: d.from_address.trim(), from_name: d.from_name.trim() || null });
