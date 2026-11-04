@@ -12,7 +12,7 @@ spec:
   revisionHistoryLimit: 3
   strategy:
     # AGENTS.md: serve never migrates. A release with migrations uses
-    # `migrations.run=true` plus `upgrade.mode: drain` (docs/kubernetes.md);
+    # `migrations.run=true` after scaling to 0 (docs/kubernetes.md);
     # the rolling default here is for migration-free releases only.
     type: RollingUpdate
     rollingUpdate:
