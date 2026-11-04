@@ -6,6 +6,8 @@ use axum::{
 };
 use sqlx::PgPool;
 use tower::ServiceExt;
+#[path = "access_requests_model_tests.rs"]
+mod access_requests_model_tests;
 #[path = "access_requests_tests.rs"]
 mod access_requests_tests;
 #[path = "admin_token_revalidation_tests.rs"]
