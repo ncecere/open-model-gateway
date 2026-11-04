@@ -1,4 +1,5 @@
-//! #83 slice A: browser-only, independent approval of manual member grants.
+//! #83: browser-only, independent approval of manual member grants (slice
+//! A) and of catalog model selections for a shared workspace (slice B).
 //! All writes use the existing management transaction and canonical locks.
 use super::*;
 use sha2::{Digest, Sha256};
@@ -8,7 +9,7 @@ type RequestResult = Result<Json<Value>, ManagementError>;
 /// queues. `workspace_name_at_request` is a frozen submitted reference (UX fix, #83): it is
 /// captured once at INSERT and never updated, so it never discloses a later rename or a
 /// workspace becoming non-discoverable. It is not the live workspace name.
-const PROJECTION: &str = "jsonb_build_object('id',r.id,'requester',r.requester,'target_kind',r.target_kind,'workspace_id',r.workspace_id,'workspace_name_at_request',r.workspace_name_at_request,'requested_role',r.requested_role,'status',r.status,'reason',r.reason,'created_at',r.created_at,'expires_at',r.expires_at,'decided_by',r.decided_by,'decided_at',r.decided_at,'membership_grant_id',(SELECT membership_grant_id FROM access_request_applications a WHERE a.request_id=r.id))";
+const PROJECTION: &str = "jsonb_build_object('id',r.id,'requester',r.requester,'target_kind',r.target_kind,'workspace_id',r.workspace_id,'workspace_name_at_request',r.workspace_name_at_request,'model_id',r.model_id,'model_name_at_request',r.model_name_at_request,'requested_role',r.requested_role,'status',r.status,'reason',r.reason,'created_at',r.created_at,'expires_at',r.expires_at,'decided_by',r.decided_by,'decided_at',r.decided_at,'membership_grant_id',(SELECT membership_grant_id FROM access_request_applications a WHERE a.request_id=r.id))";
 /// Approver-only: adds the requester's display name/email (requires a `JOIN users ru ON
 /// ru.id=r.requester` in the FROM clause). Workspace owners/admins already see this pair for
 /// any entitled user through the Members "Add member" picker (`members::candidates`), and
@@ -22,7 +23,7 @@ const PROJECTION: &str = "jsonb_build_object('id',r.id,'requester',r.requester,'
 /// that picker's reach gets both fields redacted to `NULL` here too, so this projection never
 /// discloses more than that picker actually would for the requester's *current* state, not
 /// just their state at submission.
-const PROJECTION_WITH_REQUESTER: &str = "jsonb_build_object('id',r.id,'requester',r.requester,'requester_display_name',CASE WHEN ru.disabled_at IS NULL AND ru.cleaned_at IS NULL AND ru.email IS NOT NULL AND EXISTS(SELECT 1 FROM effective_platform_roles er WHERE er.user_id=ru.id) THEN ru.display_name END,'requester_email',CASE WHEN ru.disabled_at IS NULL AND ru.cleaned_at IS NULL AND ru.email IS NOT NULL AND EXISTS(SELECT 1 FROM effective_platform_roles er WHERE er.user_id=ru.id) THEN ru.email END,'target_kind',r.target_kind,'workspace_id',r.workspace_id,'workspace_name_at_request',r.workspace_name_at_request,'requested_role',r.requested_role,'status',r.status,'reason',r.reason,'created_at',r.created_at,'expires_at',r.expires_at,'decided_by',r.decided_by,'decided_at',r.decided_at,'membership_grant_id',(SELECT membership_grant_id FROM access_request_applications a WHERE a.request_id=r.id))";
+const PROJECTION_WITH_REQUESTER: &str = "jsonb_build_object('id',r.id,'requester',r.requester,'requester_display_name',CASE WHEN ru.disabled_at IS NULL AND ru.cleaned_at IS NULL AND ru.email IS NOT NULL AND EXISTS(SELECT 1 FROM effective_platform_roles er WHERE er.user_id=ru.id) THEN ru.display_name END,'requester_email',CASE WHEN ru.disabled_at IS NULL AND ru.cleaned_at IS NULL AND ru.email IS NOT NULL AND EXISTS(SELECT 1 FROM effective_platform_roles er WHERE er.user_id=ru.id) THEN ru.email END,'target_kind',r.target_kind,'workspace_id',r.workspace_id,'workspace_name_at_request',r.workspace_name_at_request,'model_id',r.model_id,'model_name_at_request',r.model_name_at_request,'requested_role',r.requested_role,'status',r.status,'reason',r.reason,'created_at',r.created_at,'expires_at',r.expires_at,'decided_by',r.decided_by,'decided_at',r.decided_at,'membership_grant_id',(SELECT membership_grant_id FROM access_request_applications a WHERE a.request_id=r.id))";
 fn conflict() -> ApiError {
     ApiError(StatusCode::CONFLICT, "Request is no longer applicable")
 }
@@ -65,6 +66,10 @@ struct Submission {
     workspace_id: Uuid,
     reason: Option<String>,
     idempotency_key: String,
+    /// #83 slice B: request selection of this model for the workspace. Last
+    /// and defaulted, so the three-element positional form still parses.
+    #[serde(default)]
+    model_id: Option<Uuid>,
 }
 #[cfg(test)]
 #[test]
@@ -119,6 +124,17 @@ async fn eligible_target(tx: &mut Transaction<'_, Postgres>, ws: Uuid) -> Result
     }
     Ok(())
 }
+async fn effective_member(
+    tx: &mut Transaction<'_, Postgres>,
+    ws: Uuid,
+    user: Uuid,
+) -> Result<bool, ApiError> {
+    Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM effective_workspace_memberships m JOIN workspaces w ON w.id=m.workspace_id WHERE m.workspace_id=$1 AND m.user_id=$2 AND w.kind IN ('team','project'))")
+        .bind(ws)
+        .bind(user)
+        .fetch_one(&mut **tx)
+        .await?)
+}
 async fn workspace_authority(
     tx: &mut Transaction<'_, Postgres>,
     u: &BrowserPrincipal,
@@ -161,6 +177,10 @@ async fn event(
     id: Uuid,
     outcome: &str,
 ) -> Result<(), ApiError> {
+    let kind: String = sqlx::query_scalar("SELECT target_kind FROM access_requests WHERE id=$1")
+        .bind(id)
+        .fetch_one(&mut **tx)
+        .await?;
     audit(
         tx,
         u,
@@ -168,7 +188,7 @@ async fn event(
         &format!("access_request.{outcome}"),
         "access_request",
         Some(id),
-        json!({"kind":"workspace_membership","outcome":outcome}),
+        json!({"kind":kind,"outcome":outcome}),
     )
     .await
 }
@@ -247,11 +267,13 @@ async fn create(
         return Err(invalid().into());
     }
     let digest = Sha256::digest(b.idempotency_key.as_bytes()).to_vec();
-    let payload = Sha256::digest(
-        serde_json::to_vec(&json!({"workspace_id":b.workspace_id,"reason":b.reason}))
-            .map_err(|_| invalid())?,
-    )
-    .to_vec();
+    // Membership payloads keep their original form, so a replay across the
+    // upgrade still matches.
+    let canonical = match b.model_id {
+        None => json!({"workspace_id":b.workspace_id,"reason":b.reason}),
+        Some(model) => json!({"workspace_id":b.workspace_id,"model_id":model,"reason":b.reason}),
+    };
+    let payload = Sha256::digest(serde_json::to_vec(&canonical).map_err(|_| invalid())?).to_vec();
     let mut tx = resources::installation_tx(&s).await?;
     // Replays keep only submitted references even if discovery was later disabled.
     let replay:Option<(Uuid,Vec<u8>)>=sqlx::query_as("SELECT id,payload_digest FROM access_requests WHERE requester=$1 AND idempotency_digest=$2")
@@ -268,17 +290,30 @@ async fn create(
     }
     scope_locks(&mut tx, b.workspace_id, &[u.user_id]).await?;
     resources::platform_role_snapshot(&mut tx, u.user_id).await?;
-    eligible_target(&mut tx, b.workspace_id).await?;
-    let member:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workspace_membership_grants WHERE workspace_id=$1 AND user_id=$2 AND revoked_at IS NULL)")
-        .bind(b.workspace_id).bind(u.user_id).fetch_one(&mut *tx).await?;
-    if member {
-        return Err(conflict().into());
+    if let Some(model) = b.model_id {
+        // Only a current member, for a model within the workspace's catalog
+        // visibility: anything else is indistinguishable from unknown.
+        if !effective_member(&mut tx, b.workspace_id, u.user_id).await? {
+            return Err(missing().into());
+        }
+        match catalogs::requestable_model(&mut tx, b.workspace_id, model).await? {
+            None => return Err(missing().into()),
+            Some(true) => return Err(conflict().into()),
+            Some(false) => {}
+        }
+    } else {
+        eligible_target(&mut tx, b.workspace_id).await?;
+        let member:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workspace_membership_grants WHERE workspace_id=$1 AND user_id=$2 AND revoked_at IS NULL)")
+            .bind(b.workspace_id).bind(u.user_id).fetch_one(&mut *tx).await?;
+        if member {
+            return Err(conflict().into());
+        }
     }
     let due:Vec<Uuid>=sqlx::query_scalar("SELECT id FROM access_requests WHERE requester=$1 AND status='pending' AND expires_at<=clock_timestamp() ORDER BY id LIMIT 20")
         .bind(u.user_id).fetch_all(&mut *tx).await?;
     expire(&mut tx, &u, &due).await?;
-    let id:Uuid=sqlx::query_scalar("INSERT INTO access_requests(requester,workspace_id,reason,idempotency_digest,payload_digest) VALUES($1,$2,$3,$4,$5) RETURNING id")
-        .bind(u.user_id).bind(b.workspace_id).bind(b.reason).bind(digest).bind(payload).fetch_one(&mut *tx).await.map_err(insertion_error)?;
+    let id:Uuid=sqlx::query_scalar("INSERT INTO access_requests(requester,workspace_id,model_id,reason,idempotency_digest,payload_digest) VALUES($1,$2,$3,$4,$5,$6) RETURNING id")
+        .bind(u.user_id).bind(b.workspace_id).bind(b.model_id).bind(b.reason).bind(digest).bind(payload).fetch_one(&mut *tx).await.map_err(insertion_error)?;
     event(&mut tx, &u, b.workspace_id, id, "created").await?;
     let result = one(&mut tx, id).await?;
     tx.commit().await?;
@@ -435,13 +470,14 @@ async fn decision(
     approve: bool,
 ) -> ApiResult {
     let mut tx = resources::installation_tx(s).await?;
-    type SubmissionScope = (Uuid, Uuid, chrono::DateTime<chrono::Utc>);
-    let (ws, requester, submitted_at): SubmissionScope =
-        sqlx::query_as("SELECT workspace_id,requester,created_at FROM access_requests WHERE id=$1")
-            .bind(id)
-            .fetch_optional(&mut *tx)
-            .await?
-            .ok_or_else(missing)?;
+    type SubmissionScope = (Uuid, Uuid, chrono::DateTime<chrono::Utc>, Option<Uuid>);
+    let (ws, requester, submitted_at, model): SubmissionScope = sqlx::query_as(
+        "SELECT workspace_id,requester,created_at,model_id FROM access_requests WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(missing)?;
     if path_ws.is_some_and(|w| w != ws) {
         return Err(missing());
     }
@@ -450,6 +486,11 @@ async fn decision(
         workspace_authority(&mut tx, u, ws).await?;
     } else {
         resources::platform_write(&mut tx, u).await?;
+        // A workspace's model selection needs its own owner/admin: platform
+        // authority never substitutes for workspace membership.
+        if model.is_some() {
+            return Err(denied());
+        }
     }
     if requester == u.user_id {
         return Err(denied());
@@ -470,7 +511,34 @@ async fn decision(
         tx.commit().await?;
         return Err(conflict());
     }
-    if approve {
+    if let (true, Some(model)) = (approve, model) {
+        // The requester must still be entitled and a member; the model still
+        // eligible and not already usable. Otherwise the request stays pending.
+        if resources::platform_role_snapshot(&mut tx, requester)
+            .await
+            .is_err()
+            || !effective_member(&mut tx, ws, requester).await?
+        {
+            return Err(ApiError(
+                StatusCode::CONFLICT,
+                "Requester is no longer eligible",
+            ));
+        }
+        catalogs::apply_model_request(&mut tx, ws, model).await?;
+        sqlx::query("INSERT INTO access_request_applications(request_id,workspace_id,requester,model_id) VALUES($1,$2,$3,$4)")
+            .bind(id).bind(ws).bind(requester).bind(model).execute(&mut *tx).await?;
+        audit(
+            &mut tx,
+            u,
+            Some(ws),
+            "model.granted",
+            "model",
+            Some(model),
+            json!({"source":"catalog"}),
+        )
+        .await?;
+        event(&mut tx, u, ws, id, "applied").await?;
+    } else if approve {
         if let Err(e) = eligible_target(&mut tx, ws).await {
             return Err(if e.0 == StatusCode::NOT_FOUND {
                 conflict()

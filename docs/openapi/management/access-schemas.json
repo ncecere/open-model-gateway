@@ -691,6 +691,8 @@
         "target_kind",
         "workspace_id",
         "workspace_name_at_request",
+        "model_id",
+        "model_name_at_request",
         "requested_role",
         "status",
         "reason",
@@ -710,7 +712,10 @@
           "$ref": "#/components/schemas/IdentityUuid"
         },
         "target_kind": {
-          "const": "workspace_membership"
+          "enum": [
+            "workspace_membership",
+            "model_selection"
+          ]
         },
         "workspace_id": {
           "$ref": "#/components/schemas/IdentityUuid"
@@ -719,7 +724,15 @@
           "type": "string"
         },
         "requested_role": {
-          "const": "member"
+          "anyOf": [
+            {
+              "const": "member"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "member for a membership request; null for a model-selection request."
         },
         "status": {
           "enum": [
@@ -753,6 +766,14 @@
         },
         "requester_email": {
           "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "model_id": {
+          "$ref": "#/components/schemas/IdentityNullableUuid",
+          "description": "The requested model (model_selection); null for a membership request."
+        },
+        "model_name_at_request": {
+          "type": "string",
+          "description": "The model's public name when requested (frozen); empty for a membership request."
         }
       },
       "additionalProperties": false,
@@ -3889,11 +3910,11 @@
     },
     "post_api_v1_platform_access_requests_by_id_approveRequest": false,
     "post_api_v1_platform_access_requests_by_id_approveResponse": {
-      "$ref": "#/components/schemas/AccessApprovedRequest"
+      "$ref": "#/components/schemas/AccessApprovedMembershipRequest"
     },
     "post_api_v1_platform_access_requests_by_id_denyRequest": false,
     "post_api_v1_platform_access_requests_by_id_denyResponse": {
-      "$ref": "#/components/schemas/AccessDeniedRequest"
+      "$ref": "#/components/schemas/AccessDeniedMembershipRequest"
     },
     "get_api_v1_platform_oidc_group_mappingsRequest": false,
     "get_api_v1_platform_oidc_group_mappingsResponse": {
@@ -4900,6 +4921,8 @@
         "target_kind",
         "workspace_id",
         "workspace_name_at_request",
+        "model_id",
+        "model_name_at_request",
         "requested_role",
         "status",
         "reason",
@@ -4917,7 +4940,10 @@
           "$ref": "#/components/schemas/IdentityUuid"
         },
         "target_kind": {
-          "const": "workspace_membership"
+          "enum": [
+            "workspace_membership",
+            "model_selection"
+          ]
         },
         "workspace_id": {
           "$ref": "#/components/schemas/IdentityUuid"
@@ -4926,7 +4952,15 @@
           "type": "string"
         },
         "requested_role": {
-          "const": "member"
+          "anyOf": [
+            {
+              "const": "member"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "member for a membership request; null for a model-selection request."
         },
         "status": {
           "const": "approved"
@@ -4947,7 +4981,16 @@
           "$ref": "#/components/schemas/IdentityTime"
         },
         "membership_grant_id": {
-          "$ref": "#/components/schemas/IdentityUuid"
+          "$ref": "#/components/schemas/IdentityNullableUuid",
+          "description": "The applied membership grant; null for an approved model-selection request (the model is selected for the workspace instead)."
+        },
+        "model_id": {
+          "$ref": "#/components/schemas/IdentityNullableUuid",
+          "description": "The requested model (model_selection); null for a membership request."
+        },
+        "model_name_at_request": {
+          "type": "string",
+          "description": "The model's public name when requested (frozen); empty for a membership request."
         }
       },
       "additionalProperties": false,
@@ -4961,6 +5004,8 @@
         "target_kind",
         "workspace_id",
         "workspace_name_at_request",
+        "model_id",
+        "model_name_at_request",
         "requested_role",
         "status",
         "reason",
@@ -4978,7 +5023,10 @@
           "$ref": "#/components/schemas/IdentityUuid"
         },
         "target_kind": {
-          "const": "workspace_membership"
+          "enum": [
+            "workspace_membership",
+            "model_selection"
+          ]
         },
         "workspace_id": {
           "$ref": "#/components/schemas/IdentityUuid"
@@ -4987,7 +5035,15 @@
           "type": "string"
         },
         "requested_role": {
-          "const": "member"
+          "anyOf": [
+            {
+              "const": "member"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "member for a membership request; null for a model-selection request."
         },
         "status": {
           "const": "denied"
@@ -5009,6 +5065,14 @@
         },
         "membership_grant_id": {
           "type": "null"
+        },
+        "model_id": {
+          "$ref": "#/components/schemas/IdentityNullableUuid",
+          "description": "The requested model (model_selection); null for a membership request."
+        },
+        "model_name_at_request": {
+          "type": "string",
+          "description": "The model's public name when requested (frozen); empty for a membership request."
         }
       },
       "additionalProperties": false,
@@ -5256,6 +5320,144 @@
         }
       ],
       "description": "One budget window as a platform reader sees it: usage is always visible. Three shapes: known (no unknown-cost request; remaining_microusd is a decimal), unknown (at least one unknown-cost request: every figure is present but remaining_microusd is null) and unavailable (the accounting row is unreadable: used_microusd, unresolved_usage, exhausted, settled_microusd, pending_held_microusd, unknown_held_microusd, unknown_cost_requests and remaining_microusd are all null together and headroom_status is unknown). A null group therefore implies headroom_status unknown, but unknown does not imply the null group (governance/totals.rs read_budget_report and BudgetReport::remaining, policies.rs budget_windows)."
+    },
+    "AccessApprovedMembershipRequest": {
+      "type": "object",
+      "required": [
+        "id",
+        "requester",
+        "target_kind",
+        "workspace_id",
+        "workspace_name_at_request",
+        "model_id",
+        "model_name_at_request",
+        "requested_role",
+        "status",
+        "reason",
+        "created_at",
+        "expires_at",
+        "decided_by",
+        "decided_at",
+        "membership_grant_id"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "requester": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "target_kind": {
+          "const": "workspace_membership"
+        },
+        "workspace_id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "workspace_name_at_request": {
+          "type": "string"
+        },
+        "requested_role": {
+          "const": "member"
+        },
+        "status": {
+          "const": "approved"
+        },
+        "reason": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "expires_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "decided_by": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "decided_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "membership_grant_id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "model_id": {
+          "type": "null"
+        },
+        "model_name_at_request": {
+          "const": ""
+        }
+      },
+      "additionalProperties": false,
+      "description": "Decision response of an approve call: requester-private projection (no requester identity) after the decision. decided_by and decided_at are always set, and the applied membership grant is always present. The platform decision routes decide membership requests only (a model-selection request is 403 there)."
+    },
+    "AccessDeniedMembershipRequest": {
+      "type": "object",
+      "required": [
+        "id",
+        "requester",
+        "target_kind",
+        "workspace_id",
+        "workspace_name_at_request",
+        "model_id",
+        "model_name_at_request",
+        "requested_role",
+        "status",
+        "reason",
+        "created_at",
+        "expires_at",
+        "decided_by",
+        "decided_at",
+        "membership_grant_id"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "requester": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "target_kind": {
+          "const": "workspace_membership"
+        },
+        "workspace_id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "workspace_name_at_request": {
+          "type": "string"
+        },
+        "requested_role": {
+          "const": "member"
+        },
+        "status": {
+          "const": "denied"
+        },
+        "reason": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "expires_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "decided_by": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "decided_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "membership_grant_id": {
+          "type": "null"
+        },
+        "model_id": {
+          "type": "null"
+        },
+        "model_name_at_request": {
+          "const": ""
+        }
+      },
+      "additionalProperties": false,
+      "description": "Decision response of a deny call: requester-private projection (no requester identity) after the decision. decided_by and decided_at are always set; a denial never carries a membership grant. The platform decision routes decide membership requests only (a model-selection request is 403 there)."
     }
   }
 }

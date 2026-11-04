@@ -121,6 +121,64 @@ pub(super) fn routes() -> Router<Store> {
 }
 // Effective availability is a replacement list, never a union of defaults and overrides.
 const ELIGIBLE: &str = "EXISTS(SELECT 1 FROM catalog_models cm WHERE cm.model_id=m.id AND ((EXISTS(SELECT 1 FROM workspace_catalog_overrides h WHERE h.workspace_id=w.id) AND EXISTS(SELECT 1 FROM workspace_catalog_override_items i WHERE i.workspace_id=w.id AND i.catalog_id=cm.catalog_id)) OR (NOT EXISTS(SELECT 1 FROM workspace_catalog_overrides h WHERE h.workspace_id=w.id) AND EXISTS(SELECT 1 FROM workspace_type_catalogs t WHERE t.kind=w.kind AND t.catalog_id=cm.catalog_id))))";
+/// #83: select a requested model for a workspace from its catalog, inside the
+/// approval transaction (which holds the workspace's exclusive authority
+/// scope). The same eligibility as a member-facing selection: the workspace
+/// enabled, the model enabled and in the workspace's catalogs. A model the
+/// workspace can already use (selected or directly assigned) is a conflict,
+/// never a duplicate.
+pub(super) async fn apply_model_request(
+    tx: &mut Transaction<'_, Postgres>,
+    ws: Uuid,
+    model: Uuid,
+) -> Result<(), ApiError> {
+    let (eligible, allowed): (bool, bool) = sqlx::query_as(&format!("SELECT m.enabled AND w.disabled_at IS NULL AND ({ELIGIBLE}),workspace_model_allowed(w.id,m.id) FROM models m CROSS JOIN workspaces w WHERE w.id=$1 AND m.id=$2"))
+        .bind(ws)
+        .bind(model)
+        .fetch_optional(&mut **tx)
+        .await?
+        .unwrap_or((false, false));
+    if !eligible {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "The model is no longer available to this workspace",
+        ));
+    }
+    if allowed {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "The workspace can already use this model",
+        ));
+    }
+    sqlx::query(
+        "INSERT INTO workspace_model_grants(workspace_id,model_id,source) VALUES($1,$2,'catalog')",
+    )
+    .bind(ws)
+    .bind(model)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+/// Whether a member may request `model` for `ws`: `Some(true)` when the
+/// workspace can already use it (selected or directly assigned, both visible
+/// to members), `Some(false)` when it is enabled and catalog-eligible, `None`
+/// otherwise (outside what members can see).
+pub(super) async fn requestable_model(
+    tx: &mut Transaction<'_, Postgres>,
+    ws: Uuid,
+    model: Uuid,
+) -> Result<Option<bool>, ApiError> {
+    let row: Option<(bool, bool)> = sqlx::query_as(&format!("SELECT m.enabled AND w.disabled_at IS NULL AND ({ELIGIBLE}),workspace_model_allowed(w.id,m.id) FROM models m CROSS JOIN workspaces w WHERE w.id=$1 AND m.id=$2"))
+        .bind(ws)
+        .bind(model)
+        .fetch_optional(&mut **tx)
+        .await?;
+    Ok(match row {
+        Some((_, true)) => Some(true),
+        Some((true, false)) => Some(false),
+        _ => None,
+    })
+}
 /// [`retire`] limited to one workspace, for a change of only that
 /// workspace's grants (under its exclusive authority lock and the lineage
 /// locks of its key allowlists).

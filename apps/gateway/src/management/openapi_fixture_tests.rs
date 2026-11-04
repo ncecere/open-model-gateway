@@ -639,8 +639,8 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
 
     // A second request on the Team, decided by its owner: approved with the
     // membership it created, and replayed with the same idempotency key.
-    let vector_submission =
-        json!({"workspace_id":f.team,"reason":"Join team","idempotency_key":"contract-vector"});
+    // model_id null is a membership request (the null arm of the field).
+    let vector_submission = json!({"workspace_id":f.team,"reason":"Join team","idempotency_key":"contract-vector","model_id":null});
     body_vectors_http(
         &mut observed,
         "POST",
@@ -661,13 +661,26 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         },
     )
     .await;
-    // The positional wire form [workspace_id, reason, idempotency_key] replays the
-    // same pending request (same key and payload) and gets the same boundaries.
+    // The positional wire form [workspace_id, reason, idempotency_key] (three
+    // elements, as before #83 slice B) replays the same pending request.
+    let r = send(
+        &client,
+        base,
+        Some(&requester),
+        "POST",
+        "/api/v1/me/access-requests",
+        Some(json!([f.team, "Join team", "contract-vector"])),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK);
+    observed.observe(&r);
+    // The four-element form with a null model replays it too and gets the
+    // same boundaries.
     body_vectors_http(
         &mut observed,
         "POST",
         "/api/v1/me/access-requests",
-        json!([f.team, "Join team", "contract-vector"]),
+        json!([f.team, "Join team", "contract-vector", null]),
         async |request| {
             Probe::from(
                 send(
@@ -738,6 +751,138 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         "unexpected value: body(&r)[\"decided_by\"]"
     );
     observed.observe(&r);
+    // #83 slice B: the requester, now a Team member, asks for a catalog model
+    // (object and positional forms, with the model last), approved by the
+    // owner, which selects it; the replay shows no membership grant.
+    let model_id = Uuid::new_v4();
+    let model_catalog = Uuid::new_v4();
+    sqlx::query("INSERT INTO models(id,public_name) VALUES($1,'contract/requested')")
+        .bind(model_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO catalogs(id,name) VALUES($1,'Contract requests')")
+        .bind(model_catalog)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO catalog_models(catalog_id,model_id) VALUES($1,$2)")
+        .bind(model_catalog)
+        .bind(model_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO workspace_type_catalogs(kind,catalog_id) VALUES('team',$1)")
+        .bind(model_catalog)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let model_submission = json!({"workspace_id":f.team,"reason":"Need it","idempotency_key":"contract-model","model_id":model_id});
+    for valid in [
+        model_submission.clone(),
+        json!([f.team, "Need it", "contract-model", model_id]),
+    ] {
+        body_vectors_http(
+            &mut observed,
+            "POST",
+            "/api/v1/me/access-requests",
+            valid,
+            async |request| {
+                Probe::from(
+                    send(
+                        &client,
+                        base,
+                        Some(&requester),
+                        "POST",
+                        "/api/v1/me/access-requests",
+                        Some(request),
+                    )
+                    .await,
+                )
+            },
+        )
+        .await;
+    }
+    let r = send(
+        &client,
+        base,
+        Some(&requester),
+        "POST",
+        "/api/v1/me/access-requests",
+        Some(model_submission.clone()),
+    )
+    .await;
+    let model_request = id(&body(&r));
+    assert_eq!(body(&r)["target_kind"], "model_selection");
+    assert!(body(&r)["requested_role"].is_null());
+    observed.observe(&r);
+    let (status, decided) = call(
+        &f.s,
+        &f.owner,
+        "POST",
+        &format!(
+            "/api/v1/workspaces/{}/access-requests/{model_request}/approve",
+            f.team
+        ),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{decided}");
+    let r = send(
+        &client,
+        base,
+        Some(&requester),
+        "POST",
+        "/api/v1/me/access-requests",
+        Some(model_submission),
+    )
+    .await;
+    assert_eq!(body(&r)["status"], "approved");
+    assert!(body(&r)["membership_grant_id"].is_null());
+    observed.observe(&r);
+    // A second model request, read and withdrawn by its requester.
+    let withdrawn_model = Uuid::new_v4();
+    sqlx::query("INSERT INTO models(id,public_name) VALUES($1,'contract/withdrawn')")
+        .bind(withdrawn_model)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO catalog_models(catalog_id,model_id) VALUES($1,$2)")
+        .bind(model_catalog)
+        .bind(withdrawn_model)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let r = send(&client, base, Some(&requester), "POST", "/api/v1/me/access-requests", Some(json!({"workspace_id":f.team,"idempotency_key":"contract-model-withdrawn","model_id":withdrawn_model}))).await;
+    let withdrawn_request = id(&body(&r));
+    observed.observe(&r);
+    let r = send(
+        &client,
+        base,
+        Some(&requester),
+        "GET",
+        &format!("/api/v1/me/access-requests/{withdrawn_request}"),
+        None,
+    )
+    .await;
+    assert_eq!(body(&r)["model_id"], json!(withdrawn_model));
+    observed.observe(&r);
+    let r = send(
+        &client,
+        base,
+        Some(&requester),
+        "POST",
+        &format!("/api/v1/me/access-requests/{withdrawn_request}/withdraw"),
+        None,
+    )
+    .await;
+    assert_eq!(body(&r)["status"], "withdrawn");
+    observed.observe(&r);
+    sqlx::query("DELETE FROM workspace_type_catalogs WHERE catalog_id=$1")
+        .bind(model_catalog)
+        .execute(&pool)
+        .await
+        .unwrap();
     // A member asks for another workspace without a reason: denied by a Platform
     // Admin; and a second request that is withdrawn.
     let denied_submission =

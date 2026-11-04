@@ -1268,6 +1268,69 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
     )
     .await;
 
+    // #83 slice B: model-selection requests in both queues, approved (no
+    // membership grant) and denied on the workspace path by its owner.
+    // The requester whose export is read below; a member of `ws` since its
+    // platform-approved membership request.
+    let member_browser = &decided_browser;
+    let request_catalog = Uuid::new_v4();
+    sqlx::query("INSERT INTO catalogs(id,name) VALUES($1,'Contract requests')")
+        .bind(request_catalog)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO workspace_type_catalogs(kind,catalog_id) VALUES('project',$1)")
+        .bind(request_catalog)
+        .execute(&pool)
+        .await
+        .unwrap();
+    for (n, outcome) in ["approve", "deny"].into_iter().enumerate() {
+        let requested = model(&pool, &format!("contract/requested-{n}")).await;
+        sqlx::query("INSERT INTO catalog_models(catalog_id,model_id) VALUES($1,$2)")
+            .bind(request_catalog)
+            .bind(requested)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let request = id(&c.ok(member_browser, "POST", "/api/v1/me/access-requests", Some(json!({"workspace_id":ws,"model_id":requested,"idempotency_key":format!("slice2-model-{n}")}))).await);
+        for (who, path) in [
+            (&auditor, "/api/v1/platform/access-requests".to_owned()),
+            (&owner, format!("{own}/access-requests")),
+        ] {
+            let queue = c.ok(who, "GET", &path, None).await;
+            assert!(
+                queue["data"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|v| v["id"] == json!(request) && v["target_kind"] == "model_selection")
+            );
+        }
+        // Platform authority never decides a workspace's model selection.
+        c.send(
+            &admin,
+            "POST",
+            &format!("/api/v1/platform/access-requests/{request}/{outcome}"),
+            None,
+            StatusCode::FORBIDDEN,
+        )
+        .await;
+        let value = c
+            .ok(
+                &owner,
+                "POST",
+                &format!("{own}/access-requests/{request}/{outcome}"),
+                None,
+            )
+            .await;
+        assert!(value["membership_grant_id"].is_null());
+    }
+    sqlx::query("DELETE FROM workspace_type_catalogs WHERE catalog_id=$1")
+        .bind(request_catalog)
+        .execute(&pool)
+        .await
+        .unwrap();
+
     // Catalog and policy layers: populated replacement/default lists, never a union.
     let catalog = Uuid::new_v4();
     sqlx::query("INSERT INTO catalogs(id,name) VALUES($1,'Contract catalog')")
