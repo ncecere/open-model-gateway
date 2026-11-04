@@ -102,6 +102,12 @@ describe("bulk disable (#88)", () => {
     await screen.findByText("Several routes of one model");
     expect(screen.getByText(/company\/fast/)).toBeTruthy();
   });
+  it("names a single route in the singular", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => Promise.resolve(Response.json(previewFetch(url)))));
+    render(<QueryClientProvider client={testClient()}><BulkDisableDialog targets={targets.slice(0, 1)} onClose={() => {}} onDone={() => {}} /></QueryClientProvider>);
+    await screen.findByRole("button", { name: "Disable 1 route" });
+    expect(screen.getByRole("dialog", { name: "Disable 1 route" })).toBeTruthy();
+  });
   it("cannot submit while the review is missing or refused", async () => {
     vi.stubGlobal("fetch", vi.fn().mockImplementation(() => Promise.resolve(Response.json({ error: { code: "403", message: "Not allowed" } }, { status: 403 }))));
     view();

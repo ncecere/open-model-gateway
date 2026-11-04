@@ -17,6 +17,7 @@ const reasonLabel: Record<string, string> = { not_found: "route no longer exists
 // No answer (network), a server failure, an incomplete operation, or a key
 // already used: some targets may have committed. Other refusals applied
 // nothing.
+const routeCount = (n: number) => `${n} route${n === 1 ? "" : "s"}`;
 const uncertain = (e: unknown) => !(e instanceof ApiError) || e.status === 0 || e.status >= 500 || e.code === "invalid_response" || e.status === 408 || e.reason === "bulk_incomplete" || e.reason === "idempotency_key_reused";
 
 export function BulkDisableDialog({ targets: selection, onClose, onDone }: { targets: BulkTarget[]; onClose: () => void; onDone: (disabled: string[]) => void }) {
@@ -61,9 +62,9 @@ export function BulkDisableDialog({ targets: selection, onClose, onDone }: { tar
   const counts = new Map<string, { name: string; n: number }>();
   for (const t of targets) if (t.model) counts.set(t.model.id, { name: t.model.name, n: (counts.get(t.model.id)?.n ?? 0) + 1 });
   const shared = [...counts.values()].filter(m => m.n > 1).map(m => m.name);
-  return <Dialog open title={result ? "Bulk disable result" : `Disable ${targets.length} routes`} description={result ? undefined : "Each route is disabled in its own transaction at the revision shown. A route that changed since this review is not disabled."} onOpenChange={open => { if (!open) onClose(); }} size="lg" footer={result
+  return <Dialog open title={result ? "Bulk disable result" : `Disable ${routeCount(targets.length)}`} description={result ? undefined : "Each route is disabled in its own transaction at the revision shown. A route that changed since this review is not disabled."} onOpenChange={open => { if (!open) onClose(); }} size="lg" footer={result
     ? <>{!result.completed && <Button variant="secondary" disabled={busy} onClick={() => void status()}>Check outcome</Button>}<Button onClick={onClose}>Close</Button></>
-    : <><Button variant="secondary" onClick={onClose}>Cancel</Button><Button variant="secondary" disabled={previews.isFetching || busy || mustCheck} onClick={() => void previews.refetch()}>Refresh review</Button>{unknown && <Button variant="secondary" disabled={busy} onClick={() => void status()}>Check outcome</Button>}<Button disabled={!reviewed || busy || previews.isFetching || mustCheck} onClick={() => void run()}>{`Disable ${targets.length} routes`}</Button></>}>
+    : <><Button variant="secondary" onClick={onClose}>Cancel</Button><Button variant="secondary" disabled={previews.isFetching || busy || mustCheck} onClick={() => void previews.refetch()}>Refresh review</Button>{unknown && <Button variant="secondary" disabled={busy} onClick={() => void status()}>Check outcome</Button>}<Button disabled={!reviewed || busy || previews.isFetching || mustCheck} onClick={() => void run()}>{`Disable ${routeCount(targets.length)}`}</Button></>}>
     <Stack gap={4}>
       {previews.isFetching && <p role="status">Reviewing the selected routes…</p>}
       {previews.isError && <ErrorNotice error={previews.error} retry={() => void previews.refetch()} />}
