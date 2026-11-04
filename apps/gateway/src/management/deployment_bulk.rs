@@ -49,7 +49,7 @@ fn validate(input: &BulkInput) -> Result<(Targets, Vec<u8>), ApiError> {
     {
         return Err(invalid());
     }
-    let mut targets = Vec::with_capacity(input.items.len());
+    let mut targets = Vec::with_capacity(MAX_ITEMS);
     for item in &input.items {
         let revision = super::deployment_configuration::revision(&item.expected_revision)?;
         if targets.iter().any(|(id, _)| *id == item.id) {
