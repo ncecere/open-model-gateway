@@ -11,6 +11,7 @@ mod catalogs;
 #[cfg(test)]
 mod char_limits_tests;
 mod compare;
+mod deployment_bulk;
 mod deployment_configuration;
 mod deployment_history;
 mod directory;

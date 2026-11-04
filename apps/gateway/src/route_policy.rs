@@ -1128,6 +1128,19 @@ pub(crate) const ROUTES: &[Route] = &[
         PlatformWrite,
         DENIED
     ),
+    // #88: explicit-target bulk disable; status is the actor's own operation.
+    route!(
+        "POST",
+        "/api/v1/platform/deployment-bulk-operations",
+        PlatformWrite,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/deployment-bulk-operations/{idempotency_key}",
+        PlatformWrite,
+        DENIED
+    ),
     route!(
         "POST",
         "/api/v1/platform/deployments/{id}/configuration/apply",

@@ -4055,6 +4055,7 @@
                   "access_request_rate_limited",
                   "alert_rule_kind_fixed",
                   "alert_rule_limit",
+                  "bulk_incomplete",
                   "credential_reference_not_allowed",
                   "email_not_configured",
                   "email_test_rate_limited",
@@ -4065,6 +4066,7 @@
                   "file_storage_unavailable",
                   "file_storage_unhealthy",
                   "file_too_large",
+                  "idempotency_key_reused",
                   "installation_limits_removed",
                   "invalid_request_error",
                   "key_disabled",
@@ -31962,6 +31964,550 @@
           }
         ]
       },
+      "SetupBulkDisable": {
+        "description": "Closed serde object or existing positional struct array. Only explicit targets: no filter or implicit selection exists.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "disable"
+              },
+              "idempotency_key": {
+                "description": "Caller-chosen idempotency key, unique per actor: 1 to 128 ASCII letters, digits, dots, underscores, colons or hyphens.",
+                "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+                "type": "string"
+              },
+              "items": {
+                "description": "Explicit targets, each with the revision it was reviewed at. Duplicate ids are refused with 400 (the schema compares whole items only, so it cannot express this).",
+                "items": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "expected_revision": {
+                          "description": "The expected_revision of the preview being applied: a decimal deployment enablement revision (a signed 64-bit counter; leading zeros are accepted). Not a monetary amount.",
+                          "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6]|9223372036854775807)$",
+                          "type": "string"
+                        },
+                        "id": {
+                          "format": "uuid",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "expected_revision"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "items": false,
+                      "maxItems": 2,
+                      "minItems": 2,
+                      "prefixItems": [
+                        {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        {
+                          "description": "The expected_revision of the preview being applied: a decimal deployment enablement revision (a signed 64-bit counter; leading zeros are accepted). Not a monetary amount.",
+                          "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6]|9223372036854775807)$",
+                          "type": "string"
+                        }
+                      ],
+                      "type": "array"
+                    }
+                  ]
+                },
+                "maxItems": 50,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": [
+              "action",
+              "idempotency_key",
+              "items"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "const": "disable"
+              },
+              {
+                "description": "Caller-chosen idempotency key, unique per actor: 1 to 128 ASCII letters, digits, dots, underscores, colons or hyphens.",
+                "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+                "type": "string"
+              },
+              {
+                "items": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "expected_revision": {
+                          "description": "The expected_revision of the preview being applied: a decimal deployment enablement revision (a signed 64-bit counter; leading zeros are accepted). Not a monetary amount.",
+                          "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6]|9223372036854775807)$",
+                          "type": "string"
+                        },
+                        "id": {
+                          "format": "uuid",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "expected_revision"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "items": false,
+                      "maxItems": 2,
+                      "minItems": 2,
+                      "prefixItems": [
+                        {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        {
+                          "description": "The expected_revision of the preview being applied: a decimal deployment enablement revision (a signed 64-bit counter; leading zeros are accepted). Not a monetary amount.",
+                          "pattern": "^(?:[0-9]{1,18}|[0-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6]|9223372036854775807)$",
+                          "type": "string"
+                        }
+                      ],
+                      "type": "array"
+                    }
+                  ]
+                },
+                "maxItems": 50,
+                "minItems": 1,
+                "type": "array"
+              }
+            ],
+            "type": "array"
+          }
+        ]
+      },
+      "SetupBulkOperation": {
+        "additionalProperties": false,
+        "description": "Per-target outcomes in request order. Targets are applied independently, each in its own transaction with live authorization; a target's outcome is recorded with its change. Targets are matched in order: the same targets in another order are a different payload.",
+        "properties": {
+          "completed": {
+            "description": "true once the operation has completed: every target has an outcome and the operation's outcome audit event is recorded. An interrupted operation completes when a replay or status read finds its request's lease lapsed (30 seconds without progress).",
+            "type": "boolean"
+          },
+          "idempotency_key": {
+            "description": "Caller-chosen idempotency key, unique per actor: 1 to 128 ASCII letters, digits, dots, underscores, colons or hyphens.",
+            "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "additionalProperties": false,
+              "oneOf": [
+                {
+                  "properties": {
+                    "change_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "outcome": {
+                      "const": "committed"
+                    },
+                    "reason": {
+                      "type": "null"
+                    },
+                    "revision": {
+                      "pattern": "^[0-9]+$",
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "change_id": {
+                      "type": "null"
+                    },
+                    "outcome": {
+                      "const": "unchanged"
+                    },
+                    "reason": {
+                      "type": "null"
+                    },
+                    "revision": {
+                      "pattern": "^[0-9]+$",
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "change_id": {
+                      "type": "null"
+                    },
+                    "outcome": {
+                      "const": "conflict"
+                    },
+                    "reason": {
+                      "const": "revision_conflict"
+                    },
+                    "revision": {
+                      "pattern": "^[0-9]+$",
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "change_id": {
+                      "type": "null"
+                    },
+                    "outcome": {
+                      "const": "refused"
+                    },
+                    "reason": {
+                      "enum": [
+                        "not_found",
+                        "forbidden"
+                      ]
+                    },
+                    "revision": {
+                      "type": "null"
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "change_id": {
+                      "type": "null"
+                    },
+                    "outcome": {
+                      "const": "unattempted"
+                    },
+                    "reason": {
+                      "type": "null"
+                    },
+                    "revision": {
+                      "type": "null"
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "change_id": {
+                      "type": "null"
+                    },
+                    "outcome": {
+                      "type": "null"
+                    },
+                    "reason": {
+                      "type": "null"
+                    },
+                    "revision": {
+                      "type": "null"
+                    }
+                  }
+                }
+              ],
+              "properties": {
+                "change_id": {
+                  "anyOf": [
+                    {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "expected_revision": {
+                  "description": "The reviewed revision as recorded: a nonnegative integer counter as a decimal string. Not a monetary amount.",
+                  "pattern": "^[0-9]+$",
+                  "type": "string"
+                },
+                "id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "outcome": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "committed",
+                        "unchanged",
+                        "refused",
+                        "conflict",
+                        "unattempted"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "committed: disabled by this operation (change_id). unchanged: already disabled at the reviewed revision. refused: not_found or forbidden (live authority lost). conflict: the revision changed (revision_conflict). unattempted: never applied (the request was interrupted or stopped by a failure before this target). null: only while the operation is incomplete; this target is not decided yet and may still be applied."
+                },
+                "reason": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "not_found",
+                        "forbidden",
+                        "revision_conflict"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "revision": {
+                  "anyOf": [
+                    {
+                      "description": "The target's enablement revision when its outcome was recorded: a nonnegative integer counter as a decimal string. Not a monetary amount.",
+                      "pattern": "^[0-9]+$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "expected_revision",
+                "outcome",
+                "reason",
+                "revision",
+                "change_id"
+              ],
+              "type": "object"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "type": "array"
+          },
+          "operation_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "replayed": {
+            "description": "true when this response reads a recorded operation (a replay of a completed key, or the status route); nothing was applied by this request.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "operation_id",
+          "idempotency_key",
+          "completed",
+          "replayed",
+          "items"
+        ],
+        "type": "object"
+      },
+      "SetupBulkResult": {
+        "additionalProperties": false,
+        "description": "The completed operation's per-target outcomes in request order. Targets are applied independently, each in its own transaction with live authorization; a target's outcome is recorded with its change. Targets are matched in order: the same targets in another order are a different payload.",
+        "properties": {
+          "completed": {
+            "const": true,
+            "description": "Always true: this request completed the operation, or replays one that is complete."
+          },
+          "idempotency_key": {
+            "description": "Caller-chosen idempotency key, unique per actor: 1 to 128 ASCII letters, digits, dots, underscores, colons or hyphens.",
+            "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "additionalProperties": false,
+              "oneOf": [
+                {
+                  "properties": {
+                    "change_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "outcome": {
+                      "const": "committed"
+                    },
+                    "reason": {
+                      "type": "null"
+                    },
+                    "revision": {
+                      "pattern": "^[0-9]+$",
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "change_id": {
+                      "type": "null"
+                    },
+                    "outcome": {
+                      "const": "unchanged"
+                    },
+                    "reason": {
+                      "type": "null"
+                    },
+                    "revision": {
+                      "pattern": "^[0-9]+$",
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "change_id": {
+                      "type": "null"
+                    },
+                    "outcome": {
+                      "const": "conflict"
+                    },
+                    "reason": {
+                      "const": "revision_conflict"
+                    },
+                    "revision": {
+                      "pattern": "^[0-9]+$",
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "change_id": {
+                      "type": "null"
+                    },
+                    "outcome": {
+                      "const": "refused"
+                    },
+                    "reason": {
+                      "enum": [
+                        "not_found",
+                        "forbidden"
+                      ]
+                    },
+                    "revision": {
+                      "type": "null"
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "change_id": {
+                      "type": "null"
+                    },
+                    "outcome": {
+                      "const": "unattempted"
+                    },
+                    "reason": {
+                      "type": "null"
+                    },
+                    "revision": {
+                      "type": "null"
+                    }
+                  }
+                }
+              ],
+              "properties": {
+                "change_id": {
+                  "anyOf": [
+                    {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "expected_revision": {
+                  "description": "The reviewed revision as recorded: a nonnegative integer counter as a decimal string. Not a monetary amount.",
+                  "pattern": "^[0-9]+$",
+                  "type": "string"
+                },
+                "id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "outcome": {
+                  "description": "committed: disabled by this operation (change_id). unchanged: already disabled at the reviewed revision. refused: not_found or forbidden (live authority lost). conflict: the revision changed (revision_conflict). unattempted: never applied (the request stopped before this target).",
+                  "enum": [
+                    "committed",
+                    "unchanged",
+                    "refused",
+                    "conflict",
+                    "unattempted"
+                  ]
+                },
+                "reason": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "not_found",
+                        "forbidden",
+                        "revision_conflict"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "revision": {
+                  "anyOf": [
+                    {
+                      "description": "The target's enablement revision when its outcome was recorded: a nonnegative integer counter as a decimal string. Not a monetary amount.",
+                      "pattern": "^[0-9]+$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "expected_revision",
+                "outcome",
+                "reason",
+                "revision",
+                "change_id"
+              ],
+              "type": "object"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "type": "array"
+          },
+          "operation_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "replayed": {
+            "description": "true when this response reads a recorded operation (a replay of a completed key, or the status route); nothing was applied by this request.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "operation_id",
+          "idempotency_key",
+          "completed",
+          "replayed",
+          "items"
+        ],
+        "type": "object"
+      },
       "SetupCachePricing": {
         "description": "Closed serde object or existing positional struct array in declared field order. Handler semantic validation is additional.",
         "oneOf": [
@@ -33557,6 +34103,9 @@
               "before": {
                 "type": "null"
               },
+              "bulk_operation_id": {
+                "type": "null"
+              },
               "restored_from": {
                 "type": "null"
               },
@@ -33653,6 +34202,18 @@
               }
             ]
           },
+          "bulk_operation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The bulk operation that made this change (#88), or null."
+          },
           "created_at": {
             "format": "date-time",
             "type": "string"
@@ -33727,7 +34288,8 @@
           "values_available",
           "before",
           "after",
-          "restored_from"
+          "restored_from",
+          "bulk_operation_id"
         ],
         "type": "object"
       },
@@ -42712,6 +43274,10 @@
       "get_api_v1_platform_cost_reportResponse": {
         "$ref": "#/components/schemas/MoneyPlatformCostReport"
       },
+      "get_api_v1_platform_deployment_bulk_operations_by_idempotency_keyRequest": false,
+      "get_api_v1_platform_deployment_bulk_operations_by_idempotency_keyResponse": {
+        "$ref": "#/components/schemas/SetupBulkOperation"
+      },
       "get_api_v1_platform_deploymentsRequest": false,
       "get_api_v1_platform_deploymentsResponse": {
         "additionalProperties": false,
@@ -45421,6 +45987,12 @@
       },
       "post_api_v1_platform_cost_centersResponse": {
         "$ref": "#/components/schemas/MoneyIdentifier"
+      },
+      "post_api_v1_platform_deployment_bulk_operationsRequest": {
+        "$ref": "#/components/schemas/SetupBulkDisable"
+      },
+      "post_api_v1_platform_deployment_bulk_operationsResponse": {
+        "$ref": "#/components/schemas/SetupBulkResult"
       },
       "post_api_v1_platform_deploymentsRequest": {
         "$ref": "#/components/schemas/SetupDeploymentInput"
@@ -54489,6 +55061,199 @@
           "$ref": "#/components/schemas/get_api_v1_platform_cost_reportResponse"
         },
         "x-omg-token-policy": "Scope"
+      }
+    },
+    "/api/v1/platform/deployment-bulk-operations": {
+      "post": {
+        "description": "Platform Admin, browser session only. Disables 1 to 50 explicit deployments, each at its reviewed revision, in independent transactions with live authorization, and returns each target's outcome (#88). The same actor and idempotency key never apply twice: a replay returns the recorded outcomes. Dropping the request stops unstarted targets; committed ones stay committed and recorded, and once the request's lease lapses (30 seconds) a replay or status read completes the operation with the rest unattempted. A failure stops the remaining targets, which are recorded unattempted. One audit event lists the targets and outcomes when the operation completes; each committed change names the operation.",
+        "operationId": "post_api_v1_platform_deployment_bulk_operations",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_deployment_bulk_operationsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_deployment_bulk_operationsResponse"
+                }
+              }
+            },
+            "description": "Successful real handler representation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Handler validation refusal"
+          },
+          "401": {
+            "$ref": "#/components/responses/ManagementMiddleware401Variant2"
+          },
+          "403": {
+            "$ref": "#/components/responses/ManagementMiddleware403Variant3"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "idempotency_key_reused (this actor used the key for different targets) or bulk_incomplete (the key's operation is still in progress; read its status, never replay)"
+          },
+          "413": {
+            "$ref": "#/components/responses/ManagementMiddleware413Variant1"
+          },
+          "415": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "JSON content type required"
+          },
+          "422": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Axum JSON extraction refusal (including unknown fields, missing required fields or invalid types)"
+          },
+          "429": {
+            "$ref": "#/components/responses/ManagementMiddleware429Variant1"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
+          }
+        },
+        "security": [
+          {
+            "browserSession": [],
+            "csrfToken": [],
+            "origin": []
+          }
+        ],
+        "x-omg-access": "PlatformWrite",
+        "x-omg-middleware-responses": {
+          "$ref": "#/x-omg-middleware-contracts/management"
+        },
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_deployment_bulk_operationsRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_deployment_bulk_operationsResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/api/v1/platform/deployment-bulk-operations/{idempotency_key}": {
+      "get": {
+        "description": "Platform Admin, browser session only. The calling actor's own bulk operation with this idempotency key and its per-target outcomes (#88). An operation whose request's lease has lapsed is completed by this read, its undecided targets unattempted; otherwise a null outcome means not decided yet.",
+        "operationId": "get_api_v1_platform_deployment_bulk_operations_by_idempotency_key",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "idempotency_key",
+            "required": true,
+            "schema": {
+              "description": "Caller-chosen idempotency key, unique per actor: 1 to 128 ASCII letters, digits, dots, underscores, colons or hyphens.",
+              "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_deployment_bulk_operations_by_idempotency_keyResponse"
+                }
+              }
+            },
+            "description": "Successful real handler representation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Handler validation refusal"
+          },
+          "401": {
+            "$ref": "#/components/responses/ManagementMiddleware401Variant2"
+          },
+          "403": {
+            "$ref": "#/components/responses/ManagementMiddleware403Variant3"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No operation of the calling actor with this key (another actor's key is as unknown as a missing one)"
+          },
+          "413": {
+            "$ref": "#/components/responses/ManagementMiddleware413Variant1"
+          },
+          "429": {
+            "$ref": "#/components/responses/ManagementMiddleware429Variant1"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagementMiddleware503Variant4"
+          }
+        },
+        "security": [
+          {
+            "browserSession": []
+          }
+        ],
+        "x-omg-access": "PlatformWrite",
+        "x-omg-middleware-responses": {
+          "$ref": "#/x-omg-middleware-contracts/management"
+        },
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_api_v1_platform_deployment_bulk_operations_by_idempotency_keyRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_api_v1_platform_deployment_bulk_operations_by_idempotency_keyResponse"
+        },
+        "x-omg-token-policy": "Denied"
       }
     },
     "/api/v1/platform/deployments": {

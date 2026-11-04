@@ -82,6 +82,8 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         "monetary_ledger",
         "audit_events",
         "configuration_changes",
+        "configuration_bulk_operations",
+        "configuration_bulk_items",
         "budget_totals",
         "rate_minute_counters",
         "inflight_counters",

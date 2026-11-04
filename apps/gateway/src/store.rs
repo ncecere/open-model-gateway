@@ -111,6 +111,8 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "deployment_health",
     "audit_events",
     "configuration_changes",
+    "configuration_bulk_operations",
+    "configuration_bulk_items",
     "installation_settings",
     // 0011 alerts
     "alert_rules",

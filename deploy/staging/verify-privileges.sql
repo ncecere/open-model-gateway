@@ -555,6 +555,36 @@ BEGIN
  BEGIN INSERT INTO configuration_changes(id,created_at,audit_event_id,audit_created_at,target_kind,deployment_id,schema_version,before_enabled,after_enabled,revision,restored_from) VALUES(changed,now(),changed,now(),'deployment',d,1,true,false,3,(SELECT id FROM configuration_changes WHERE deployment_id=d AND revision=1)); RAISE EXCEPTION 'forged restore row allowed'; EXCEPTION WHEN foreign_key_violation OR unique_violation THEN NULL; END;
  BEGIN UPDATE configuration_changes SET restored_from=NULL WHERE deployment_id=d; RAISE EXCEPTION 'restore link rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  UPDATE deployments SET enabled=true WHERE id=d;
+ -- #88: a bulk item records its outcome once, with the change it made; the
+ -- operation completes once, after every item; nothing is rewritten or deleted.
+ changed := gen_random_uuid();
+ INSERT INTO configuration_bulk_operations(id,actor_user_id,idempotency_key,payload_digest,action,item_count) VALUES(changed,u,'probe-bulk',decode(repeat('ab',32),'hex'),'deployment.disable',1);
+ BEGIN INSERT INTO configuration_bulk_operations(id,actor_user_id,idempotency_key,payload_digest,action,item_count,completed_at) VALUES(gen_random_uuid(),u,'probe-done',decode(repeat('ab',32),'hex'),'deployment.disable',1,clock_timestamp()); RAISE EXCEPTION 'completed bulk operation inserted'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN INSERT INTO configuration_bulk_items(operation_id,position,deployment_id,expected_revision,outcome,decided_at) VALUES(changed,0,d,1,'unattempted',now()); RAISE EXCEPTION 'decided bulk item inserted'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN INSERT INTO configuration_bulk_items(operation_id,position,deployment_id,expected_revision) VALUES(changed,1,gen_random_uuid(),1); RAISE EXCEPTION 'bulk item beyond its count inserted'; EXCEPTION WHEN check_violation THEN NULL; END;
+ INSERT INTO configuration_bulk_items(operation_id,position,deployment_id,expected_revision) VALUES(changed,0,d,(SELECT revision FROM deployments WHERE id=d));
+ BEGIN UPDATE configuration_bulk_operations SET completed_at=clock_timestamp() WHERE id=changed; RAISE EXCEPTION 'bulk completed before its items'; EXCEPTION WHEN check_violation THEN NULL; END;
+ UPDATE configuration_bulk_operations SET lease_until=now()+interval '1 minute' WHERE id=changed;
+ BEGIN UPDATE configuration_bulk_items SET outcome='committed',revision=(SELECT revision FROM deployments WHERE id=d)+1,change_id=(SELECT id FROM configuration_changes WHERE deployment_id=d ORDER BY revision DESC LIMIT 1),decided_at=now() WHERE operation_id=changed; RAISE EXCEPTION 'forged committed outcome allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+ PERFORM set_config('omg.configuration_actor',u::text,true);
+ PERFORM set_config('omg.configuration_bulk',changed::text,true);
+ UPDATE deployments SET enabled=false WHERE id=d;
+ IF (SELECT bulk_operation_id FROM configuration_changes WHERE deployment_id=d ORDER BY revision DESC LIMIT 1) IS DISTINCT FROM changed OR current_setting('omg.configuration_bulk',true)<>'' THEN RAISE EXCEPTION 'bulk link not recorded or not consumed'; END IF;
+ UPDATE configuration_bulk_items SET outcome='committed',revision=(SELECT revision FROM deployments WHERE id=d),change_id=(SELECT id FROM configuration_changes WHERE deployment_id=d ORDER BY revision DESC LIMIT 1),decided_at=now() WHERE operation_id=changed AND position=0;
+ UPDATE configuration_bulk_operations SET completed_at=clock_timestamp() WHERE id=changed;
+ BEGIN UPDATE configuration_bulk_items SET outcome='refused',reason='forbidden',change_id=NULL WHERE operation_id=changed; RAISE EXCEPTION 'bulk outcome rewritten'; EXCEPTION WHEN check_violation THEN NULL; END;
+ BEGIN UPDATE configuration_bulk_items SET expected_revision=0 WHERE operation_id=changed; RAISE EXCEPTION 'bulk target rewritten'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN UPDATE configuration_bulk_operations SET completed_at=clock_timestamp() WHERE id=changed; RAISE EXCEPTION 'bulk completion rewritten'; EXCEPTION WHEN check_violation THEN NULL; END;
+ BEGIN UPDATE configuration_bulk_operations SET lease_until=now() WHERE id=changed; RAISE EXCEPTION 'completed bulk lease moved'; EXCEPTION WHEN check_violation THEN NULL; END;
+ BEGIN DELETE FROM configuration_bulk_items WHERE operation_id=changed; RAISE EXCEPTION 'bulk item deletion allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN DELETE FROM configuration_bulk_operations WHERE id=changed; RAISE EXCEPTION 'bulk operation deletion allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN
+  PERFORM set_config('omg.configuration_bulk',changed::text,true);
+  UPDATE deployments SET enabled=true WHERE id=d;
+  RAISE EXCEPTION 'bulk link without a pending item allowed';
+ EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+ UPDATE deployments SET enabled=true WHERE id=d;
+ PERFORM set_config('omg.configuration_actor','',true);
  -- Bedrock identity modes (0008): reference shapes, identity/endpoint replacement, immutable region.
  INSERT INTO provider_connections(id,name,provider,credential_ref,region) VALUES(gen_random_uuid(),'Rollback Bedrock','bedrock','aws:role:arn:aws:iam::123456789012:role/gateway/bedrock;external_id=probe-external;session_name=gateway-probe','us-east-1');
  UPDATE provider_connections SET credential_ref='aws:profile:bedrock-prod',endpoint='https://vpce-0probe.bedrock-runtime.us-east-1.vpce.amazonaws.com' WHERE name='Rollback Bedrock';

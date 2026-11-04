@@ -1,6 +1,7 @@
 //! #88: explicit-target bulk disable, on real PostgreSQL: independent targets
 //! with per-target outcomes, actor-bound idempotency, no replay of unknown
-//! outcomes, history correlation and immutable operation records.
+//! outcomes (an interrupted operation completes once, its undecided targets
+//! unattempted), history correlation and immutable operation records.
 use super::*;
 
 const BULK: &str = "/api/v1/platform/deployment-bulk-operations";
@@ -152,20 +153,40 @@ async fn bulk_idempotency_is_actor_bound_and_never_replays(pool: PgPool) {
     assert_eq!(status, StatusCode::OK);
     assert_ne!(theirs["operation_id"], first.1["operation_id"]);
     assert_eq!(theirs["items"][0]["outcome"], "conflict");
-    // An interrupted operation (no completion, an item without an outcome) is
-    // never replayed: the caller reads its status instead. Seeded as a crash
-    // would leave it, with the digest of the same targets.
+    assert_eq!(revision(&pool, a).await, (false, 2));
+}
+
+/// An operation as an interrupted request leaves it: created with its items,
+/// none decided, with the digest of the same targets. `lapsed`: its lease.
+async fn interrupted(pool: &PgPool, actor: Uuid, key: &str, a: Uuid, lapsed: bool) -> Uuid {
     let digest = {
         use sha2::{Digest, Sha256};
-        Sha256::digest(format!("deployment.disable\n{a}:2").as_bytes()).to_vec()
+        Sha256::digest(format!("deployment.disable\n{a}:1").as_bytes()).to_vec()
     };
-    let interrupted = Uuid::now_v7();
-    sqlx::query("INSERT INTO configuration_bulk_operations(id,actor_user_id,idempotency_key,payload_digest,action,item_count) VALUES($1,$2,'interrupted-2',$3,'deployment.disable',1)").bind(interrupted).bind(f.admin.user_id).bind(&digest).execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO configuration_bulk_items(operation_id,position,deployment_id,expected_revision) VALUES($1,0,$2,2)").bind(interrupted).bind(a).execute(&pool).await.unwrap();
+    let operation = Uuid::now_v7();
+    sqlx::query("INSERT INTO configuration_bulk_operations(id,actor_user_id,idempotency_key,payload_digest,action,item_count,lease_until) VALUES($1,$2,$3,$4,'deployment.disable',1,clock_timestamp()+CASE WHEN $5 THEN interval '-1 second' ELSE interval '1 minute' END)").bind(operation).bind(actor).bind(key).bind(&digest).bind(lapsed).execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO configuration_bulk_items(operation_id,position,deployment_id,expected_revision) VALUES($1,0,$2,1)").bind(operation).bind(a).execute(pool).await.unwrap();
+    operation
+}
+async fn outcome_events(pool: &PgPool, operation: Uuid) -> Vec<Value> {
+    sqlx::query_scalar("SELECT metadata FROM audit_events WHERE action='configuration.bulk_disabled' AND resource_id=$1")
+        .bind(operation)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn interrupted_operations_complete_once_and_are_never_replayed(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let a = route(&f, &pool, "interrupted-a").await;
+    // In progress (its lease is live): never replayed; status shows the
+    // target undecided and completes nothing.
+    let live = interrupted(&pool, f.admin.user_id, "in-progress", a, false).await;
     // It cannot be marked complete while an item has no outcome.
     assert!(
         sqlx::query("UPDATE configuration_bulk_operations SET completed_at=now() WHERE id=$1")
-            .bind(interrupted)
+            .bind(live)
             .execute(&pool)
             .await
             .is_err()
@@ -175,22 +196,132 @@ async fn bulk_idempotency_is_actor_bound_and_never_replays(pool: PgPool) {
         &f.admin,
         "POST",
         BULK,
-        body("interrupted-2", &[(a, "2")]),
+        body("in-progress", &[(a, "1")]),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{out}");
     assert_eq!(out["error"]["reason"], "bulk_incomplete");
-    let (_, status_body) = call(
+    let (_, pending) = call(
         &f.s,
         &f.admin,
         "GET",
-        &format!("{BULK}/interrupted-2"),
+        &format!("{BULK}/in-progress"),
         Value::Null,
     )
     .await;
-    assert_eq!(status_body["completed"], false);
-    assert!(status_body["items"][0]["outcome"].is_null());
-    assert_eq!(revision(&pool, a).await, (false, 2));
+    assert_eq!(pending["completed"], false);
+    assert!(pending["items"][0]["outcome"].is_null());
+    assert!(outcome_events(&pool, live).await.is_empty());
+    // Lapsed: the status read completes it once, the target unattempted and
+    // not applied, with one outcome event; later reads and replays add none.
+    let lapsed = interrupted(&pool, f.admin.user_id, "lapsed", a, true).await;
+    let (status, done) = call(
+        &f.s,
+        &f.admin,
+        "GET",
+        &format!("{BULK}/lapsed"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["completed"], true);
+    assert_eq!(done["items"][0]["outcome"], "unattempted");
+    assert!(done["items"][0]["revision"].is_null());
+    let (status, replay) = call(&f.s, &f.admin, "POST", BULK, body("lapsed", &[(a, "1")])).await;
+    assert_eq!(status, StatusCode::OK, "{replay}");
+    assert_eq!(
+        (replay["replayed"].clone(), replay["items"].clone()),
+        (json!(true), done["items"].clone())
+    );
+    call(
+        &f.s,
+        &f.admin,
+        "GET",
+        &format!("{BULK}/lapsed"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(
+        outcome_events(&pool, lapsed).await,
+        vec![json!({"count":1,"items":[{"id":a,"outcome":"unattempted"}]})]
+    );
+    assert_eq!(revision(&pool, a).await, (true, 1));
+    // A lapsed operation is completed by a replay too, never applied.
+    let replayed = interrupted(&pool, f.admin.user_id, "lapsed-replay", a, true).await;
+    let (status, out) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        BULK,
+        body("lapsed-replay", &[(a, "1")]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["items"][0]["outcome"], "unattempted");
+    assert_eq!(outcome_events(&pool, replayed).await.len(), 1);
+    assert_eq!(revision(&pool, a).await, (true, 1));
+    // Once completed, an item that lost the race cannot be decided or applied:
+    // the history link needs an undecided item of an incomplete operation.
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT set_config('omg.configuration_bulk',$1,true)")
+        .bind(lapsed.to_string())
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    assert!(
+        sqlx::query("UPDATE deployments SET enabled=false WHERE id=$1")
+            .bind(a)
+            .execute(&mut *tx)
+            .await
+            .is_err()
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn concurrent_requests_with_one_key_apply_once(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let targets: Vec<Uuid> = {
+        let mut v = Vec::new();
+        for n in 0..5 {
+            v.push(route(&f, &pool, &format!("race-{n}")).await);
+        }
+        v
+    };
+    let items: Vec<(Uuid, &str)> = targets.iter().map(|t| (*t, "1")).collect();
+    let request = body("race", &items);
+    let (one, two) = tokio::join!(
+        call(&f.s, &f.admin, "POST", BULK, request.clone()),
+        call(&f.s, &f.admin, "POST", BULK, request.clone()),
+    );
+    let fresh = [&one, &two]
+        .iter()
+        .filter(|(status, out)| *status == StatusCode::OK && out["replayed"] == false)
+        .count();
+    assert_eq!(fresh, 1, "{one:?} {two:?}");
+    for (status, out) in [&one, &two] {
+        assert!(
+            *status == StatusCode::OK
+                || (*status == StatusCode::CONFLICT && out["error"]["reason"] == "bulk_incomplete"),
+            "{status} {out}"
+        );
+    }
+    for t in &targets {
+        assert_eq!(revision(&pool, *t).await, (false, 2));
+    }
+    let changes: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM configuration_changes WHERE bulk_operation_id IS NOT NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(changes, 5);
+    let events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events WHERE action='configuration.bulk_disabled'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(events, 1);
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
@@ -252,21 +383,36 @@ async fn bulk_records_are_immutable_and_links_are_bound(pool: PgPool) {
     let b = route(&f, &pool, "immutable-b").await;
     let (_, out) = call(&f.s, &f.admin, "POST", BULK, body("immutable", &[(a, "1")])).await;
     let operation = Uuid::parse_str(out["operation_id"].as_str().unwrap()).unwrap();
+    let pending = interrupted(&pool, f.admin.user_id, "forgery", b, false).await;
     for sql in [
         "UPDATE configuration_bulk_items SET outcome='refused',reason='forbidden',change_id=NULL",
+        // Created decided, complete, or beyond the declared count.
+        "INSERT INTO configuration_bulk_operations(id,actor_user_id,idempotency_key,payload_digest,action,item_count,completed_at) SELECT gen_random_uuid(),actor_user_id,'done',payload_digest,action,1,now() FROM configuration_bulk_operations LIMIT 1",
+        "INSERT INTO configuration_bulk_items(operation_id,position,deployment_id,expected_revision,outcome,decided_at) SELECT id,1,gen_random_uuid(),1,'unattempted',now() FROM configuration_bulk_operations WHERE idempotency_key='forgery'",
+        "INSERT INTO configuration_bulk_items(operation_id,position,deployment_id,expected_revision) SELECT id,1,gen_random_uuid(),1 FROM configuration_bulk_operations WHERE idempotency_key='forgery'",
+        // Committed without its own change: an unrelated change, wrong revision.
+        "UPDATE configuration_bulk_items SET outcome='committed',revision=2,change_id=(SELECT id FROM configuration_changes LIMIT 1),decided_at=now() WHERE deployment_id IN (SELECT deployment_id FROM configuration_bulk_items i JOIN configuration_bulk_operations o ON o.id=i.operation_id WHERE o.idempotency_key='forgery')",
         "UPDATE configuration_bulk_operations SET completed_at=now()",
         "DELETE FROM configuration_bulk_items",
         "DELETE FROM configuration_bulk_operations",
         "TRUNCATE configuration_bulk_items",
         "UPDATE configuration_changes SET bulk_operation_id=NULL",
+        "UPDATE configuration_bulk_operations SET lease_until=now() WHERE completed_at IS NOT NULL",
+        // A pending item carrying a change, an update that decides nothing, a
+        // lease held far ahead.
+        "UPDATE configuration_bulk_items SET change_id=gen_random_uuid() WHERE outcome IS NULL",
+        "UPDATE configuration_bulk_items SET expected_revision=expected_revision WHERE outcome IS NULL",
+        "UPDATE configuration_bulk_operations SET lease_until=clock_timestamp()+interval '1 hour' WHERE completed_at IS NULL",
     ] {
         assert!(
             sqlx::query(sql).execute(&pool).await.is_err(),
             "accepted {sql}"
         );
     }
-    // A bulk link needs a pending item of that operation for that target, and
-    // only a disable.
+    // A bulk link needs a pending item of that operation for that target, at
+    // the next revision, recorded by the operation's actor, and only a
+    // disable: a completed operation, another target, an enable, another
+    // actor (no configuration actor) all fail.
     for (target, enabled) in [(b, false), (a, true)] {
         let mut tx = pool.begin().await.unwrap();
         sqlx::query("SELECT set_config('omg.configuration_bulk',$1,true)")
@@ -284,4 +430,76 @@ async fn bulk_records_are_immutable_and_links_are_bound(pool: PgPool) {
             "linked an unrelated change"
         );
     }
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT set_config('omg.configuration_bulk',$1,true)")
+        .bind(pending.to_string())
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    assert!(
+        sqlx::query("UPDATE deployments SET enabled=false WHERE id=$1")
+            .bind(b)
+            .execute(&mut *tx)
+            .await
+            .is_err(),
+        "linked a change without the operation's actor"
+    );
+    drop(tx);
+    // The control: the same change by the operation's actor links.
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT set_config('omg.configuration_bulk',$1,true),set_config('omg.configuration_actor',$2,true)")
+        .bind(pending.to_string())
+        .bind(f.admin.user_id.to_string())
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE deployments SET enabled=false WHERE id=$1")
+        .bind(b)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    // At commit the linked change must be the item's committed outcome:
+    // recording anything else for it fails the whole transaction.
+    sqlx::query("UPDATE configuration_bulk_items SET outcome='unattempted' WHERE operation_id=$1")
+        .bind(pending)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    assert!(
+        tx.commit().await.is_err(),
+        "a linked change recorded as unattempted committed"
+    );
+    assert_eq!(revision(&pool, b).await, (true, 1));
+    // Its committed outcome commits, on the server's clock whatever the
+    // caller sends; completion too.
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT set_config('omg.configuration_bulk',$1,true),set_config('omg.configuration_actor',$2,true)")
+        .bind(pending.to_string())
+        .bind(f.admin.user_id.to_string())
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE deployments SET enabled=false WHERE id=$1")
+        .bind(b)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE configuration_bulk_items SET outcome='committed',revision=2,change_id=(SELECT id FROM configuration_changes WHERE deployment_id=$2 AND revision=2),decided_at='1999-01-01' WHERE operation_id=$1")
+        .bind(pending)
+        .bind(b)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE configuration_bulk_operations SET completed_at='2001-01-01' WHERE id=$1")
+        .bind(pending)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let (decided, completed): (bool, bool) = sqlx::query_as("SELECT i.decided_at>now()-interval '1 minute',o.completed_at>now()-interval '1 minute' FROM configuration_bulk_items i JOIN configuration_bulk_operations o ON o.id=i.operation_id WHERE o.id=$1")
+        .bind(pending)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(decided && completed, "caller-chosen clocks recorded");
 }

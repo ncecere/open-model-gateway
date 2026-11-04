@@ -624,6 +624,34 @@ pub(crate) async fn audit(
             {
                 safe.insert(k.clone(), v.clone());
             }
+            // #88: the bulk outcome event lists each target's id and closed
+            // outcome code, nothing else.
+            if k == "items"
+                && action == "configuration.bulk_disabled"
+                && v.as_array().is_some_and(|items| {
+                    items.len() <= 50
+                        && items.iter().all(|item| {
+                            item.as_object().is_some_and(|o| {
+                                o.len() == 2
+                                    && o.get("id")
+                                        .and_then(Value::as_str)
+                                        .is_some_and(|id| Uuid::parse_str(id).is_ok())
+                                    && o.get("outcome").and_then(Value::as_str).is_some_and(|x| {
+                                        matches!(
+                                            x,
+                                            "committed"
+                                                | "unchanged"
+                                                | "refused"
+                                                | "conflict"
+                                                | "unattempted"
+                                        )
+                                    })
+                            })
+                        })
+                })
+            {
+                safe.insert(k.clone(), v.clone());
+            }
             if matches!(
                 k.as_str(),
                 "enabled"
@@ -686,6 +714,14 @@ pub(super) fn platform_routes() -> Router<Store> {
         .route(
             "/api/v1/platform/deployments/{id}/configuration/preview",
             post(super::deployment_configuration::preview),
+        )
+        .route(
+            "/api/v1/platform/deployment-bulk-operations",
+            post(super::deployment_bulk::create),
+        )
+        .route(
+            "/api/v1/platform/deployment-bulk-operations/{idempotency_key}",
+            get(super::deployment_bulk::status),
         )
         .route(
             "/api/v1/platform/deployments/{id}/configuration/apply",

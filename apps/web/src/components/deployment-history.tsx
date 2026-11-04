@@ -38,6 +38,7 @@ export function DeploymentHistory({ id, restore }: { id: string; restore?: Resto
           <p>{change.actor.label}{change.actor.admin_token_id && " · Admin API token"}</p>
           {change.revision !== null && <p>Revision {change.revision}</p>}
           {change.restored_from && <p>Restored the configuration of change <code>{change.restored_from}</code></p>}
+          {change.bulk_operation_id && <p>Part of bulk operation <code>{change.bulk_operation_id}</code></p>}
           {restore && change.values_available && change.after && <Inline gap={2}><Button variant="secondary" size="sm" onClick={event => setRestoring({ change: change.id, returnFocus: event.currentTarget })}>Restore this configuration</Button></Inline>}
           <details><summary>Change details</summary><DescriptionList items={[
             { label: "Change / audit ID", value: <code>{change.id}</code> },

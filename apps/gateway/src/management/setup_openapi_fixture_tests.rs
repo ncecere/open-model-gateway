@@ -512,6 +512,30 @@ fn price_refused(b: &Value) -> bool {
         || (version == Some(&json!(3))
             && crate::management::governance::batch_meters_refused(standard, batch))
 }
+/// A bulk body that names a target twice (object or positional, at any item
+/// form): the handler refuses duplicates, which the schema cannot express.
+fn duplicate_targets(b: &Value) -> bool {
+    let items = if b.is_array() { &b[2] } else { &b["items"] };
+    let ids: Vec<String> = items
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            let id = if item.is_array() {
+                &item[0]
+            } else {
+                &item["id"]
+            };
+            id.as_str()
+                .and_then(|s| Uuid::parse_str(s).ok())
+                .map(|u| u.to_string())
+        })
+        .collect();
+    let mut unique = ids.clone();
+    unique.sort();
+    unique.dedup();
+    unique.len() != ids.len()
+}
 /// A batch-scheduling body whose window names a well-formed (1 to 64
 /// characters, #405) zone other than UTC: the vectors only ever send UTC as a
 /// real zone, so the handler refuses any other as unknown. The window may be an
@@ -1574,6 +1598,139 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         )
         .await;
     assert_eq!(lost["serving_routes_lost"].as_array().unwrap().len(), 1);
+    // #88: one bulk operation with every outcome (committed, conflict,
+    // unchanged, refused), its replay and status, the history link, and an
+    // interrupted operation's status (targets without an outcome).
+    let (_, bulk_a) = api_route(
+        &mut j,
+        provider,
+        "contract/bulk-a",
+        &["chat_completions"],
+        "contract/model",
+    )
+    .await;
+    let (_, bulk_b) = api_route(
+        &mut j,
+        provider,
+        "contract/bulk-b",
+        &["chat_completions"],
+        "contract/model",
+    )
+    .await;
+    let bulk_body = json!({"action":"disable","idempotency_key":"contract-bulk","items":[
+        {"id":bulk_a,"expected_revision":"1"},{"id":bulk_b,"expected_revision":"9"},
+        {"id":bulk_a,"expected_revision":"1"}]});
+    // Duplicate targets are refused before anything is recorded.
+    let r = send(
+        &j.client,
+        &j.base,
+        Some(j.actor),
+        "POST",
+        "/api/v1/platform/deployment-bulk-operations",
+        Some(bulk_body),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    j.observed.observe(&r);
+    let unknown = Uuid::new_v4();
+    let bulk_body = json!({"action":"disable","idempotency_key":"contract-bulk","items":[
+        {"id":bulk_a,"expected_revision":"1"},{"id":bulk_b,"expected_revision":"9"},{"id":unknown,"expected_revision":"1"}]});
+    let bulk = j
+        .request(
+            "POST",
+            "/api/v1/platform/deployment-bulk-operations",
+            Some(bulk_body.clone()),
+        )
+        .await;
+    assert_eq!(bulk["items"][0]["outcome"], "committed");
+    assert_eq!(bulk["items"][1]["outcome"], "conflict");
+    assert_eq!(bulk["items"][2]["outcome"], "refused");
+    let replay = j
+        .request(
+            "POST",
+            "/api/v1/platform/deployment-bulk-operations",
+            Some(bulk_body),
+        )
+        .await;
+    assert_eq!(replay["replayed"], true);
+    let unchanged = j
+        .request(
+            "POST",
+            "/api/v1/platform/deployment-bulk-operations",
+            Some(json!(["disable", "contract-bulk-2", [[bulk_a, "2"]]])),
+        )
+        .await;
+    assert_eq!(unchanged["items"][0]["outcome"], "unchanged");
+    j.request(
+        "GET",
+        "/api/v1/platform/deployment-bulk-operations/contract-bulk",
+        None,
+    )
+    .await;
+    let bulk_history = j
+        .request(
+            "GET",
+            &format!("/api/v1/platform/deployments/{bulk_a}/configuration/history"),
+            None,
+        )
+        .await;
+    assert!(bulk_history["data"][0]["bulk_operation_id"].is_string());
+    j.request(
+        "GET",
+        "/api/v1/platform/deployment-bulk-operations/contract-bulk-2",
+        None,
+    )
+    .await;
+    let bulk_change = j
+        .request(
+            "GET",
+            &format!(
+                "/api/v1/platform/deployments/{bulk_a}/configuration/history/{}",
+                bulk_history["data"][0]["id"].as_str().unwrap()
+            ),
+            None,
+        )
+        .await;
+    assert!(bulk_change["bulk_operation_id"].is_string());
+    let interrupted = Uuid::now_v7();
+    sqlx::query("INSERT INTO configuration_bulk_operations(id,actor_user_id,idempotency_key,payload_digest,action,item_count) VALUES($1,$2,'contract-interrupted',decode(repeat('ab',32),'hex'),'deployment.disable',1)").bind(interrupted).bind(f.admin.user_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO configuration_bulk_items(operation_id,position,deployment_id,expected_revision) VALUES($1,0,$2,1)").bind(interrupted).bind(bulk_b).execute(&pool).await.unwrap();
+    let pending = j
+        .request(
+            "GET",
+            "/api/v1/platform/deployment-bulk-operations/contract-interrupted",
+            None,
+        )
+        .await;
+    assert!(pending["items"][0]["outcome"].is_null());
+    // Its lease lapsed: the status read completes it, the target unattempted.
+    let lapsed = Uuid::now_v7();
+    sqlx::query("INSERT INTO configuration_bulk_operations(id,actor_user_id,idempotency_key,payload_digest,action,item_count,lease_until) VALUES($1,$2,'contract-lapsed',decode(repeat('ab',32),'hex'),'deployment.disable',1,clock_timestamp()-interval '1 second')").bind(lapsed).bind(f.admin.user_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO configuration_bulk_items(operation_id,position,deployment_id,expected_revision) VALUES($1,0,$2,1)").bind(lapsed).bind(bulk_b).execute(&pool).await.unwrap();
+    let completed = j
+        .request(
+            "GET",
+            "/api/v1/platform/deployment-bulk-operations/contract-lapsed",
+            None,
+        )
+        .await;
+    assert_eq!(completed["items"][0]["outcome"], "unattempted");
+    // A retry after the lease lapsed completes it too and returns it.
+    let replayed = Uuid::now_v7();
+    let digest: Vec<u8> = {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(format!("deployment.disable\n{bulk_b}:1").as_bytes()).to_vec()
+    };
+    sqlx::query("INSERT INTO configuration_bulk_operations(id,actor_user_id,idempotency_key,payload_digest,action,item_count,lease_until) VALUES($1,$2,'contract-lapsed-retry',$3,'deployment.disable',1,clock_timestamp()-interval '1 second')").bind(replayed).bind(f.admin.user_id).bind(&digest).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO configuration_bulk_items(operation_id,position,deployment_id,expected_revision) VALUES($1,0,$2,1)").bind(replayed).bind(bulk_b).execute(&pool).await.unwrap();
+    let retried = j
+        .request(
+            "POST",
+            "/api/v1/platform/deployment-bulk-operations",
+            Some(json!({"action":"disable","idempotency_key":"contract-lapsed-retry","items":[{"id":bulk_b,"expected_revision":"1"}]})),
+        )
+        .await;
+    assert_eq!(retried["items"][0]["outcome"], "unattempted");
     // The same change made with an admin token (catalog:write) records the token.
     let created = send(
         &j.client,
@@ -3016,6 +3173,48 @@ async fn management_openapi_slice3_fixtures(pool: PgPool) {
         &[],
     )
     .await;
+    // #88: bulk vectors. Each vector body carries its own key, so replays of a
+    // reused key answer 409 (a domain verdict) and unknown targets are refused
+    // outcomes, never errors.
+    // The revision pattern has no derivable length bound: candidates straddle
+    // its upper end in every body and item form.
+    for (valid, pointer) in [
+        (
+            json!({"action":"disable","idempotency_key":"vector-bulk","items":[{"id":Uuid::new_v4(),"expected_revision":"1"}]}),
+            "/items/0/expected_revision",
+        ),
+        (
+            json!({"action":"disable","idempotency_key":"vector-bulk-item","items":[[Uuid::new_v4(),"1"]]}),
+            "/items/0/1",
+        ),
+        (
+            json!(["disable", "vector-bulk-positional", [{"id":Uuid::new_v4(),"expected_revision":"1"}]]),
+            "/2/0/expected_revision",
+        ),
+        (
+            json!([
+                "disable",
+                "vector-bulk-positional-item",
+                [[Uuid::new_v4(), "1"]]
+            ]),
+            "/2/0/1",
+        ),
+    ] {
+        body_set_when_candidates(
+            &mut j,
+            a,
+            "POST",
+            "/api/v1/platform/deployment-bulk-operations",
+            "/api/v1/platform/deployment-bulk-operations",
+            valid,
+            (&|b| duplicate_targets(b), &[]),
+            &[
+                (pointer, json!("9223372036854775807")),
+                (pointer, json!("9223372036854775808")),
+            ],
+        )
+        .await;
+    }
     // The positional wire form (and null arms) of the remaining setup operations.
     for (method, template, path, body) in [
         (

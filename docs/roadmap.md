@@ -226,7 +226,7 @@ Effort is relative: **S** = narrow change; **M** = several components plus tests
 
 - [x] Selected (phase 5)
 - **Value:** reduce surprises when revoking assignments, changing limits or moving traffic.
-- **Scope / done:** permission-scoped impact previews, readable configuration diffs/history and guarded bulk actions with explicit targets and partial-failure reporting. Deployment enablement previews (#85) and browser-only Admin/Auditor history (#86, migration 0067) shipped in v0.9.0. History is database-captured and append-only, with no legacy snapshot reconstruction. Revision enforcement/restore (#87), bulk (#88) and other mutation classes remain deferred.
+- **Scope / done:** permission-scoped impact previews, readable configuration diffs/history and guarded bulk actions with explicit targets and partial-failure reporting. Deployment enablement previews (#85) and browser-only Admin/Auditor history (#86, migration 0067) shipped in v0.9.0. History is database-captured and append-only, with no legacy snapshot reconstruction. Guarded apply and restore (#87, migration 0070) and explicit-target bulk disable with per-target outcomes (#88, migration 0071) are implemented for deployment enablement; other mutation classes remain deferred.
 - **Guardrails:** previews must not reveal private resources. Recheck at commit time; a preview is not authorization. Rollback publishes a newly authorized configuration—it never edits old ledger entries, rewrites price versions or revives revoked credentials.
 
 ### R16 — Management automation and declarative configuration · P2 · L
