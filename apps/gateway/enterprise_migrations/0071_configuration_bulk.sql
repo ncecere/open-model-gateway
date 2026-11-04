@@ -135,7 +135,7 @@ LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$ BEGIN
         SELECT FROM public.configuration_changes s WHERE s.id=NEW.restored_from
         AND s.deployment_id=NEW.deployment_id AND s.after_enabled=NEW.after_enabled
         AND s.revision<NEW.revision
-    ))) OR (NEW.bulk_operation_id IS NOT NULL AND (NEW.before_enabled IS DISTINCT FROM true OR NEW.after_enabled OR NOT EXISTS (
+    ))) OR (NEW.bulk_operation_id IS NOT NULL AND (NEW.before_enabled IS DISTINCT FROM true OR NEW.after_enabled OR NEW.restored_from IS NOT NULL OR NOT EXISTS (
         -- A pending item of an incomplete operation, for this target at the
         -- next revision, recorded by the operation's own actor (browser only).
         SELECT FROM public.configuration_bulk_items i

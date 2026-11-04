@@ -36,7 +36,8 @@ describe("bulk disable (#88)", () => {
     expect(sent.action).toBe("disable");
     expect(sent.items).toEqual([{ id: "a", expected_revision: "3" }, { id: "b", expected_revision: "1" }]);
     expect(sent.idempotency_key).toMatch(/^[A-Za-z0-9._:-]{1,128}$/);
-    expect(onDone).toHaveBeenCalled();
+    // Only the disabled routes leave the selection; the conflict stays.
+    expect(onDone).toHaveBeenCalledWith(["a"]);
   });
   it("an interrupted request is read through its status, with the same key, never replayed blindly", async () => {
     let sentKey = "";

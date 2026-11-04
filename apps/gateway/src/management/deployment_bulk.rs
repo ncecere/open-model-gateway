@@ -241,7 +241,9 @@ async fn apply_one(
     id: Uuid,
     expected: i64,
 ) -> Result<bool, ManagementError> {
-    let mut tx = match resources::catalog_tx(s, u, true).await {
+    // Lock waits (the catalog lock, this item) end well within the lease, so
+    // a slow target fails and stops the operation instead of outliving it.
+    let mut tx = match resources::catalog_tx_bounded(s, u, "SET LOCAL lock_timeout='10s'").await {
         Ok(tx) => tx,
         Err(e) if e.0 == StatusCode::FORBIDDEN => {
             return Ok(refuse(s, operation, position, "forbidden").await?);
@@ -444,15 +446,18 @@ pub(super) async fn status(
     }
     let mut tx = crate::db::begin(&s.pool).await?;
     resources::platform_write(&mut tx, &u).await?;
-    let operation: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM configuration_bulk_operations WHERE actor_user_id=$1 AND idempotency_key=$2",
+    let operation: Option<(Uuid, bool)> = sqlx::query_as(
+        "SELECT id,completed_at IS NOT NULL FROM configuration_bulk_operations WHERE actor_user_id=$1 AND idempotency_key=$2",
     )
     .bind(u.user_id())
     .bind(&key)
     .fetch_optional(&mut *tx)
     .await?;
     tx.commit().await?;
-    let operation = operation.ok_or_else(missing)?;
-    finalize(&s, &u, operation, false).await?;
+    let (operation, completed) = operation.ok_or_else(missing)?;
+    // Only an incomplete operation is locked (and perhaps completed).
+    if !completed {
+        finalize(&s, &u, operation, false).await?;
+    }
     Ok(Json(report(&s, operation, true).await?))
 }

@@ -304,7 +304,24 @@ pub(crate) async fn catalog_tx<'a>(
     u: &impl Actor,
     write: bool,
 ) -> Result<Transaction<'a, Postgres>, ApiError> {
-    let mut tx = crate::db::begin(&s.pool).await?;
+    let tx = crate::db::begin(&s.pool).await?;
+    catalog_tx_in(tx, u, write).await
+}
+/// [`catalog_tx`] whose lock waits end after `lock_timeout` (#88: a bulk
+/// target waits less than its operation's lease).
+pub(super) async fn catalog_tx_bounded<'a>(
+    s: &'a Store,
+    u: &impl Actor,
+    lock_timeout: &'static str,
+) -> Result<Transaction<'a, Postgres>, ApiError> {
+    let tx = crate::db::begin_with_setup(&s.pool, lock_timeout).await?;
+    catalog_tx_in(tx, u, true).await
+}
+async fn catalog_tx_in<'a>(
+    mut tx: Transaction<'a, Postgres>,
+    u: &impl Actor,
+    write: bool,
+) -> Result<Transaction<'a, Postgres>, ApiError> {
     catalog_lock(&mut tx, write).await?;
     installation_lock(&mut tx).await?;
     if write {

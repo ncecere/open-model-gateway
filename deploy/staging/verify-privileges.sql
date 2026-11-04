@@ -557,6 +557,13 @@ BEGIN
  UPDATE deployments SET enabled=true WHERE id=d;
  -- #88: a bulk item records its outcome once, with the change it made; the
  -- operation completes once, after every item; nothing is rewritten or deleted.
+ IF has_column_privilege('gateway_runtime','configuration_bulk_operations','lease_until','INSERT') OR has_column_privilege('gateway_runtime','configuration_bulk_operations','created_at','INSERT')
+    OR has_column_privilege('gateway_runtime','configuration_bulk_operations','completed_at','INSERT') OR has_column_privilege('gateway_runtime','configuration_bulk_items','outcome','INSERT')
+    OR has_column_privilege('gateway_runtime','configuration_bulk_items','deployment_id','UPDATE') OR has_column_privilege('gateway_runtime','configuration_bulk_items','expected_revision','UPDATE')
+    OR has_column_privilege('gateway_runtime','configuration_bulk_operations','actor_user_id','UPDATE') OR has_column_privilege('gateway_runtime','configuration_bulk_operations','payload_digest','UPDATE')
+    OR has_table_privilege('gateway_runtime','configuration_bulk_items','DELETE') OR has_table_privilege('gateway_runtime','configuration_bulk_operations','DELETE') THEN
+  RAISE EXCEPTION 'bulk records have creation-only INSERT and outcome-only UPDATE';
+ END IF;
  changed := gen_random_uuid();
  INSERT INTO configuration_bulk_operations(id,actor_user_id,idempotency_key,payload_digest,action,item_count) VALUES(changed,u,'probe-bulk',decode(repeat('ab',32),'hex'),'deployment.disable',1);
  BEGIN INSERT INTO configuration_bulk_operations(id,actor_user_id,idempotency_key,payload_digest,action,item_count,completed_at) VALUES(gen_random_uuid(),u,'probe-done',decode(repeat('ab',32),'hex'),'deployment.disable',1,clock_timestamp()); RAISE EXCEPTION 'completed bulk operation inserted'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;

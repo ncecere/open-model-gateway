@@ -503,3 +503,108 @@ async fn bulk_records_are_immutable_and_links_are_bound(pool: PgPool) {
         .unwrap();
     assert!(decided && completed, "caller-chosen clocks recorded");
 }
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn a_slow_owner_keeps_its_outcome_when_its_lease_lapses(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let (a, b) = (
+        route(&f, &pool, "slow-a").await,
+        route(&f, &pool, "slow-b").await,
+    );
+    // Two targets; the lease has lapsed while the owner applies the first.
+    let digest = {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(format!("deployment.disable\n{a}:1\n{b}:1").as_bytes()).to_vec()
+    };
+    let operation = Uuid::now_v7();
+    sqlx::query("INSERT INTO configuration_bulk_operations(id,actor_user_id,idempotency_key,payload_digest,action,item_count,lease_until) VALUES($1,$2,'slow',$3,'deployment.disable',2,clock_timestamp()-interval '1 second')").bind(operation).bind(f.admin.user_id).bind(&digest).execute(&pool).await.unwrap();
+    for (position, target) in [(0i16, a), (1, b)] {
+        sqlx::query("INSERT INTO configuration_bulk_items(operation_id,position,deployment_id,expected_revision) VALUES($1,$2,$3,1)").bind(operation).bind(position).bind(target).execute(&pool).await.unwrap();
+    }
+    // The owner, as apply_one does: claim the item, change, record.
+    let mut owner = pool.begin().await.unwrap();
+    sqlx::query(
+        "SELECT 1 FROM configuration_bulk_items WHERE operation_id=$1 AND position=0 FOR UPDATE",
+    )
+    .bind(operation)
+    .execute(&mut *owner)
+    .await
+    .unwrap();
+    // A status read now finds the lease lapsed and must wait for the item.
+    let reader = {
+        let (s, admin) = (f.s.clone(), f.admin.clone());
+        tokio::spawn(
+            async move { call(&s, &admin, "GET", &format!("{BULK}/slow"), Value::Null).await },
+        )
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(
+        !reader.is_finished(),
+        "the finalizer did not wait for the claimed item"
+    );
+    sqlx::query("SELECT set_config('omg.configuration_bulk',$1,true),set_config('omg.configuration_actor',$2,true)")
+        .bind(operation.to_string())
+        .bind(f.admin.user_id.to_string())
+        .execute(&mut *owner)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE deployments SET enabled=false WHERE id=$1")
+        .bind(a)
+        .execute(&mut *owner)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE configuration_bulk_items SET outcome='committed',revision=2,change_id=(SELECT id FROM configuration_changes WHERE deployment_id=$2 AND revision=2) WHERE operation_id=$1 AND position=0")
+        .bind(operation)
+        .bind(a)
+        .execute(&mut *owner)
+        .await
+        .unwrap();
+    owner.commit().await.unwrap();
+    let (status, out) = reader.await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["completed"], true);
+    assert_eq!(out["items"][0]["outcome"], "committed");
+    assert_eq!(out["items"][1]["outcome"], "unattempted");
+    assert_eq!(revision(&pool, a).await, (false, 2));
+    assert_eq!(revision(&pool, b).await, (true, 1));
+    assert_eq!(
+        outcome_events(&pool, operation).await,
+        vec![
+            json!({"count":2,"items":[{"id":a,"outcome":"committed"},{"id":b,"outcome":"unattempted"}]})
+        ]
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn a_target_that_waits_too_long_stops_the_operation(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let (a, b) = (
+        route(&f, &pool, "wait-a").await,
+        route(&f, &pool, "wait-b").await,
+    );
+    // Another catalog writer holds the exclusive catalog lock past the bulk
+    // target's lock timeout (10 s, within the 30 s lease).
+    let mut writer = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(72419502)")
+        .execute(&mut *writer)
+        .await
+        .unwrap();
+    let started = std::time::Instant::now();
+    let (status, out) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        BULK,
+        body("wait", &[(a, "1"), (b, "1")]),
+    )
+    .await;
+    let waited = started.elapsed();
+    writer.rollback().await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert!(waited < std::time::Duration::from_secs(25), "{waited:?}");
+    assert_eq!(out["completed"], true);
+    assert_eq!(out["items"][0]["outcome"], "unattempted");
+    assert_eq!(out["items"][1]["outcome"], "unattempted");
+    assert_eq!(revision(&pool, a).await, (true, 1));
+    assert_eq!(revision(&pool, b).await, (true, 1));
+}

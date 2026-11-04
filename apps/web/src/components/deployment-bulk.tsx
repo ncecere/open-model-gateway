@@ -17,9 +17,11 @@ const reasonLabel: Record<string, string> = { not_found: "route no longer exists
 // No answer (network), a server failure, an incomplete operation, or a key
 // already used: some targets may have committed. Other refusals applied
 // nothing.
-const uncertain = (e: unknown) => !(e instanceof ApiError) || e.status === 0 || e.status >= 500 || e.reason === "bulk_incomplete" || e.reason === "idempotency_key_reused";
+const uncertain = (e: unknown) => !(e instanceof ApiError) || e.status === 0 || e.status >= 500 || e.code === "invalid_response" || e.status === 408 || e.reason === "bulk_incomplete" || e.reason === "idempotency_key_reused";
 
-export function BulkDisableDialog({ targets, onClose, onDone }: { targets: BulkTarget[]; onClose: () => void; onDone: () => void }) {
+export function BulkDisableDialog({ targets: selection, onClose, onDone }: { targets: BulkTarget[]; onClose: () => void; onDone: (disabled: string[]) => void }) {
+  // The selection as reviewed: the page may change its own while this is open.
+  const [targets] = useState(selection);
   const scope = useApiScope(), client = useQueryClient();
   const key = useRef(crypto.randomUUID()).current;
   const [busy, setBusy] = useState(false), [error, setError] = useState<unknown>(null), [result, setResult] = useState<DeploymentBulkOperation | null>(null);
@@ -33,7 +35,7 @@ export function BulkDisableDialog({ targets, onClose, onDone }: { targets: BulkT
   });
   const reviewed = previews.data && previews.data.every((p, i) => p.target.id === targets[i].id) ? previews.data : undefined;
   const names = new Map(targets.map(t => [t.id, t.name]));
-  const finish = (operation: DeploymentBulkOperation) => { setResult(operation); void client.invalidateQueries({ queryKey: ["api", scope] }); if (operation.completed) onDone(); };
+  const finish = (operation: DeploymentBulkOperation) => { setResult(operation); void client.invalidateQueries({ queryKey: ["api", scope] }); if (operation.completed) onDone(operation.items.filter(i => i.outcome === "committed" || i.outcome === "unchanged").map(i => i.id)); };
   const run = async () => {
     if (!reviewed) return;
     setBusy(true); setError(null);
