@@ -10,7 +10,7 @@ Changes after v0.12.0: [unreleased notes](docs/releases/unreleased.md).
 
 ## [0.12.0]
 
-Self-service access requests are complete (#83): a Team or Project member can ask for a catalog model for the workspace, decided only by that workspace's owners and admins, and request events appear in the in-app notifications for approvers and requesters (never emailed or sent to webhooks). **Migrations `0072`–`0073`** (schema now 0073) and **runtime-grant changes**; access-request objects and the notification feed gain fields and shapes. See [release and upgrade notes](docs/releases/v0.12.0.md).
+Self-service access requests are complete (#83): a Team or Project member can ask for a catalog model for the workspace, decided only by that workspace's owners and admins, and request events appear in the in-app notifications for approvers and requesters (notification events are never emailed or sent to webhooks). **Migrations `0072`–`0073`** (schema now 0073) and **runtime-grant changes**; access-request objects and the notification feed gain fields and shapes. See [release and upgrade notes](docs/releases/v0.12.0.md).
 
 ## [0.11.0]
 
