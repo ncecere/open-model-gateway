@@ -895,7 +895,9 @@ async fn notifications(
     let visible = visible();
     // Incidents and (#83) access-request events, newest first.
     let requests = super::request_notifications::items("$1", "$6");
-    let mut data: Vec<Value> = sqlx::query_scalar(&format!("SELECT n.item FROM (SELECT e.fired_at AS at,e.id,{EVENT_JSON}||jsonb_build_object('read',x.event_id IS NOT NULL) AS item,x.event_id IS NOT NULL AS is_read {EVENT_FROM} LEFT JOIN alert_reads x ON x.event_id=e.id AND x.user_id=$1 WHERE {visible} UNION ALL SELECT at,id,item,is_read FROM ({requests}) q) n WHERE NOT $3 OR NOT n.is_read ORDER BY n.at DESC,n.id LIMIT $4 OFFSET $5"))
+    // The page is chosen from light rows; an incident's JSON (with its
+    // delivery subselects) is built only for the incidents on the page.
+    let mut data: Vec<Value> = sqlx::query_scalar(&format!("WITH page AS (SELECT at,id,item,is_read FROM (SELECT e.fired_at AS at,e.id,NULL::jsonb AS item,x.event_id IS NOT NULL AS is_read {EVENT_FROM} LEFT JOIN alert_reads x ON x.event_id=e.id AND x.user_id=$1 WHERE {visible} UNION ALL SELECT at,id,item,is_read FROM ({requests}) q) n WHERE NOT $3 OR NOT n.is_read ORDER BY n.at DESC,n.id LIMIT $4 OFFSET $5) SELECT COALESCE(pg.item,(SELECT {EVENT_JSON}||jsonb_build_object('read',pg.is_read) {EVENT_FROM} WHERE e.id=pg.id)) FROM page pg ORDER BY pg.at DESC,pg.id"))
         .bind(u.user_id)
         .bind(reader)
         .bind(unread)
@@ -922,10 +924,12 @@ async fn notification_summary(
         .bind(reader)
         .fetch_one(&mut *tx)
         .await?;
-    // #83: unread access-request events count too (they never fire).
+    // #83: unread access-request events count too (they never fire), at
+    // most 100 (the bell shows 99+), so a Platform Admin's poll stops early
+    // however many membership requests are pending.
     let requests = super::request_notifications::items("$1", "$2");
     let unread_requests: i64 = sqlx::query_scalar(&format!(
-        "SELECT count(*) FROM ({requests}) n WHERE NOT n.is_read"
+        "SELECT count(*) FROM (SELECT 1 FROM ({requests}) n WHERE NOT n.is_read LIMIT 100) c"
     ))
     .bind(u.user_id)
     .bind(admin)

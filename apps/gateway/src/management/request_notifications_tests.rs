@@ -261,3 +261,175 @@ async fn lost_authority_hides_request_notifications_at_once(pool: PgPool) {
         .unwrap();
     assert_eq!(rows, 0);
 }
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn request_items_merge_with_incidents_and_keep_their_windows(pool: PgPool) {
+    let f = fixture(&pool).await;
+    // A workspace incident the owner sees (a workspace budget rule), fired
+    // between two requests.
+    let (status, r) = call(&f.s, &f.owner, "POST", &format!("/api/v1/workspaces/{}/alerts/rules", f.team), json!({"name":"Mixed","kind":"budget_threshold","budget_layers":["local"],"thresholds":[100],"notify_workspace_admins":true})).await;
+    assert_eq!(status, StatusCode::OK, "{r}");
+    let rule = Uuid::parse_str(r["id"].as_str().unwrap()).unwrap();
+    let m1 = eligible_model(&pool, "company/first").await;
+    let m2 = eligible_model(&pool, "company/second").await;
+    let (_, first) = call(
+        &f.s,
+        &f.member,
+        "POST",
+        "/api/v1/me/access-requests",
+        json!({"workspace_id":f.team,"model_id":m1,"idempotency_key":"mix-1"}),
+    )
+    .await;
+    let event = Uuid::new_v4();
+    sqlx::query("INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary,details) VALUES($1,$2,'budget_threshold','mix',100,'critical',$3,'Mixed incident',jsonb_build_object('layer','local','period','month','threshold_percent',100,'used_percent','100','used_microusd','100','budget_microusd','100','unknown_cost_requests',0,'window_start','2026-10-01T00:00:00Z','window_end','2026-11-01T00:00:00Z'))")
+        .bind(event).bind(rule).bind(f.team).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO alert_deliveries(id,event_id,transition) VALUES(gen_random_uuid(),$1,'fired')",
+    )
+    .bind(event)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let (_, second) = call(
+        &f.s,
+        &f.member,
+        "POST",
+        "/api/v1/me/access-requests",
+        json!({"workspace_id":f.team,"model_id":m2,"idempotency_key":"mix-2"}),
+    )
+    .await;
+    // Newest first across both sources, paged with has_more.
+    let ids = |v: &Value| {
+        v["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["id"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let (_, all) = call(&f.s, &f.owner, "GET", FEED, Value::Null).await;
+    assert_eq!(
+        ids(&all),
+        vec![rid(&second), event.to_string(), rid(&first)]
+    );
+    assert_eq!(all["data"][1]["summary"], "Mixed incident");
+    let (_, page1) = call(
+        &f.s,
+        &f.owner,
+        "GET",
+        &format!("{FEED}?limit=2"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(
+        (ids(&page1), page1["has_more"].clone()),
+        (vec![rid(&second), event.to_string()], json!(true))
+    );
+    let (_, page2) = call(
+        &f.s,
+        &f.owner,
+        "GET",
+        &format!("{FEED}?limit=2&offset=2"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(
+        (ids(&page2), page2["has_more"].clone()),
+        (vec![rid(&first)], json!(false))
+    );
+    // Marking everything read covers both; the incident's read state is its own.
+    assert_eq!(unread(&f, &f.owner).await, 3);
+    let (_, marked) = call(
+        &f.s,
+        &f.owner,
+        "POST",
+        &format!("{FEED}/read"),
+        json!({"all":true}),
+    )
+    .await;
+    assert_eq!(marked["marked"], 3);
+    let (_, unread_page) = call(
+        &f.s,
+        &f.owner,
+        "GET",
+        &format!("{FEED}?status=unread"),
+        Value::Null,
+    )
+    .await;
+    assert!(unread_page["data"].as_array().unwrap().is_empty());
+    // A Platform Admin who also owns the workspace sees one row per request.
+    member(&pool, f.team, f.admin.user_id, "owner").await;
+    sqlx::query("UPDATE workspaces SET discoverable=true WHERE id=$1")
+        .bind(f.team)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (_, join) = call(
+        &f.s,
+        &f.outsider,
+        "POST",
+        "/api/v1/me/access-requests",
+        json!({"workspace_id":f.team,"idempotency_key":"mix-join"}),
+    )
+    .await;
+    let admin_items = request_items(&f, &f.admin, "").await;
+    assert_eq!(admin_items.iter().filter(|i| i.0 == rid(&join)).count(), 1);
+    assert_eq!(admin_items.len(), 3);
+    // Withdrawn requests never notify anyone; the requester's expired and
+    // older-than-30-days decisions follow the window.
+    let (status, _) = call(
+        &f.s,
+        &f.outsider,
+        "POST",
+        &format!("/api/v1/me/access-requests/{}/withdraw", rid(&join)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(request_items(&f, &f.outsider, "").await.is_empty());
+    assert!(
+        !request_items(&f, &f.admin, "")
+            .await
+            .iter()
+            .any(|i| i.0 == rid(&join))
+    );
+    sqlx::raw_sql("ALTER TABLE access_requests DISABLE TRIGGER access_requests_guard")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE access_requests SET created_at=clock_timestamp()-interval '8 days',expires_at=clock_timestamp()-interval '1 day' WHERE id=$1::uuid").bind(rid(&first)).execute(&pool).await.unwrap();
+    sqlx::raw_sql("ALTER TABLE access_requests ENABLE TRIGGER access_requests_guard")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        crate::lifecycle::expire_access_requests_fenced(&f.s, None)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        request_items(&f, &f.member, "").await,
+        vec![(rid(&first), "requester".into(), "expired".into(), false)]
+    );
+    sqlx::raw_sql("ALTER TABLE access_requests DISABLE TRIGGER access_requests_guard")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE access_requests SET decided_at=clock_timestamp()-interval '31 days',created_at=clock_timestamp()-interval '40 days',expires_at=clock_timestamp()-interval '33 days' WHERE id=$1::uuid").bind(rid(&first)).execute(&pool).await.unwrap();
+    sqlx::raw_sql("ALTER TABLE access_requests ENABLE TRIGGER access_requests_guard")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        request_items(&f, &f.member, "").await.is_empty(),
+        "older than 30 days"
+    );
+    // A disabled workspace's pending requests stop notifying its admins.
+    sqlx::query("UPDATE workspaces SET disabled_at=now() WHERE id=$1")
+        .bind(f.team)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(request_items(&f, &f.owner, "").await.is_empty());
+}

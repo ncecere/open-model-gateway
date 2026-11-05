@@ -225,7 +225,8 @@ export function NotificationsPage({ session }: { session: Session }) {
     if (!isRequestNotification(n)) return;
     if (n.audience === "requester") return { page: "access-requests", tab: "mine" };
     const ws = session.workspaces.find(w => w.id === n.workspace_id);
-    return ws && permissions(session, ws).manageTeam ? { page: "workspace-settings", ws: ws.id, tab: "access-requests" } : { page: "platform-access-requests" };
+    if (ws && permissions(session, ws).manageTeam) return { page: "workspace-settings", ws: ws.id, tab: "access-requests" };
+    return session.capabilities.platform_write ? { page: "platform-access-requests" } : undefined;
   };
   const ruleLink = (n: Notification): DashboardSearch | undefined => {
     if (isRequestNotification(n)) return;

@@ -12,6 +12,7 @@ CREATE TABLE access_request_notification_reads (
 );
 CREATE TRIGGER access_request_notification_reads_immutable BEFORE UPDATE OR DELETE ON access_request_notification_reads FOR EACH ROW EXECUTE FUNCTION immutable_history();
 CREATE TRIGGER access_request_notification_reads_no_truncate BEFORE TRUNCATE ON access_request_notification_reads FOR EACH STATEMENT EXECUTE FUNCTION immutable_history();
--- The approver feed looks up pending requests per workspace (existing
--- access_requests_workspace_clock) and decided ones per requester.
+-- The approver feed walks the viewer's owner/admin workspaces to their
+-- pending requests; the requester feed reads decided ones per requester.
+CREATE INDEX access_requests_pending_workspace ON access_requests(workspace_id,created_at DESC) WHERE status='pending';
 CREATE INDEX access_requests_decided_requester ON access_requests(requester,decided_at DESC) WHERE status IN ('approved','denied','expired');

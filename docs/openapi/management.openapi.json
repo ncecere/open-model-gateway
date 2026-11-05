@@ -51301,7 +51301,7 @@
                 }
               }
             },
-            "description": "Visible notifications marked read; invisible IDs ignored"
+            "description": "Visible notifications (incidents and, #83, access-request events in their current state) marked read; invisible IDs ignored"
           },
           "400": {
             "$ref": "#/paths/~1api~1v1~1me/get/responses/400"
