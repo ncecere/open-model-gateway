@@ -36,7 +36,25 @@ export type AlertEvent = {
   workspace: { id: string; name: string; kind: "personal" | "team" | "project" } | null; connection: { id: string; name: string; provider: string } | null;
   fired_at: string; resolved_at: string | null; resolution: "cleared" | "superseded" | "rule_disabled" | null; email: EmailOutcome | null; cleared_email?: EmailOutcome | null;
 };
-export type Notification = AlertEvent & { read: boolean };
+export type AlertNotification = AlertEvent & { read: boolean; source?: undefined };
+/**
+ * #83: an access-request event, derived live by the server from the request (visibility is
+ * the viewer's current authority). In-app only; references are frozen at submission.
+ */
+export type RequestNotification = {
+  source: "access_request"; id: string; audience: "approver" | "requester"; state: "pending" | "approved" | "denied" | "expired";
+  target_kind: "workspace_membership" | "model_selection"; workspace_id: string; workspace_name_at_request: string; model_name_at_request: string;
+  at: string; read: boolean;
+};
+export type Notification = AlertNotification | RequestNotification;
+export const isRequestNotification = (n: Notification): n is RequestNotification => n.source === "access_request";
+const decidedText: Record<RequestNotification["state"], string> = { pending: "is pending", approved: "was approved", denied: "was denied", expired: "expired" };
+/** One line for a request event, from frozen references only. */
+export function requestNotificationText(n: RequestNotification): string {
+  const model = n.target_kind === "model_selection";
+  if (n.audience === "approver") return model ? `Request to use ${n.model_name_at_request} in ${n.workspace_name_at_request}` : `Request to join ${n.workspace_name_at_request}`;
+  return model ? `Your request to use ${n.model_name_at_request} in ${n.workspace_name_at_request} ${decidedText[n.state]}` : `Your request to join ${n.workspace_name_at_request} ${decidedText[n.state]}`;
+}
 export type NotificationSummary = { unread: number; firing: number };
 
 export type AlertScope = { kind: "platform" } | { kind: "workspace"; ws: string };

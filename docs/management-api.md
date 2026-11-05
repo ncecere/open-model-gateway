@@ -91,7 +91,7 @@ A workspace mapping instead uses `target_kind:"workspace"`, `platform_role:null`
 
 ## Self-service access requests (#83)
 
-These routes are **browser-session only** (`TokenPolicy::Denied`), including platform reads. Every POST/PUT requires the configured Origin and `X-CSRF-Token`. Membership requests (slice A, migration 0066) and model-selection requests (slice B, migration 0072) share these routes. In-app notifications are not implemented yet. The dashboard covers both: see [dashboard](dashboard.md#access-requests-83).
+These routes are **browser-session only** (`TokenPolicy::Denied`), including platform reads. Every POST/PUT requires the configured Origin and `X-CSRF-Token`. Membership requests (slice A, migration 0066) and model-selection requests (slice B, migration 0072) share these routes, and both appear in the in-app notification feed (slice B3, migration 0073; see below). The dashboard covers both: see [dashboard](dashboard.md#access-requests-83).
 
 | Method/path | Authority and behavior |
 | --- | --- |
@@ -125,6 +125,12 @@ That picker excludes a disabled, cleaned or currently unentitled user, so both f
 - Withdrawal, expiry (7 days), the caps and idempotency are shared with membership requests; in addition at most 5 model requests can be pending per requester and workspace and 100 per workspace: beyond that a request is `409 model_request_queue_full` (a slot frees when an owner/admin decides or a request expires; it is not a rate limit). A model request that would be refused is refused before the workspace's authority locks are taken. The payload digest of a model request includes `model_id`; membership digests are unchanged.
 
 Migration **0072_model_access_requests** adds `access_requests.model_id` and the frozen `model_name_at_request`, replaces 0066's insert guard (the kind, role and frozen names derive from the target; the runtime cannot insert them; a model request needs a current member, an enabled shared workspace and an enabled model; the model-request caps) and application check (an application names exactly one of the membership grant or the model; an approved model request needs the workspace's catalog selection at application), and splits the pending uniqueness per target. Runtime grants: `INSERT(model_id)` on `access_requests` and `access_request_applications`; nothing else changes.
+
+**Request notifications (slice B3).** `GET /me/notifications` also lists access-request events (`source:"access_request"`), merged with alert incidents newest first, and `GET /me/notifications/summary` counts the unread ones in `unread` (never in `firing`). They are derived from the requests on every read, so they follow the viewer's current authority:
+- `audience:"approver"`, `state:"pending"`: a pending, unexpired request in an enabled Team/Project where the viewer is a live owner/admin, or a pending membership request for a Platform Admin (who decides those on the platform path). Never the viewer's own request. It disappears once decided, withdrawn or expired, or when the viewer loses that authority.
+- `audience:"requester"`: the viewer's own request, approved, denied or expired in the last 30 days.
+
+Items carry `id` (the request), `target_kind`, `workspace_id`, the frozen `workspace_name_at_request` and `model_name_at_request`, `at` and `read`; never the reason or the requester's identity. `POST /me/notifications/read` marks request events too (by request id, or all); a mark applies to the request's current state, so a decision is unread again for the requester, and ids the viewer cannot see are ignored. They are in-app only: never emailed or sent to webhooks. Migration **0073_access_request_notifications** adds the insert-only `access_request_notification_reads` (runtime `SELECT` and `INSERT(user_id,request_id,state)`; the read time is the server's).
 
 PostgreSQL enforces at most **20 unexpired pending requests**, **five submissions in a rolling minute**, and **50 in a rolling 24 hours** per requester across replicas. Excess returns `429`, `reason:"access_request_rate_limited"`, `retry_after_seconds` and `Retry-After` (pending-cap retry: 60 seconds; withdrawal/expiry may free capacity sooner).
 

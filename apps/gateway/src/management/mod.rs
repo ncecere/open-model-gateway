@@ -32,6 +32,7 @@ pub(crate) mod openapi;
 #[path = "openapi_semantic_tests.rs"]
 pub(crate) mod openapi_semantic;
 mod provider_costs;
+mod request_notifications;
 mod requests;
 pub(crate) mod resources;
 mod scheduled_reports;

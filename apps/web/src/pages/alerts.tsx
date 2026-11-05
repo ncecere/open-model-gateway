@@ -10,13 +10,14 @@ import { useQueryClient } from "@tanstack/react-query";
 import { BellRing, CheckCheck, History, Plus, Webhook } from "lucide-react";
 import { AlertWebhooks } from "./alert-webhooks";
 import { api, platformPath, type Provider, type Session, type Workspace } from "../lib/api";
-import { conditionText, draftOf, emailStatusText, eventsPath, kindHints, kindLabels, kindsFor, layerLabels, layersFor, lockWaitChoices, newDraft, notificationsPath, recipientsText, resolutionLabels, ruleBody, sourceText, ruleErrors, rulePath, rulesPath, spendPeriodLabels, unknownCostNote, whereText, type AlertEvent, type AlertKind, type AlertRule, type AlertScope, type BudgetLayer, type Notification, type RuleDraft, type RuleList, type SpendPeriod } from "../lib/alerts";
+import { conditionText, draftOf, emailStatusText, eventsPath, kindHints, kindLabels, kindsFor, layerLabels, layersFor, lockWaitChoices, newDraft, isRequestNotification, notificationsPath, requestNotificationText, recipientsText, resolutionLabels, ruleBody, sourceText, ruleErrors, rulePath, rulesPath, spendPeriodLabels, unknownCostNote, whereText, type AlertEvent, type AlertKind, type AlertRule, type AlertScope, type BudgetLayer, type Notification, type RuleDraft, type RuleList, type SpendPeriod } from "../lib/alerts";
 import { permissions, type DashboardSearch } from "../lib/permissions";
 import { Button, ErrorNotice, FormField, Heading, Input, NativeSelect, Stack, Textarea, useAction, useApi, useChoices } from "../components/ui";
 import { ResourcePage } from "../components/resource-page";
 import { DirectoryTable, LocalTable } from "../components/people";
 import { CellText, type DataTableColumn } from "../components/ui/data-table/data-table";
 import { StatusBadge } from "../components/ui/badge/badge";
+import { accessRequestStatusLabels, accessRequestStatusTone } from "../lib/access-requests";
 import { TableTime } from "../components/templates/when";
 import { BackLink, FormPage, FormSection, Wide } from "../components/templates/form-page";
 import { Checkbox, CheckboxGroup } from "../components/ui/checkbox/checkbox";
@@ -219,7 +220,15 @@ export function NotificationsPage({ session }: { session: Session }) {
     try { await api(`${notificationsPath}/read`, { method: "POST", body }); await client.invalidateQueries({ queryKey: ["api"] }); }
     catch { toast.error("Couldn't mark as read. Try again."); } finally { setBusy(false); }
   }
+  // #83: request events open the queue that can decide them, or My requests.
+  const requestLink = (n: Notification): DashboardSearch | undefined => {
+    if (!isRequestNotification(n)) return;
+    if (n.audience === "requester") return { page: "access-requests", tab: "mine" };
+    const ws = session.workspaces.find(w => w.id === n.workspace_id);
+    return ws && permissions(session, ws).manageTeam ? { page: "workspace-settings", ws: ws.id, tab: "access-requests" } : { page: "platform-access-requests" };
+  };
   const ruleLink = (n: Notification): DashboardSearch | undefined => {
+    if (isRequestNotification(n)) return;
     if (n.builtin && n.workspace) return { page: "workspace-settings", ws: n.workspace.id, tab: "alerts" };
     if (n.rule?.deleted) return;
     if (n.rule?.scope === "installation" && session.capabilities.platform_read) return { page: "alert-rule-detail", record: n.rule.id };
@@ -228,24 +237,26 @@ export function NotificationsPage({ session }: { session: Session }) {
   };
   // Key-expiry reminders (#100) have no rule: the action opens the workspace's
   // keys list, never a key identifier.
-  const keysLink = (n: Notification): DashboardSearch | undefined => n.kind === "key_expiring" && n.workspace ? { page: "keys", ws: n.workspace.id } : undefined;
+  const keysLink = (n: Notification): DashboardSearch | undefined => !isRequestNotification(n) && n.kind === "key_expiring" && n.workspace ? { page: "keys", ws: n.workspace.id } : undefined;
   // Aged unknown-hold incidents (#101) open the Holds tab: the workspace's own, or Admin's queue.
-  const holdsLink = (n: Notification): DashboardSearch | undefined => agedHoldLink(session, n);
+  const holdsLink = (n: Notification): DashboardSearch | undefined => isRequestNotification(n) ? undefined : agedHoldLink(session, n);
+  const title = (n: Notification) => isRequestNotification(n) ? requestNotificationText(n) : n.summary;
   const columns: DataTableColumn<Notification>[] = [
-    { id: "alert", header: "Alert", accessor: n => n.summary, rowHeader: true, hideable: false, cell: n => <CellText primary={n.read ? n.summary : <strong>{n.summary}</strong>} secondary={eventSecondary(n)} title={unknownCostNote(n)} /> },
-    { id: "where", header: "Where", accessor: n => whereText(n), cell: n => whereText(n) },
-    { id: "state", header: "State", accessor: n => n.state, cell: n => <EventState event={n} /> },
-    { id: "when", header: "When", accessor: n => n.fired_at, cell: n => <TableTime value={n.fired_at} /> },
+    { id: "alert", header: "Alert", accessor: title, rowHeader: true, hideable: false, cell: n => <CellText primary={n.read ? title(n) : <strong>{title(n)}</strong>} secondary={isRequestNotification(n) ? "Access request" : eventSecondary(n)} title={isRequestNotification(n) ? undefined : unknownCostNote(n)} /> },
+    { id: "where", header: "Where", accessor: n => isRequestNotification(n) ? n.workspace_name_at_request : whereText(n), cell: n => isRequestNotification(n) ? n.workspace_name_at_request : whereText(n) },
+    { id: "state", header: "State", accessor: n => n.state, cell: n => isRequestNotification(n) ? <StatusBadge tone={accessRequestStatusTone[n.state]}>{accessRequestStatusLabels[n.state]}</StatusBadge> : <EventState event={n} /> },
+    { id: "when", header: "When", accessor: n => isRequestNotification(n) ? n.at : n.fired_at, cell: n => <TableTime value={isRequestNotification(n) ? n.at : n.fired_at} /> },
   ];
   return <Stack gap={6} className={s.page}>
-    <Heading title="Notifications" description="Alerts for what you look after." actions={<Button variant="secondary" loading={busy} onClick={() => void markRead({ all: true })}><CheckCheck aria-hidden /> Mark all read</Button>} />
-    <DirectoryTable<Notification> path={notificationsPath} label="Notifications" storageKey="notifications" columns={columns} rowKey={n => n.id} rowLabel={n => n.summary}
+    <Heading title="Notifications" description="Alerts and access requests for what you look after." actions={<Button variant="secondary" loading={busy} onClick={() => void markRead({ all: true })}><CheckCheck aria-hidden /> Mark all read</Button>} />
+    <DirectoryTable<Notification> path={notificationsPath} label="Notifications" storageKey="notifications" columns={columns} rowKey={n => n.id} rowLabel={title}
       facets={[{ id: "status", label: "Show", allLabel: "All", options: [{ value: "unread", label: "Unread" }] }]}
-      rowActions={n => { const link = ruleLink(n), keys = keysLink(n), holds = holdsLink(n); return [
+      rowActions={n => { const link = ruleLink(n), keys = keysLink(n), holds = holdsLink(n), request = requestLink(n); return [
         { label: "Mark as read", hidden: n.read, onSelect: () => void markRead({ ids: [n.id] }) },
         { label: "Open rule", hidden: !link, render: link ? <ResourceLink search={link} /> : undefined },
         { label: "Open keys", hidden: !keys, render: keys ? <ResourceLink search={keys} /> : undefined },
         { label: "Open holds", hidden: !holds, render: holds ? <ResourceLink search={holds} /> : undefined },
+        { label: "Open requests", hidden: !request, render: request ? <ResourceLink search={request} /> : undefined },
       ]; }}
       empty={{ icon: <BellRing />, title: "No notifications.", description: "Alerts for your budgets and workspaces show up here." }} />
   </Stack>;

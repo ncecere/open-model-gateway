@@ -217,7 +217,7 @@ Effort is relative: **S** = narrow change; **M** = several components plus tests
 
 ### R14 — Self-service access requests and onboarding templates · P2 · M–L
 
-- [x] Selected (phase 5) — partly done: self-service Team/Project membership requests (#83, slice A) shipped in v0.9.0 ([identity](identity.md#self-service-membership-requests), [dashboard](dashboard.md#access-requests-83)); model-selection requests (#83, slice B, migration 0072) are implemented; in-app request notifications and reviewed onboarding templates remain planned.
+- [x] Selected (phase 5) — partly done: self-service Team/Project membership requests (#83, slice A) shipped in v0.9.0 ([identity](identity.md#self-service-membership-requests), [dashboard](dashboard.md#access-requests-83)); model-selection requests (#83, slice B, migration 0072) and in-app request notifications (slice B3, migration 0073) are implemented; reviewed onboarding templates (#84) remain planned.
 - **Value:** replace “ask an admin” and manual UUID handoffs with an accountable approval process.
 - **Scope / done:** request access to an eligible shared workspace or model; show the request's status and reason; authorized approvers accept/reject with audit evidence. Optional reviewed templates can apply initial shared-workspace grants and limits.
 - **Guardrails:** approval must recheck current entitlements, membership and authority atomically. Never list private workspaces, auto-promote approvers or let a template override a platform ceiling. Decide whether invitation email delivery belongs in this slice.
