@@ -5498,6 +5498,72 @@
         ],
         "description": "Non-Admin projection of a non-personal event: no workspace identity/name, including nested details. A personal event carries no identity for any audience and matches only the personal branch of IdentityAdminCeilingNotification, keeping the oneOf exclusive."
       },
+      "IdentityRequestNotification": {
+        "additionalProperties": false,
+        "description": "#83: an access-request event, derived live from the request on every read (visibility is the viewer's current authority). In-app only: never delivered by email or webhook. No reason text or requester identity.",
+        "properties": {
+          "at": {
+            "$ref": "#/components/schemas/IdentityTime",
+            "description": "Submission time (approver) or decision time (requester)."
+          },
+          "audience": {
+            "description": "approver: a pending request the viewer can decide now (a live owner/admin of the workspace, or a Platform Admin for a membership request). requester: the viewer's own request, decided in the last 30 days.",
+            "enum": [
+              "approver",
+              "requester"
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/IdentityUuid",
+            "description": "The access request's id (also what POST /me/notifications/read takes)."
+          },
+          "model_name_at_request": {
+            "description": "Frozen at submission; empty for a membership request.",
+            "type": "string"
+          },
+          "read": {
+            "description": "Read by this viewer in this state; a decision is unread again for the requester.",
+            "type": "boolean"
+          },
+          "source": {
+            "const": "access_request"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "approved",
+              "denied",
+              "expired"
+            ]
+          },
+          "target_kind": {
+            "enum": [
+              "workspace_membership",
+              "model_selection"
+            ]
+          },
+          "workspace_id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "workspace_name_at_request": {
+            "description": "Frozen at submission, never the live name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "id",
+          "audience",
+          "state",
+          "target_kind",
+          "workspace_id",
+          "workspace_name_at_request",
+          "model_name_at_request",
+          "at",
+          "read"
+        ],
+        "type": "object"
+      },
       "IdentityRevoked": {
         "additionalProperties": false,
         "properties": {
@@ -43176,6 +43242,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/IdentityRedactedCeilingNotification"
+                },
+                {
+                  "$ref": "#/components/schemas/IdentityRequestNotification"
                 }
               ]
             },
@@ -51167,7 +51236,7 @@
                 }
               }
             },
-            "description": "Live-authorized incident feed; admission-ceiling workspace identities removed for non-Admins"
+            "description": "Live-authorized incident feed and (#83) access-request events, newest first; admission-ceiling workspace identities removed for non-Admins"
           },
           "400": {
             "$ref": "#/paths/~1api~1v1~1me/get/responses/400"
@@ -51232,7 +51301,7 @@
                 }
               }
             },
-            "description": "Visible notifications marked read; invisible IDs ignored"
+            "description": "Visible notifications (incidents and, #83, access-request events in their current state) marked read; invisible IDs ignored"
           },
           "400": {
             "$ref": "#/paths/~1api~1v1~1me/get/responses/400"

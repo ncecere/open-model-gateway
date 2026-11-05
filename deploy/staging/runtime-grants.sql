@@ -180,6 +180,10 @@ GRANT UPDATE(consecutive_failures,open_until,last_observed_at) ON public.deploym
 -- marks are insert-only. No DELETE/TRUNCATE on any alert table.
 GRANT SELECT,INSERT ON public.alert_rules,public.alert_events,public.alert_deliveries,
  public.alert_reads TO gateway_runtime;
+-- #83 slice B3: access-request notification read marks, insert-only (the
+-- notifications are derived from access_requests; read_at is the default).
+GRANT SELECT ON public.access_request_notification_reads TO gateway_runtime;
+GRANT INSERT(user_id,request_id,state) ON public.access_request_notification_reads TO gateway_runtime;
 -- Installation spend rules (0026) edit their period and reference amount.
 GRANT UPDATE(name,enabled,budget_layers,thresholds,spike_factor_percent,min_spend_microusd,
  window_minutes,error_rate_percent,min_requests,consecutive_failures,provider_connection_id,

@@ -148,6 +148,28 @@ describe("Notifications", () => {
   });
 });
 
+describe("Access-request notifications (#83)", () => {
+  const approverItem: Notification = { source: "access_request", id: "req-a", audience: "approver", state: "pending", target_kind: "model_selection", workspace_id: "team", workspace_name_at_request: "Team", model_name_at_request: "company/smart", at: "2026-10-09T00:00:00Z", read: false };
+  const requesterItem: Notification = { source: "access_request", id: "req-b", audience: "requester", state: "denied", target_kind: "workspace_membership", workspace_id: "lab", workspace_name_at_request: "Lab", model_name_at_request: "", at: "2026-10-08T00:00:00Z", read: true };
+  it("shows request events from their frozen references and opens the queue that decides them, or My requests", async () => {
+    const user = userEvent.setup();
+    serve(session, path => path.startsWith("/api/v1/me/notifications?") ? { data: [approverItem, requesterItem], has_more: false } : undefined);
+    const { client } = await mount("/notifications");
+    await screen.findByText("Request to use company/smart in Team");
+    expect(screen.getByText("Your request to join Lab was denied")).toBeTruthy();
+    expect(screen.getByText("Pending")).toBeTruthy();
+    const approverRow = screen.getByText("Request to use company/smart in Team").closest("tr")!;
+    await user.click(within(approverRow).getByRole("button", { name: /actions/i }));
+    expect((await screen.findByRole("menuitem", { name: "Open requests" })).getAttribute("href")).toBe("/workspaces/team/settings?tab=access-requests");
+    expect(screen.queryByRole("menuitem", { name: "Open rule" })).toBeNull();
+    await user.keyboard("{Escape}");
+    const requesterRow = screen.getByText("Your request to join Lab was denied").closest("tr")!;
+    await user.click(within(requesterRow).getByRole("button", { name: /actions/i }));
+    expect((await screen.findByRole("menuitem", { name: "Open requests" })).getAttribute("href")).toBe("/access-requests?tab=mine");
+    client.clear();
+  });
+});
+
 const agedHold: Notification = { ...keyExpiring, id: "e3", kind: "aged_unknown_hold", severity: "warning", summary: "Holds with unknown cost are over 24 hours old", details: { threshold_hours: 24 } };
 describe("Aged unknown-hold notifications (#101)", () => {
   it("offers Open holds to the Holds tab, never a rule or a key list", async () => {

@@ -113,6 +113,7 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "configuration_changes",
     "configuration_bulk_operations",
     "configuration_bulk_items",
+    "access_request_notification_reads",
     "installation_settings",
     // 0011 alerts
     "alert_rules",

@@ -893,12 +893,17 @@ async fn notifications(
     };
     let (mut tx, reader, admin) = viewer(&s, &u).await?;
     let visible = visible();
-    let mut data: Vec<Value> = sqlx::query_scalar(&format!("SELECT {EVENT_JSON}||jsonb_build_object('read',x.event_id IS NOT NULL) {EVENT_FROM} LEFT JOIN alert_reads x ON x.event_id=e.id AND x.user_id=$1 WHERE {visible} AND (NOT $3 OR x.event_id IS NULL) ORDER BY e.fired_at DESC,e.id LIMIT $4 OFFSET $5"))
+    // Incidents and (#83) access-request events, newest first.
+    let requests = super::request_notifications::items("$1", "$6");
+    // The page is chosen from light rows; an incident's JSON (with its
+    // delivery subselects) is built only for the incidents on the page.
+    let mut data: Vec<Value> = sqlx::query_scalar(&format!("WITH page AS (SELECT at,id,item,is_read FROM (SELECT e.fired_at AS at,e.id,NULL::jsonb AS item,x.event_id IS NOT NULL AS is_read {EVENT_FROM} LEFT JOIN alert_reads x ON x.event_id=e.id AND x.user_id=$1 WHERE {visible} UNION ALL SELECT at,id,item,is_read FROM ({requests}) q) n WHERE NOT $3 OR NOT n.is_read ORDER BY n.at DESC,n.id LIMIT $4 OFFSET $5) SELECT COALESCE(pg.item,(SELECT {EVENT_JSON}||jsonb_build_object('read',pg.is_read) {EVENT_FROM} WHERE e.id=pg.id)) FROM page pg ORDER BY pg.at DESC,pg.id"))
         .bind(u.user_id)
         .bind(reader)
         .bind(unread)
         .bind(l + 1)
         .bind(o)
+        .bind(admin)
         .fetch_all(&mut *tx)
         .await?;
     tx.commit().await?;
@@ -912,15 +917,28 @@ async fn notification_summary(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
 ) -> ApiResult {
-    let (mut tx, reader, _) = viewer(&s, &u).await?;
+    let (mut tx, reader, admin) = viewer(&s, &u).await?;
     let visible = visible();
     let (unread, firing): (i64, i64) = sqlx::query_as(&format!("SELECT count(*) FILTER(WHERE NOT EXISTS(SELECT 1 FROM alert_reads x WHERE x.event_id=e.id AND x.user_id=$1)),count(*) FILTER(WHERE e.resolved_at IS NULL) {EVENT_FROM} WHERE {visible}"))
         .bind(u.user_id)
         .bind(reader)
         .fetch_one(&mut *tx)
         .await?;
+    // #83: unread access-request events count too (they never fire), at
+    // most 100 (the bell shows 99+), so a Platform Admin's poll stops early
+    // however many membership requests are pending.
+    let requests = super::request_notifications::items("$1", "$2");
+    let unread_requests: i64 = sqlx::query_scalar(&format!(
+        "SELECT count(*) FROM (SELECT 1 FROM ({requests}) n WHERE NOT n.is_read LIMIT 100) c"
+    ))
+    .bind(u.user_id)
+    .bind(admin)
+    .fetch_one(&mut *tx)
+    .await?;
     tx.commit().await?;
-    Ok(Json(json!({"unread": unread, "firing": firing})))
+    Ok(Json(
+        json!({"unread": unread + unread_requests, "firing": firing}),
+    ))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -941,7 +959,7 @@ async fn mark_read(
     {
         return Err(invalid());
     }
-    let (mut tx, reader, _) = viewer(&s, &u).await?;
+    let (mut tx, reader, admin) = viewer(&s, &u).await?;
     // Only incidents the caller can see; others are ignored, not disclosed.
     let visible = visible();
     let marked = sqlx::query(&format!("INSERT INTO alert_reads(user_id,event_id) SELECT $1,e.id {EVENT_FROM} WHERE {visible} AND ($3::uuid[] IS NULL OR e.id=ANY($3)) AND NOT EXISTS(SELECT 1 FROM alert_reads x WHERE x.event_id=e.id AND x.user_id=$1) ORDER BY e.fired_at DESC LIMIT 1000 ON CONFLICT DO NOTHING"))
@@ -951,8 +969,16 @@ async fn mark_read(
         .execute(&mut *tx)
         .await?
         .rows_affected();
+    // #83: and the visible access-request events, in their current state.
+    let marked_requests = sqlx::query(&super::request_notifications::mark_read("$1", "$2", "$3"))
+        .bind(u.user_id)
+        .bind(admin)
+        .bind(&b.ids)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
     tx.commit().await?;
-    Ok(Json(json!({"marked": marked})))
+    Ok(Json(json!({"marked": marked + marked_requests})))
 }
 
 #[cfg(test)]

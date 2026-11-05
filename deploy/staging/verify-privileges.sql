@@ -1216,6 +1216,11 @@ BEGIN
   UPDATE access_requests SET status='approved',decided_by=decider WHERE id=req;
   SET CONSTRAINTS access_requests_application,access_request_applications_check IMMEDIATE;
   BEGIN UPDATE access_request_applications SET model_id=NULL WHERE request_id=req; RAISE EXCEPTION 'model application mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  -- Notification read marks (0073): insert-only, server clock.
+  INSERT INTO access_request_notification_reads(user_id,request_id,state) VALUES(ru,req,'approved');
+  BEGIN INSERT INTO access_request_notification_reads(user_id,request_id,state,read_at) VALUES(decider,req,'approved',now()-interval '1 year'); RAISE EXCEPTION 'read time forgeable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE access_request_notification_reads SET state='denied' WHERE user_id=ru; RAISE EXCEPTION 'read mark mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN DELETE FROM access_request_notification_reads WHERE user_id=ru; RAISE EXCEPTION 'read mark removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  END;
  -- Work leases (0029): election, renewal, fencing, release and takeover as runtime.
  DECLARE me uuid:=gen_random_uuid(); other uuid:=gen_random_uuid(); term bigint; BEGIN

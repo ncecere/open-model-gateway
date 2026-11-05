@@ -96,6 +96,8 @@ mod provider_cost_matching_tests;
 mod provider_cost_tests;
 #[path = "read_scale_tests.rs"]
 mod read_scale_tests;
+#[path = "request_notifications_tests.rs"]
+mod request_notifications_tests;
 #[path = "resources/tests.rs"]
 mod resource_tests;
 #[path = "scheduled_report_csv_tests.rs"]
