@@ -1,6 +1,7 @@
 /*
- * Self-service membership requests (#83, slice A): join a discoverable Team/Project as
- * `member`. Three surfaces, all browser-session-only (docs/management-api.md):
+ * Self-service access requests (#83): join a discoverable Team/Project as `member` (slice A),
+ * or ask for a catalog model for a workspace you belong to (slice B; asked from the
+ * workspace's Models page). Three surfaces, all browser-session-only (docs/management-api.md):
  *   - Workspace portal "Request access" (discover + submit) and "My requests" (status, withdraw).
  *   - Workspace Settings › Access requests: the owner/admin approval queue for that workspace.
  *   - Admin › Access requests: the platform queue/history (Platform Admin approves; Auditor reads).
@@ -10,7 +11,7 @@
  */
 import { UserPlus, Inbox } from "lucide-react";
 import { api, type Session, type Workspace } from "../lib/api";
-import { accessRequestStatusLabels, accessRequestStatusTone, accessRequestTargetsPath, myAccessRequestsPath, newIdempotencyKey, platformAccessRequestDecisionPath, platformAccessRequestsPath, reasonError, withdrawAccessRequestPath, workspaceAccessRequestDecisionPath, workspaceAccessRequestsPath, type AccessRequest, type AccessRequestTarget } from "../lib/access-requests";
+import { accessRequestStatusLabels, accessRequestStatusTone, accessRequestTargetsPath, isModelRequest, myAccessRequestsPath, newIdempotencyKey, platformAccessRequestDecisionPath, platformAccessRequestsPath, reasonError, requestSubject, withdrawAccessRequestPath, workspaceAccessRequestDecisionPath, workspaceAccessRequestsPath, type AccessRequest, type AccessRequestTarget } from "../lib/access-requests";
 import { permissions } from "../lib/permissions";
 import { Heading, Id, Stack, useAction, useChoices } from "../components/ui";
 import { ResourcePage } from "../components/resource-page";
@@ -58,6 +59,7 @@ function MyRequests() {
   const withdraw = (r: AccessRequest) => ask({ title: "Withdraw this request?", description: "You can send a new request later.", submitLabel: "Withdraw", successNotice: "Request withdrawn.", run: (_, signal) => api<AccessRequest>(withdrawAccessRequestPath(r.id), { method: "POST", signal }) });
   const columns: DataTableColumn<AccessRequest>[] = [
     { id: "target", header: "Workspace", accessor: r => r.workspace_name_at_request, rowHeader: true, hideable: false, cell: r => <CellText primary={r.workspace_name_at_request} secondary={<ReasonCell reason={r.reason} />} /> },
+    { id: "request", header: "Request", accessor: requestSubject, cell: r => requestSubject(r) },
     { id: "status", header: "Status", accessor: r => r.status, cell: r => <StatusCell status={r.status} /> },
     { id: "created", header: "Submitted", accessor: r => r.created_at, cell: r => <span className={s.secondary}>{new Date(r.created_at).toLocaleString()}</span> },
   ];
@@ -67,7 +69,7 @@ function MyRequests() {
 }
 /** Workspace portal top-level page: `?page=access-requests`. */
 export function AccessRequestsPage({ tab, onTabChange }: { tab?: string; onTabChange: (tab: string) => void }) {
-  return <ResourcePage title="Request access" description="Ask to join a discoverable Team or Project as a member." tab={tab} onTabChange={onTabChange} tabs={[
+  return <ResourcePage title="Request access" description="Ask to join a discoverable Team or Project as a member. To ask for a model, open a workspace's Models page." tab={tab} onTabChange={onTabChange} tabs={[
     { value: "discover", label: "Request access", icon: <UserPlus aria-hidden />, content: <DiscoverTargets /> },
     { value: "mine", label: "My requests", icon: <Inbox aria-hidden />, content: <MyRequests /> },
   ]} />;
@@ -100,15 +102,16 @@ export function WorkspaceAccessRequestQueue({ session, workspace }: { session: S
   const ask = useAction(), writable = permissions(session, workspace).manageTeam;
   const decide = (r: AccessRequest, approve: boolean) => ask({
     title: approve ? "Approve this request?" : "Deny this request?", danger: !approve,
-    description: approve ? "Grants member access to this workspace." : "The requester can send a new request later.",
+    description: !approve ? "The requester can send a new request later." : isModelRequest(r) ? `Adds the model requested as ${r.model_name_at_request} to this workspace. Members' keys can call it, unless a key is limited to other models.` : "Grants member access to this workspace.",
     submitLabel: approve ? "Approve" : "Deny", successNotice: approve ? "Request approved." : "Request denied.",
     run: (_, signal) => api<AccessRequest>(workspaceAccessRequestDecisionPath(workspace.id, r.id, approve), { method: "POST", signal }),
   });
   // An owner/admin already sees any entitled user's display name/email through the Members
   // "Add member" picker, so showing the same pair here (instead of a raw requester ID) discloses
-  // nothing new (docs/management-api.md#self-service-membership-requests-83-slice-a).
+  // nothing new (docs/management-api.md#self-service-access-requests-83).
   const columns: DataTableColumn<AccessRequest>[] = [
     { id: "requester", header: "Requester", accessor: requesterLabel, rowHeader: true, hideable: false, cell: r => <PersonIdentity person={{ display_name: r.requester_display_name, email: r.requester_email ?? null }} self={r.requester === session.user.id} /> },
+    { id: "request", header: "Request", accessor: requestSubject, cell: r => requestSubject(r) },
     { id: "reason", header: "Reason", accessor: r => r.reason ?? "", cell: r => <ReasonCell reason={r.reason} /> },
     { id: "status", header: "Status", accessor: r => r.status, cell: r => <StatusCell status={r.status} /> },
     { id: "created", header: "Submitted", accessor: r => r.created_at, cell: r => <span className={s.secondary}>{new Date(r.created_at).toLocaleString()}</span> },
@@ -118,7 +121,7 @@ export function WorkspaceAccessRequestQueue({ session, workspace }: { session: S
   return <LocalTable<AccessRequest> rows={pending} loading={choices.isFetching} error={choices.error} retry={() => void choices.refetch()}
     label="Access requests" storageKey="workspace-access-requests" columns={columns} rowKey={r => r.id} rowLabel={requesterLabel}
     rowActions={r => decisionActions(r, session.user.id, writable, decide)}
-    empty={{ icon: <Inbox />, title: "No access requests.", description: "Requests to join this workspace appear here." }} />;
+    empty={{ icon: <Inbox />, title: "No access requests.", description: "Requests to join this workspace, or for a model, appear here." }} />;
 }
 /** Admin › Access requests: platform queue and history. Platform Admin approves; Auditor reads only. */
 export function PlatformAccessRequestsPage({ session }: { session: Session }) {
@@ -131,18 +134,19 @@ export function PlatformAccessRequestsPage({ session }: { session: Session }) {
   });
   // A Platform Admin/Auditor already sees any user's display name/email through the platform
   // user directory, so showing the same pair here (instead of a raw requester ID) discloses
-  // nothing new (docs/management-api.md#self-service-membership-requests-83-slice-a).
+  // nothing new (docs/management-api.md#self-service-access-requests-83).
   const columns: DataTableColumn<AccessRequest>[] = [
     { id: "requester", header: "Requester", accessor: requesterLabel, rowHeader: true, hideable: false, cell: r => <PersonIdentity person={{ display_name: r.requester_display_name, email: r.requester_email ?? null }} self={r.requester === session.user.id} /> },
+    { id: "request", header: "Request", accessor: requestSubject, cell: r => requestSubject(r) },
     { id: "reason", header: "Reason", accessor: r => r.reason ?? "", cell: r => <ReasonCell reason={r.reason} /> },
     { id: "workspace", header: "Workspace", accessor: r => r.workspace_id, cell: r => <Id value={r.workspace_id} /> },
     { id: "status", header: "Status", accessor: r => r.status, cell: r => <StatusCell status={r.status} /> },
     { id: "created", header: "Submitted", accessor: r => r.created_at, cell: r => <span className={s.secondary}>{new Date(r.created_at).toLocaleString()}</span> },
   ];
   return <Stack gap={6} className={s.page}>
-    <Heading title="Access requests" description="Membership requests across every Team and Project." />
+    <Heading title="Access requests" description="Requests across every Team and Project. Model requests are decided by the workspace's own owners and admins, so they are shown here without actions." />
     <DirectoryTable<AccessRequest> path={platformAccessRequestsPath} label="Access requests" storageKey="platform-access-requests" columns={columns} rowKey={r => r.id} rowLabel={requesterLabel}
-      rowActions={r => decisionActions(r, session.user.id, writable, decide)}
-      empty={{ icon: <Inbox />, title: "No access requests yet.", description: "Requests to join a Team or Project appear here." }} />
+      rowActions={r => isModelRequest(r) ? [] : decisionActions(r, session.user.id, writable, decide)}
+      empty={{ icon: <Inbox />, title: "No access requests yet.", description: "Requests to join a Team or Project, or for a model, appear here." }} />
   </Stack>;
 }

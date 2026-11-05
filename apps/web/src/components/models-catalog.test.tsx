@@ -159,11 +159,39 @@ describe("Workspace Models (eligible catalog)", () => {
     const missing = page("nope");
     expect(missing).toContain("Model not found"); expect(missing).toContain("doesn&#x27;t exist or you can&#x27;t see it");
   });
-  it("is read-only for ordinary members and filters by eligibility from the URL", () => {
+  it("is read-only for ordinary members (they can only ask) and filters by eligibility from the URL", () => {
     const html = ws(member);
     expect(html).toContain("Available one"); expect(html).not.toContain("Add</button>"); expect(html).not.toContain('aria-label="Actions for');
+    expect(html).toContain("Request</button>");
     const added = ws(team, session, { page: "grants", ws: team.id, eligibility: "selected" });
     expect(added).toContain("Smart model"); expect(added).not.toContain("Available one");
+  });
+  it("lets a member ask for an available model, once (#83 slice B)", async () => {
+    const posted: unknown[] = [];
+    let pending = false;
+    vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+    document.cookie = "omg_csrf=test-csrf; Path=/";
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((path: string, init?: RequestInit) => {
+      if (path.startsWith("/api/v1/me/access-requests") && init?.method === "POST") { posted.push(JSON.parse(String(init.body))); pending = true; return Promise.resolve(Response.json({})); }
+      if (path.startsWith(`/api/v1/me/access-requests?status=pending&workspace_id=${member.id}`)) return Promise.resolve(Response.json({ data: pending ? [{ id: "r", status: "pending", workspace_id: member.id, model_id: "avail", target_kind: "model_selection" }] : [] }));
+      if (path.startsWith(`/api/v1/workspaces/${member.id}/catalog`)) return Promise.resolve(Response.json({ data: catalog }));
+      if (path.startsWith(`/api/v1/workspaces/${member.id}/models`)) return Promise.resolve(Response.json({ data: [grant] }));
+      return Promise.reject(new Error(`Unexpected ${path}`));
+    }));
+    const c = testClient(); c.setQueryData(["api", undefined, `/api/v1/workspaces/${member.id}/catalog`, "choices"], catalog); c.setQueryData(["api", undefined, `/api/v1/workspaces/${member.id}/models`, "choices"], [grant]);
+    const user = userEvent.setup();
+    render(<QueryClientProvider client={c}><ActionProvider><DashboardNavigationProvider search={{ page: "grants", ws: member.id }} navigate={() => {}}><WorkspaceModels session={session} workspace={member} /></DashboardNavigationProvider></ActionProvider></QueryClientProvider>);
+    const ask = await screen.findByRole("button", { name: "Request" });
+    await vi.waitFor(() => expect(ask.hasAttribute("disabled")).toBe(false));
+    await user.click(ask);
+    await user.type(await screen.findByRole("textbox", { name: "Reason" }), "Evaluations");
+    await user.click(screen.getByRole("button", { name: "Send request" }));
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]).toMatchObject({ workspace_id: member.id, model_id: "avail", reason: "Evaluations" });
+    expect((posted[0] as { idempotency_key: string }).idempotency_key).toMatch(/^[!-~]{1,128}$/);
+    const done = await screen.findByRole("button", { name: "Requested" });
+    expect(done.hasAttribute("disabled")).toBe(true);
+    vi.unstubAllGlobals();
   });
   it("describes the personal variant in one short line", () => { expect(ws(personal)).toContain("Models you can call from your personal workspace."); });
   it("offers Newest and orders by the catalog's created_at, showing when each model was added", () => {

@@ -121,6 +121,81 @@ pub(super) fn routes() -> Router<Store> {
 }
 // Effective availability is a replacement list, never a union of defaults and overrides.
 const ELIGIBLE: &str = "EXISTS(SELECT 1 FROM catalog_models cm WHERE cm.model_id=m.id AND ((EXISTS(SELECT 1 FROM workspace_catalog_overrides h WHERE h.workspace_id=w.id) AND EXISTS(SELECT 1 FROM workspace_catalog_override_items i WHERE i.workspace_id=w.id AND i.catalog_id=cm.catalog_id)) OR (NOT EXISTS(SELECT 1 FROM workspace_catalog_overrides h WHERE h.workspace_id=w.id) AND EXISTS(SELECT 1 FROM workspace_type_catalogs t WHERE t.kind=w.kind AND t.catalog_id=cm.catalog_id))))";
+/// One workspace's view of one model: `(eligible, allowed)`, where eligible
+/// is the member-facing selection rule (the workspace enabled, the model
+/// enabled and in the workspace's catalogs) and allowed is
+/// `workspace_model_allowed` (selected or directly assigned). `None` for an
+/// unknown workspace or model. Shared by selection and #83 requests.
+async fn availability(
+    tx: &mut Transaction<'_, Postgres>,
+    ws: Uuid,
+    model: Uuid,
+) -> Result<Option<(bool, bool)>, ApiError> {
+    Ok(sqlx::query_as(&format!("SELECT m.enabled AND w.disabled_at IS NULL AND ({ELIGIBLE}),workspace_model_allowed(w.id,m.id) FROM models m CROSS JOIN workspaces w WHERE w.id=$1 AND m.id=$2"))
+        .bind(ws)
+        .bind(model)
+        .fetch_optional(&mut **tx)
+        .await?)
+}
+/// #83: select a requested model for a workspace from its catalog, inside the
+/// approval transaction (which holds the workspace's exclusive authority
+/// scope), with the same eligibility and audit as a workspace admin's
+/// selection. A model the workspace can already use (selected or directly
+/// assigned) is a conflict, never a duplicate.
+pub(super) async fn apply_model_request(
+    tx: &mut Transaction<'_, Postgres>,
+    u: &impl Actor,
+    ws: Uuid,
+    model: Uuid,
+) -> Result<(), ApiError> {
+    match availability(tx, ws, model).await? {
+        Some((_, true)) => {
+            return Err(ApiError(
+                StatusCode::CONFLICT,
+                "The workspace can already use this model",
+            ));
+        }
+        Some((true, false)) => {}
+        _ => {
+            return Err(ApiError(
+                StatusCode::CONFLICT,
+                "The model is no longer available to this workspace",
+            ));
+        }
+    }
+    sqlx::query(
+        "INSERT INTO workspace_model_grants(workspace_id,model_id,source) VALUES($1,$2,'catalog')",
+    )
+    .bind(ws)
+    .bind(model)
+    .execute(&mut **tx)
+    .await?;
+    audit(
+        tx,
+        u,
+        Some(ws),
+        "model.granted",
+        "model",
+        Some(model),
+        json!({"source":"catalog"}),
+    )
+    .await
+}
+/// Whether a member may request `model` for `ws`: `Some(true)` when the
+/// workspace can already use it (selected or directly assigned, both visible
+/// to members), `Some(false)` when it is eligible, `None` otherwise (outside
+/// what members can see).
+pub(super) async fn requestable_model(
+    tx: &mut Transaction<'_, Postgres>,
+    ws: Uuid,
+    model: Uuid,
+) -> Result<Option<bool>, ApiError> {
+    Ok(match availability(tx, ws, model).await? {
+        Some((_, true)) => Some(true),
+        Some((true, false)) => Some(false),
+        _ => None,
+    })
+}
 /// [`retire`] limited to one workspace, for a change of only that
 /// workspace's grants (under its exclusive authority lock and the lineage
 /// locks of its key allowlists).
@@ -828,7 +903,9 @@ pub(super) async fn change_model(
     }
     validate_ids(&mut tx, &[model], "models").await?;
     if add && !direct {
-        let allowed:bool=sqlx::query_scalar(&format!("SELECT m.enabled AND ({ELIGIBLE}) FROM models m CROSS JOIN workspaces w WHERE w.id=$1 AND m.id=$2 AND w.disabled_at IS NULL")).bind(ws).bind(model).fetch_optional(&mut *tx).await?.unwrap_or(false);
+        let allowed = availability(&mut tx, ws, model)
+            .await?
+            .is_some_and(|(eligible, _)| eligible);
         if !allowed {
             return Err(denied());
         }

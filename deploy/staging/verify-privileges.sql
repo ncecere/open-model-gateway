@@ -2,10 +2,10 @@
 DO $$ DECLARE c text; BEGIN
  IF NOT has_table_privilege('gateway_runtime','public.access_requests','SELECT') OR NOT has_column_privilege('gateway_runtime','public.access_requests','status','UPDATE') OR NOT has_column_privilege('gateway_runtime','public.workspaces','discoverable','UPDATE') THEN RAISE EXCEPTION 'request operations unavailable'; END IF;
  IF has_table_privilege('gateway_runtime','public.access_requests','INSERT,UPDATE,DELETE,TRUNCATE') OR has_table_privilege('gateway_runtime','public.access_request_applications','INSERT,UPDATE,DELETE,TRUNCATE') OR has_any_column_privilege('gateway_runtime','public.access_request_applications','UPDATE') THEN RAISE EXCEPTION 'request history mutable'; END IF;
- FOREACH c IN ARRAY ARRAY['id','requester','workspace_id','target_kind','requested_role','reason','idempotency_digest','payload_digest','created_at','expires_at','workspace_name_at_request'] LOOP
+ FOREACH c IN ARRAY ARRAY['id','requester','workspace_id','target_kind','requested_role','reason','idempotency_digest','payload_digest','created_at','expires_at','workspace_name_at_request','model_id','model_name_at_request'] LOOP
   IF has_column_privilege('gateway_runtime','public.access_requests',c,'UPDATE') THEN RAISE EXCEPTION 'mutable request identity: %',c; END IF;
  END LOOP;
- FOREACH c IN ARRAY ARRAY['id','status','target_kind','requested_role','created_at','expires_at','decided_by','decided_at','workspace_name_at_request'] LOOP
+ FOREACH c IN ARRAY ARRAY['id','status','target_kind','requested_role','created_at','expires_at','decided_by','decided_at','workspace_name_at_request','model_name_at_request'] LOOP
   IF has_column_privilege('gateway_runtime','public.access_requests',c,'INSERT') THEN RAISE EXCEPTION 'request initialization bypass: %',c; END IF;
  END LOOP;
  IF has_function_privilege('gateway_runtime','public.access_request_reason_cleanup()','EXECUTE') THEN RAISE EXCEPTION 'cleanup trigger callable'; END IF;
@@ -1198,6 +1198,24 @@ BEGIN
   BEGIN UPDATE access_requests SET status='pending',decided_by=NULL,decided_at=NULL WHERE id=req; RAISE EXCEPTION 'request reopened'; EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN UPDATE access_request_applications SET membership_grant_id=gen_random_uuid() WHERE request_id=req; RAISE EXCEPTION 'application mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   BEGIN DELETE FROM access_request_applications WHERE request_id=req; RAISE EXCEPTION 'application removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ END;
+ -- Model-selection requests (0072): the kind, role and frozen model name derive
+ -- from the target; approval requires the workspace's catalog selection.
+ DECLARE ru uuid:=gen_random_uuid(); decider uuid:=gen_random_uuid(); ws uuid:=gen_random_uuid(); m uuid:=gen_random_uuid(); req uuid; BEGIN
+  INSERT INTO users(id,email) VALUES(ru,'model-request-'||ru||'@example.invalid'),(decider,'model-decider-'||decider||'@example.invalid');
+  INSERT INTO platform_role_grants(user_id,role,source) VALUES(ru,'user','manual');
+  INSERT INTO workspaces(id,name,kind) VALUES(ws,'Model request probe','team');
+  INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source) VALUES(ws,ru,'member','manual');
+  INSERT INTO models(id,public_name) VALUES(m,'probe/model-request-'||m);
+  INSERT INTO access_requests(requester,workspace_id,model_id,reason,idempotency_digest,payload_digest) VALUES(ru,ws,m,'Probe',decode(repeat('ab',32),'hex'),decode(repeat('cd',32),'hex')) RETURNING id INTO req;
+  IF (SELECT (target_kind,requested_role,model_name_at_request) FROM access_requests WHERE id=req) IS DISTINCT FROM ('model_selection'::text,NULL::text,'probe/model-request-'||m) THEN RAISE EXCEPTION 'model request kind or name not derived'; END IF;
+  BEGIN UPDATE access_requests SET model_id=NULL WHERE id=req; RAISE EXCEPTION 'requested model mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  SET CONSTRAINTS access_requests_application,access_request_applications_check DEFERRED;
+  INSERT INTO workspace_model_grants(workspace_id,model_id,source) VALUES(ws,m,'catalog');
+  INSERT INTO access_request_applications(request_id,workspace_id,requester,model_id) VALUES(req,ws,ru,m);
+  UPDATE access_requests SET status='approved',decided_by=decider WHERE id=req;
+  SET CONSTRAINTS access_requests_application,access_request_applications_check IMMEDIATE;
+  BEGIN UPDATE access_request_applications SET model_id=NULL WHERE request_id=req; RAISE EXCEPTION 'model application mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  END;
  -- Work leases (0029): election, renewal, fencing, release and takeover as runtime.
  DECLARE me uuid:=gen_random_uuid(); other uuid:=gen_random_uuid(); term bigint; BEGIN
