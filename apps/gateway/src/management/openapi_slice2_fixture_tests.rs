@@ -2818,7 +2818,7 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         json!(["Vector template positional", vector_content])
     );
     // Every union arm in a valid body: inherit catalogs; limits in the
-    // budgets form (object and positional entries) and the single-budget form.
+    // budgets form (object and positional entries) with every limit set or null.
     let vector_slots = json!([{"name":"crew","role":"member","required":false,"multiple":true}]);
     let vector_model = model(&pool, "contract/vector-template-model").await;
     let vector_shapes = [

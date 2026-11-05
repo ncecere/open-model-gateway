@@ -12,7 +12,12 @@ use super::*;
 use serde::Serialize;
 
 const MAX_REFERENCES: usize = 50;
-const MAX_SLOTS: usize = 10;
+/// Admin and member slots besides the owner.
+const MAX_EXTRA_SLOTS: usize = 9;
+/// Versions per template (the migration enforces the same).
+const MAX_VERSIONS: i32 = 100;
+/// Templates per installation.
+const MAX_TEMPLATES: i64 = 500;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -34,6 +39,8 @@ pub(super) struct Content {
     pub(super) kind: String,
     pub(super) catalogs: Catalogs,
     pub(super) model_ids: Vec<Uuid>,
+    /// Stored as submitted (shape-checked); applying re-parses it as a
+    /// policy body and never reads the stored form directly.
     #[serde(default)]
     pub(super) limits: Option<Value>,
     /// The one owner slot: always required, exactly one user.
@@ -74,6 +81,19 @@ pub(super) async fn validate_content(
     tx: &mut Transaction<'_, Postgres>,
     content: &Value,
 ) -> Result<Content, ApiError> {
+    // Objects only inside content (serde would also take positional arrays),
+    // and an inherit has no catalog_ids key at all, as the contract states.
+    let objects = content.is_object()
+        && content["catalogs"].is_object()
+        && content["owner"].is_object()
+        && content["slots"]
+            .as_array()
+            .is_some_and(|s| s.iter().all(Value::is_object))
+        && (content["catalogs"]["mode"] != "inherit"
+            || content["catalogs"].get("catalog_ids").is_none());
+    if !objects {
+        return Err(invalid());
+    }
     let c: Content = serde_json::from_value(content.clone()).map_err(|_| invalid())?;
     if !matches!(c.kind.as_str(), "team" | "project") {
         return Err(invalid());
@@ -83,7 +103,7 @@ pub(super) async fn validate_content(
         ("replace", Some(ids)) if ids.len() <= MAX_REFERENCES => ids.clone(),
         _ => return Err(invalid()),
     };
-    if c.model_ids.len() > MAX_REFERENCES || c.slots.len() >= MAX_SLOTS {
+    if c.model_ids.len() > MAX_REFERENCES || c.slots.len() > MAX_EXTRA_SLOTS {
         return Err(invalid());
     }
     if !slot_name_valid(&c.owner.name) {
@@ -140,22 +160,19 @@ async fn event(
     tx: &mut Transaction<'_, Postgres>,
     u: &BrowserPrincipal,
     id: Uuid,
-    action: &str,
+    action: &'static str,
     version: i32,
 ) -> Result<(), ApiError> {
     audit(
         tx,
         u,
         None,
-        &format!("workspace_template.{action}"),
+        action,
         "workspace_template",
         Some(id),
         json!({"version":version}),
     )
     .await
-}
-fn name_valid(name: &str) -> bool {
-    valid_name(name)
 }
 async fn insert_version(
     tx: &mut Transaction<'_, Postgres>,
@@ -171,7 +188,14 @@ async fn insert_version(
     .bind(template)
     .fetch_one(&mut **tx)
     .await?;
-    // The hash is of the stored (normalized) content.
+    if version > MAX_VERSIONS {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "This template has the maximum number of versions",
+        )
+        .into());
+    }
+    // The trigger also computes the hash of the stored content; a CHECK binds it.
     sqlx::query("INSERT INTO workspace_template_versions(id,template_id,version,content,content_hash,author) VALUES($1,$2,$3,$4::jsonb,sha256(convert_to($4::jsonb::text,'UTF8')),$5)")
         .bind(Uuid::now_v7())
         .bind(template)
@@ -228,13 +252,23 @@ pub(super) async fn create(
     Extension(u): Extension<BrowserPrincipal>,
     Json(b): Json<NewTemplate>,
 ) -> Result<Json<Value>, ManagementError> {
-    if !name_valid(&b.name) {
+    if !valid_name(&b.name) {
         return Err(invalid().into());
     }
     let mut tx = resources::installation_tx(&s).await?;
     resources::platform_write(&mut tx, &u).await?;
     // Content first: an invalid template is 400 whatever its name.
     validate_content(&mut tx, &b.content).await?;
+    let templates: i64 = sqlx::query_scalar("SELECT count(*) FROM workspace_templates")
+        .fetch_one(&mut *tx)
+        .await?;
+    if templates >= MAX_TEMPLATES {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "The installation has the maximum number of templates",
+        )
+        .into());
+    }
     let id = Uuid::now_v7();
     sqlx::query("INSERT INTO workspace_templates(id,name,created_by) VALUES($1,$2,$3)")
         .bind(id)
@@ -244,7 +278,7 @@ pub(super) async fn create(
         .await
         .map_err(conflict_on_unique)?;
     let version = insert_version(&mut tx, &u, id, &b.content).await?;
-    event(&mut tx, &u, id, "created", version).await?;
+    event(&mut tx, &u, id, "workspace_template.created", version).await?;
     let result = one(&mut tx, id).await?;
     tx.commit().await?;
     Ok(result)
@@ -267,7 +301,14 @@ pub(super) async fn create_version(
         return Err(missing().into());
     }
     let version = insert_version(&mut tx, &u, id, &b.content).await?;
-    event(&mut tx, &u, id, "version_created", version).await?;
+    event(
+        &mut tx,
+        &u,
+        id,
+        "workspace_template.version_created",
+        version,
+    )
+    .await?;
     let result = one(&mut tx, id).await?;
     tx.commit().await?;
     Ok(result)
@@ -307,13 +348,8 @@ async fn transition(
 ) -> ApiResult {
     let mut tx = resources::installation_tx(s).await?;
     resources::platform_write(&mut tx, u).await?;
-    // Serializes steps on one template (versions are numbered per template).
-    sqlx::query(
-        "SELECT pg_advisory_xact_lock(hashtextextended('workspace-template:'||$1::text,0))",
-    )
-    .bind(id)
-    .execute(&mut *tx)
-    .await?;
+    // The installation row lock (installation_tx) serializes template steps;
+    // the row lock below is defence in depth.
     let row = version_row(&mut tx, id, version).await?;
     match step {
         "review" => {
@@ -331,9 +367,15 @@ async fn transition(
             if !row.reviewed || row.published || row.retired {
                 return Err(step_conflict());
             }
-            // One published version per template: the previous one retires.
-            sqlx::query("UPDATE workspace_template_versions SET retired_at=clock_timestamp() WHERE template_id=$1 AND published_at IS NOT NULL AND retired_at IS NULL")
-                .bind(id).execute(&mut *tx).await?;
+            // One published version per template: the previous one retires
+            // (audited as its own retirement).
+            let previous: Option<i32> = sqlx::query_scalar("UPDATE workspace_template_versions SET retired_at=clock_timestamp() WHERE template_id=$1 AND published_at IS NOT NULL AND retired_at IS NULL RETURNING version")
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await?;
+            if let Some(previous) = previous {
+                event(&mut tx, u, id, "workspace_template.retired", previous).await?;
+            }
             sqlx::query("UPDATE workspace_template_versions SET published_at=clock_timestamp() WHERE template_id=$1 AND version=$2")
                 .bind(id).bind(version).execute(&mut *tx).await?;
         }
@@ -346,9 +388,9 @@ async fn transition(
         }
     }
     let action = match step {
-        "review" => "reviewed",
-        "publish" => "published",
-        _ => "retired",
+        "review" => "workspace_template.reviewed",
+        "publish" => "workspace_template.published",
+        _ => "workspace_template.retired",
     };
     event(&mut tx, u, id, action, version).await?;
     let result = one(&mut tx, id).await?;

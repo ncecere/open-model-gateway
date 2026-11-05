@@ -5718,7 +5718,7 @@
           ]
         },
         "content": {
-          "$ref": "#/components/schemas/AccessTemplateContent"
+          "$ref": "#/components/schemas/AccessTemplateStoredContent"
         },
         "content_hash": {
           "type": "string",
@@ -5940,7 +5940,7 @@
           "const": "pending_review"
         },
         "content": {
-          "$ref": "#/components/schemas/AccessTemplateContent"
+          "$ref": "#/components/schemas/AccessTemplateStoredContent"
         },
         "content_hash": {
           "type": "string",
@@ -6001,6 +6001,237 @@
         }
       },
       "description": "#84: the created template with its version 1, pending review."
+    },
+    "AccessTemplateStoredContent": {
+      "type": "object",
+      "required": [
+        "kind",
+        "catalogs",
+        "model_ids",
+        "owner",
+        "slots",
+        "limits"
+      ],
+      "additionalProperties": false,
+      "description": "#84: the stored, reviewed content (references only): canonical, with limits always present (null when none).",
+      "properties": {
+        "kind": {
+          "enum": [
+            "team",
+            "project"
+          ]
+        },
+        "catalogs": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "mode"
+              ],
+              "properties": {
+                "mode": {
+                  "const": "inherit"
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": [
+                "mode",
+                "catalog_ids"
+              ],
+              "properties": {
+                "mode": {
+                  "const": "replace"
+                },
+                "catalog_ids": {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  },
+                  "description": "At most 50 distinct, existing catalogs (refused by the handler with 400 beyond that)."
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "model_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "description": "At most 50 distinct, existing models (refused by the handler with 400 beyond that)."
+        },
+        "limits": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "requests_per_minute": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 2147483647
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "tokens_per_minute": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 2147483647
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "concurrent_requests": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 2147483647
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "concurrent_jobs": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 2147483647
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "storage_bytes": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 1125899906842624
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "key_issuances_per_holder": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 10000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "key_issuances_per_workspace": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 10000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "budgets": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SetupBudgetInput"
+                  },
+                  "maxItems": 4,
+                  "uniqueItems": true,
+                  "description": "A full replacement set: at most one budget per period. The handler refuses two entries for the same period even when their amounts differ (parse_budgets); uniqueItems can only forbid identical entries, so that case is described, not expressed."
+                }
+              },
+              "required": [
+                "requests_per_minute",
+                "tokens_per_minute",
+                "concurrent_requests",
+                "budgets"
+              ],
+              "additionalProperties": false,
+              "description": "The object form of a workspace policy body with the budgets list (the single monthly_budget_microusd form is refused in templates)."
+            }
+          ],
+          "description": "A workspace policy body in its object form with a budgets list, validated tighten-only against the live layers when applied; or null for no local limits."
+        },
+        "slots": {
+          "type": "array",
+          "minItems": 0,
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "role",
+              "required",
+              "multiple"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32,
+                "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+              },
+              "role": {
+                "enum": [
+                  "admin",
+                  "member"
+                ]
+              },
+              "required": {
+                "type": "boolean"
+              },
+              "multiple": {
+                "type": "boolean"
+              }
+            }
+          },
+          "description": "Up to 9 admin/member slots with names distinct from each other and from the owner slot (the handler refuses others with 400)."
+        },
+        "owner": {
+          "type": "object",
+          "required": [
+            "name"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32,
+              "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+            }
+          },
+          "description": "The one owner slot: always required, exactly one user."
+        }
+      }
     }
   }
 }

@@ -3609,7 +3609,7 @@
             "$ref": "#/components/schemas/IdentityUuid"
           },
           "content": {
-            "$ref": "#/components/schemas/AccessTemplateContent"
+            "$ref": "#/components/schemas/AccessTemplateStoredContent"
           },
           "content_hash": {
             "description": "SHA-256 of the stored content.",
@@ -3652,6 +3652,237 @@
         ],
         "type": "object"
       },
+      "AccessTemplateStoredContent": {
+        "additionalProperties": false,
+        "description": "#84: the stored, reviewed content (references only): canonical, with limits always present (null when none).",
+        "properties": {
+          "catalogs": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "mode": {
+                    "const": "inherit"
+                  }
+                },
+                "required": [
+                  "mode"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "catalog_ids": {
+                    "description": "At most 50 distinct, existing catalogs (refused by the handler with 400 beyond that).",
+                    "items": {
+                      "$ref": "#/components/schemas/IdentityUuid"
+                    },
+                    "type": "array",
+                    "uniqueItems": true
+                  },
+                  "mode": {
+                    "const": "replace"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "catalog_ids"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "kind": {
+            "enum": [
+              "team",
+              "project"
+            ]
+          },
+          "limits": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "additionalProperties": false,
+                "description": "The object form of a workspace policy body with the budgets list (the single monthly_budget_microusd form is refused in templates).",
+                "properties": {
+                  "budgets": {
+                    "description": "A full replacement set: at most one budget per period. The handler refuses two entries for the same period even when their amounts differ (parse_budgets); uniqueItems can only forbid identical entries, so that case is described, not expressed.",
+                    "items": {
+                      "$ref": "#/components/schemas/SetupBudgetInput"
+                    },
+                    "maxItems": 4,
+                    "type": "array",
+                    "uniqueItems": true
+                  },
+                  "concurrent_jobs": {
+                    "anyOf": [
+                      {
+                        "maximum": 2147483647,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "concurrent_requests": {
+                    "anyOf": [
+                      {
+                        "maximum": 2147483647,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "key_issuances_per_holder": {
+                    "anyOf": [
+                      {
+                        "maximum": 10000,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "key_issuances_per_workspace": {
+                    "anyOf": [
+                      {
+                        "maximum": 10000,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "requests_per_minute": {
+                    "anyOf": [
+                      {
+                        "maximum": 2147483647,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "storage_bytes": {
+                    "anyOf": [
+                      {
+                        "maximum": 1125899906842624,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "tokens_per_minute": {
+                    "anyOf": [
+                      {
+                        "maximum": 2147483647,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "requests_per_minute",
+                  "tokens_per_minute",
+                  "concurrent_requests",
+                  "budgets"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "A workspace policy body in its object form with a budgets list, validated tighten-only against the live layers when applied; or null for no local limits."
+          },
+          "model_ids": {
+            "description": "At most 50 distinct, existing models (refused by the handler with 400 beyond that).",
+            "items": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "owner": {
+            "additionalProperties": false,
+            "description": "The one owner slot: always required, exactly one user.",
+            "properties": {
+              "name": {
+                "maxLength": 32,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_-]{0,31}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          },
+          "slots": {
+            "description": "Up to 9 admin/member slots with names distinct from each other and from the owner slot (the handler refuses others with 400).",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "multiple": {
+                  "type": "boolean"
+                },
+                "name": {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "pattern": "^[a-z][a-z0-9_-]{0,31}$",
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean"
+                },
+                "role": {
+                  "enum": [
+                    "admin",
+                    "member"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "role",
+                "required",
+                "multiple"
+              ],
+              "type": "object"
+            },
+            "minItems": 0,
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "catalogs",
+          "model_ids",
+          "owner",
+          "slots",
+          "limits"
+        ],
+        "type": "object"
+      },
       "AccessTemplateVersion": {
         "additionalProperties": false,
         "properties": {
@@ -3659,7 +3890,7 @@
             "$ref": "#/components/schemas/IdentityUuid"
           },
           "content": {
-            "$ref": "#/components/schemas/AccessTemplateContent"
+            "$ref": "#/components/schemas/AccessTemplateStoredContent"
           },
           "content_hash": {
             "description": "SHA-256 of the stored content.",

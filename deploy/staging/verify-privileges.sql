@@ -1226,15 +1226,27 @@ BEGIN
  -- someone other than the author; published once, after review; immutable.
  DECLARE t_author uuid:=gen_random_uuid(); t_reviewer uuid:=gen_random_uuid(); t uuid:=gen_random_uuid(); BEGIN
   INSERT INTO users(id,email) VALUES(t_author,'template-author-'||t_author||'@example.invalid'),(t_reviewer,'template-reviewer-'||t_reviewer||'@example.invalid');
+  INSERT INTO platform_role_grants(user_id,role,source) VALUES(t_reviewer,'admin','manual');
   INSERT INTO workspace_templates(id,name,created_by) VALUES(t,'Probe template '||t,t_author);
   INSERT INTO workspace_template_versions(id,template_id,version,content,content_hash,author) VALUES(gen_random_uuid(),t,1,'{"kind":"team"}',sha256('x'::bytea),t_author);
+  IF (SELECT content_hash<>sha256(convert_to(content::text,'UTF8')) FROM workspace_template_versions WHERE template_id=t) THEN RAISE EXCEPTION 'template hash not computed by the database'; END IF;
+  BEGIN UPDATE workspace_template_versions SET reviewed_by=(SELECT id FROM users WHERE id NOT IN (SELECT user_id FROM effective_platform_roles WHERE role='admin') AND id<>t_author LIMIT 1),reviewed_at=now() WHERE template_id=t; RAISE EXCEPTION 'non-admin reviewed a template'; EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN INSERT INTO workspace_template_versions(id,template_id,version,content,content_hash,author,published_at) VALUES(gen_random_uuid(),t,2,'{}',sha256('x'::bytea),t_author,now()); RAISE EXCEPTION 'published template version inserted'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   BEGIN UPDATE workspace_template_versions SET published_at=now() WHERE template_id=t; RAISE EXCEPTION 'unreviewed template published'; EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN UPDATE workspace_template_versions SET reviewed_by=t_author,reviewed_at=now() WHERE template_id=t; RAISE EXCEPTION 'author reviewed its own template'; EXCEPTION WHEN check_violation THEN NULL; END;
   UPDATE workspace_template_versions SET reviewed_by=t_reviewer,reviewed_at=now() WHERE template_id=t;
   UPDATE workspace_template_versions SET published_at=now() WHERE template_id=t;
-  BEGIN UPDATE workspace_template_versions SET content='{}' WHERE template_id=t; RAISE EXCEPTION 'template content mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
-  BEGIN UPDATE workspace_template_versions SET published_at=now()-interval '1 day' WHERE template_id=t; RAISE EXCEPTION 'template publication rewritten'; EXCEPTION WHEN check_violation THEN NULL; END;
+  -- The handler's own statements: the row lock, a second version, a second
+  -- publication refused by the index, retirement then publication.
+  PERFORM 1 FROM workspace_template_versions WHERE template_id=t AND version=1 FOR SHARE;
+  INSERT INTO workspace_template_versions(id,template_id,version,content,content_hash,author) VALUES(gen_random_uuid(),t,2,'{"kind":"project"}',sha256('x'::bytea),t_author);
+  UPDATE workspace_template_versions SET reviewed_by=t_reviewer,reviewed_at=now() WHERE template_id=t AND version=2;
+  BEGIN UPDATE workspace_template_versions SET published_at=now() WHERE template_id=t AND version=2; RAISE EXCEPTION 'two published template versions'; EXCEPTION WHEN unique_violation THEN NULL; END;
+  UPDATE workspace_template_versions SET retired_at=now() WHERE template_id=t AND version=1;
+  UPDATE workspace_template_versions SET published_at=now() WHERE template_id=t AND version=2;
+  BEGIN UPDATE workspace_template_versions SET retired_at=NULL WHERE template_id=t AND version=1; RAISE EXCEPTION 'template version un-retired'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE workspace_template_versions SET content='{}' WHERE template_id=t AND version=2; RAISE EXCEPTION 'template content mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE workspace_template_versions SET published_at=now()-interval '1 day' WHERE template_id=t AND version=2; RAISE EXCEPTION 'template publication rewritten'; EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN DELETE FROM workspace_template_versions WHERE template_id=t; RAISE EXCEPTION 'template version removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   BEGIN UPDATE workspace_templates SET name='renamed' WHERE id=t; RAISE EXCEPTION 'template renamed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  END;
