@@ -50,6 +50,7 @@ pub(crate) const SLICE2_AREAS: &[&str] = &[
     "platform/access-requests",
     "platform/oidc",
     "platform/users",
+    "platform/workspace-templates",
     "platform/workspace-types",
     "platform/workspaces",
     "workspaces/{ws}",
@@ -1223,7 +1224,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(count, 255);
+        assert_eq!(count, 262);
     }
     #[test]
     fn management_openapi_response_rejects_incomplete_completed_slot() {

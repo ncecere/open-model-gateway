@@ -1222,6 +1222,22 @@ BEGIN
   BEGIN UPDATE access_request_notification_reads SET state='denied' WHERE user_id=ru; RAISE EXCEPTION 'read mark mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   BEGIN DELETE FROM access_request_notification_reads WHERE user_id=ru; RAISE EXCEPTION 'read mark removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  END;
+ -- Onboarding templates (0074): created pending on the server clock; reviewed by
+ -- someone other than the author; published once, after review; immutable.
+ DECLARE t_author uuid:=gen_random_uuid(); t_reviewer uuid:=gen_random_uuid(); t uuid:=gen_random_uuid(); BEGIN
+  INSERT INTO users(id,email) VALUES(t_author,'template-author-'||t_author||'@example.invalid'),(t_reviewer,'template-reviewer-'||t_reviewer||'@example.invalid');
+  INSERT INTO workspace_templates(id,name,created_by) VALUES(t,'Probe template '||t,t_author);
+  INSERT INTO workspace_template_versions(id,template_id,version,content,content_hash,author) VALUES(gen_random_uuid(),t,1,'{"kind":"team"}',sha256('x'::bytea),t_author);
+  BEGIN INSERT INTO workspace_template_versions(id,template_id,version,content,content_hash,author,published_at) VALUES(gen_random_uuid(),t,2,'{}',sha256('x'::bytea),t_author,now()); RAISE EXCEPTION 'published template version inserted'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE workspace_template_versions SET published_at=now() WHERE template_id=t; RAISE EXCEPTION 'unreviewed template published'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE workspace_template_versions SET reviewed_by=t_author,reviewed_at=now() WHERE template_id=t; RAISE EXCEPTION 'author reviewed its own template'; EXCEPTION WHEN check_violation THEN NULL; END;
+  UPDATE workspace_template_versions SET reviewed_by=t_reviewer,reviewed_at=now() WHERE template_id=t;
+  UPDATE workspace_template_versions SET published_at=now() WHERE template_id=t;
+  BEGIN UPDATE workspace_template_versions SET content='{}' WHERE template_id=t; RAISE EXCEPTION 'template content mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE workspace_template_versions SET published_at=now()-interval '1 day' WHERE template_id=t; RAISE EXCEPTION 'template publication rewritten'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN DELETE FROM workspace_template_versions WHERE template_id=t; RAISE EXCEPTION 'template version removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE workspace_templates SET name='renamed' WHERE id=t; RAISE EXCEPTION 'template renamed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ END;
  -- Work leases (0029): election, renewal, fencing, release and takeover as runtime.
  DECLARE me uuid:=gen_random_uuid(); other uuid:=gen_random_uuid(); term bigint; BEGIN
   term:=omg_lease_acquire('privilege_probe',me,30);

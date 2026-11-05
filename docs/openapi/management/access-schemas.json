@@ -5458,6 +5458,549 @@
       },
       "additionalProperties": false,
       "description": "Decision response of a deny call: requester-private projection (no requester identity) after the decision. decided_by and decided_at are always set; a denial never carries a membership grant. The platform decision routes decide membership requests only (a model-selection request is 403 there)."
+    },
+    "AccessTemplateContent": {
+      "type": "object",
+      "required": [
+        "kind",
+        "catalogs",
+        "model_ids",
+        "owner",
+        "slots"
+      ],
+      "additionalProperties": false,
+      "description": "#84: reviewed references only (no secrets, emails, platform roles or group mappings). The handler also requires distinct slot names, distinct existing catalog and model ids (at most 50 each), and a limits body valid as the object form of a workspace policy (validated tighten-only against the live layers when applied). An omitted limits is null; the stored content always carries it.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "team",
+            "project"
+          ]
+        },
+        "catalogs": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "mode"
+              ],
+              "properties": {
+                "mode": {
+                  "const": "inherit"
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": [
+                "mode",
+                "catalog_ids"
+              ],
+              "properties": {
+                "mode": {
+                  "const": "replace"
+                },
+                "catalog_ids": {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": {
+                    "$ref": "#/components/schemas/IdentityUuid"
+                  },
+                  "description": "At most 50 distinct, existing catalogs (refused by the handler with 400 beyond that)."
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "model_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "description": "At most 50 distinct, existing models (refused by the handler with 400 beyond that)."
+        },
+        "limits": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "requests_per_minute": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 2147483647
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "tokens_per_minute": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 2147483647
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "concurrent_requests": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 2147483647
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "concurrent_jobs": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 2147483647
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "storage_bytes": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 1125899906842624
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "key_issuances_per_holder": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 10000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "key_issuances_per_workspace": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 10000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "budgets": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SetupBudgetInput"
+                  },
+                  "maxItems": 4,
+                  "uniqueItems": true,
+                  "description": "A full replacement set: at most one budget per period. The handler refuses two entries for the same period even when their amounts differ (parse_budgets); uniqueItems can only forbid identical entries, so that case is described, not expressed."
+                }
+              },
+              "required": [
+                "requests_per_minute",
+                "tokens_per_minute",
+                "concurrent_requests",
+                "budgets"
+              ],
+              "additionalProperties": false,
+              "description": "The object form of a workspace policy body with the budgets list (the single monthly_budget_microusd form is refused in templates)."
+            }
+          ],
+          "description": "A workspace policy body in its object form with a budgets list, validated tighten-only against the live layers when applied; or null for no local limits."
+        },
+        "slots": {
+          "type": "array",
+          "minItems": 0,
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "role",
+              "required",
+              "multiple"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32,
+                "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+              },
+              "role": {
+                "enum": [
+                  "admin",
+                  "member"
+                ]
+              },
+              "required": {
+                "type": "boolean"
+              },
+              "multiple": {
+                "type": "boolean"
+              }
+            }
+          },
+          "description": "Up to 9 admin/member slots with names distinct from each other and from the owner slot (the handler refuses others with 400)."
+        },
+        "owner": {
+          "type": "object",
+          "required": [
+            "name"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32,
+              "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+            }
+          },
+          "description": "The one owner slot: always required, exactly one user."
+        }
+      }
+    },
+    "AccessTemplateVersion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "state",
+        "content",
+        "content_hash",
+        "author",
+        "created_at",
+        "reviewed_by",
+        "reviewed_at",
+        "published_at",
+        "retired_at"
+      ],
+      "properties": {
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "state": {
+          "enum": [
+            "pending_review",
+            "reviewed",
+            "published",
+            "retired"
+          ]
+        },
+        "content": {
+          "$ref": "#/components/schemas/AccessTemplateContent"
+        },
+        "content_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 of the stored content."
+        },
+        "author": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "reviewed_by": {
+          "$ref": "#/components/schemas/IdentityNullableUuid"
+        },
+        "reviewed_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "published_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "retired_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        }
+      }
+    },
+    "AccessTemplate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "created_by",
+        "created_at",
+        "versions"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "created_by": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "versions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/components/schemas/AccessTemplateVersion"
+          },
+          "description": "Newest first."
+        }
+      }
+    },
+    "post_api_v1_platform_workspace_templatesRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "name",
+            "content"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
+              "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank."
+            },
+            "content": {
+              "$ref": "#/components/schemas/AccessTemplateContent"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
+              "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank."
+            },
+            {
+              "$ref": "#/components/schemas/AccessTemplateContent"
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2,
+          "items": false
+        }
+      ],
+      "description": "Serde accepts the closed object or the positional array [name, content]."
+    },
+    "post_api_v1_platform_workspace_templatesResponse": {
+      "$ref": "#/components/schemas/AccessTemplateCreated"
+    },
+    "get_api_v1_platform_workspace_templatesRequest": false,
+    "get_api_v1_platform_workspace_templatesResponse": {
+      "type": "object",
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "name",
+              "created_at",
+              "latest_version",
+              "published_version"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/IdentityUuid"
+              },
+              "name": {
+                "type": "string"
+              },
+              "created_at": {
+                "$ref": "#/components/schemas/IdentityTime"
+              },
+              "latest_version": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "published_version": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "get_api_v1_platform_workspace_templates_by_idRequest": false,
+    "get_api_v1_platform_workspace_templates_by_idResponse": {
+      "$ref": "#/components/schemas/AccessTemplate"
+    },
+    "post_api_v1_platform_workspace_templates_by_id_versionsRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "content"
+          ],
+          "properties": {
+            "content": {
+              "$ref": "#/components/schemas/AccessTemplateContent"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "$ref": "#/components/schemas/AccessTemplateContent"
+            }
+          ],
+          "minItems": 1,
+          "maxItems": 1,
+          "items": false
+        }
+      ],
+      "description": "Serde accepts the closed object or the positional array [content]."
+    },
+    "post_api_v1_platform_workspace_templates_by_id_versionsResponse": {
+      "$ref": "#/components/schemas/AccessTemplate"
+    },
+    "post_api_v1_platform_workspace_templates_by_id_versions_by_version_reviewRequest": false,
+    "post_api_v1_platform_workspace_templates_by_id_versions_by_version_reviewResponse": {
+      "$ref": "#/components/schemas/AccessTemplate"
+    },
+    "post_api_v1_platform_workspace_templates_by_id_versions_by_version_publishRequest": false,
+    "post_api_v1_platform_workspace_templates_by_id_versions_by_version_publishResponse": {
+      "$ref": "#/components/schemas/AccessTemplate"
+    },
+    "post_api_v1_platform_workspace_templates_by_id_versions_by_version_retireRequest": false,
+    "post_api_v1_platform_workspace_templates_by_id_versions_by_version_retireResponse": {
+      "$ref": "#/components/schemas/AccessTemplate"
+    },
+    "AccessTemplatePendingVersion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "state",
+        "content",
+        "content_hash",
+        "author",
+        "created_at",
+        "reviewed_by",
+        "reviewed_at",
+        "published_at",
+        "retired_at"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "state": {
+          "const": "pending_review"
+        },
+        "content": {
+          "$ref": "#/components/schemas/AccessTemplateContent"
+        },
+        "content_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 of the stored content."
+        },
+        "author": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "reviewed_by": {
+          "type": "null"
+        },
+        "reviewed_at": {
+          "type": "null"
+        },
+        "published_at": {
+          "type": "null"
+        },
+        "retired_at": {
+          "type": "null"
+        }
+      },
+      "description": "A just-created template's only version: version 1, pending review."
+    },
+    "AccessTemplateCreated": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "created_by",
+        "created_at",
+        "versions"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "created_by": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "versions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "$ref": "#/components/schemas/AccessTemplatePendingVersion"
+          }
+        }
+      },
+      "description": "#84: the created template with its version 1, pending review."
     }
   }
 }

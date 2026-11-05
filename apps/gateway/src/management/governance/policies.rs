@@ -1279,6 +1279,13 @@ pub(super) async fn workspace_policy(
     tx.commit().await?;
     Ok(Json(value))
 }
+/// #84: a template's limits body has the shape of `PUT /workspaces/{ws}/policy`
+/// (it is validated tighten-only against the live layers when applied).
+pub(crate) fn template_limits_valid(v: &Value) -> Result<(), ApiError> {
+    let p: Policy = serde_json::from_value(v.clone()).map_err(|_| invalid())?;
+    p.limits(&Limits::default(), BudgetPeriod::Month)?;
+    Ok(())
+}
 pub(super) async fn put_workspace_policy(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,

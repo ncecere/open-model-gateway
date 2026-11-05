@@ -22,8 +22,8 @@ fn content(catalog: Uuid, model: Uuid) -> Value {
         "catalogs": {"mode": "replace", "catalog_ids": [catalog]},
         "model_ids": [model],
         "limits": null,
+        "owner": {"name": "lead"},
         "slots": [
-            {"name": "lead", "role": "owner", "required": true, "multiple": false},
             {"name": "engineers", "role": "member", "required": false, "multiple": true}
         ]
     })
@@ -108,7 +108,7 @@ async fn templates_are_reviewed_by_another_admin_before_publication(pool: PgPool
     );
     // A new version is pending; publishing it retires the previous one.
     let mut next = content(c, m);
-    next["slots"][1]["role"] = json!("admin");
+    next["slots"][0]["role"] = json!("admin");
     let (status, t2) = call(
         &f.s,
         &f.admin,
@@ -219,13 +219,13 @@ async fn template_content_is_references_only_and_validated(pool: PgPool) {
         with("/catalogs", json!({"mode":"replace","catalog_ids":[Uuid::new_v4()]})),
         with("/catalogs", json!({"mode":"merge"})),
         with("/model_ids", json!([Uuid::new_v4()])),
-        with("/slots", json!([])),
-        with("/slots", json!([{"name":"a","role":"owner","required":false,"multiple":false}])),
-        with("/slots", json!([{"name":"a","role":"owner","required":true,"multiple":true}])),
-        with("/slots", json!([{"name":"a","role":"owner","required":true,"multiple":false},{"name":"b","role":"owner","required":true,"multiple":false}])),
-        with("/slots", json!([{"name":"a","role":"owner","required":true,"multiple":false},{"name":"a","role":"member","required":false,"multiple":true}])),
-        with("/slots", json!([{"name":"Lead Person","role":"owner","required":true,"multiple":false}])),
-        with("/slots", json!([{"name":"lead","role":"platform_admin","required":true,"multiple":false}])),
+        with("/owner", json!({"name":"Lead Person"})),
+        with("/owner", json!({"name":"lead","multiple":true})),
+        with("/slots", json!([{"name":"a","role":"owner","required":true,"multiple":false}])),
+        with("/slots", json!([{"name":"lead","role":"member","required":false,"multiple":true}])),
+        with("/slots", json!([{"name":"a","role":"member","required":false,"multiple":true},{"name":"a","role":"admin","required":false,"multiple":true}])),
+        with("/slots", json!([{"name":"x","role":"platform_admin","required":true,"multiple":false}])),
+        with("/slots", json!((0..10).map(|n| json!({"name":format!("s{n}"),"role":"member","required":false,"multiple":true})).collect::<Vec<_>>())),
         with("/limits", json!({"requests_per_minute":"lots"})),
     ]
     .into_iter()

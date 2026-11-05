@@ -3304,6 +3304,410 @@
         ],
         "type": "object"
       },
+      "AccessTemplate": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "created_by": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "versions": {
+            "description": "Newest first.",
+            "items": {
+              "$ref": "#/components/schemas/AccessTemplateVersion"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "created_by",
+          "created_at",
+          "versions"
+        ],
+        "type": "object"
+      },
+      "AccessTemplateContent": {
+        "additionalProperties": false,
+        "description": "#84: reviewed references only (no secrets, emails, platform roles or group mappings). The handler also requires distinct slot names, distinct existing catalog and model ids (at most 50 each), and a limits body valid as the object form of a workspace policy (validated tighten-only against the live layers when applied). An omitted limits is null; the stored content always carries it.",
+        "properties": {
+          "catalogs": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "mode": {
+                    "const": "inherit"
+                  }
+                },
+                "required": [
+                  "mode"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "catalog_ids": {
+                    "description": "At most 50 distinct, existing catalogs (refused by the handler with 400 beyond that).",
+                    "items": {
+                      "$ref": "#/components/schemas/IdentityUuid"
+                    },
+                    "type": "array",
+                    "uniqueItems": true
+                  },
+                  "mode": {
+                    "const": "replace"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "catalog_ids"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "kind": {
+            "enum": [
+              "team",
+              "project"
+            ]
+          },
+          "limits": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "additionalProperties": false,
+                "description": "The object form of a workspace policy body with the budgets list (the single monthly_budget_microusd form is refused in templates).",
+                "properties": {
+                  "budgets": {
+                    "description": "A full replacement set: at most one budget per period. The handler refuses two entries for the same period even when their amounts differ (parse_budgets); uniqueItems can only forbid identical entries, so that case is described, not expressed.",
+                    "items": {
+                      "$ref": "#/components/schemas/SetupBudgetInput"
+                    },
+                    "maxItems": 4,
+                    "type": "array",
+                    "uniqueItems": true
+                  },
+                  "concurrent_jobs": {
+                    "anyOf": [
+                      {
+                        "maximum": 2147483647,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "concurrent_requests": {
+                    "anyOf": [
+                      {
+                        "maximum": 2147483647,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "key_issuances_per_holder": {
+                    "anyOf": [
+                      {
+                        "maximum": 10000,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "key_issuances_per_workspace": {
+                    "anyOf": [
+                      {
+                        "maximum": 10000,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "requests_per_minute": {
+                    "anyOf": [
+                      {
+                        "maximum": 2147483647,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "storage_bytes": {
+                    "anyOf": [
+                      {
+                        "maximum": 1125899906842624,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "tokens_per_minute": {
+                    "anyOf": [
+                      {
+                        "maximum": 2147483647,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "requests_per_minute",
+                  "tokens_per_minute",
+                  "concurrent_requests",
+                  "budgets"
+                ],
+                "type": "object"
+              }
+            ],
+            "description": "A workspace policy body in its object form with a budgets list, validated tighten-only against the live layers when applied; or null for no local limits."
+          },
+          "model_ids": {
+            "description": "At most 50 distinct, existing models (refused by the handler with 400 beyond that).",
+            "items": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "owner": {
+            "additionalProperties": false,
+            "description": "The one owner slot: always required, exactly one user.",
+            "properties": {
+              "name": {
+                "maxLength": 32,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_-]{0,31}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          },
+          "slots": {
+            "description": "Up to 9 admin/member slots with names distinct from each other and from the owner slot (the handler refuses others with 400).",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "multiple": {
+                  "type": "boolean"
+                },
+                "name": {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "pattern": "^[a-z][a-z0-9_-]{0,31}$",
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean"
+                },
+                "role": {
+                  "enum": [
+                    "admin",
+                    "member"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "role",
+                "required",
+                "multiple"
+              ],
+              "type": "object"
+            },
+            "minItems": 0,
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "catalogs",
+          "model_ids",
+          "owner",
+          "slots"
+        ],
+        "type": "object"
+      },
+      "AccessTemplateCreated": {
+        "additionalProperties": false,
+        "description": "#84: the created template with its version 1, pending review.",
+        "properties": {
+          "created_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "created_by": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/AccessTemplatePendingVersion"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "created_by",
+          "created_at",
+          "versions"
+        ],
+        "type": "object"
+      },
+      "AccessTemplatePendingVersion": {
+        "additionalProperties": false,
+        "description": "A just-created template's only version: version 1, pending review.",
+        "properties": {
+          "author": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "content": {
+            "$ref": "#/components/schemas/AccessTemplateContent"
+          },
+          "content_hash": {
+            "description": "SHA-256 of the stored content.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "published_at": {
+            "type": "null"
+          },
+          "retired_at": {
+            "type": "null"
+          },
+          "reviewed_at": {
+            "type": "null"
+          },
+          "reviewed_by": {
+            "type": "null"
+          },
+          "state": {
+            "const": "pending_review"
+          },
+          "version": {
+            "const": 1
+          }
+        },
+        "required": [
+          "version",
+          "state",
+          "content",
+          "content_hash",
+          "author",
+          "created_at",
+          "reviewed_by",
+          "reviewed_at",
+          "published_at",
+          "retired_at"
+        ],
+        "type": "object"
+      },
+      "AccessTemplateVersion": {
+        "additionalProperties": false,
+        "properties": {
+          "author": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "content": {
+            "$ref": "#/components/schemas/AccessTemplateContent"
+          },
+          "content_hash": {
+            "description": "SHA-256 of the stored content.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "published_at": {
+            "$ref": "#/components/schemas/IdentityNullableTime"
+          },
+          "retired_at": {
+            "$ref": "#/components/schemas/IdentityNullableTime"
+          },
+          "reviewed_at": {
+            "$ref": "#/components/schemas/IdentityNullableTime"
+          },
+          "reviewed_by": {
+            "$ref": "#/components/schemas/IdentityNullableUuid"
+          },
+          "state": {
+            "enum": [
+              "pending_review",
+              "reviewed",
+              "published",
+              "retired"
+            ]
+          },
+          "version": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "state",
+          "content",
+          "content_hash",
+          "author",
+          "created_at",
+          "reviewed_by",
+          "reviewed_at",
+          "published_at",
+          "retired_at"
+        ],
+        "type": "object"
+      },
       "AccessUser": {
         "additionalProperties": false,
         "properties": {
@@ -44339,6 +44743,56 @@
       "get_api_v1_platform_users_by_user_exportResponse": {
         "$ref": "#/components/schemas/AccessPlatformExport"
       },
+      "get_api_v1_platform_workspace_templatesRequest": false,
+      "get_api_v1_platform_workspace_templatesResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "created_at": {
+                  "$ref": "#/components/schemas/IdentityTime"
+                },
+                "id": {
+                  "$ref": "#/components/schemas/IdentityUuid"
+                },
+                "latest_version": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "published_version": {
+                  "minimum": 1,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "created_at",
+                "latest_version",
+                "published_version"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "type": "object"
+      },
+      "get_api_v1_platform_workspace_templates_by_idRequest": false,
+      "get_api_v1_platform_workspace_templates_by_idResponse": {
+        "$ref": "#/components/schemas/AccessTemplate"
+      },
       "get_api_v1_platform_workspace_types_by_kind_catalogsRequest": false,
       "get_api_v1_platform_workspace_types_by_kind_catalogsResponse": {
         "additionalProperties": false,
@@ -47873,6 +48327,95 @@
       "post_api_v1_platform_users_by_user_sessions_revokeRequest": false,
       "post_api_v1_platform_users_by_user_sessions_revokeResponse": {
         "$ref": "#/components/schemas/IdentityRevoked"
+      },
+      "post_api_v1_platform_workspace_templatesRequest": {
+        "description": "Serde accepts the closed object or the positional array [name, content].",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/AccessTemplateContent"
+              },
+              "name": {
+                "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
+                "maxLength": 120,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
+                "maxLength": 120,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
+                "type": "string"
+              },
+              {
+                "$ref": "#/components/schemas/AccessTemplateContent"
+              }
+            ],
+            "type": "array"
+          }
+        ]
+      },
+      "post_api_v1_platform_workspace_templatesResponse": {
+        "$ref": "#/components/schemas/AccessTemplateCreated"
+      },
+      "post_api_v1_platform_workspace_templates_by_id_versionsRequest": {
+        "description": "Serde accepts the closed object or the positional array [content].",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/AccessTemplateContent"
+              }
+            },
+            "required": [
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "$ref": "#/components/schemas/AccessTemplateContent"
+              }
+            ],
+            "type": "array"
+          }
+        ]
+      },
+      "post_api_v1_platform_workspace_templates_by_id_versionsResponse": {
+        "$ref": "#/components/schemas/AccessTemplate"
+      },
+      "post_api_v1_platform_workspace_templates_by_id_versions_by_version_publishRequest": false,
+      "post_api_v1_platform_workspace_templates_by_id_versions_by_version_publishResponse": {
+        "$ref": "#/components/schemas/AccessTemplate"
+      },
+      "post_api_v1_platform_workspace_templates_by_id_versions_by_version_retireRequest": false,
+      "post_api_v1_platform_workspace_templates_by_id_versions_by_version_retireResponse": {
+        "$ref": "#/components/schemas/AccessTemplate"
+      },
+      "post_api_v1_platform_workspace_templates_by_id_versions_by_version_reviewRequest": false,
+      "post_api_v1_platform_workspace_templates_by_id_versions_by_version_reviewResponse": {
+        "$ref": "#/components/schemas/AccessTemplate"
       },
       "post_api_v1_platform_workspacesRequest": {
         "description": "Closed serde object or positional struct array in declared field order. Handler semantic validation (documented per field) applies.",
@@ -66882,6 +67425,725 @@
           "$ref": "#/components/schemas/post_api_v1_platform_users_by_user_sessions_revokeResponse"
         },
         "x-omg-token-policy": "Scope"
+      }
+    },
+    "/api/v1/platform/workspace-templates": {
+      "get": {
+        "description": "#84: Platform Admin/Auditor, browser only. Templates by name, with their latest and published version numbers.",
+        "operationId": "get_api_v1_platform_workspace_templates",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 100,
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "schema": {
+              "default": 0,
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_workspace_templatesResponse"
+                }
+              }
+            },
+            "description": "Successful handler representation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Invalid input or malformed extraction"
+          },
+          "401": {
+            "$ref": "#/components/responses/ManagementMiddleware401Variant2"
+          },
+          "403": {
+            "$ref": "#/components/responses/ManagementMiddleware403Variant3"
+          },
+          "413": {
+            "$ref": "#/components/responses/ManagementMiddleware413Variant1"
+          },
+          "429": {
+            "$ref": "#/components/responses/ManagementMiddleware429Variant1"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+          }
+        },
+        "security": [
+          {
+            "browserSession": []
+          }
+        ],
+        "x-omg-access": "PlatformRead",
+        "x-omg-middleware-responses": {
+          "$ref": "#/x-omg-middleware-contracts/management"
+        },
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_api_v1_platform_workspace_templatesRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_api_v1_platform_workspace_templatesResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      },
+      "post": {
+        "description": "#84: Platform Admin, browser only. Creates a template and its version 1, pending review by another Platform Admin. References are validated (they must exist); a duplicate name is 409.",
+        "operationId": "post_api_v1_platform_workspace_templates",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_workspace_templatesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_workspace_templatesResponse"
+                }
+              }
+            },
+            "description": "Successful handler representation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Invalid input or malformed extraction"
+          },
+          "401": {
+            "$ref": "#/components/responses/ManagementMiddleware401Variant2"
+          },
+          "403": {
+            "$ref": "#/components/responses/ManagementMiddleware403Variant3"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A template with this name exists"
+          },
+          "413": {
+            "$ref": "#/components/responses/ManagementMiddleware413Variant1"
+          },
+          "415": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "JSON content type required"
+          },
+          "422": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Axum JSON extraction refusal"
+          },
+          "429": {
+            "$ref": "#/components/responses/ManagementMiddleware429Variant1"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+          }
+        },
+        "security": [
+          {
+            "browserSession": [],
+            "csrfToken": [],
+            "origin": []
+          }
+        ],
+        "x-omg-access": "PlatformWrite",
+        "x-omg-middleware-responses": {
+          "$ref": "#/x-omg-middleware-contracts/management"
+        },
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_workspace_templatesRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_workspace_templatesResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/api/v1/platform/workspace-templates/{id}": {
+      "get": {
+        "description": "#84: a template and all its versions, newest first.",
+        "operationId": "get_api_v1_platform_workspace_templates_by_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_workspace_templates_by_idResponse"
+                }
+              }
+            },
+            "description": "Successful handler representation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Invalid input or malformed extraction"
+          },
+          "401": {
+            "$ref": "#/components/responses/ManagementMiddleware401Variant2"
+          },
+          "403": {
+            "$ref": "#/components/responses/ManagementMiddleware403Variant3"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown template"
+          },
+          "413": {
+            "$ref": "#/components/responses/ManagementMiddleware413Variant1"
+          },
+          "429": {
+            "$ref": "#/components/responses/ManagementMiddleware429Variant1"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+          }
+        },
+        "security": [
+          {
+            "browserSession": []
+          }
+        ],
+        "x-omg-access": "PlatformRead",
+        "x-omg-middleware-responses": {
+          "$ref": "#/x-omg-middleware-contracts/management"
+        },
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_api_v1_platform_workspace_templates_by_idRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_api_v1_platform_workspace_templates_by_idResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/api/v1/platform/workspace-templates/{id}/versions": {
+      "post": {
+        "description": "#84: Platform Admin. A new immutable version, pending review.",
+        "operationId": "post_api_v1_platform_workspace_templates_by_id_versions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_workspace_templates_by_id_versionsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_workspace_templates_by_id_versionsResponse"
+                }
+              }
+            },
+            "description": "Successful handler representation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Invalid input or malformed extraction"
+          },
+          "401": {
+            "$ref": "#/components/responses/ManagementMiddleware401Variant2"
+          },
+          "403": {
+            "$ref": "#/components/responses/ManagementMiddleware403Variant3"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown template"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A concurrent version took this number"
+          },
+          "413": {
+            "$ref": "#/components/responses/ManagementMiddleware413Variant1"
+          },
+          "415": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "JSON content type required"
+          },
+          "422": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Axum JSON extraction refusal"
+          },
+          "429": {
+            "$ref": "#/components/responses/ManagementMiddleware429Variant1"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+          }
+        },
+        "security": [
+          {
+            "browserSession": [],
+            "csrfToken": [],
+            "origin": []
+          }
+        ],
+        "x-omg-access": "PlatformWrite",
+        "x-omg-middleware-responses": {
+          "$ref": "#/x-omg-middleware-contracts/management"
+        },
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_workspace_templates_by_id_versionsRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_workspace_templates_by_id_versionsResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/api/v1/platform/workspace-templates/{id}/versions/{version}/publish": {
+      "post": {
+        "description": "#84: publishes a reviewed version; the template's previously published version is retired in the same transaction. 409 if unreviewed, already published or retired.",
+        "operationId": "post_api_v1_platform_workspace_templates_by_id_versions_by_version_publish",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "maximum": 2147483647,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_workspace_templates_by_id_versions_by_version_publishResponse"
+                }
+              }
+            },
+            "description": "Successful handler representation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Invalid input or malformed extraction"
+          },
+          "401": {
+            "$ref": "#/components/responses/ManagementMiddleware401Variant2"
+          },
+          "403": {
+            "$ref": "#/components/responses/ManagementMiddleware403Variant3"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown template or version"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The version cannot take that step"
+          },
+          "413": {
+            "$ref": "#/components/responses/ManagementMiddleware413Variant1"
+          },
+          "429": {
+            "$ref": "#/components/responses/ManagementMiddleware429Variant1"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+          }
+        },
+        "security": [
+          {
+            "browserSession": [],
+            "csrfToken": [],
+            "origin": []
+          }
+        ],
+        "x-omg-access": "PlatformWrite",
+        "x-omg-middleware-responses": {
+          "$ref": "#/x-omg-middleware-contracts/management"
+        },
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_workspace_templates_by_id_versions_by_version_publishRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_workspace_templates_by_id_versions_by_version_publishResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/api/v1/platform/workspace-templates/{id}/versions/{version}/retire": {
+      "post": {
+        "description": "#84: retires a version (published or not); 409 if already retired. Nothing is deleted.",
+        "operationId": "post_api_v1_platform_workspace_templates_by_id_versions_by_version_retire",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "maximum": 2147483647,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_workspace_templates_by_id_versions_by_version_retireResponse"
+                }
+              }
+            },
+            "description": "Successful handler representation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Invalid input or malformed extraction"
+          },
+          "401": {
+            "$ref": "#/components/responses/ManagementMiddleware401Variant2"
+          },
+          "403": {
+            "$ref": "#/components/responses/ManagementMiddleware403Variant3"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown template or version"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The version cannot take that step"
+          },
+          "413": {
+            "$ref": "#/components/responses/ManagementMiddleware413Variant1"
+          },
+          "429": {
+            "$ref": "#/components/responses/ManagementMiddleware429Variant1"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+          }
+        },
+        "security": [
+          {
+            "browserSession": [],
+            "csrfToken": [],
+            "origin": []
+          }
+        ],
+        "x-omg-access": "PlatformWrite",
+        "x-omg-middleware-responses": {
+          "$ref": "#/x-omg-middleware-contracts/management"
+        },
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_workspace_templates_by_id_versions_by_version_retireRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_workspace_templates_by_id_versions_by_version_retireResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/api/v1/platform/workspace-templates/{id}/versions/{version}/review": {
+      "post": {
+        "description": "#84: a Platform Admin other than the version's author reviews (approves) a pending version (the author is 403). 409 if it was already reviewed or is retired.",
+        "operationId": "post_api_v1_platform_workspace_templates_by_id_versions_by_version_review",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "maximum": 2147483647,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_workspace_templates_by_id_versions_by_version_reviewResponse"
+                }
+              }
+            },
+            "description": "Successful handler representation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Invalid input or malformed extraction"
+          },
+          "401": {
+            "$ref": "#/components/responses/ManagementMiddleware401Variant2"
+          },
+          "403": {
+            "$ref": "#/components/responses/ManagementMiddleware403Variant3"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown template or version"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The version cannot take that step"
+          },
+          "413": {
+            "$ref": "#/components/responses/ManagementMiddleware413Variant1"
+          },
+          "429": {
+            "$ref": "#/components/responses/ManagementMiddleware429Variant1"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+          }
+        },
+        "security": [
+          {
+            "browserSession": [],
+            "csrfToken": [],
+            "origin": []
+          }
+        ],
+        "x-omg-access": "PlatformWrite",
+        "x-omg-middleware-responses": {
+          "$ref": "#/x-omg-middleware-contracts/management"
+        },
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_workspace_templates_by_id_versions_by_version_reviewRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_workspace_templates_by_id_versions_by_version_reviewResponse"
+        },
+        "x-omg-token-policy": "Denied"
       }
     },
     "/api/v1/platform/workspace-types/{kind}/catalogs": {
