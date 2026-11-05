@@ -9,7 +9,7 @@ Alerts tell people when budgets fill up, spend jumps, requests fail or a connect
 - **Personal workspaces** have built-in budget alerts for their owner only (80% and 100%). Nothing is configurable and nobody else sees them, Platform Admins included.
 - **SCIM safeguard:** a built-in installation alert, "SCIM tried to remove the last Platform Admin", fires when SCIM is refused for that reason ([SCIM](scim.md#the-last-platform-admin-is-protected)). It appears in Admin › Settings › Alerts › History and in Notifications for Platform Admins and Auditors, is emailed to Platform Admins, and clears once a second active Platform Admin exists. At most one is open at a time.
 - **Authorized key-expiry reminders** (see the dedicated section below).
-- **Notifications** (`/notifications`, the bell in the top bar with the unread count): each person's alerts, with per-user read state.
+- **Notifications** (`/notifications`, the bell in the top bar with the unread count): each person's alerts, with per-user read state, and (#83) the access-request events they can act on or that concern them (pending requests for approvers; their own decided requests for 30 days; never emailed or sent to webhooks; see [management API](management-api.md#self-service-access-requests-83)).
 
 ## Rule kinds
 

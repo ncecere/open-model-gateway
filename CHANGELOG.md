@@ -6,7 +6,11 @@ The project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). 
 
 ## [Unreleased]
 
-Changes after v0.11.0: [unreleased notes](docs/releases/unreleased.md).
+Changes after v0.12.0: [unreleased notes](docs/releases/unreleased.md).
+
+## [0.12.0]
+
+Self-service access requests are complete (#83): a Team or Project member can ask for a catalog model for the workspace, decided only by that workspace's owners and admins, and request events appear in the in-app notifications for approvers and requesters (notification events are never emailed or sent to webhooks). **Migrations `0072`–`0073`** (schema now 0073) and **runtime-grant changes**; access-request objects and the notification feed gain fields and shapes. See [release and upgrade notes](docs/releases/v0.12.0.md).
 
 ## [0.11.0]
 
@@ -90,7 +94,8 @@ Alerts, key safety, model compare, SCIM, JWKS refresh, metrics and backup toolin
 
 The single-enterprise rebuild: Team, Project and personal workspaces, OIDC platform roles, catalogs, multimodal workloads across five provider families, immutable micro-USD accounting, logs and Admin settings. Migrations `0001` to `0010`. Notes: [`docs/releases/v0.1.0.md`](docs/releases/v0.1.0.md).
 
-[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/ncecere/open-model-gateway/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/ncecere/open-model-gateway/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/ncecere/open-model-gateway/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/ncecere/open-model-gateway/compare/v0.9.3...v0.10.0
