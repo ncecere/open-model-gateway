@@ -4896,6 +4896,101 @@
       },
       "scope": null,
       "token_policy": "Denied"
+    },
+    "POST /api/v1/platform/workspace-templates/{id}/apply": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "#84: Platform Admin, browser only. Creates one Team or Project from the template's published version in one transaction, within the applying admin's own authority: the workspace and its owner, the catalog replacement, the catalog model selections, the local limits (tighten-only against the live platform layers) and the slot members (manual grants; people must be live and entitled). Any failure rolls everything back. The application is recorded immutably with the version and hash; a replay of the same idempotency key returns it, another payload under the key is 409. 409 reasons: template_version_stale (the version is not the published one), template_reference_unavailable, template_model_unavailable, template_limits_exceed_platform, template_assignment_ineligible.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_workspace_templates_by_id_applyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_workspace_templates_by_id_applyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown template"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The template no longer fits (see the reasons), or the idempotency key was used for another application"
+          },
+          "422": {
+            "description": "Axum JSON extraction refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON content type required",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
+      },
+      "scope": null,
+      "token_policy": "Denied"
     }
   }
 }

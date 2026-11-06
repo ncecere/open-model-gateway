@@ -258,6 +258,35 @@ async fn manual_member(
     insert_manual_member(tx, ws, user, role).await?;
     Ok(())
 }
+/// #84: a template slot's manual grant in a workspace created in this
+/// transaction (nothing to replace). The user must be live and entitled
+/// (`Ok(false)` otherwise); the caller already holds the Type and Workspace
+/// scopes and every member's User scope, taken together in canonical order.
+pub(super) async fn template_member(
+    tx: &mut Transaction<'_, Postgres>,
+    u: &impl Actor,
+    ws: Uuid,
+    user: Uuid,
+    role: &str,
+) -> Result<bool, ApiError> {
+    match resources::platform_role(tx, user).await {
+        Ok(_) => {}
+        Err(e) if e.0 == StatusCode::FORBIDDEN || e.0 == StatusCode::NOT_FOUND => return Ok(false),
+        Err(e) => return Err(e),
+    }
+    insert_manual_member(tx, ws, user, role).await?;
+    audit(
+        tx,
+        u,
+        Some(ws),
+        "workspace.manual_membership_set",
+        "user",
+        Some(user),
+        json!({"role":role,"source":"manual"}),
+    )
+    .await?;
+    Ok(true)
+}
 /// Transaction-aware grant operation shared by manual administration and #83.
 /// Caller holds canonical authority locks before its first write.
 async fn insert_manual_member(

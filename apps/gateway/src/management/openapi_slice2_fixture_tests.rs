@@ -402,8 +402,51 @@ async fn unknown_cost_attempt(pool: &PgPool, ws: Uuid, key: Uuid, deployment: Uu
         .execute(pool).await.unwrap();
 }
 
+/// The fixture is one long async function: in a debug build its poll frame
+/// alone approaches the 2 MiB test-thread stack, which it outgrew (#84; boxing
+/// the future does not shrink a poll frame). It runs on its own thread with a
+/// larger stack and a current-thread runtime; a panic is re-raised here, so a
+/// failure is reported exactly as before.
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn management_openapi_slice2_fixtures(pool: PgPool) {
+    let (done, outcome) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("slice2-fixtures".into())
+        .stack_size(16 << 20)
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("fixture runtime");
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                runtime.block_on(slice2_fixtures(pool))
+            }));
+            let _ = done.send(result);
+        })
+        .expect("fixture thread");
+    let (mut failures, observed) = match outcome.await.expect("fixture thread finished") {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    };
+    // The coverage gates last: they judge every positive and vector set above.
+    let gates = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        observed.finish(SLICE2_AREAS);
+    }));
+    if let Err(panic) = gates {
+        failures.push(
+            panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+                .unwrap_or_else(|| "gates panicked".to_owned()),
+        );
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Runs every fixture, returning the failures and what the handlers were seen
+/// to do; the runner judges coverage.
+async fn slice2_fixtures(pool: PgPool) -> (Vec<String>, PositiveFixtures) {
     let f = fixture(&pool).await;
     let admin = browser(&pool, &f.admin).await;
     let auditor = browser(&pool, &f.auditor).await;
@@ -1448,6 +1491,19 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         None,
         StatusCode::NOT_FOUND,
     )
+    .await;
+    // #84 slice B: the apply journey, boxed so its temporaries stay out of
+    // this function's (debug-build) poll frame, which is near the test
+    // thread's stack limit.
+    Box::pin(apply_journey(
+        c,
+        &admin,
+        &f,
+        &pool,
+        &detail,
+        template_catalog,
+        template_model,
+    ))
     .await;
 
     // Catalog and policy layers: populated replacement/default lists, never a union.
@@ -2930,6 +2986,9 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         .await;
     }
 
+    // #84 slice B: apply body vectors (boxed, as the apply journey above).
+    Box::pin(apply_vectors(c, &admin, &f, &pool)).await;
+
     // Handler-derived probes the derived vectors cannot generate. Each pins the
     // schema's verdict AND the handler's verdict on the same input, so every
     // documented divergence (trimming,
@@ -3504,20 +3563,122 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             "handler-derived probes: {pins} ran ({domain} accepted via 404/409); expected {EXPECTED_PINS} ({EXPECTED_DOMAIN_PINS})"
         ),
     );
-    let mut failures = c.failures.borrow().clone();
-    // The coverage gates last: they judge every positive and vector set above.
-    let observed = c.observed.lock().await;
-    let gates = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        observed.finish(SLICE2_AREAS);
-    }));
-    if let Err(panic) = gates {
-        failures.push(
-            panic
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_owned()))
-                .unwrap_or_else(|| "gates panicked".to_owned()),
-        );
+    let failures = c.failures.borrow().clone();
+    let observed = std::mem::take(&mut *c.observed.lock().await);
+    (failures, observed)
+}
+
+/// #84 slice B: apply the published version (5, shape A), replay it, and the
+/// refusals. Shape A's catalog holds its model.
+async fn apply_journey(
+    c: &Client,
+    admin: &Browser,
+    f: &Fixture,
+    pool: &PgPool,
+    detail: &str,
+    template_catalog: Uuid,
+    template_model: Uuid,
+) {
+    sqlx::query(
+        "INSERT INTO catalog_models(catalog_id,model_id) VALUES($1,$2) ON CONFLICT DO NOTHING",
+    )
+    .bind(template_catalog)
+    .bind(template_model)
+    .execute(pool)
+    .await
+    .unwrap();
+    let apply_path = format!("{detail}/apply");
+    let apply_body = json!({"version":5,"name":"Contract applied","assignments":[{"slot":"lead","user_ids":[f.owner.user_id]},{"slot":"crew","user_ids":[f.member.user_id]}],"idempotency_key":"contract-apply"});
+    let applied = c
+        .ok(admin, "POST", &apply_path, Some(apply_body.clone()))
+        .await;
+    assert_eq!(applied["replayed"], false);
+    let replay = c.ok(admin, "POST", &apply_path, Some(apply_body)).await;
+    assert_eq!(replay["replayed"], true);
+    c.send(admin, "POST", &apply_path, Some(json!({"version":4,"name":"Stale","assignments":[{"slot":"lead","user_ids":[f.owner.user_id]}],"idempotency_key":"contract-stale"})), StatusCode::CONFLICT).await;
+    c.send(admin, "POST", &format!("/api/v1/platform/workspace-templates/{}/apply", Uuid::new_v4()), Some(json!({"version":1,"name":"Unknown","assignments":[{"slot":"lead","user_ids":[f.owner.user_id]}],"idempotency_key":"contract-unknown"})), StatusCode::NOT_FOUND).await;
+}
+
+/// #84 slice B: apply bodies (object and positional), each vector with a fresh
+/// idempotency key; the slots are the published shape A's.
+async fn apply_vectors(c: &Client, admin: &Browser, f: &Fixture, pool: &PgPool) {
+    let apply_template = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM workspace_templates WHERE name='Contract template'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let path = format!("/api/v1/platform/workspace-templates/{apply_template}/apply");
+    let counter = std::sync::atomic::AtomicUsize::new(0);
+    for valid in [
+        json!({"version":5,"name":"Vector applied","assignments":[{"slot":"lead","user_ids":[f.owner.user_id]},["crew",[f.member.user_id]],{"slot":"admins","user_ids":[]}],"idempotency_key":"vector-apply"}),
+        json!([5, "Vector applied positional", [{"slot":"lead","user_ids":[f.owner.user_id]}, ["admins", [f.member.user_id]]], "vector-apply-positional"]),
+    ] {
+        let mut o = c.observed.lock().await;
+        c.guarded(
+            "POST /platform/workspace-templates/{id}/apply",
+            body_vectors_http(
+                &mut o,
+                "POST",
+                "/api/v1/platform/workspace-templates/{id}/apply",
+                valid,
+                async |mut body| {
+                    let n = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if let Some(k) = body
+                        .get_mut("idempotency_key")
+                        .filter(|k| matches!(k.as_str(), Some("vector-apply" | "vector-apply-positional")))
+                    {
+                        *k = json!(format!("vector-apply-{n}"));
+                    } else if let Some(k) = body
+                        .get_mut(3)
+                        .filter(|k| matches!(k.as_str(), Some("vector-apply" | "vector-apply-positional")))
+                    {
+                        *k = json!(format!("vector-apply-p-{n}"));
+                    }
+                    // The slot rules (the owner present exactly once, known slots,
+                    // each slot once) are described, not expressed: slot names
+                    // are data. The real handler decides a body whose slot set
+                    // breaks them.
+                    let assignments = if body.is_array() {
+                        body[2].clone()
+                    } else {
+                        body["assignments"].clone()
+                    };
+                    // Per slot of the published shape A: lead is the single owner,
+                    // crew a required single member, admins multiple.
+                    let entries: Vec<(String, usize)> = assignments
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|a| {
+                            let slot = a.get("slot").or_else(|| a.get(0)).and_then(Value::as_str)?;
+                            let users = a.get("user_ids").or_else(|| a.get(1)).and_then(Value::as_array).map_or(0, Vec::len);
+                            Some((slot.to_owned(), users))
+                        })
+                        .collect();
+                    let count = |name: &str| entries.iter().filter(|(s, _)| s == name).map(|(_, n)| *n).sum::<usize>();
+                    let slots: std::collections::BTreeSet<&str> = entries.iter().map(|(s, _)| s.as_str()).collect();
+                    let schema_accepts = openapi::http_vectors::accepts(
+                        openapi::responses::artifact(),
+                        &openapi::responses::artifact()["paths"]["/api/v1/platform/workspace-templates/{id}/apply"]["post"]["requestBody"]["content"]["application/json"]["schema"],
+                        &body,
+                    )
+                    .unwrap_or(false);
+                    let slot_rule = schema_accepts
+                        && assignments.is_array()
+                        && (count("lead") != 1
+                            || count("crew") > 1
+                            || slots.len() != entries.len()
+                            || slots.iter().any(|s| !["lead", "crew", "admins"].contains(s)));
+                    let captured = c.raw(admin, "POST", &path, Some(body), &[]).await;
+                    if slot_rule && captured.status == StatusCode::BAD_REQUEST {
+                        Probe::decided(captured, true)
+                    } else {
+                        Probe::from(captured)
+                    }
+                },
+            ),
+        )
+        .await;
     }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

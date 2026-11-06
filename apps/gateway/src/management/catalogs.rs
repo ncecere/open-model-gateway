@@ -181,6 +181,49 @@ pub(super) async fn apply_model_request(
     )
     .await
 }
+/// #84: a new workspace's catalog replacement list (it has no selections
+/// yet, so nothing retires).
+pub(super) async fn template_catalogs(
+    tx: &mut Transaction<'_, Postgres>,
+    u: &impl Actor,
+    ws: Uuid,
+    catalogs: &[Uuid],
+) -> Result<(), ApiError> {
+    sqlx::query("INSERT INTO workspace_catalog_overrides(workspace_id) VALUES($1)")
+        .bind(ws)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query("INSERT INTO workspace_catalog_override_items(workspace_id,catalog_id) SELECT $1,unnest($2::uuid[])")
+        .bind(ws)
+        .bind(catalogs)
+        .execute(&mut **tx)
+        .await?;
+    audit(
+        tx,
+        u,
+        Some(ws),
+        "catalog.override_replaced",
+        "workspace",
+        Some(ws),
+        json!({"mode":"replace","count":catalogs.len()}),
+    )
+    .await
+}
+/// #84: select a template's model for a new workspace from its catalogs;
+/// `Ok(false)` when it is not (or no longer) eligible there.
+pub(super) async fn template_model(
+    tx: &mut Transaction<'_, Postgres>,
+    u: &impl Actor,
+    ws: Uuid,
+    model: Uuid,
+) -> Result<bool, ApiError> {
+    match availability(tx, ws, model).await? {
+        Some((true, false)) => {}
+        _ => return Ok(false),
+    }
+    apply_model_request(tx, u, ws, model).await?;
+    Ok(true)
+}
 /// Whether a member may request `model` for `ws`: `Some(true)` when the
 /// workspace can already use it (selected or directly assigned, both visible
 /// to members), `Some(false)` when it is eligible, `None` otherwise (outside

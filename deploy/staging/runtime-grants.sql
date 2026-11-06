@@ -191,6 +191,9 @@ GRANT SELECT ON public.workspace_templates,public.workspace_template_versions TO
 GRANT INSERT(id,name,created_by) ON public.workspace_templates TO gateway_runtime;
 GRANT INSERT(id,template_id,version,content,content_hash,author) ON public.workspace_template_versions TO gateway_runtime;
 GRANT UPDATE(reviewed_by,reviewed_at,published_at,retired_at) ON public.workspace_template_versions TO gateway_runtime;
+-- #84 slice B: immutable application records (the trigger sets the clock).
+GRANT SELECT ON public.workspace_template_applications TO gateway_runtime;
+GRANT INSERT(id,template_id,version,content_hash,workspace_id,applied_by,idempotency_digest,payload_digest) ON public.workspace_template_applications TO gateway_runtime;
 -- Installation spend rules (0026) edit their period and reference amount.
 GRANT UPDATE(name,enabled,budget_layers,thresholds,spike_factor_percent,min_spend_microusd,
  window_minutes,error_rate_percent,min_requests,consecutive_failures,provider_connection_id,

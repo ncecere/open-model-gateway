@@ -4860,7 +4860,7 @@
       },
       "ErrorEnvelope": {
         "additionalProperties": false,
-        "description": "Shared management handler envelope, not a universal framework response. code equals the HTTP status string. Selected reasons add period, limit, missing_meters or retry details. Detail keys are closed over the inventoried handler vocabulary (policy period/limit, price missing_meters, and access/key-issuance retry details).",
+        "description": "Shared management handler envelope, not a universal framework response. code equals the HTTP status string. Selected reasons add period, limit, missing_meters or retry details. Detail keys are closed over the inventoried handler vocabulary (policy period/limit, price missing_meters, access/key-issuance retry details, and a template slot name).",
         "properties": {
           "error": {
             "additionalProperties": false,
@@ -4934,6 +4934,11 @@
                   "storage_test_rate_limited",
                   "stored_budget_raise_not_allowed",
                   "stored_rate_loosen_not_allowed",
+                  "template_assignment_ineligible",
+                  "template_limits_exceed_platform",
+                  "template_model_unavailable",
+                  "template_reference_unavailable",
+                  "template_version_stale",
                   "unsupported_capability",
                   "workspace_wide_visibility_required"
                 ],
@@ -4944,6 +4949,9 @@
                 "type": "integer"
               },
               "scope": {
+                "type": "string"
+              },
+              "slot": {
                 "type": "string"
               },
               "window_seconds": {
@@ -48605,6 +48613,195 @@
       "post_api_v1_platform_workspace_templatesResponse": {
         "$ref": "#/components/schemas/AccessTemplateCreated"
       },
+      "post_api_v1_platform_workspace_templates_by_id_applyRequest": {
+        "description": "Serde accepts the closed object or the positional array [version, name, assignments, idempotency_key]. version must be the template's published version (the one reviewed); assignments map slot names to users.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "assignments": {
+                "description": "Users per slot ({slot, user_ids}, or positional [slot, user_ids]): each slot at most once, at most 10 entries; the owner slot exactly one user, a required slot at least one, a single slot at most one, no unknown slot, nobody in two slots, at most 100 people (the handler refuses others with 400).",
+                "items": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "slot": {
+                          "maxLength": 32,
+                          "minLength": 1,
+                          "pattern": "^[a-z][a-z0-9_-]{0,31}$",
+                          "type": "string"
+                        },
+                        "user_ids": {
+                          "items": {
+                            "$ref": "#/components/schemas/IdentityUuid"
+                          },
+                          "type": "array",
+                          "uniqueItems": true
+                        }
+                      },
+                      "required": [
+                        "slot",
+                        "user_ids"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "items": false,
+                      "maxItems": 2,
+                      "minItems": 2,
+                      "prefixItems": [
+                        {
+                          "maxLength": 32,
+                          "minLength": 1,
+                          "pattern": "^[a-z][a-z0-9_-]{0,31}$",
+                          "type": "string"
+                        },
+                        {
+                          "items": {
+                            "$ref": "#/components/schemas/IdentityUuid"
+                          },
+                          "type": "array",
+                          "uniqueItems": true
+                        }
+                      ],
+                      "type": "array"
+                    }
+                  ]
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              "idempotency_key": {
+                "pattern": "^[!-~]{1,128}$",
+                "type": "string"
+              },
+              "name": {
+                "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
+                "maxLength": 120,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
+                "type": "string"
+              },
+              "version": {
+                "maximum": 2147483647,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "version",
+              "name",
+              "assignments",
+              "idempotency_key"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 4,
+            "minItems": 4,
+            "prefixItems": [
+              {
+                "maximum": 2147483647,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
+                "maxLength": 120,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
+                "type": "string"
+              },
+              {
+                "description": "Users per slot ({slot, user_ids}, or positional [slot, user_ids]): each slot at most once, at most 10 entries; the owner slot exactly one user, a required slot at least one, a single slot at most one, no unknown slot, nobody in two slots, at most 100 people (the handler refuses others with 400).",
+                "items": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "slot": {
+                          "maxLength": 32,
+                          "minLength": 1,
+                          "pattern": "^[a-z][a-z0-9_-]{0,31}$",
+                          "type": "string"
+                        },
+                        "user_ids": {
+                          "items": {
+                            "$ref": "#/components/schemas/IdentityUuid"
+                          },
+                          "type": "array",
+                          "uniqueItems": true
+                        }
+                      },
+                      "required": [
+                        "slot",
+                        "user_ids"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "items": false,
+                      "maxItems": 2,
+                      "minItems": 2,
+                      "prefixItems": [
+                        {
+                          "maxLength": 32,
+                          "minLength": 1,
+                          "pattern": "^[a-z][a-z0-9_-]{0,31}$",
+                          "type": "string"
+                        },
+                        {
+                          "items": {
+                            "$ref": "#/components/schemas/IdentityUuid"
+                          },
+                          "type": "array",
+                          "uniqueItems": true
+                        }
+                      ],
+                      "type": "array"
+                    }
+                  ]
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "pattern": "^[!-~]{1,128}$",
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          }
+        ]
+      },
+      "post_api_v1_platform_workspace_templates_by_id_applyResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "replayed": {
+            "description": "true when this idempotency key's recorded application is returned; nothing was created by this request.",
+            "type": "boolean"
+          },
+          "template_id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "version": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "workspace_id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          }
+        },
+        "required": [
+          "workspace_id",
+          "template_id",
+          "version",
+          "replayed"
+        ],
+        "type": "object"
+      },
       "post_api_v1_platform_workspace_templates_by_id_versionsRequest": {
         "description": "Serde accepts the closed object or the positional array [content].",
         "oneOf": [
@@ -67929,6 +68126,132 @@
         },
         "x-omg-response-schema": {
           "$ref": "#/components/schemas/get_api_v1_platform_workspace_templates_by_idResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/api/v1/platform/workspace-templates/{id}/apply": {
+      "post": {
+        "description": "#84: Platform Admin, browser only. Creates one Team or Project from the template's published version in one transaction, within the applying admin's own authority: the workspace and its owner, the catalog replacement, the catalog model selections, the local limits (tighten-only against the live platform layers) and the slot members (manual grants; people must be live and entitled). Any failure rolls everything back. The application is recorded immutably with the version and hash; a replay of the same idempotency key returns it, another payload under the key is 409. 409 reasons: template_version_stale (the version is not the published one), template_reference_unavailable, template_model_unavailable, template_limits_exceed_platform, template_assignment_ineligible.",
+        "operationId": "post_api_v1_platform_workspace_templates_by_id_apply",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_workspace_templates_by_id_applyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_workspace_templates_by_id_applyResponse"
+                }
+              }
+            },
+            "description": "Successful handler representation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Invalid input or malformed extraction"
+          },
+          "401": {
+            "$ref": "#/components/responses/ManagementMiddleware401Variant2"
+          },
+          "403": {
+            "$ref": "#/components/responses/ManagementMiddleware403Variant3"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown template"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The template no longer fits (see the reasons), or the idempotency key was used for another application"
+          },
+          "413": {
+            "$ref": "#/components/responses/ManagementMiddleware413Variant1"
+          },
+          "415": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "JSON content type required"
+          },
+          "422": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Axum JSON extraction refusal"
+          },
+          "429": {
+            "$ref": "#/components/responses/ManagementMiddleware429Variant1"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+          }
+        },
+        "security": [
+          {
+            "browserSession": [],
+            "csrfToken": [],
+            "origin": []
+          }
+        ],
+        "x-omg-access": "PlatformWrite",
+        "x-omg-middleware-responses": {
+          "$ref": "#/x-omg-middleware-contracts/management"
+        },
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_workspace_templates_by_id_applyRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_workspace_templates_by_id_applyResponse"
         },
         "x-omg-token-policy": "Denied"
       }

@@ -765,6 +765,31 @@ async fn every_json_management_write_rejects_unknown_fields_after_valid_control(
         &f.admin,
         json!({"name":"Matrix template 2","content":template_content})
     );
+    let reviewer = user(&pool, "matrix-template-reviewer", "admin").await;
+    let tid = id(&template);
+    for step in ["review", "publish"] {
+        let who = if step == "review" {
+            &reviewer
+        } else {
+            &f.admin
+        };
+        let (status, body) = call(
+            &f.s,
+            who,
+            "POST",
+            &format!("/api/v1/platform/workspace-templates/{tid}/versions/1/{step}"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    case!(
+        "workspace_templates::apply",
+        "POST",
+        format!("/api/v1/platform/workspace-templates/{tid}/apply"),
+        &f.admin,
+        json!({"version":1,"name":"Matrix applied","assignments":[{"slot":"lead","user_ids":[f.owner.user_id]}],"idempotency_key":"matrix-apply"})
+    );
     case!(
         "workspace_templates::create_version",
         "POST",

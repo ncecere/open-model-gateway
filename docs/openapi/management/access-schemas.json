@@ -6232,6 +6232,195 @@
           "description": "The one owner slot: always required, exactly one user."
         }
       }
+    },
+    "post_api_v1_platform_workspace_templates_by_id_applyRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "version",
+            "name",
+            "assignments",
+            "idempotency_key"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
+              "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank."
+            },
+            "assignments": {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "slot",
+                      "user_ids"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "slot": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 32,
+                        "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                      },
+                      "user_ids": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/components/schemas/IdentityUuid"
+                        },
+                        "uniqueItems": true
+                      }
+                    }
+                  },
+                  {
+                    "type": "array",
+                    "prefixItems": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 32,
+                        "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/components/schemas/IdentityUuid"
+                        },
+                        "uniqueItems": true
+                      }
+                    ],
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "items": false
+                  }
+                ]
+              },
+              "description": "Users per slot ({slot, user_ids}, or positional [slot, user_ids]): each slot at most once, at most 10 entries; the owner slot exactly one user, a required slot at least one, a single slot at most one, no unknown slot, nobody in two slots, at most 100 people (the handler refuses others with 400).",
+              "minItems": 1
+            },
+            "idempotency_key": {
+              "type": "string",
+              "pattern": "^[!-~]{1,128}$"
+            }
+          }
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
+              "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank."
+            },
+            {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "slot",
+                      "user_ids"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "slot": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 32,
+                        "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                      },
+                      "user_ids": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/components/schemas/IdentityUuid"
+                        },
+                        "uniqueItems": true
+                      }
+                    }
+                  },
+                  {
+                    "type": "array",
+                    "prefixItems": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 32,
+                        "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/components/schemas/IdentityUuid"
+                        },
+                        "uniqueItems": true
+                      }
+                    ],
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "items": false
+                  }
+                ]
+              },
+              "description": "Users per slot ({slot, user_ids}, or positional [slot, user_ids]): each slot at most once, at most 10 entries; the owner slot exactly one user, a required slot at least one, a single slot at most one, no unknown slot, nobody in two slots, at most 100 people (the handler refuses others with 400).",
+              "minItems": 1
+            },
+            {
+              "type": "string",
+              "pattern": "^[!-~]{1,128}$"
+            }
+          ],
+          "minItems": 4,
+          "maxItems": 4,
+          "items": false
+        }
+      ],
+      "description": "Serde accepts the closed object or the positional array [version, name, assignments, idempotency_key]. version must be the template's published version (the one reviewed); assignments map slot names to users."
+    },
+    "post_api_v1_platform_workspace_templates_by_id_applyResponse": {
+      "type": "object",
+      "required": [
+        "workspace_id",
+        "template_id",
+        "version",
+        "replayed"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "workspace_id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "template_id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "replayed": {
+          "type": "boolean",
+          "description": "true when this idempotency key's recorded application is returned; nothing was created by this request."
+        }
+      }
     }
   }
 }
