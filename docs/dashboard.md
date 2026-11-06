@@ -20,6 +20,10 @@ A member of a Team or Project who cannot add models sees **Request** on each mod
 
 **Notifications** also lists access-request events: pending requests you can decide (with **Open requests** to the workspace's Access requests tab, or Admin › Access requests for a Platform Admin) and your own requests once approved, denied or expired (**Open requests** to My requests). They count towards the unread badge and follow your current access.
 
+## Workspace templates (#84)
+
+Admin › **Workspace templates** (`/admin/workspace-templates`) lists templates with their published and latest version. A Platform Admin creates a template (a name and its content, as JSON references: kind, catalogs, models, limits and slots); version 1 waits for review. A template's page lists its versions with their state (waiting for review, reviewed, published, retired) and content hash, and offers each version only the step the viewer can take: **Approve** (never for the version's own author), **Publish**, **Create workspace** (the published version) and **Retire**. **Create workspace** asks for the workspace name and a person for each slot (people are searched by email), creates everything together or nothing, and opens the new Team or Project. Platform Auditors see templates and versions without actions.
+
 ## Canonical links
 
 Identifiers are UUIDs, not organization paths or public model aliases:

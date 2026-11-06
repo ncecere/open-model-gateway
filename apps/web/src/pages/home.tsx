@@ -45,6 +45,7 @@ import { EmailSettingsPage } from "./settings/email";
 import { SignInSettingsPage } from "./settings/sign-in";
 import { AdminAlertsPage, AlertRulePage, NotificationsPage } from "./alerts";
 import { AccessRequestsPage, PlatformAccessRequestsPage } from "./access-requests";
+import { WorkspaceTemplateDetail, WorkspaceTemplatesPage } from "./workspace-templates";
 import s from "./shared.module.css";
 import signIn from "./sign-in.module.css";
 import { Card, CardBody } from "../components/ui/card/card";
@@ -109,6 +110,8 @@ export function DashboardContent({ session, search, workspace, navigate, workspa
     case "platform-report-run": return search.record && search.run ? <ReportRunPage session={session} schedule={search.record} run={search.run} /> : <PermissionNotice title="Missing report identifier" />;
     case "access-requests": return <AccessRequestsPage tab={search.tab} onTabChange={changeTab} />;
     case "platform-access-requests": return <PlatformAccessRequestsPage session={session} />;
+    case "workspace-templates": return <WorkspaceTemplatesPage session={session} />;
+    case "workspace-template-detail": return search.record ? <WorkspaceTemplateDetail session={session} id={search.record} /> : <PermissionNotice title="Missing template identifier" />;
     case "platform-costs": return <PlatformCosts session={session} />;
     case "platform-logs": return <LogsPage scope={{ kind: "platform" }} />;
     case "platform-log-detail": return search.record ? <PlatformRequestDetailPage session={session} id={search.record} /> : <PermissionNotice title="Missing request identifier" />;
