@@ -687,6 +687,7 @@ pub(crate) async fn audit(
                     | "reason"
                     | "email_changed"
                     | "oidc_link_changed"
+                    | "version"
             ) && (v.is_boolean()
                 || v.is_number()
                 || v.as_str().is_some_and(|s| {

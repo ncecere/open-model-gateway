@@ -93,6 +93,8 @@ fn sample(document: &Value, schema: &Value) -> Value {
                     format!("0_{}", uuid::Uuid::nil()),
                     // A schedule's `HH:MM` delivery time.
                     "00:00".to_owned(),
+                    // A lowercase identifier (template slot names, #84).
+                    "fixture".to_owned(),
                 ]
                 .into_iter()
                 .chain((!prefix.is_empty()).then(|| format!("{prefix}fixture")))
@@ -655,7 +657,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
             }
         }
     }
-    assert_eq!((operations, json_operations), (255, 247));
+    assert_eq!((operations, json_operations), (262, 254));
 }
 
 #[test]
@@ -679,7 +681,11 @@ fn management_openapi_review_only_immutable_artifact_validators_are_cached() {
 #[test]
 fn management_openapi_sampler_control_for_pattern_strings() {
     let document = json!({});
-    for pattern in ["^[1-9][0-9]*$", "^(0|[1-9][0-9]*)\\.[0-9]{2}$"] {
+    for pattern in [
+        "^[1-9][0-9]*$",
+        "^(0|[1-9][0-9]*)\\.[0-9]{2}$",
+        "^[a-z][a-z0-9_-]{0,31}$",
+    ] {
         let schema = json!({"type":"string","pattern":pattern});
         let sampled = sample(&document, &schema);
         assert!(
@@ -687,7 +693,7 @@ fn management_openapi_sampler_control_for_pattern_strings() {
             "the sample for pattern {pattern} is not accepted by it"
         );
     }
-    let schema = json!({"type":"string","pattern":"^[a-z]+$"});
+    let schema = json!({"type":"string","pattern":"^[A-Z]{3}$"});
     let sampled = sample(&document, &schema);
     assert_eq!(sampled, json!("0"), "the fallback sample changed");
     assert!(

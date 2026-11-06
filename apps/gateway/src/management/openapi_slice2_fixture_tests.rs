@@ -1331,6 +1331,125 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
         .await
         .unwrap();
 
+    // #84: onboarding templates. Three content shapes (replace catalogs with
+    // every limit set in the budgets form; inherit with every limit null; the
+    // single-budget form), then one template carrying all three through every
+    // state, so each response observes reviewed, published and retired versions.
+    let template_reviewer = user(&pool, "template-reviewer", "admin").await;
+    let template_reviewer = browser(&pool, &template_reviewer).await;
+    let template_catalog = Uuid::new_v4();
+    sqlx::query("INSERT INTO catalogs(id,name) VALUES($1,'Template catalog')")
+        .bind(template_catalog)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let template_model = model(&pool, "contract/template-model").await;
+    let slots = json!([{"name":"crew","role":"member","required":false,"multiple":true},{"name":"admins","role":"admin","required":false,"multiple":true}]);
+    let shape_a = json!({"kind":"team","catalogs":{"mode":"replace","catalog_ids":[template_catalog]},"model_ids":[template_model],"limits":{"requests_per_minute":60,"tokens_per_minute":1000,"concurrent_requests":5,"concurrent_jobs":2,"storage_bytes":1048576,"key_issuances_per_holder":5,"key_issuances_per_workspace":50,"budgets":[{"period":"month","amount_microusd":"1000000"},["day","50000"]]},"owner":{"name":"lead"},"slots":slots});
+    let shape_b = json!({"kind":"project","catalogs":{"mode":"inherit"},"model_ids":[],"limits":{"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"concurrent_jobs":null,"storage_bytes":null,"key_issuances_per_holder":null,"key_issuances_per_workspace":null,"budgets":[]},"owner":{"name":"lead"},"slots":slots});
+    let shape_c = json!({"kind":"team","catalogs":{"mode":"inherit"},"model_ids":[],"limits":{"requests_per_minute":10,"tokens_per_minute":null,"concurrent_requests":null,"budgets":[{"period":"week","amount_microusd":"5000000"}]},"owner":{"name":"lead"},"slots":slots});
+    let shape_none = json!({"kind":"team","catalogs":{"mode":"inherit"},"model_ids":[],"limits":null,"owner":{"name":"lead"},"slots":slots});
+    for (name, shape) in [
+        ("Contract template B", &shape_b),
+        ("Contract template C", &shape_c),
+        ("Contract template none", &shape_none),
+    ] {
+        let created = c
+            .ok(
+                &admin,
+                "POST",
+                "/api/v1/platform/workspace-templates",
+                Some(json!({"name":name,"content":shape})),
+            )
+            .await;
+        c.ok(
+            &auditor,
+            "GET",
+            &format!("/api/v1/platform/workspace-templates/{}", id(&created)),
+            None,
+        )
+        .await;
+    }
+    let template = c
+        .ok(
+            &admin,
+            "POST",
+            "/api/v1/platform/workspace-templates",
+            Some(json!({"name":"Contract template","content":shape_a})),
+        )
+        .await;
+    let template_id = id(&template);
+    let detail = format!("/api/v1/platform/workspace-templates/{template_id}");
+    let versions = format!("{detail}/versions");
+    c.ok(&admin, "POST", &versions, Some(json!({"content":shape_b})))
+        .await;
+    c.ok(&admin, "POST", &versions, Some(json!({"content":shape_c})))
+        .await;
+    c.ok(&admin, "POST", &format!("{versions}/3/retire"), None)
+        .await;
+    c.ok(
+        &template_reviewer,
+        "POST",
+        &format!("{versions}/1/review"),
+        None,
+    )
+    .await;
+    c.ok(&admin, "POST", &format!("{versions}/1/publish"), None)
+        .await;
+    c.ok(
+        &template_reviewer,
+        "POST",
+        &format!("{versions}/2/review"),
+        None,
+    )
+    .await;
+    c.ok(&admin, "POST", &format!("{versions}/2/publish"), None)
+        .await;
+    c.ok(
+        &admin,
+        "POST",
+        &versions,
+        Some(json!({"content":shape_none})),
+    )
+    .await;
+    c.ok(&admin, "POST", &format!("{versions}/4/retire"), None)
+        .await;
+    c.ok(&admin, "POST", &versions, Some(json!({"content":shape_a})))
+        .await;
+    c.ok(
+        &template_reviewer,
+        "POST",
+        &format!("{versions}/5/review"),
+        None,
+    )
+    .await;
+    c.ok(&admin, "POST", &format!("{versions}/5/publish"), None)
+        .await;
+    c.ok(&admin, "GET", &detail, None).await;
+    c.ok(
+        &auditor,
+        "GET",
+        "/api/v1/platform/workspace-templates",
+        None,
+    )
+    .await;
+    c.send(
+        &admin,
+        "POST",
+        &format!("{versions}/2/retire"),
+        None,
+        StatusCode::CONFLICT,
+    )
+    .await;
+    c.send(
+        &admin,
+        "POST",
+        &format!("{versions}/9/review"),
+        None,
+        StatusCode::NOT_FOUND,
+    )
+    .await;
+
     // Catalog and policy layers: populated replacement/default lists, never a union.
     let catalog = Uuid::new_v4();
     sqlx::query("INSERT INTO catalogs(id,name) VALUES($1,'Contract catalog')")
@@ -1850,6 +1969,26 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
                         &auditor,
                         "GET",
                         &target("/api/v1/platform/users", &q),
+                        None,
+                        &[],
+                    )
+                    .await
+                },
+            ),
+        )
+        .await;
+        c.guarded(
+            "GET /platform/workspace-templates",
+            query_vectors_fixed(
+                &mut o,
+                "GET",
+                "/api/v1/platform/workspace-templates",
+                &[("limit", "50"), ("offset", "0")],
+                async |q| {
+                    c.raw(
+                        &auditor,
+                        "GET",
+                        &target("/api/v1/platform/workspace-templates", &q),
                         None,
                         &[],
                     )
@@ -2652,6 +2791,143 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             "/api/v1/platform/oidc/group-mappings/preview".to_owned(),
             positional
         );
+    }
+
+    // #84: template bodies, object and positional, with a fresh name per vector.
+    let vector_catalog = Uuid::new_v4();
+    sqlx::query("INSERT INTO catalogs(id,name) VALUES($1,'Vector template catalog')")
+        .bind(vector_catalog)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let vector_content = json!({"kind":"team","catalogs":{"mode":"replace","catalog_ids":[vector_catalog]},"model_ids":[],"limits":null,"owner":{"name":"lead"},"slots":[]});
+    body!(
+        "POST /platform/workspace-templates",
+        "POST",
+        "/api/v1/platform/workspace-templates",
+        &admin,
+        "/api/v1/platform/workspace-templates".to_owned(),
+        json!({"name":"Vector template","content":vector_content})
+    );
+    body!(
+        "POST /platform/workspace-templates (positional)",
+        "POST",
+        "/api/v1/platform/workspace-templates",
+        &admin,
+        "/api/v1/platform/workspace-templates".to_owned(),
+        json!(["Vector template positional", vector_content])
+    );
+    // Every union arm in a valid body: inherit catalogs; limits in the
+    // budgets form (object and positional entries) with every limit set or null.
+    let vector_slots = json!([{"name":"crew","role":"member","required":false,"multiple":true}]);
+    let vector_model = model(&pool, "contract/vector-template-model").await;
+    let vector_shapes = [
+        (
+            "models",
+            json!({"kind":"team","catalogs":{"mode":"inherit"},"model_ids":[vector_model],"limits":{"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"budgets":[{"period":"month","amount_microusd":"1000000"},["day","50000"],{"period":"week","amount_microusd":"300000"},["lifetime","9000000"]]},"owner":{"name":"lead"},"slots":vector_slots}),
+        ),
+        (
+            "budgets",
+            json!({"kind":"team","catalogs":{"mode":"inherit"},"model_ids":[],"limits":{"requests_per_minute":60,"tokens_per_minute":1000,"concurrent_requests":5,"concurrent_jobs":2,"storage_bytes":1048576,"key_issuances_per_holder":5,"key_issuances_per_workspace":50,"budgets":[{"period":"month","amount_microusd":"1000000"},["day","50000"],{"period":"week","amount_microusd":"300000"},["lifetime","9000000"]]},"owner":{"name":"lead"},"slots":vector_slots}),
+        ),
+        (
+            "single",
+            json!({"kind":"project","catalogs":{"mode":"inherit"},"model_ids":[],"limits":{"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"concurrent_jobs":null,"storage_bytes":null,"key_issuances_per_holder":null,"key_issuances_per_workspace":null,"budgets":[{"period":"month","amount_microusd":"1000000"},["day","50000"],{"period":"week","amount_microusd":"300000"},["lifetime","9000000"]]},"owner":{"name":"lead"},"slots":vector_slots}),
+        ),
+    ];
+    // One budget per period is a cross-item rule the schema documents but
+    // cannot state (as for PUT /workspaces/{ws}/policy): the real parser
+    // decides that refusal.
+    let template_vectors = async |label: String, template: &str, path: String, valid: Value| {
+        let mut o = c.observed.lock().await;
+        let accepts = |body: &Value| {
+            openapi::http_vectors::accepts(
+                openapi::responses::artifact(),
+                &openapi::responses::artifact()["paths"][template]["post"]["requestBody"]["content"]
+                    ["application/json"]["schema"],
+                body,
+            )
+            .unwrap_or(false)
+        };
+        c.guarded(
+            &label,
+            body_vectors_http(&mut o, "POST", template, valid, async |body| {
+                let content = if body.is_array() {
+                    body.as_array()
+                        .and_then(|a| a.last())
+                        .cloned()
+                        .unwrap_or(Value::Null)
+                } else {
+                    body["content"].clone()
+                };
+                let budgets = content["limits"]["budgets"].clone();
+                let cross_item = budgets.is_array()
+                    && accepts(&body)
+                    && !crate::management::governance::budgets_parse(&budgets);
+                let captured = c.raw(&admin, "POST", &path, Some(body), &[]).await;
+                if cross_item && captured.status == StatusCode::BAD_REQUEST {
+                    Probe::decided(captured, true)
+                } else {
+                    Probe::from(captured)
+                }
+            }),
+        )
+        .await;
+    };
+    for (label, shape) in &vector_shapes {
+        template_vectors(
+            format!("POST /platform/workspace-templates ({label})"),
+            "/api/v1/platform/workspace-templates",
+            "/api/v1/platform/workspace-templates".to_owned(),
+            json!({"name":format!("Vector template {label}"),"content":shape}),
+        )
+        .await;
+        template_vectors(
+            format!("POST /platform/workspace-templates ({label}, positional)"),
+            "/api/v1/platform/workspace-templates",
+            "/api/v1/platform/workspace-templates".to_owned(),
+            json!([format!("Vector template {label} positional"), shape]),
+        )
+        .await;
+    }
+    let vector_template = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM workspace_templates WHERE name='Contract template'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    body!(
+        "POST /platform/workspace-templates/{id}/versions",
+        "POST",
+        "/api/v1/platform/workspace-templates/{id}/versions",
+        &admin,
+        format!("/api/v1/platform/workspace-templates/{vector_template}/versions"),
+        json!({"content":vector_content})
+    );
+    body!(
+        "POST /platform/workspace-templates/{id}/versions (positional)",
+        "POST",
+        "/api/v1/platform/workspace-templates/{id}/versions",
+        &admin,
+        format!("/api/v1/platform/workspace-templates/{vector_template}/versions"),
+        json!([vector_content])
+    );
+    for (label, shape) in &vector_shapes {
+        let path = format!("/api/v1/platform/workspace-templates/{vector_template}/versions");
+        template_vectors(
+            format!("POST /platform/workspace-templates/{{id}}/versions ({label})"),
+            "/api/v1/platform/workspace-templates/{id}/versions",
+            path.clone(),
+            json!({"content":shape}),
+        )
+        .await;
+        template_vectors(
+            format!("POST /platform/workspace-templates/{{id}}/versions ({label}, positional)"),
+            "/api/v1/platform/workspace-templates/{id}/versions",
+            path,
+            json!([shape]),
+        )
+        .await;
     }
 
     // Handler-derived probes the derived vectors cannot generate. Each pins the

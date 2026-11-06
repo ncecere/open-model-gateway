@@ -741,6 +741,40 @@ async fn every_json_management_write_rejects_unknown_fields_after_valid_control(
         &f.admin,
         json!({"import_id":id(&cost_import),"mapping_id":id(&cost_map)})
     );
+    // #84: onboarding templates.
+    let template_catalog = Uuid::new_v4();
+    sqlx::query("INSERT INTO catalogs(id,name) VALUES($1,'Matrix template catalog')")
+        .bind(template_catalog)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let template_content = json!({"kind":"team","catalogs":{"mode":"replace","catalog_ids":[template_catalog]},"model_ids":[],"limits":null,"owner":{"name":"lead"},"slots":[]});
+    let (status, template) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        "/api/v1/platform/workspace-templates",
+        json!({"name":"Matrix template","content":template_content}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{template}");
+    case!(
+        "workspace_templates::create",
+        "POST",
+        "/api/v1/platform/workspace-templates",
+        &f.admin,
+        json!({"name":"Matrix template 2","content":template_content})
+    );
+    case!(
+        "workspace_templates::create_version",
+        "POST",
+        format!(
+            "/api/v1/platform/workspace-templates/{}/versions",
+            id(&template)
+        ),
+        &f.admin,
+        json!({"content":template_content})
+    );
     let covered: BTreeSet<String> = cases.iter().map(|c| c.handler.to_owned()).collect();
     assert_eq!(
         covered,

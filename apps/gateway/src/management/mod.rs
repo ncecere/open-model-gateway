@@ -44,6 +44,7 @@ mod subject_export;
 #[cfg(all(test, feature = "integration-tests"))]
 mod tests;
 mod usage;
+mod workspace_templates;
 
 use crate::{
     governance::locks,
@@ -653,6 +654,7 @@ fn routes() -> Router<Store> {
     Router::new()
         .merge(scheduled_reports::routes())
         .merge(access_requests::routes())
+        .merge(workspace_templates::routes())
         .merge(admin_tokens::routes())
         .merge(provider_costs::routes())
         .merge(directory::routes())

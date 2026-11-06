@@ -326,6 +326,49 @@ pub(crate) const ROUTES: &[Route] = &[
         PlatformWrite,
         DENIED
     ),
+    // #84: onboarding templates, browser-only Platform Admin authoring and review.
+    route!(
+        "GET",
+        "/api/v1/platform/workspace-templates",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "POST",
+        "/api/v1/platform/workspace-templates",
+        PlatformWrite,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/workspace-templates/{id}",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "POST",
+        "/api/v1/platform/workspace-templates/{id}/versions",
+        PlatformWrite,
+        DENIED
+    ),
+    route!(
+        "POST",
+        "/api/v1/platform/workspace-templates/{id}/versions/{version}/review",
+        PlatformWrite,
+        DENIED
+    ),
+    route!(
+        "POST",
+        "/api/v1/platform/workspace-templates/{id}/versions/{version}/publish",
+        PlatformWrite,
+        DENIED
+    ),
+    route!(
+        "POST",
+        "/api/v1/platform/workspace-templates/{id}/versions/{version}/retire",
+        PlatformWrite,
+        DENIED
+    ),
     route!("GET", "/api/v1/me", Browser, DENIED),
     route!("GET", "/api/v1/me/summary", Browser, DENIED),
     route!("GET", "/api/v1/me/keys", Browser, DENIED),
