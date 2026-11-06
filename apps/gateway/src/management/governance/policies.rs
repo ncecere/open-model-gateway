@@ -1286,6 +1286,43 @@ pub(crate) fn template_limits_valid(v: &Value) -> Result<(), ApiError> {
     p.limits(&Limits::default(), BudgetPeriod::Month)?;
     Ok(())
 }
+/// #84: a template's limits as the new workspace's local layer, validated
+/// tighten-only against the live platform layers exactly as
+/// `PUT /workspaces/{ws}/policy` (a looser limit is `None`: not applicable).
+pub(crate) async fn apply_template_limits(
+    tx: &mut Transaction<'_, Postgres>,
+    u: &impl Actor,
+    ws: Uuid,
+    v: &Value,
+) -> Result<Option<()>, ApiError> {
+    let p: Policy = serde_json::from_value(v.clone()).map_err(|_| invalid())?;
+    // Shared workspaces only (personal limits are platform-controlled).
+    let shared: bool =
+        sqlx::query_scalar("SELECT kind IN ('team','project') FROM workspaces WHERE id=$1")
+            .bind(ws)
+            .fetch_one(&mut **tx)
+            .await?;
+    if !shared {
+        return Err(personal_limits());
+    }
+    let current = layers(tx, ws).await?;
+    let l = p.limits(&current.local, BudgetPeriod::Month)?;
+    if validate_tighten(&l, &[&current.platform], &current.local).is_err() {
+        return Ok(None);
+    }
+    put_layer(tx, &Scope::Local(ws), &l, u).await?;
+    resources::audit(
+        tx,
+        u,
+        Some(ws),
+        "policy.local_updated",
+        "workspace",
+        Some(ws),
+        period_audit(&l, &current.local),
+    )
+    .await?;
+    Ok(Some(()))
+}
 pub(super) async fn put_workspace_policy(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,

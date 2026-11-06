@@ -353,6 +353,12 @@ pub(crate) const ROUTES: &[Route] = &[
     ),
     route!(
         "POST",
+        "/api/v1/platform/workspace-templates/{id}/apply",
+        PlatformWrite,
+        DENIED
+    ),
+    route!(
+        "POST",
         "/api/v1/platform/workspace-templates/{id}/versions/{version}/review",
         PlatformWrite,
         DENIED

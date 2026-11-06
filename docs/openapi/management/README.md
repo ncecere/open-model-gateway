@@ -2,7 +2,7 @@
 
 [management.openapi.json](../management.openapi.json) is the **complete management contract** (#81): every management operation documents its request and response schemas and is validated against the real handlers (response captures, HTTP request boundary vectors on PostgreSQL, coverage gates). The test-only generator reads compiled `route_policy::ROUTES`, expands declared methods and includes exactly `/api/v1/*`. Inference, SCIM, health and metrics are excluded; anonymous authentication/branding operations and authorized installation-policy tombstones are included. Implicit HEAD follows GET policy without synthetic operations. `info.version` is the gateway package version.
 
-The contract has 262 operations and **0 incomplete request/response schema slots**. It was completed in six slices (#399, #433, #436, #440, #426, #418); `management_openapi_reports_incomplete_schemas` pins the operation count (262 after #87, #88 and #84) and zero placeholders, so a new route fails until its fragment is complete.
+The contract has 263 operations and **0 incomplete request/response schema slots**. It was completed in six slices (#399, #433, #436, #440, #426, #418); `management_openapi_reports_incomplete_schemas` pins the operation count (263 after #87, #88 and #84) and zero placeholders, so a new route fails until its fragment is complete.
 
 ## Run the gates
 

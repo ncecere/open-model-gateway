@@ -124,10 +124,10 @@ mod subject_export_tests;
 mod ux_tests;
 #[path = "alerts/webhook_tests.rs"]
 mod webhook_tests;
-#[path = "workspace_templates_tests.rs"]
-mod workspace_templates_tests;
 #[path = "workspace_template_apply_tests.rs"]
 mod workspace_template_apply_tests;
+#[path = "workspace_templates_tests.rs"]
+mod workspace_templates_tests;
 
 struct Fixture {
     s: Store,

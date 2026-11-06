@@ -657,7 +657,7 @@ fn management_openapi_review_every_completed_operation_rejects_response_mutation
             }
         }
     }
-    assert_eq!((operations, json_operations), (262, 254));
+    assert_eq!((operations, json_operations), (263, 255));
 }
 
 #[test]

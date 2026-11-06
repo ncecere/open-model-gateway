@@ -1249,6 +1249,18 @@ BEGIN
   BEGIN UPDATE workspace_template_versions SET published_at=now()-interval '1 day' WHERE template_id=t AND version=2; RAISE EXCEPTION 'template publication rewritten'; EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN DELETE FROM workspace_template_versions WHERE template_id=t; RAISE EXCEPTION 'template version removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   BEGIN UPDATE workspace_templates SET name='renamed' WHERE id=t; RAISE EXCEPTION 'template renamed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  -- Applications (0075): only of the published version, with its hash, to a
+  -- shared workspace; immutable.
+  DECLARE ws uuid:=gen_random_uuid(); app uuid:=gen_random_uuid(); BEGIN
+   INSERT INTO workspaces(id,name,kind) VALUES(ws,'Template probe '||ws,'project');
+   BEGIN INSERT INTO workspace_template_applications(id,template_id,version,content_hash,workspace_id,applied_by,idempotency_digest,payload_digest) VALUES(gen_random_uuid(),t,1,(SELECT content_hash FROM workspace_template_versions WHERE template_id=t AND version=1),ws,t_reviewer,sha256('a'::bytea),sha256('b'::bytea)); RAISE EXCEPTION 'retired template version applied'; EXCEPTION WHEN check_violation THEN NULL; END;
+   BEGIN INSERT INTO workspace_template_applications(id,template_id,version,content_hash,workspace_id,applied_by,idempotency_digest,payload_digest) VALUES(gen_random_uuid(),t,2,sha256('forged'::bytea),ws,t_reviewer,sha256('a'::bytea),sha256('b'::bytea)); RAISE EXCEPTION 'template applied with another hash'; EXCEPTION WHEN check_violation THEN NULL; END;
+   BEGIN INSERT INTO workspace_template_applications(id,template_id,version,content_hash,workspace_id,applied_by,idempotency_digest,payload_digest) VALUES(gen_random_uuid(),t,2,(SELECT content_hash FROM workspace_template_versions WHERE template_id=t AND version=2),ws,t_author,sha256('c'::bytea),sha256('b'::bytea)); RAISE EXCEPTION 'template applied by a non-admin'; EXCEPTION WHEN check_violation THEN NULL; END;
+   BEGIN INSERT INTO workspace_template_applications(id,template_id,version,content_hash,workspace_id,applied_by,idempotency_digest,payload_digest) VALUES(gen_random_uuid(),t,2,(SELECT content_hash FROM workspace_template_versions WHERE template_id=t AND version=2),(SELECT id FROM workspaces WHERE kind='team' AND id<>ws LIMIT 1),t_reviewer,sha256('d'::bytea),sha256('b'::bytea)); RAISE EXCEPTION 'template applied to an existing workspace'; EXCEPTION WHEN check_violation OR not_null_violation THEN NULL; END;
+   INSERT INTO workspace_template_applications(id,template_id,version,content_hash,workspace_id,applied_by,idempotency_digest,payload_digest) VALUES(app,t,2,(SELECT content_hash FROM workspace_template_versions WHERE template_id=t AND version=2),ws,t_reviewer,sha256('a'::bytea),sha256('b'::bytea));
+   BEGIN UPDATE workspace_template_applications SET version=1 WHERE id=app; RAISE EXCEPTION 'template application mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+   BEGIN DELETE FROM workspace_template_applications WHERE id=app; RAISE EXCEPTION 'template application removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  END;
  END;
  -- Work leases (0029): election, renewal, fencing, release and takeover as runtime.
  DECLARE me uuid:=gen_random_uuid(); other uuid:=gen_random_uuid(); term bigint; BEGIN
