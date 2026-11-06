@@ -302,7 +302,7 @@ export function WorkspaceModels({ session, workspace }: { session: Session; work
   // #83: a member who cannot add models asks the workspace's owners/admins instead.
   // Only a member asks (#453): a Platform reader viewing a shared workspace
   // without membership would only get 404.
-  const canRequest = !canSelect && workspace.kind !== "personal" && workspace.role !== null;
+  const canRequest = !canSelect && workspace.kind !== "personal" && !!workspace.role;
   // Only this workspace's pending requests (a read-only server filter).
   const mine = useChoices<AccessRequest>(`${myAccessRequestsPath}?status=pending&workspace_id=${encodeURIComponent(workspace.id)}`, canRequest);
   const requested = new Set((mine.data ?? []).filter(q => q.model_id).map(q => q.model_id!));

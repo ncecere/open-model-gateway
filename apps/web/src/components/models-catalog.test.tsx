@@ -195,6 +195,8 @@ describe("Workspace Models (eligible catalog)", () => {
   });
   it("offers no Request to a platform reader who is not a member (#453)", () => {
     expect(ws({ ...member, role: null })).not.toContain("Request</button>");
+    expect(ws({ ...member, role: undefined as never })).not.toContain("Request</button>");
+    expect(ws(member)).toContain("Request</button>");
   });
   it("describes the personal variant in one short line", () => { expect(ws(personal)).toContain("Models you can call from your personal workspace."); });
   it("offers Newest and orders by the catalog's created_at, showing when each model was added", () => {
