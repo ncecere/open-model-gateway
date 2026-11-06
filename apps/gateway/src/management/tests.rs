@@ -126,6 +126,8 @@ mod ux_tests;
 mod webhook_tests;
 #[path = "workspace_templates_tests.rs"]
 mod workspace_templates_tests;
+#[path = "workspace_template_apply_tests.rs"]
+mod workspace_template_apply_tests;
 
 struct Fixture {
     s: Store,
