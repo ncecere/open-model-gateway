@@ -424,12 +424,29 @@ async fn management_openapi_slice2_fixtures(pool: PgPool) {
             let _ = done.send(result);
         })
         .expect("fixture thread");
-    if let Err(panic) = outcome.await.expect("fixture thread finished") {
-        std::panic::resume_unwind(panic);
+    let (mut failures, observed) = match outcome.await.expect("fixture thread finished") {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    };
+    // The coverage gates last: they judge every positive and vector set above.
+    let gates = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        observed.finish(SLICE2_AREAS);
+    }));
+    if let Err(panic) = gates {
+        failures.push(
+            panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+                .unwrap_or_else(|| "gates panicked".to_owned()),
+        );
     }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-async fn slice2_fixtures(pool: PgPool) {
+/// Runs every fixture, returning the failures and what the handlers were seen
+/// to do; the runner judges coverage.
+async fn slice2_fixtures(pool: PgPool) -> (Vec<String>, PositiveFixtures) {
     let f = fixture(&pool).await;
     let admin = browser(&pool, &f.admin).await;
     let auditor = browser(&pool, &f.auditor).await;
@@ -3546,22 +3563,9 @@ async fn slice2_fixtures(pool: PgPool) {
             "handler-derived probes: {pins} ran ({domain} accepted via 404/409); expected {EXPECTED_PINS} ({EXPECTED_DOMAIN_PINS})"
         ),
     );
-    let mut failures = c.failures.borrow().clone();
-    // The coverage gates last: they judge every positive and vector set above.
-    let observed = c.observed.lock().await;
-    let gates = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        observed.finish(SLICE2_AREAS);
-    }));
-    if let Err(panic) = gates {
-        failures.push(
-            panic
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_owned()))
-                .unwrap_or_else(|| "gates panicked".to_owned()),
-        );
-    }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    let failures = c.failures.borrow().clone();
+    let observed = std::mem::take(&mut *c.observed.lock().await);
+    (failures, observed)
 }
 
 /// #84 slice B: apply the published version (5, shape A), replay it, and the
