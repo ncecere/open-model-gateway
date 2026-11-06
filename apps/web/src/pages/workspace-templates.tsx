@@ -9,7 +9,7 @@
  */
 import { LayoutTemplate, Plus } from "lucide-react";
 import { api, platformPath, type Session } from "../lib/api";
-import { applyPath, contentError, describeContent, exampleContent, parseContent, templatePath, templatesPath, versionStateLabels, versionStateTone, versionStepPath, versionsPath, type TemplateApplication, type TemplateVersion, type WorkspaceTemplate, type WorkspaceTemplateSummary } from "../lib/workspace-templates";
+import { applyPath, contentError, describeContent, exampleContent, summarizeContent, parseContent, templatePath, templatesPath, versionStateLabels, versionStateTone, versionStepPath, versionsPath, type TemplateApplication, type TemplateVersion, type WorkspaceTemplate, type WorkspaceTemplateSummary } from "../lib/workspace-templates";
 import { nameField, type Field } from "../lib/forms";
 import type { DirectoryUser } from "../lib/people";
 import { Button, ErrorNotice, Heading, Inline, Stack, useAction, useApi } from "../components/ui";
@@ -67,7 +67,7 @@ export function WorkspaceTemplateDetail({ session, id }: { session: Session; id:
   const step = (v: TemplateVersion, which: "review" | "publish" | "retire") => ask({
     title: which === "review" ? `Approve version ${v.version}?` : which === "publish" ? `Publish version ${v.version}?` : `Retire version ${v.version}?`,
     danger: which === "retire",
-    description: which === "review" ? "You confirm this version's content is right. You can't review a version you wrote." : which === "publish" ? "New workspaces can be created from it. The currently published version is retired." : "It can no longer be published or used. Workspaces already created from it are not changed.",
+    description: which === "review" ? "You confirm this version's content is right. You can't review a version you wrote." : which === "publish" ? "New workspaces can be created from it. It replaces the published version, if there is one (that version is retired)." : v.state === "published" ? "It can no longer be used, and no version of this template will be published. Workspaces already created from it are not changed." : "It can no longer be published or used.",
     submitLabel: which === "review" ? "Approve" : which === "publish" ? "Publish" : "Retire",
     successNotice: which === "review" ? "Version approved." : which === "publish" ? "Version published." : "Version retired.",
     run: (_, signal) => api<WorkspaceTemplate>(versionStepPath(id, v.version, which), { method: "POST", signal }),
@@ -82,11 +82,18 @@ export function WorkspaceTemplateDetail({ session, id }: { session: Session; id:
     const slots = [{ name: c.owner.name, label: `${c.owner.name} (owner)`, required: true, multiple: false }, ...c.slots.map(sl => ({ name: sl.name, label: `${sl.name} (${sl.role})`, required: sl.required, multiple: sl.multiple }))];
     ask({
       title: `Create a ${c.kind === "project" ? "Project" : "Team"} from ${t.name}`,
-      description: `Version ${v.version}: ${describeContent(c).slice(1, 4).join(" · ")}. Everything is created together, or nothing is.`,
+      description: (({ catalogs, models, limits }) => `Version ${v.version}: ${catalogs} · ${models} · ${limits}. Everything is created together, or nothing is.`)(summarizeContent(c)),
       fields: [nameField, ...slots.map(sl => slotField(sl.name, sl.label, sl.required, sl.multiple))],
       submitLabel: "Create workspace", successNotice: "Workspace created.",
       run: async (values, signal) => {
         const assignments = slots.map(sl => ({ slot: sl.name, user_ids: parseIds(values[`slot:${sl.name}`], sl.multiple) })).filter(a => a.user_ids.length);
+        // One slot per person (the server refuses a repeat with a generic 400).
+        const seen = new Map<string, string>();
+        for (const a of assignments) for (const user of a.user_ids) {
+          const other = seen.get(user);
+          if (other) throw new Error(`The same person is chosen for ${other} and ${a.slot}. Choose each person for one slot only.`);
+          seen.set(user, a.slot);
+        }
         return api<TemplateApplication>(applyPath(id), { method: "POST", body: { version: v.version, name: values.name, assignments, idempotency_key: key }, signal });
       },
       // After the dialog completes (its navigation guard allows leaving then): open the new workspace.
@@ -95,9 +102,10 @@ export function WorkspaceTemplateDetail({ session, id }: { session: Session; id:
   };
   const isAuthor = (v: TemplateVersion) => v.author === session.user.id;
   const columns: DataTableColumn<TemplateVersion>[] = [
-    { id: "version", header: "Version", accessor: v => v.version, rowHeader: true, hideable: false, cell: v => <CellText primary={`Version ${v.version}`} secondary={describeContent(v.content).join(" · ")} /> },
+    { id: "version", header: "Version", accessor: v => v.version, rowHeader: true, hideable: false, cell: v => <CellText primary={`Version ${v.version}`} secondary={describeContent(v.content)} /> },
     { id: "state", header: "State", accessor: v => v.state, cell: v => <StatusBadge tone={versionStateTone[v.state]}>{versionStateLabels[v.state]}</StatusBadge> },
-    { id: "hash", header: "Content hash", accessor: v => v.content_hash, cell: v => <code title={v.content_hash}>{v.content_hash.slice(0, 12)}</code> },
+    { id: "author", header: "Author", accessor: v => isAuthor(v) ? "You" : "Another admin", cell: v => isAuthor(v) ? "You" : <span className={s.secondary}>Another admin</span> },
+    { id: "hash", header: "Content hash", accessor: v => v.content_hash, cell: v => <><code title={v.content_hash} aria-hidden>{v.content_hash.slice(0, 12)}</code><span className="sr-only">{v.content_hash}</span></> },
     { id: "created", header: "Created", accessor: v => v.created_at, cell: v => <span className={s.secondary}>{new Date(v.created_at).toLocaleString()}</span> },
   ];
   const actions = (v: TemplateVersion) => !writable ? [] : [

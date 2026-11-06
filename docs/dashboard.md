@@ -40,6 +40,7 @@ Identifiers are UUIDs, not organization paths or public model aliases:
 | Workspace keys/models/costs/settings | `/workspaces/{uuid}/keys`, `/models`, `/costs`, `/settings` |
 | Profile/invitation acceptance | `/profile`, `/invitations/accept` |
 | Access requests | `/access-requests` (Workspace portal), `/admin/access-requests` (Admin) |
+| Workspace templates | `/admin/workspace-templates`, `/admin/workspace-templates/{id}` (Admin) |
 
 The router and location helpers are `src/router.tsx` and `src/lib/locations.ts`. Tabs use `?tab=`; catalog search/status/pagination and cost dates/filters are URL-backed. Recognized root navigation metadata is canonicalized, but removed organization URLs/`org` contexts are not retained as an organization compatibility feature. Invalid/unavailable workspace navigation is restored to an authorized destination rather than used to fetch foreign data.
 

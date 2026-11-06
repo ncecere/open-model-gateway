@@ -49,11 +49,14 @@ export function contentError(text: string): string | undefined {
 }
 
 /** A plain summary of what a version creates, from its content. */
-export function describeContent(c: TemplateContent): string[] {
+export function summarizeContent(c: TemplateContent): { kind: string; catalogs: string; models: string; limits: string; slots: string } {
   const kind = c.kind === "project" ? "Project" : "Team";
   const catalogs = c.catalogs.mode === "inherit" ? `${kind} default catalogs` : `${c.catalogs.catalog_ids.length} catalog${c.catalogs.catalog_ids.length === 1 ? "" : "s"} (replacing the defaults)`;
-  const models = c.model_ids.length ? `${c.model_ids.length} model${c.model_ids.length === 1 ? "" : "s"} added` : "No models added";
+  // Catalog models the new workspace selects; a template never changes a catalog.
+  const models = c.model_ids.length ? `${c.model_ids.length} model${c.model_ids.length === 1 ? "" : "s"} selected` : "No models selected";
   const limits = c.limits ? "Local limits set" : "No local limits";
   const slots = [`${c.owner.name} (owner)`, ...c.slots.map(s => `${s.name} (${s.role}${s.required ? ", required" : ""}${s.multiple ? ", several" : ""})`)].join(", ");
-  return [kind, catalogs, models, limits, `Slots: ${slots}`];
+  return { kind, catalogs, models, limits, slots: `Slots: ${slots}` };
 }
+/** Everything, for a version row. */
+export const describeContent = (c: TemplateContent): string => { const s = summarizeContent(c); return [s.kind, s.catalogs, s.models, s.limits, s.slots].join(" · "); };
