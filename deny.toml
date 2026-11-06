@@ -46,6 +46,11 @@ ignore = [
     # >=1.150 and the aws-smithy 0.61 generation; remove this when the
     # AWS SDK crates are bumped together.
     { id = "RUSTSEC-2026-0253", reason = "unsound only with panicking key Drop; fix needs the next AWS SDK generation" },
+    # pin-utils 0.1.0 (via aws-smithy-http 0.63, the pinned AWS SDK
+    # generation): unmaintained (repository archived 2026-10-01), no known
+    # vulnerability; its pin_mut! macros are superseded by core::pin::pin!.
+    # Removed with the AWS SDK generation bump (#456).
+    { id = "RUSTSEC-2026-0441", reason = "unmaintained notice only; arrives with the pinned AWS SDK generation, removed by its bump" },
 ]
 
 [licenses]
