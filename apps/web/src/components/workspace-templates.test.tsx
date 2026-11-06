@@ -3,11 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { abortRequests } from "../lib/api";
+import { abortRequests, platformPath } from "../lib/api";
 import { ActionProvider } from "./ui";
 import { DashboardNavigationProvider } from "./navigation-link";
 import { WorkspaceTemplateDetail, WorkspaceTemplatesPage } from "../pages/workspace-templates";
-import { templatePath, templatesPath, type TemplateVersion, type WorkspaceTemplate } from "../lib/workspace-templates";
+import { applyPath, templatePath, templatesPath, type TemplateVersion, type WorkspaceTemplate } from "../lib/workspace-templates";
 import { admin, auditor, testClient } from "../lib/test-fixtures";
 
 beforeEach(() => {
@@ -22,7 +22,7 @@ const version = (patch: Partial<TemplateVersion>): TemplateVersion => ({ version
 const template = (versions: TemplateVersion[]): WorkspaceTemplate => ({ id: "t1", name: "Team starter", created_by: "other-admin", created_at: "2026-11-01T00:00:00Z", versions });
 function serve(routes: Record<string, (init?: RequestInit) => unknown>) {
   const fetch = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
-    const key = Object.keys(routes).find(r => path === r || path.startsWith(`${r}?`));
+    const key = Object.keys(routes).find(r => path === r || path.startsWith(r.includes("?") ? `${r}&` : `${r}?`));
     if (key) return Promise.resolve(Response.json(routes[key]!(init)));
     return Promise.reject(new Error(`Unexpected ${init?.method ?? "GET"} ${path}`));
   });
@@ -79,6 +79,29 @@ describe("Workspace templates (#84)", () => {
     await user.click(await screen.findByRole("menuitem", { name: "Approve…" }));
     await user.click(await screen.findByRole("button", { name: "Approve" }));
     await waitFor(() => expect(writes(fetch).map(([p]) => p)).toEqual([`${templatePath("t1")}/versions/1/review`]));
+  });
+  it("creates a workspace from the published version with a person per slot, then opens it", async () => {
+    const published = version({ state: "published", reviewed_by: "x", reviewed_at: "2026-11-02T00:00:00Z", published_at: "2026-11-02T00:00:00Z" });
+    const people = [{ id: "u-alex", email: "alex@example.invalid", display_name: "Alex", platform_role: "user", disabled_at: null }, { id: "u-blair", email: "blair@example.invalid", display_name: "Blair", platform_role: "user", disabled_at: null }];
+    const fetch = serve({
+      [templatePath("t1")]: () => template([published]),
+      [`${platformPath}/users?status=active&role=any`]: () => ({ data: people }),
+      [applyPath("t1")]: () => ({ workspace_id: "ws-new", template_id: "t1", version: 1, replayed: false }),
+    });
+    const { user, navigate } = mount(<WorkspaceTemplateDetail session={admin} id="t1" />);
+    await user.click(await screen.findByRole("button", { name: "Create workspace" }));
+    const dialog = await screen.findByRole("dialog", { name: "Create a Team from Team starter" });
+    await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Platform crew");
+    await user.type(within(dialog).getByRole("combobox", { name: /^lead \(owner\)/ }), "alex");
+    await user.click(await screen.findByRole("option", { name: "alex@example.invalid" }));
+    await user.type(within(dialog).getByRole("combobox", { name: /^crew \(member\)/ }), "blair");
+    await user.click(await screen.findByRole("option", { name: "blair@example.invalid" }));
+    await user.click(within(dialog).getByRole("button", { name: "Create workspace" }));
+    await waitFor(() => expect(writes(fetch)).toHaveLength(1));
+    const [path, body] = writes(fetch)[0]!;
+    expect(path).toBe(applyPath("t1"));
+    expect({ ...body, idempotency_key: typeof body.idempotency_key }).toEqual({ version: 1, name: "Platform crew", assignments: [{ slot: "lead", user_ids: ["u-alex"] }, { slot: "crew", user_ids: ["u-blair"] }], idempotency_key: "string" });
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith({ page: "workspace-detail", record: "ws-new", kind: "team" }));
   });
   it("shows no steps to an Auditor", async () => {
     serve({ [templatePath("t1")]: () => template([version({})]) });

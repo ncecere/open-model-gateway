@@ -87,10 +87,10 @@ export function WorkspaceTemplateDetail({ session, id }: { session: Session; id:
       submitLabel: "Create workspace", successNotice: "Workspace created.",
       run: async (values, signal) => {
         const assignments = slots.map(sl => ({ slot: sl.name, user_ids: parseIds(values[`slot:${sl.name}`], sl.multiple) })).filter(a => a.user_ids.length);
-        const result = await api<TemplateApplication>(applyPath(id), { method: "POST", body: { version: v.version, name: values.name, assignments, idempotency_key: key }, signal });
-        nav?.navigate({ page: "workspace-detail", record: result.workspace_id, kind: c.kind });
-        return result;
+        return api<TemplateApplication>(applyPath(id), { method: "POST", body: { version: v.version, name: values.name, assignments, idempotency_key: key }, signal });
       },
+      // After the dialog completes (its navigation guard allows leaving then): open the new workspace.
+      after: result => nav?.navigate({ page: "workspace-detail", record: (result as TemplateApplication).workspace_id, kind: c.kind }),
     });
   };
   const isAuthor = (v: TemplateVersion) => v.author === session.user.id;
