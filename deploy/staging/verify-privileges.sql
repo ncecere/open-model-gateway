@@ -1261,6 +1261,26 @@ BEGIN
    BEGIN UPDATE workspace_template_applications SET version=1 WHERE id=app; RAISE EXCEPTION 'template application mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
    BEGIN DELETE FROM workspace_template_applications WHERE id=app; RAISE EXCEPTION 'template application removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   END;
+  -- Access review campaigns (0076): started by a Platform Admin; items name a
+  -- grant only (the database copies the rest from it); immutable.
+  DECLARE ws uuid:=gen_random_uuid(); g uuid:=gen_random_uuid(); c uuid:=gen_random_uuid(); BEGIN
+   INSERT INTO workspaces(id,name,kind) VALUES(ws,'Review probe '||ws,'team');
+   INSERT INTO workspace_membership_grants(id,workspace_id,user_id,role,source) VALUES(g,ws,t_reviewer,'member','manual');
+   BEGIN INSERT INTO access_review_campaigns(id,name,subjects,workspace_ids,created_by,due_at) VALUES(gen_random_uuid(),'Probe','{workspace_memberships}','{}',t_author,now()+interval '7 days'); RAISE EXCEPTION 'access review started by a non-admin'; EXCEPTION WHEN check_violation THEN NULL; END;
+   INSERT INTO access_review_campaigns(id,name,subjects,workspace_ids,created_by,due_at) VALUES(c,'Probe','{workspace_memberships}',ARRAY[ws],t_reviewer,now()+interval '7 days');
+   BEGIN INSERT INTO access_review_items(id,campaign_id,subject_kind,membership_grant_id,user_id) VALUES(gen_random_uuid(),c,'workspace_membership',g,t_author); RAISE EXCEPTION 'access review item fields forgeable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+   INSERT INTO access_review_items(id,campaign_id,subject_kind,membership_grant_id) VALUES(gen_random_uuid(),c,'workspace_membership',g);
+   IF NOT EXISTS (SELECT FROM access_review_items WHERE campaign_id=c AND workspace_id=ws AND user_id=t_reviewer AND role='member' AND source='manual') THEN RAISE EXCEPTION 'access review item not derived from its grant'; END IF;
+   BEGIN UPDATE access_review_campaigns SET name='renamed' WHERE id=c; RAISE EXCEPTION 'access review renamed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+   BEGIN UPDATE access_review_items SET role='owner' WHERE campaign_id=c; RAISE EXCEPTION 'access review item mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+   BEGIN DELETE FROM access_review_items WHERE campaign_id=c; RAISE EXCEPTION 'access review item removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+   BEGIN DELETE FROM access_review_campaigns WHERE id=c; RAISE EXCEPTION 'access review removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+   -- Closing: once, by a current Platform Admin; a closed campaign takes no item.
+   BEGIN UPDATE access_review_campaigns SET closed_by=t_author,closed_at=now() WHERE id=c; RAISE EXCEPTION 'access review closed by a non-admin'; EXCEPTION WHEN check_violation THEN NULL; END;
+   UPDATE access_review_campaigns SET closed_by=t_reviewer,closed_at=now() WHERE id=c;
+   BEGIN UPDATE access_review_campaigns SET closed_by=t_reviewer,closed_at=now() WHERE id=c; RAISE EXCEPTION 'access review closed twice'; EXCEPTION WHEN check_violation THEN NULL; END;
+   BEGIN INSERT INTO access_review_items(id,campaign_id,subject_kind,membership_grant_id) VALUES(gen_random_uuid(),c,'workspace_membership',g); RAISE EXCEPTION 'item added to a closed access review'; EXCEPTION WHEN check_violation OR unique_violation THEN NULL; END;
+  END;
  END;
  -- Work leases (0029): election, renewal, fencing, release and takeover as runtime.
  DECLARE me uuid:=gen_random_uuid(); other uuid:=gen_random_uuid(); term bigint; BEGIN

@@ -1505,6 +1505,8 @@ async fn slice2_fixtures(pool: PgPool) -> (Vec<String>, PositiveFixtures) {
         template_model,
     ))
     .await;
+    // #90: access review campaigns (positives, query and body vectors).
+    Box::pin(access_review_fixtures(c, &admin, &f, &pool)).await;
 
     // Catalog and policy layers: populated replacement/default lists, never a union.
     let catalog = Uuid::new_v4();
@@ -3678,6 +3680,163 @@ async fn apply_vectors(c: &Client, admin: &Browser, f: &Fixture, pool: &PgPool) 
                     }
                 },
             ),
+        )
+        .await;
+    }
+}
+
+/// #90 slice 1: access review campaigns. Positives cover memberships and
+/// platform roles, a narrowed and an unnarrowed campaign, an open and a
+/// closed one, and an item whose person's data was removed after the
+/// snapshot.
+async fn access_review_fixtures(c: &Client, admin: &Browser, f: &Fixture, pool: &PgPool) {
+    const REVIEWS: &str = "/api/v1/platform/access-reviews";
+    let auditor = browser(pool, &f.auditor).await;
+    sqlx::query("UPDATE users SET display_name='Contract Member' WHERE id=$1")
+        .bind(f.member.user_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    let removed = plain_user(pool, "review-removed").await;
+    member(pool, f.team, removed, "member").await;
+    let both = c
+        .ok(
+            admin,
+            "POST",
+            REVIEWS,
+            Some(json!({"name":"Contract review","subjects":["workspace_memberships","platform_roles"],"workspace_ids":[f.team],"due_in_days":30})),
+        )
+        .await;
+    let roles = c
+        .ok(
+            admin,
+            "POST",
+            REVIEWS,
+            Some(json!(["Contract roles", ["platform_roles"]])),
+        )
+        .await;
+    sqlx::query("UPDATE users SET email=NULL WHERE id=$1")
+        .bind(removed)
+        .execute(pool)
+        .await
+        .unwrap();
+    c.ok(
+        admin,
+        "POST",
+        &format!("{REVIEWS}/{}/close", id(&roles)),
+        None,
+    )
+    .await;
+    c.ok(&auditor, "GET", &target(REVIEWS, "limit=50&offset=0"), None)
+        .await;
+    for campaign in [&both, &roles] {
+        c.ok(
+            &auditor,
+            "GET",
+            &format!("{REVIEWS}/{}", id(campaign)),
+            None,
+        )
+        .await;
+    }
+    let items = format!("{REVIEWS}/{}/items", id(&both));
+    c.ok(&auditor, "GET", &target(&items, "limit=50&offset=0"), None)
+        .await;
+    // A filtered campaign closed (after its open-state positives above).
+    c.ok(
+        admin,
+        "POST",
+        &format!("{REVIEWS}/{}/close", id(&both)),
+        None,
+    )
+    .await;
+    // Vectors. Accepted bodies start campaigns: close every open one first
+    // so the 20-open limit never decides a vector.
+    let close_open = || async {
+        sqlx::query("UPDATE access_review_campaigns SET closed_by=$1, closed_at=now() WHERE closed_at IS NULL")
+            .bind(f.admin.user_id)
+            .execute(pool)
+            .await
+            .unwrap();
+    };
+    let mut o = c.observed.lock().await;
+    c.guarded(
+        "GET /platform/access-reviews",
+        query_vectors_fixed(
+            &mut o,
+            "GET",
+            REVIEWS,
+            &[("limit", "50"), ("offset", "0")],
+            async |q| {
+                c.raw(&auditor, "GET", &target(REVIEWS, &q), None, &[])
+                    .await
+            },
+        ),
+    )
+    .await;
+    c.guarded(
+        "GET /platform/access-reviews/{id}/items",
+        query_vectors_fixed(
+            &mut o,
+            "GET",
+            "/api/v1/platform/access-reviews/{id}/items",
+            &[("limit", "50"), ("offset", "0")],
+            async |q| c.raw(&auditor, "GET", &target(&items, &q), None, &[]).await,
+        ),
+    )
+    .await;
+    for valid in [
+        json!({"name":"Vector review","subjects":["workspace_memberships"],"workspace_ids":[f.team],"due_in_days":7}),
+        json!([
+            "Vector review positional",
+            ["workspace_memberships"],
+            [f.project],
+            7
+        ]),
+    ] {
+        c.guarded(
+            "POST /platform/access-reviews",
+            body_vectors_http(&mut o, "POST", REVIEWS, valid, async |body| {
+                close_open().await;
+                // Described, not expressed: a workspace filter needs the
+                // memberships subject and existing Teams/Projects. The real
+                // handler decides a body that breaks it.
+                let (subjects, filter) = if body.is_array() {
+                    (body[1].clone(), body[2].clone())
+                } else {
+                    (body["subjects"].clone(), body["workspace_ids"].clone())
+                };
+                let filter: Vec<Uuid> = filter
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|v| v.as_str().and_then(|s| Uuid::parse_str(s).ok()))
+                    .collect();
+                let shared: i64 = sqlx::query_scalar(
+                    "SELECT count(*) FROM workspaces WHERE id=ANY($1) AND kind IN ('team','project')",
+                )
+                .bind(&filter)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+                let schema_accepts = openapi::http_vectors::accepts(
+                    openapi::responses::artifact(),
+                    &openapi::responses::artifact()["paths"][REVIEWS]["post"]["requestBody"]["content"]["application/json"]["schema"],
+                    &body,
+                )
+                .unwrap_or(false);
+                let filter_rule = schema_accepts
+                    && !filter.is_empty()
+                    && (!subjects
+                        .as_array()
+                        .is_some_and(|s| s.iter().any(|v| v == "workspace_memberships"))
+                        || shared as usize != filter.len());
+                let captured = c.raw(admin, "POST", REVIEWS, Some(body), &[]).await;
+                if filter_rule && captured.status == StatusCode::BAD_REQUEST {
+                    Probe::decided(captured, true)
+                } else {
+                    Probe::from(captured)
+                }
+            }),
         )
         .await;
     }

@@ -117,6 +117,8 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "workspace_templates",
     "workspace_template_versions",
     "workspace_template_applications",
+    "access_review_campaigns",
+    "access_review_items",
     "installation_settings",
     // 0011 alerts
     "alert_rules",

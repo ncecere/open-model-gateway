@@ -131,7 +131,7 @@ export const auditActionLabels: Record<string, string> = {
   "usage.reconciled": "Reconciled usage",
   "provider_cost.imported": "Imported provider-reported costs", "provider_cost.mapped": "Attested provider cost mapping", "provider_cost.reconciled": "Reconciled provider-reported costs",
   "access_request.created": "Submitted access request", "access_request.approved": "Approved access request", "access_request.denied": "Denied access request", "access_request.withdrawn": "Withdrew access request", "access_request.expired": "Expired access request", "access_request.applied": "Applied access request", "workspace.discoverability_set": "Changed workspace discoverability",
-  "workspace_template.created": "Created workspace template", "workspace_template.version_created": "Added template version", "workspace_template.reviewed": "Reviewed template version", "workspace_template.published": "Published template version", "workspace_template.retired": "Retired template version", "workspace_template.applied": "Created workspace from template",
+  "workspace_template.created": "Created workspace template", "workspace_template.version_created": "Added template version", "workspace_template.reviewed": "Reviewed template version", "workspace_template.published": "Published template version", "workspace_template.retired": "Retired template version", "workspace_template.applied": "Created workspace from template", "access_review.created": "Started access review", "access_review.closed": "Closed access review",
   "user.provisioned": "Provisioned user", "user.updated": "Changed user", "user.suspended": "Suspended user", "subject.exported": "Exported own data", "user.exported": "Exported user record", "user.personal_data_removed": "Removed personal data", "legal_hold.placed": "Placed legal hold", "legal_hold.released": "Released legal hold", "audit_export.tested": "Sent a test audit export", "user.sessions_revoked": "Signed out all sessions of user", "session.revoked": "Signed out own session", "session.others_revoked": "Signed out own other sessions", "user.reactivated": "Reactivated user", "user.bootstrap_role": "Granted first admin role", "user.cleaned": "Cleaned up departed user",
   "workspace.created": "Created workspace", "workspace.updated": "Changed workspace", "workspace.manual_membership_set": "Set manual membership", "workspace.manual_membership_revoked": "Removed manual membership",
 };
@@ -150,7 +150,7 @@ export function auditEventLabel(event: { action: string; metadata?: Record<strin
 export const resourceTypeLabels: Record<string, string> = {
   user: "User", workspace: "Workspace", key: "API key", model: "Model", catalog: "Catalog", cost_center: "Cost center", group_mapping: "SSO group mapping",
   installation: "Installation", workspace_type: "Workspace type", provider: "Connection", deployment: "Route", price: "Price", service_account: "Service account",
-  invitation: "Invitation", execution: "Request", scim_group: "SCIM group", workspace_template: "Template",
+  invitation: "Invitation", execution: "Request", scim_group: "SCIM group", workspace_template: "Template", access_review: "Access review",
 };
 export const resourceTypeLabel = (type?: string) => type ? resourceTypeLabels[type] ?? cap(type.replaceAll("_", " ")) : "Unknown";
 
