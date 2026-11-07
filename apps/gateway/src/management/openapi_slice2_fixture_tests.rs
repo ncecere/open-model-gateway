@@ -3687,8 +3687,8 @@ async fn apply_vectors(c: &Client, admin: &Browser, f: &Fixture, pool: &PgPool) 
 
 /// #90 slice 1: access review campaigns. Positives cover memberships and
 /// platform roles, a narrowed and an unnarrowed campaign, an open and a
-/// closed one (closed in SQL: closing arrives in a later slice), and an item
-/// whose person's data was removed after the snapshot.
+/// closed one, and an item whose person's data was removed after the
+/// snapshot.
 async fn access_review_fixtures(c: &Client, admin: &Browser, f: &Fixture, pool: &PgPool) {
     const REVIEWS: &str = "/api/v1/platform/access-reviews";
     let auditor = browser(pool, &f.auditor).await;
@@ -3720,12 +3720,13 @@ async fn access_review_fixtures(c: &Client, admin: &Browser, f: &Fixture, pool: 
         .execute(pool)
         .await
         .unwrap();
-    sqlx::query("UPDATE access_review_campaigns SET closed_by=$2, closed_at=now() WHERE id=$1")
-        .bind(id(&roles))
-        .bind(f.admin.user_id)
-        .execute(pool)
-        .await
-        .unwrap();
+    c.ok(
+        admin,
+        "POST",
+        &format!("{REVIEWS}/{}/close", id(&roles)),
+        None,
+    )
+    .await;
     c.ok(&auditor, "GET", &target(REVIEWS, "limit=50&offset=0"), None)
         .await;
     for campaign in [&both, &roles] {
@@ -3740,6 +3741,14 @@ async fn access_review_fixtures(c: &Client, admin: &Browser, f: &Fixture, pool: 
     let items = format!("{REVIEWS}/{}/items", id(&both));
     c.ok(&auditor, "GET", &target(&items, "limit=50&offset=0"), None)
         .await;
+    // A filtered campaign closed (after its open-state positives above).
+    c.ok(
+        admin,
+        "POST",
+        &format!("{REVIEWS}/{}/close", id(&both)),
+        None,
+    )
+    .await;
     // Vectors. Accepted bodies start campaigns: close every open one first
     // so the 20-open limit never decides a vector.
     let close_open = || async {

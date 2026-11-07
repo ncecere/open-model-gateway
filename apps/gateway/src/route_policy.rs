@@ -401,6 +401,12 @@ pub(crate) const ROUTES: &[Route] = &[
         PlatformRead,
         DENIED
     ),
+    route!(
+        "POST",
+        "/api/v1/platform/access-reviews/{id}/close",
+        PlatformWrite,
+        DENIED
+    ),
     route!("GET", "/api/v1/me", Browser, DENIED),
     route!("GET", "/api/v1/me/summary", Browser, DENIED),
     route!("GET", "/api/v1/me/keys", Browser, DENIED),

@@ -199,6 +199,8 @@ GRANT INSERT(id,template_id,version,content_hash,workspace_id,applied_by,idempot
 GRANT SELECT ON public.access_review_campaigns,public.access_review_items TO gateway_runtime;
 GRANT INSERT(id,name,subjects,workspace_ids,created_by,due_at) ON public.access_review_campaigns TO gateway_runtime;
 GRANT INSERT(id,campaign_id,subject_kind,membership_grant_id,platform_grant_id) ON public.access_review_items TO gateway_runtime;
+-- Closing a campaign (the guard allows it once, by a current Platform Admin).
+GRANT UPDATE(closed_by,closed_at) ON public.access_review_campaigns TO gateway_runtime;
 -- Installation spend rules (0026) edit their period and reference amount.
 GRANT UPDATE(name,enabled,budget_layers,thresholds,spike_factor_percent,min_spend_microusd,
  window_minutes,error_rate_percent,min_requests,consecutive_failures,provider_connection_id,

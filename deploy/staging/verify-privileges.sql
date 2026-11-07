@@ -1275,6 +1275,11 @@ BEGIN
    BEGIN UPDATE access_review_items SET role='owner' WHERE campaign_id=c; RAISE EXCEPTION 'access review item mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
    BEGIN DELETE FROM access_review_items WHERE campaign_id=c; RAISE EXCEPTION 'access review item removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
    BEGIN DELETE FROM access_review_campaigns WHERE id=c; RAISE EXCEPTION 'access review removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+   -- Closing: once, by a current Platform Admin; a closed campaign takes no item.
+   BEGIN UPDATE access_review_campaigns SET closed_by=t_author,closed_at=now() WHERE id=c; RAISE EXCEPTION 'access review closed by a non-admin'; EXCEPTION WHEN check_violation THEN NULL; END;
+   UPDATE access_review_campaigns SET closed_by=t_reviewer,closed_at=now() WHERE id=c;
+   BEGIN UPDATE access_review_campaigns SET closed_by=t_reviewer,closed_at=now() WHERE id=c; RAISE EXCEPTION 'access review closed twice'; EXCEPTION WHEN check_violation THEN NULL; END;
+   BEGIN INSERT INTO access_review_items(id,campaign_id,subject_kind,membership_grant_id) VALUES(gen_random_uuid(),c,'workspace_membership',g); RAISE EXCEPTION 'item added to a closed access review'; EXCEPTION WHEN check_violation OR unique_violation THEN NULL; END;
   END;
  END;
  -- Work leases (0029): election, renewal, fencing, release and takeover as runtime.

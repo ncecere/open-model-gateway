@@ -1,6 +1,6 @@
 //! #90 slice 1: access review campaigns. A Platform Admin starts a one-shot
 //! campaign that snapshots the live shared (Team/Project) memberships and/or
-//! platform role grants it covers. Each item records one grant; the database
+//! elevated platform role grants (Admin, Auditor) it covers, and closes it. Each item records one grant; the database
 //! derives the item from the grant and accepts items only in the
 //! transaction that creates the campaign. Reviewer decisions follow in later
 //! slices. Browser-only: Platform Admins start campaigns; Platform Admins and
@@ -27,10 +27,14 @@ pub(super) struct NewCampaign {
 
 const CAMPAIGN_JSON: &str = "jsonb_build_object('id',c.id,'name',c.name,'subjects',to_jsonb(c.subjects),'workspace_ids',to_jsonb(c.workspace_ids),'created_by',c.created_by,'created_at',c.created_at,'due_at',c.due_at,'closed_at',c.closed_at,'item_count',(SELECT count(*) FROM access_review_items i WHERE i.campaign_id=c.id))";
 
+/// Whether an item's grant is still in effect: not revoked, the person
+/// neither disabled nor cleaned up, the workspace (if any) not disabled.
+const ACTIVE: &str = "(coalesce(m.revoked_at,p.revoked_at) IS NULL AND u.disabled_at IS NULL AND u.cleaned_at IS NULL AND (w.id IS NULL OR w.disabled_at IS NULL))";
+
 /// One campaign with its item counts (by kind, by source, and how many items'
 /// grants are no longer active).
 async fn one(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> ApiResult {
-    let v: Value = sqlx::query_scalar(&format!("SELECT {CAMPAIGN_JSON} || jsonb_build_object('counts',(SELECT jsonb_build_object('workspace_membership',count(*) FILTER (WHERE i.subject_kind='workspace_membership'),'platform_role',count(*) FILTER (WHERE i.subject_kind='platform_role'),'manual',count(*) FILTER (WHERE i.source='manual'),'group',count(*) FILTER (WHERE i.source='group'),'bootstrap',count(*) FILTER (WHERE i.source='bootstrap'),'inactive',count(*) FILTER (WHERE coalesce(m.revoked_at,p.revoked_at) IS NOT NULL)) FROM access_review_items i LEFT JOIN workspace_membership_grants m ON m.id=i.membership_grant_id LEFT JOIN platform_role_grants p ON p.id=i.platform_grant_id WHERE i.campaign_id=c.id)) FROM access_review_campaigns c WHERE c.id=$1"))
+    let v: Value = sqlx::query_scalar(&format!("SELECT {CAMPAIGN_JSON} || jsonb_build_object('counts',(SELECT jsonb_build_object('by_kind',jsonb_build_object('workspace_membership',count(*) FILTER (WHERE i.subject_kind='workspace_membership'),'platform_role',count(*) FILTER (WHERE i.subject_kind='platform_role')),'by_source',jsonb_build_object('manual',count(*) FILTER (WHERE i.source='manual'),'group',count(*) FILTER (WHERE i.source='group'),'bootstrap',count(*) FILTER (WHERE i.source='bootstrap')),'inactive',count(*) FILTER (WHERE NOT {ACTIVE})) FROM access_review_items i JOIN users u ON u.id=i.user_id LEFT JOIN workspaces w ON w.id=i.workspace_id LEFT JOIN workspace_membership_grants m ON m.id=i.membership_grant_id LEFT JOIN platform_role_grants p ON p.id=i.platform_grant_id WHERE i.campaign_id=c.id)) FROM access_review_campaigns c WHERE c.id=$1"))
         .bind(id)
         .fetch_optional(&mut **tx)
         .await?
@@ -67,9 +71,10 @@ pub(super) async fn detail(
     tx.commit().await?;
     Ok(result)
 }
-/// `GET /api/v1/platform/access-reviews/{id}/items`: memberships by
-/// workspace, then platform roles; each with the person (as the platform
-/// user directory shows them) and whether the grant is still active.
+/// `GET /api/v1/platform/access-reviews/{id}/items`: memberships (by
+/// workspace id), then platform roles, in a stable snapshot order; each with
+/// the workspace name and person as they are now (as the platform user
+/// directory shows them) and whether the grant is still in effect.
 pub(super) async fn items(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
@@ -86,7 +91,7 @@ pub(super) async fn items(
     if !exists {
         return Err(missing());
     }
-    let data: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('id',i.id,'subject_kind',i.subject_kind,'workspace_id',i.workspace_id,'workspace_name',w.name,'user_id',i.user_id,'email',u.email,'display_name',u.display_name,'role',i.role,'source',i.source,'granted_at',i.granted_at,'active',coalesce(m.revoked_at,p.revoked_at) IS NULL) FROM access_review_items i JOIN users u ON u.id=i.user_id LEFT JOIN workspaces w ON w.id=i.workspace_id LEFT JOIN workspace_membership_grants m ON m.id=i.membership_grant_id LEFT JOIN platform_role_grants p ON p.id=i.platform_grant_id WHERE i.campaign_id=$1 ORDER BY i.subject_kind DESC, w.name, w.id, u.email, i.id LIMIT $2 OFFSET $3")
+    let data: Vec<Value> = sqlx::query_scalar(&format!("SELECT jsonb_build_object('id',i.id,'subject_kind',i.subject_kind,'workspace_id',i.workspace_id,'workspace_name',w.name,'user_id',i.user_id,'email',u.email,'display_name',u.display_name,'role',i.role,'source',i.source,'granted_at',i.granted_at,'active',{ACTIVE}) FROM access_review_items i JOIN users u ON u.id=i.user_id LEFT JOIN workspaces w ON w.id=i.workspace_id LEFT JOIN workspace_membership_grants m ON m.id=i.membership_grant_id LEFT JOIN platform_role_grants p ON p.id=i.platform_grant_id WHERE i.campaign_id=$1 ORDER BY i.subject_kind DESC, i.workspace_id, i.user_id, i.id LIMIT $2 OFFSET $3"))
         .bind(id)
         .bind(l)
         .bind(o)
@@ -158,20 +163,43 @@ pub(super) async fn create(
         .await?;
     // One statement, so one snapshot of the grants. The guard copies each
     // item's fields from its grant and rechecks the same rules.
-    let inserted = sqlx::query("WITH m AS (SELECT 'workspace_membership' AS kind, g.id AS membership_grant_id, NULL::uuid AS platform_grant_id FROM workspace_membership_grants g JOIN workspaces w ON w.id=g.workspace_id JOIN users u ON u.id=g.user_id WHERE $2 AND g.revoked_at IS NULL AND w.kind IN ('team','project') AND w.disabled_at IS NULL AND (cardinality($4::uuid[])=0 OR w.id=ANY($4)) AND u.disabled_at IS NULL AND u.cleaned_at IS NULL), p AS (SELECT 'platform_role', NULL::uuid, g.id FROM platform_role_grants g JOIN users u ON u.id=g.user_id WHERE $3 AND g.revoked_at IS NULL AND u.disabled_at IS NULL AND u.cleaned_at IS NULL), s AS (SELECT * FROM m UNION ALL SELECT * FROM p LIMIT $5) INSERT INTO access_review_items(id,campaign_id,subject_kind,membership_grant_id,platform_grant_id) SELECT gen_random_uuid(),$1,kind,membership_grant_id,platform_grant_id FROM s")
+    let inserted = sqlx::query("WITH m AS (SELECT 'workspace_membership' AS kind, g.id AS membership_grant_id, NULL::uuid AS platform_grant_id FROM workspace_membership_grants g JOIN workspaces w ON w.id=g.workspace_id JOIN users u ON u.id=g.user_id WHERE $2 AND g.revoked_at IS NULL AND w.kind IN ('team','project') AND w.disabled_at IS NULL AND (cardinality($4::uuid[])=0 OR w.id=ANY($4)) AND u.disabled_at IS NULL AND u.cleaned_at IS NULL), p AS (SELECT 'platform_role', NULL::uuid, g.id FROM platform_role_grants g JOIN users u ON u.id=g.user_id WHERE $3 AND g.revoked_at IS NULL AND g.role IN ('admin','auditor') AND u.disabled_at IS NULL AND u.cleaned_at IS NULL), s AS (SELECT * FROM m UNION ALL SELECT * FROM p LIMIT $5) INSERT INTO access_review_items(id,campaign_id,subject_kind,membership_grant_id,platform_grant_id) SELECT gen_random_uuid(),$1,kind,membership_grant_id,platform_grant_id FROM s")
         .bind(id)
         .bind(subjects.contains("workspace_memberships"))
         .bind(subjects.contains("platform_roles"))
         .bind(&b.workspace_ids)
         .bind(MAX_ITEMS + 1)
         .execute(&mut *tx)
-        .await?
+        .await
+        .map_err(|e| {
+            // The guard rechecks each grant in its own snapshot: a grant
+            // revoked (or a person or workspace disabled) while the
+            // snapshot was taken refuses the whole campaign.
+            if e.as_database_error().and_then(|d| d.code()).as_deref() == Some("23514") {
+                ManagementError::detailed(
+                    StatusCode::CONFLICT,
+                    "access_review_changed",
+                    "Access changed while the review was starting; try again".into(),
+                    json!({}),
+                )
+            } else {
+                e.into()
+            }
+        })?
         .rows_affected() as i64;
     if inserted > MAX_ITEMS {
         return Err(ManagementError::detailed(
             StatusCode::CONFLICT,
             "access_review_too_large",
-            "This review would have more than 5,000 items; narrow it to fewer workspaces".into(),
+            "This review would have more than 5,000 items; narrow it to fewer workspaces, or review memberships and platform roles separately".into(),
+            json!({}),
+        ));
+    }
+    if inserted == 0 {
+        return Err(ManagementError::detailed(
+            StatusCode::CONFLICT,
+            "access_review_empty",
+            "Nothing to review: no current access matches this review".into(),
             json!({}),
         ));
     }
@@ -190,9 +218,57 @@ pub(super) async fn create(
     Ok(result)
 }
 
+/// `POST /api/v1/platform/access-reviews/{id}/close`: closes an open
+/// campaign (once).
+pub(super) async fn close(
+    State(s): State<Store>,
+    Extension(u): Extension<BrowserPrincipal>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ManagementError> {
+    let mut tx = resources::installation_tx(&s).await?;
+    resources::platform_write(&mut tx, &u).await?;
+    let closed: Option<bool> = sqlx::query_scalar(
+        "SELECT closed_at IS NOT NULL FROM access_review_campaigns WHERE id=$1 FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    match closed {
+        None => return Err(missing().into()),
+        Some(true) => {
+            return Err(ManagementError::detailed(
+                StatusCode::CONFLICT,
+                "access_review_closed",
+                "This access review is already closed".into(),
+                json!({}),
+            ));
+        }
+        Some(false) => {}
+    }
+    sqlx::query("UPDATE access_review_campaigns SET closed_by=$2, closed_at=now() WHERE id=$1")
+        .bind(id)
+        .bind(u.user_id)
+        .execute(&mut *tx)
+        .await?;
+    audit(
+        &mut tx,
+        &u,
+        None,
+        "access_review.closed",
+        "access_review",
+        Some(id),
+        json!({}),
+    )
+    .await?;
+    let result = one(&mut tx, id).await?;
+    tx.commit().await?;
+    Ok(result)
+}
+
 pub(super) fn routes() -> Router<Store> {
     Router::new()
         .route("/api/v1/platform/access-reviews", get(list).post(create))
         .route("/api/v1/platform/access-reviews/{id}", get(detail))
         .route("/api/v1/platform/access-reviews/{id}/items", get(items))
+        .route("/api/v1/platform/access-reviews/{id}/close", post(close))
 }

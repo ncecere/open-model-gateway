@@ -6551,7 +6551,8 @@
           },
           "minItems": 1,
           "maxItems": 2,
-          "uniqueItems": true
+          "uniqueItems": true,
+          "description": "Sorted; platform_roles covers Admin and Auditor grants."
         },
         "workspace_ids": {
           "type": "array",
@@ -6613,7 +6614,8 @@
           },
           "minItems": 1,
           "maxItems": 2,
-          "uniqueItems": true
+          "uniqueItems": true,
+          "description": "Sorted; platform_roles covers Admin and Auditor grants."
         },
         "workspace_ids": {
           "type": "array",
@@ -6644,46 +6646,65 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "workspace_membership",
-            "platform_role",
-            "manual",
-            "group",
-            "bootstrap",
+            "by_kind",
+            "by_source",
             "inactive"
           ],
           "properties": {
-            "workspace_membership": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 5000
+            "by_kind": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "workspace_membership",
+                "platform_role"
+              ],
+              "properties": {
+                "workspace_membership": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5000
+                },
+                "platform_role": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5000
+                }
+              }
             },
-            "platform_role": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 5000
-            },
-            "manual": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 5000
-            },
-            "group": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 5000
-            },
-            "bootstrap": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 5000
+            "by_source": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "manual",
+                "group",
+                "bootstrap"
+              ],
+              "properties": {
+                "manual": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5000
+                },
+                "group": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5000
+                },
+                "bootstrap": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5000
+                }
+              }
             },
             "inactive": {
               "type": "integer",
               "minimum": 0,
-              "maximum": 5000
+              "maximum": 5000,
+              "description": "Items whose grant is no longer in effect: revoked, the person disabled or cleaned up, or the workspace disabled."
             }
           },
-          "description": "Items by kind and by source; inactive: items whose grant has since been revoked."
+          "description": "Items by kind and by source, and how many are no longer in effect."
         }
       }
     },
@@ -6735,7 +6756,6 @@
             "owner",
             "admin",
             "member",
-            "user",
             "auditor"
           ]
         },
@@ -6752,10 +6772,10 @@
         },
         "active": {
           "type": "boolean",
-          "description": "false once the grant has been revoked after the snapshot."
+          "description": "Whether the grant is still in effect: not revoked, the person neither disabled nor cleaned up, the workspace (if any) not disabled."
         }
       },
-      "description": "One grant as it was when the campaign started. workspace_id and workspace_name are null for platform roles; email is null once the person's data has been removed."
+      "description": "One grant as it was when the campaign started (role, source, grant time); the workspace name and the person are shown as they are now. workspace_id and workspace_name are null for platform roles; email is null once the person's data has been removed."
     },
     "get_api_v1_platform_access_reviewsResponse": {
       "type": "object",
@@ -6829,7 +6849,8 @@
           },
           "minItems": 1,
           "maxItems": 2,
-          "uniqueItems": true
+          "uniqueItems": true,
+          "description": "Sorted; platform_roles covers Admin and Auditor grants."
         },
         "workspace_ids": {
           "type": "array",
@@ -6861,49 +6882,200 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "workspace_membership",
-            "platform_role",
-            "manual",
-            "group",
-            "bootstrap",
+            "by_kind",
+            "by_source",
             "inactive"
           ],
           "properties": {
-            "workspace_membership": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 5000
+            "by_kind": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "workspace_membership",
+                "platform_role"
+              ],
+              "properties": {
+                "workspace_membership": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5000
+                },
+                "platform_role": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5000
+                }
+              }
             },
-            "platform_role": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 5000
-            },
-            "manual": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 5000
-            },
-            "group": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 5000
-            },
-            "bootstrap": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 5000
+            "by_source": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "manual",
+                "group",
+                "bootstrap"
+              ],
+              "properties": {
+                "manual": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5000
+                },
+                "group": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5000
+                },
+                "bootstrap": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5000
+                }
+              }
             },
             "inactive": {
               "type": "integer",
               "minimum": 0,
-              "maximum": 5000
+              "maximum": 5000,
+              "description": "Items whose grant is no longer in effect: revoked, the person disabled or cleaned up, or the workspace disabled."
             }
           },
-          "description": "Items by kind and by source; inactive: items whose grant has since been revoked."
+          "description": "Items by kind and by source, and how many are no longer in effect."
         }
       },
       "description": "A campaign as started: open, with its item counts."
+    },
+    "post_api_v1_platform_access_reviews_by_id_closeRequest": false,
+    "AccessReviewCampaignClosed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "subjects",
+        "workspace_ids",
+        "created_by",
+        "created_at",
+        "due_at",
+        "closed_at",
+        "item_count",
+        "counts"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "workspace_memberships",
+              "platform_roles"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "description": "Sorted; platform_roles covers Admin and Auditor grants."
+        },
+        "workspace_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "maxItems": 50,
+          "uniqueItems": true
+        },
+        "created_by": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "due_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "closed_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "item_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5000
+        },
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "by_kind",
+            "by_source",
+            "inactive"
+          ],
+          "properties": {
+            "by_kind": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "workspace_membership",
+                "platform_role"
+              ],
+              "properties": {
+                "workspace_membership": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5000
+                },
+                "platform_role": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5000
+                }
+              }
+            },
+            "by_source": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "manual",
+                "group",
+                "bootstrap"
+              ],
+              "properties": {
+                "manual": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5000
+                },
+                "group": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5000
+                },
+                "bootstrap": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5000
+                }
+              }
+            },
+            "inactive": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5000,
+              "description": "Items whose grant is no longer in effect: revoked, the person disabled or cleaned up, or the workspace disabled."
+            }
+          },
+          "description": "Items by kind and by source, and how many are no longer in effect."
+        }
+      },
+      "description": "A campaign as closed, with its item counts."
+    },
+    "post_api_v1_platform_access_reviews_by_id_closeResponse": {
+      "$ref": "#/components/schemas/AccessReviewCampaignClosed"
     }
   }
 }

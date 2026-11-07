@@ -5052,7 +5052,7 @@
     "POST /api/v1/platform/access-reviews": {
       "access": "PlatformWrite",
       "operation": {
-        "description": "#90: Platform Admin, browser only. Starts a one-shot access review campaign and snapshots, in one statement, the live grants it covers: shared (Team/Project) memberships, optionally narrowed to listed workspaces, and/or platform roles. Never personal workspaces, revoked grants, disabled workspaces or disabled or cleaned-up users. Due 1 to 90 days later (default 14). 409 access_review_limit at 20 open campaigns; 409 access_review_too_large above 5,000 items.",
+        "description": "#90: Platform Admin, browser only. Starts a one-shot access review campaign and snapshots, in one statement, the live grants it covers: shared (Team/Project) memberships, optionally narrowed to listed workspaces, and/or Admin and Auditor platform role grants. Never personal workspaces, revoked grants, disabled workspaces or disabled or cleaned-up users. Due 1 to 90 days later (default 14). 409: access_review_limit at 20 open campaigns, access_review_too_large above 5,000 items, access_review_empty when nothing matches, access_review_changed when access changed while the snapshot was taken (try again).",
         "responses": {
           "200": {
             "description": "Successful handler representation",
@@ -5087,7 +5087,7 @@
                 }
               }
             },
-            "description": "access_review_limit or access_review_too_large"
+            "description": "access_review_limit, access_review_too_large, access_review_empty or access_review_changed"
           },
           "422": {
             "description": "Axum JSON extraction refusal",
@@ -5247,6 +5247,71 @@
               "minimum": 0,
               "maximum": 100000,
               "default": 0
+            }
+          }
+        ]
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/platform/access-reviews/{id}/close": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "#90: Platform Admin, browser only. Closes an open campaign (once); a closed campaign no longer counts towards the 20 open campaigns. 409 access_review_closed if it is already closed.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_access_reviews_by_id_closeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown campaign"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "access_review_closed"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
             }
           }
         ]

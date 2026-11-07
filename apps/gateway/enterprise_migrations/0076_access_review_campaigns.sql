@@ -1,12 +1,15 @@
 -- #90: access review campaigns. A Platform Admin starts a one-shot campaign
--- that snapshots the live shared (Team/Project) memberships and/or platform
--- role grants it covers; reviewers decide on each item in a later slice.
--- Items are derived from their grant by the database (the runtime names only
--- the grant), added only in the transaction that creates the campaign, and
--- never change. Nothing is deleted.
+-- that snapshots the live shared (Team/Project) memberships and/or elevated
+-- platform role grants (Admin, Auditor) it covers. Items are derived from
+-- their grant by the database (the runtime names only the grant), added only
+-- in the transaction that creates the campaign, and never change. Nothing is
+-- deleted. Later slices record reviewer decisions and reviewer overrides in
+-- their own append-only tables (items stay immutable; reviewers are derived
+-- live from current owners/admins), and long-lived keys as another subject.
 CREATE TABLE access_review_campaigns (
  id uuid PRIMARY KEY,
- name text NOT NULL CHECK (char_length(name) BETWEEN 1 AND 120),
+ -- Operator labels, immutable: never personal data. Non-blank, no control characters.
+ name text NOT NULL CHECK (char_length(name) BETWEEN 1 AND 120 AND btrim(name) <> '' AND name !~ '[\x01-\x1f\x7f-\x9f]'),
  subjects text[] NOT NULL CHECK (cardinality(subjects) BETWEEN 1 AND 2 AND subjects <@ ARRAY['workspace_memberships','platform_roles']::text[] AND array_position(subjects, NULL) IS NULL),
  -- Narrows workspace memberships to these Teams/Projects; empty means all.
  workspace_ids uuid[] NOT NULL DEFAULT '{}' CHECK (cardinality(workspace_ids) <= 50 AND array_position(workspace_ids, NULL) IS NULL),
@@ -15,6 +18,8 @@ CREATE TABLE access_review_campaigns (
  due_at timestamptz NOT NULL,
  closed_at timestamptz,
  closed_by uuid REFERENCES users(id),
+ -- The creating transaction (set by the guard): items are accepted only there.
+ created_xid xid8 NOT NULL,
  CHECK (due_at >= created_at + interval '1 day' AND due_at <= created_at + interval '90 days'),
  CHECK ((closed_at IS NULL) = (closed_by IS NULL))
 );
@@ -28,6 +33,7 @@ CREATE FUNCTION access_review_campaigns_guard() RETURNS trigger LANGUAGE plpgsql
 BEGIN
  IF TG_OP = 'INSERT' THEN
   NEW.created_at := now();
+  NEW.created_xid := pg_current_xact_id();
   IF NOT EXISTS (SELECT FROM public.effective_platform_roles p WHERE p.user_id = NEW.created_by AND p.role = 'admin')
      OR NEW.closed_at IS NOT NULL OR NEW.closed_by IS NOT NULL
      OR cardinality(NEW.subjects) <> (SELECT count(DISTINCT s) FROM unnest(NEW.subjects) s)
@@ -38,8 +44,8 @@ BEGIN
   END IF;
   RETURN NEW;
  END IF;
- IF (NEW.id, NEW.name, NEW.subjects, NEW.workspace_ids, NEW.created_by, NEW.created_at, NEW.due_at)
-    IS DISTINCT FROM (OLD.id, OLD.name, OLD.subjects, OLD.workspace_ids, OLD.created_by, OLD.created_at, OLD.due_at)
+ IF (NEW.id, NEW.name, NEW.subjects, NEW.workspace_ids, NEW.created_by, NEW.created_at, NEW.due_at, NEW.created_xid)
+    IS DISTINCT FROM (OLD.id, OLD.name, OLD.subjects, OLD.workspace_ids, OLD.created_by, OLD.created_at, OLD.due_at, OLD.created_xid)
     OR OLD.closed_at IS NOT NULL OR NEW.closed_at IS NULL
     OR NOT EXISTS (SELECT FROM public.effective_platform_roles p WHERE p.user_id = NEW.closed_by AND p.role = 'admin') THEN
   RAISE EXCEPTION 'access review campaigns are immutable; closing happens once' USING ERRCODE = '23514';
@@ -61,7 +67,7 @@ CREATE TABLE access_review_items (
  -- Derived from the grant by the guard below.
  workspace_id uuid REFERENCES workspaces(id),
  user_id uuid NOT NULL REFERENCES users(id),
- role text NOT NULL CHECK (role IN ('owner','admin','member','user','auditor')),
+ role text NOT NULL CHECK (role IN ('owner','admin','member','auditor')),
  source text NOT NULL CHECK (source IN ('manual','group','bootstrap')),
  granted_at timestamptz NOT NULL,
  CHECK ((subject_kind = 'workspace_membership') = (membership_grant_id IS NOT NULL AND workspace_id IS NOT NULL)),
@@ -76,17 +82,20 @@ CREATE INDEX access_review_items_campaign ON access_review_items (campaign_id, s
 -- transaction that created the campaign; the workspace, user, role, source
 -- and grant time are copied from the grant, whatever the insert said.
 -- Memberships: an enabled Team/Project (in the campaign's filter, if any)
--- and a user who is neither disabled nor cleaned. Platform roles: the same
--- user rule.
+-- and a user who is neither disabled nor cleaned. Platform roles: an Admin or
+-- Auditor grant (the User entitlement is not reviewed here), same user rule.
+-- The campaign must be open and created by this transaction (a 64-bit id,
+-- so wraparound cannot match an old campaign).
 CREATE FUNCTION access_review_items_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
 DECLARE
  subjects text[];
  filter uuid[];
- creator text;
+ creator xid8;
+ closed timestamptz;
 BEGIN
- SELECT c.subjects, c.workspace_ids, c.xmin::text INTO subjects, filter, creator
+ SELECT c.subjects, c.workspace_ids, c.created_xid, c.closed_at INTO subjects, filter, creator, closed
    FROM public.access_review_campaigns c WHERE c.id = NEW.campaign_id;
- IF NOT FOUND OR creator <> pg_current_xact_id()::xid::text THEN
+ IF NOT FOUND OR creator <> pg_current_xact_id() OR closed IS NOT NULL THEN
   RAISE EXCEPTION 'access review items are added only with their campaign' USING ERRCODE = '23514';
  END IF;
  IF NEW.subject_kind = 'workspace_membership' AND 'workspace_memberships' = ANY (subjects) THEN
@@ -105,7 +114,7 @@ BEGIN
     INTO NEW.workspace_id, NEW.user_id, NEW.role, NEW.source, NEW.granted_at
     FROM public.platform_role_grants g
     JOIN public.users u ON u.id = g.user_id
-   WHERE g.id = NEW.platform_grant_id AND g.revoked_at IS NULL
+   WHERE g.id = NEW.platform_grant_id AND g.revoked_at IS NULL AND g.role IN ('admin','auditor')
      AND u.disabled_at IS NULL AND u.cleaned_at IS NULL;
   IF FOUND AND NEW.membership_grant_id IS NULL THEN RETURN NEW; END IF;
  END IF;
