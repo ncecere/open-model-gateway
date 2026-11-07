@@ -5318,6 +5318,261 @@
       },
       "scope": null,
       "token_policy": "Denied"
+    },
+    "GET /api/v1/me/access-reviews": {
+      "access": "Browser",
+      "operation": {
+        "description": "#90: the access review items the signed-in person may decide now (open campaigns, access still in effect): items assigned to them, or else items of workspaces they own or administer (membership items) and, for Platform Admins, elevated platform role items; never their own access. Each with its campaign and latest decision.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_me_access_reviewsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000,
+              "default": 0
+            }
+          }
+        ]
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/me/access-reviews/{item}/decision": {
+      "access": "Browser",
+      "operation": {
+        "description": "#90: records the signed-in reviewer's decision on an item (append-only; the latest counts). keep, or flag_idp for access provided by an identity provider group. An item the viewer may not decide (not theirs, unknown, or its campaign closed) is 404. 409: access_review_item_inactive (the access is no longer in effect), access_review_flag_requires_group.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_me_access_reviews_by_item_decisionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not an item the viewer may decide"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "access_review_item_inactive or access_review_flag_requires_group"
+          },
+          "415": {
+            "description": "JSON content type required",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Axum JSON extraction refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "item",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_me_access_reviews_by_item_decisionRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/platform/access-reviews/{id}/items/{item}/reviewer": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "#90: Platform Admin, browser only. Assigns the item to one reviewer (an owner or admin of the item's workspace, or a Platform Admin; for platform role items a Platform Admin; never the person under review), or with null back to the automatic reviewers. Append-only, audited. 404 unless the item belongs to that campaign; 409 access_review_closed, access_review_reviewer_ineligible.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_access_reviews_by_id_items_by_item_reviewerResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown campaign item"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "access_review_closed or access_review_reviewer_ineligible"
+          },
+          "415": {
+            "description": "JSON content type required",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Axum JSON extraction refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
+          {
+            "name": "item",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_access_reviews_by_id_items_by_item_reviewerRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": null,
+      "token_policy": "Denied"
     }
   }
 }

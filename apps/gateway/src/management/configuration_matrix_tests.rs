@@ -772,6 +772,41 @@ async fn every_json_management_write_rejects_unknown_fields_after_valid_control(
         &f.admin,
         json!({"name":"Matrix review","subjects":["platform_roles"]})
     );
+    // #90 slice 2: a decision by the Team owner, an assignment by the admin.
+    let (status, review) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        "/api/v1/platform/access-reviews",
+        json!({"name":"Matrix decisions","subjects":["workspace_memberships"],"workspace_ids":[f.team]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{review}");
+    let review_item: Uuid = sqlx::query_scalar(
+        "SELECT id FROM access_review_items WHERE campaign_id=$1 AND user_id=$2",
+    )
+    .bind(id(&review))
+    .bind(f.member.user_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    case!(
+        "access_reviews::decide",
+        "POST",
+        format!("/api/v1/me/access-reviews/{review_item}/decision"),
+        &f.owner,
+        json!({"decision":"keep"})
+    );
+    case!(
+        "access_reviews::assign",
+        "POST",
+        format!(
+            "/api/v1/platform/access-reviews/{}/items/{review_item}/reviewer",
+            id(&review)
+        ),
+        &f.admin,
+        json!({"user_id":null})
+    );
     let reviewer = user(&pool, "matrix-template-reviewer", "admin").await;
     let tid = id(&template);
     for step in ["review", "publish"] {

@@ -27,14 +27,18 @@ pub(super) struct NewCampaign {
 
 const CAMPAIGN_JSON: &str = "jsonb_build_object('id',c.id,'name',c.name,'subjects',to_jsonb(c.subjects),'workspace_ids',to_jsonb(c.workspace_ids),'created_by',c.created_by,'created_at',c.created_at,'due_at',c.due_at,'closed_at',c.closed_at,'item_count',(SELECT count(*) FROM access_review_items i WHERE i.campaign_id=c.id))";
 
-/// Whether an item's grant is still in effect: not revoked, the person
-/// neither disabled nor cleaned up, the workspace (if any) not disabled.
-const ACTIVE: &str = "(coalesce(m.revoked_at,p.revoked_at) IS NULL AND u.disabled_at IS NULL AND u.cleaned_at IS NULL AND (w.id IS NULL OR w.disabled_at IS NULL))";
+/// The latest decision and assignment of item `i` (as `d` and `a`).
+const LATEST_DECISION: &str = "LEFT JOIN LATERAL (SELECT x.decision,x.decided_by,x.decided_at FROM access_review_decisions x WHERE x.item_id=i.id ORDER BY x.decided_at DESC,x.id DESC LIMIT 1) d ON true LEFT JOIN LATERAL (SELECT y.reviewer_user_id FROM access_review_assignments y WHERE y.item_id=i.id ORDER BY y.assigned_at DESC,y.id DESC LIMIT 1) a ON true";
+/// An item as reviewers and platform readers see it: the snapshot's role,
+/// source and grant time; the workspace name and person as they are now;
+/// whether it is still in effect; the latest decision and assignment.
+const ITEM_JSON: &str = "jsonb_build_object('id',i.id,'campaign_id',i.campaign_id,'subject_kind',i.subject_kind,'workspace_id',i.workspace_id,'workspace_name',w.name,'user_id',i.user_id,'email',u.email,'display_name',u.display_name,'role',i.role,'source',i.source,'granted_at',i.granted_at,'active',access_review_item_active(i.id),'decision',d.decision,'decided_by',d.decided_by,'decided_at',d.decided_at,'reviewer_user_id',a.reviewer_user_id)";
+const ITEM_FROM: &str = "access_review_items i JOIN users u ON u.id=i.user_id LEFT JOIN workspaces w ON w.id=i.workspace_id";
 
 /// One campaign with its item counts (by kind, by source, and how many items'
 /// grants are no longer active).
 async fn one(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> ApiResult {
-    let v: Value = sqlx::query_scalar(&format!("SELECT {CAMPAIGN_JSON} || jsonb_build_object('counts',(SELECT jsonb_build_object('by_kind',jsonb_build_object('workspace_membership',count(*) FILTER (WHERE i.subject_kind='workspace_membership'),'platform_role',count(*) FILTER (WHERE i.subject_kind='platform_role')),'by_source',jsonb_build_object('manual',count(*) FILTER (WHERE i.source='manual'),'group',count(*) FILTER (WHERE i.source='group'),'bootstrap',count(*) FILTER (WHERE i.source='bootstrap')),'inactive',count(*) FILTER (WHERE NOT {ACTIVE})) FROM access_review_items i JOIN users u ON u.id=i.user_id LEFT JOIN workspaces w ON w.id=i.workspace_id LEFT JOIN workspace_membership_grants m ON m.id=i.membership_grant_id LEFT JOIN platform_role_grants p ON p.id=i.platform_grant_id WHERE i.campaign_id=c.id)) FROM access_review_campaigns c WHERE c.id=$1"))
+    let v: Value = sqlx::query_scalar(&format!("SELECT {CAMPAIGN_JSON} || jsonb_build_object('counts',(SELECT jsonb_build_object('by_kind',jsonb_build_object('workspace_membership',count(*) FILTER (WHERE i.subject_kind='workspace_membership'),'platform_role',count(*) FILTER (WHERE i.subject_kind='platform_role')),'by_source',jsonb_build_object('manual',count(*) FILTER (WHERE i.source='manual'),'group',count(*) FILTER (WHERE i.source='group'),'bootstrap',count(*) FILTER (WHERE i.source='bootstrap')),'inactive',count(*) FILTER (WHERE NOT access_review_item_active(i.id)),'by_decision',jsonb_build_object('pending',count(*) FILTER (WHERE d.decision IS NULL),'keep',count(*) FILTER (WHERE d.decision='keep'),'flag_idp',count(*) FILTER (WHERE d.decision='flag_idp'))) FROM access_review_items i {LATEST_DECISION} WHERE i.campaign_id=c.id)) FROM access_review_campaigns c WHERE c.id=$1"))
         .bind(id)
         .fetch_optional(&mut **tx)
         .await?
@@ -91,7 +95,7 @@ pub(super) async fn items(
     if !exists {
         return Err(missing());
     }
-    let data: Vec<Value> = sqlx::query_scalar(&format!("SELECT jsonb_build_object('id',i.id,'subject_kind',i.subject_kind,'workspace_id',i.workspace_id,'workspace_name',w.name,'user_id',i.user_id,'email',u.email,'display_name',u.display_name,'role',i.role,'source',i.source,'granted_at',i.granted_at,'active',{ACTIVE}) FROM access_review_items i JOIN users u ON u.id=i.user_id LEFT JOIN workspaces w ON w.id=i.workspace_id LEFT JOIN workspace_membership_grants m ON m.id=i.membership_grant_id LEFT JOIN platform_role_grants p ON p.id=i.platform_grant_id WHERE i.campaign_id=$1 ORDER BY i.subject_kind DESC, i.workspace_id, i.user_id, i.id LIMIT $2 OFFSET $3"))
+    let data: Vec<Value> = sqlx::query_scalar(&format!("SELECT {ITEM_JSON} FROM {ITEM_FROM} {LATEST_DECISION} WHERE i.campaign_id=$1 ORDER BY i.subject_kind DESC, i.workspace_id, i.user_id, i.id LIMIT $2 OFFSET $3"))
         .bind(id)
         .bind(l)
         .bind(o)
@@ -265,10 +269,189 @@ pub(super) async fn close(
     Ok(result)
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Decision {
+    decision: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Assignment {
+    user_id: Option<Uuid>,
+}
+
+/// One item as the API shows it.
+async fn one_item(tx: &mut Transaction<'_, Postgres>, item: Uuid) -> ApiResult {
+    let v: Value = sqlx::query_scalar(&format!(
+        "SELECT {ITEM_JSON} FROM {ITEM_FROM} {LATEST_DECISION} WHERE i.id=$1"
+    ))
+    .bind(item)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or_else(missing)?;
+    Ok(Json(v))
+}
+
+/// `GET /api/v1/me/access-reviews`: the items the viewer may decide now (open
+/// campaigns, still in effect), each with its campaign and latest decision.
+/// The cheap prefilter (workspaces the viewer administers, platform items for
+/// Platform Admins, items assigned to the viewer) narrows the rows; the
+/// shared rule decides.
+pub(super) async fn inbox(
+    State(s): State<Store>,
+    Extension(u): Extension<BrowserPrincipal>,
+    Query(p): Query<Page>,
+) -> ApiResult {
+    let (l, o) = p.bounds()?;
+    let mut tx = resources::read_snapshot(&s).await?;
+    resources::platform_role_snapshot(&mut tx, u.user_id).await?;
+    let data: Vec<Value> = sqlx::query_scalar(&format!("SELECT {ITEM_JSON} || jsonb_build_object('campaign_name',c.name,'due_at',c.due_at) FROM {ITEM_FROM} JOIN access_review_campaigns c ON c.id=i.campaign_id AND c.closed_at IS NULL {LATEST_DECISION} WHERE (i.workspace_id IN (SELECT e.workspace_id FROM effective_workspace_memberships e WHERE e.user_id=$1 AND e.role IN ('owner','admin')) OR (i.subject_kind='platform_role' AND EXISTS (SELECT FROM effective_platform_roles r WHERE r.user_id=$1 AND r.role='admin')) OR a.reviewer_user_id=$1) AND access_review_may_decide(i.id,$1) AND access_review_item_active(i.id) ORDER BY c.due_at, c.id, i.subject_kind DESC, i.workspace_id, i.user_id, i.id LIMIT $2 OFFSET $3"))
+        .bind(u.user_id)
+        .bind(l)
+        .bind(o)
+        .fetch_all(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(Json(json!({"data":data})))
+}
+
+/// `POST /api/v1/me/access-reviews/{item}/decision`: records the viewer's
+/// decision. An item the viewer may not decide (not theirs, unknown, or its
+/// campaign closed) is 404.
+pub(super) async fn decide(
+    State(s): State<Store>,
+    Extension(u): Extension<BrowserPrincipal>,
+    Path(item): Path<Uuid>,
+    Json(b): Json<Decision>,
+) -> Result<Json<Value>, ManagementError> {
+    if !matches!(b.decision.as_str(), "keep" | "flag_idp") {
+        return Err(invalid().into());
+    }
+    let mut tx = crate::db::begin(&s.pool).await?;
+    resources::platform_role(&mut tx, u.user_id).await?;
+    let (may, active, group, ws): (bool, bool, bool, Option<Uuid>) = sqlx::query_as("SELECT access_review_may_decide(i.id,$2), access_review_item_active(i.id), i.source='group', i.workspace_id FROM access_review_items i WHERE i.id=$1")
+        .bind(item)
+        .bind(u.user_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .unwrap_or((false, false, false, None));
+    if !may {
+        return Err(missing().into());
+    }
+    if !active {
+        return Err(ManagementError::detailed(
+            StatusCode::CONFLICT,
+            "access_review_item_inactive",
+            "This access is no longer in effect; there is nothing to decide".into(),
+            json!({}),
+        ));
+    }
+    if b.decision == "flag_idp" && !group {
+        return Err(ManagementError::detailed(
+            StatusCode::CONFLICT,
+            "access_review_flag_requires_group",
+            "Only access provided by an identity provider group is flagged for the identity provider".into(),
+            json!({}),
+        ));
+    }
+    sqlx::query(
+        "INSERT INTO access_review_decisions(id,item_id,decision,decided_by) VALUES($1,$2,$3,$4)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(item)
+    .bind(&b.decision)
+    .bind(u.user_id)
+    .execute(&mut *tx)
+    .await?;
+    audit(
+        &mut tx,
+        &u,
+        ws,
+        "access_review.decided",
+        "access_review_item",
+        Some(item),
+        json!({"kind":b.decision}),
+    )
+    .await?;
+    let result = one_item(&mut tx, item).await?;
+    tx.commit().await?;
+    Ok(result)
+}
+
+/// `POST /api/v1/platform/access-reviews/{id}/items/{item}/reviewer`: a
+/// Platform Admin assigns the item to one eligible reviewer, or (`null`)
+/// back to the automatic reviewers.
+pub(super) async fn assign(
+    State(s): State<Store>,
+    Extension(u): Extension<BrowserPrincipal>,
+    Path((id, item)): Path<(Uuid, Uuid)>,
+    Json(b): Json<Assignment>,
+) -> Result<Json<Value>, ManagementError> {
+    let mut tx = resources::installation_tx(&s).await?;
+    resources::platform_write(&mut tx, &u).await?;
+    let state: Option<(bool, Option<Uuid>)> = sqlx::query_as("SELECT c.closed_at IS NOT NULL, i.workspace_id FROM access_review_items i JOIN access_review_campaigns c ON c.id=i.campaign_id WHERE i.id=$1 AND c.id=$2")
+        .bind(item)
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let Some((closed, ws)) = state else {
+        return Err(missing().into());
+    };
+    if closed {
+        return Err(ManagementError::detailed(
+            StatusCode::CONFLICT,
+            "access_review_closed",
+            "This access review is already closed".into(),
+            json!({}),
+        ));
+    }
+    if let Some(reviewer) = b.user_id {
+        let candidate: bool = sqlx::query_scalar("SELECT access_review_candidate($1,$2)")
+            .bind(item)
+            .bind(reviewer)
+            .fetch_one(&mut *tx)
+            .await?;
+        if !candidate {
+            return Err(ManagementError::detailed(
+                StatusCode::CONFLICT,
+                "access_review_reviewer_ineligible",
+                "That person cannot review this access: choose an owner or admin of the workspace, or a Platform Admin".into(),
+                json!({}),
+            ));
+        }
+    }
+    sqlx::query("INSERT INTO access_review_assignments(id,item_id,reviewer_user_id,assigned_by) VALUES($1,$2,$3,$4)")
+        .bind(Uuid::now_v7())
+        .bind(item)
+        .bind(b.user_id)
+        .bind(u.user_id)
+        .execute(&mut *tx)
+        .await?;
+    audit(
+        &mut tx,
+        &u,
+        ws,
+        "access_review.reviewer_assigned",
+        "access_review_item",
+        Some(item),
+        json!({}),
+    )
+    .await?;
+    let result = one_item(&mut tx, item).await?;
+    tx.commit().await?;
+    Ok(result)
+}
+
 pub(super) fn routes() -> Router<Store> {
     Router::new()
         .route("/api/v1/platform/access-reviews", get(list).post(create))
         .route("/api/v1/platform/access-reviews/{id}", get(detail))
         .route("/api/v1/platform/access-reviews/{id}/items", get(items))
         .route("/api/v1/platform/access-reviews/{id}/close", post(close))
+        .route(
+            "/api/v1/platform/access-reviews/{id}/items/{item}/reviewer",
+            post(assign),
+        )
+        .route("/api/v1/me/access-reviews", get(inbox))
+        .route("/api/v1/me/access-reviews/{item}/decision", post(decide))
 }

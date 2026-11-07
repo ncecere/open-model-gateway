@@ -236,7 +236,7 @@ async fn a_campaign_snapshots_live_shared_access(pool: PgPool) {
     assert_eq!(detail["item_count"], 4);
     assert_eq!(
         detail["counts"],
-        json!({"by_kind":{"workspace_membership":4,"platform_role":0},"by_source":{"manual":3,"group":1,"bootstrap":0},"inactive":2})
+        json!({"by_kind":{"workspace_membership":4,"platform_role":0},"by_source":{"manual":3,"group":1,"bootstrap":0},"by_decision":{"pending":4,"keep":0,"flag_idp":0},"inactive":2})
     );
     // Audited, with the item count only.
     let audit: (String, Value) = sqlx::query_as("SELECT resource_type,metadata FROM audit_events WHERE action='access_review.created' AND resource_id=$1")
