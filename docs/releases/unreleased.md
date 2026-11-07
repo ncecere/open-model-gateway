@@ -1,10 +1,5 @@
 # Open Model Gateway: unreleased
 
-Notes for changes on `main` after [v0.12.0](v0.12.0.md). They become the next release's notes.
+Notes for changes on `main` after [v0.13.0](v0.13.0.md). They become the next release's notes.
 
-## New features
-
-- **Reviewed onboarding templates for Teams and Projects** (#84, part 1: authoring and review). Platform Admins write templates (`/platform/workspace-templates`): the workspace kind, its catalogs (inherit, or a replacement list), catalog models to select, optional tighten-only local limits and member slots (one owner slot, plus admin and member slots). Versions are immutable; a Platform Admin other than the author reviews a version before it can be published; publishing retires the previous version, and any version can be retired. Content holds references only (no secrets, emails, platform roles or group mappings). An installation with a single Platform Admin cannot publish templates. Requires migration **0074** and the updated runtime grants.
-- **Create a Team or Project from a template** (#84, part 2). `POST /platform/workspace-templates/{id}/apply` creates the workspace from the published version in one transaction: owner and members per slot, catalogs, catalog models and tighten-only local limits, all rechecked live; anything that no longer fits (a stale version, a missing or unavailable model, limits looser than the platform's, a person who cannot have access) refuses the whole application and changes nothing. Each application is recorded with the version and hash it used; a retry with the same key returns the same workspace. Platform Admin, browser session only. Requires migration **0075** and the updated runtime grants.
-- **Workspace templates in the dashboard** (#84, part 3). Admin › **Workspace templates**: create templates, add versions, approve another admin's version, publish, retire, and create a Team or Project from the published version by choosing a name and the people for each slot. Auditors read.
-- Workspace **Models**: **Request** is offered only to members of the workspace, not to a Platform reader viewing it without membership (#453).
+No changes recorded yet.
