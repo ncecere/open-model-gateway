@@ -6649,7 +6649,8 @@
             "by_kind",
             "by_source",
             "inactive",
-            "by_decision"
+            "by_decision",
+            "without_reviewer"
           ],
           "properties": {
             "by_kind": {
@@ -6730,6 +6731,12 @@
                 }
               },
               "description": "Items by their latest decision."
+            },
+            "without_reviewer": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5000,
+              "description": "Items still in effect that nobody may decide now (for example a sole owner's own access): a Platform Admin can assign them."
             }
           },
           "description": "Items by kind and by source, and how many are no longer in effect."
@@ -6942,7 +6949,8 @@
             "by_kind",
             "by_source",
             "inactive",
-            "by_decision"
+            "by_decision",
+            "without_reviewer"
           ],
           "properties": {
             "by_kind": {
@@ -7023,6 +7031,12 @@
                 }
               },
               "description": "Items by their latest decision."
+            },
+            "without_reviewer": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5000,
+              "description": "Items still in effect that nobody may decide now (for example a sole owner's own access): a Platform Admin can assign them."
             }
           },
           "description": "Items by kind and by source, and how many are no longer in effect."
@@ -7099,7 +7113,8 @@
             "by_kind",
             "by_source",
             "inactive",
-            "by_decision"
+            "by_decision",
+            "without_reviewer"
           ],
           "properties": {
             "by_kind": {
@@ -7180,6 +7195,12 @@
                 }
               },
               "description": "Items by their latest decision."
+            },
+            "without_reviewer": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5000,
+              "description": "Items still in effect that nobody may decide now (for example a sole owner's own access): a Platform Admin can assign them."
             }
           },
           "description": "Items by kind and by source, and how many are no longer in effect."

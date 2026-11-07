@@ -5379,7 +5379,7 @@
     "POST /api/v1/me/access-reviews/{item}/decision": {
       "access": "Browser",
       "operation": {
-        "description": "#90: records the signed-in reviewer's decision on an item (append-only; the latest counts). keep, or flag_idp for access provided by an identity provider group. An item the viewer may not decide (not theirs, unknown, or its campaign closed) is 404. 409: access_review_item_inactive (the access is no longer in effect), access_review_flag_requires_group.",
+        "description": "#90: records the signed-in reviewer's decision on an item (append-only; the latest counts; repeating one's own latest decision changes nothing). keep, or flag_idp for access provided by an identity provider group. An item the viewer may not decide (not theirs, unknown, or its campaign closed) is 404. 409: access_review_item_inactive (the access is no longer in effect), access_review_flag_requires_group.",
         "responses": {
           "200": {
             "description": "Successful handler representation",
@@ -5474,7 +5474,7 @@
     "POST /api/v1/platform/access-reviews/{id}/items/{item}/reviewer": {
       "access": "PlatformWrite",
       "operation": {
-        "description": "#90: Platform Admin, browser only. Assigns the item to one reviewer (an owner or admin of the item's workspace, or a Platform Admin; for platform role items a Platform Admin; never the person under review), or with null back to the automatic reviewers. Append-only, audited. 404 unless the item belongs to that campaign; 409 access_review_closed, access_review_reviewer_ineligible.",
+        "description": "#90: Platform Admin, browser only. Assigns the item to one reviewer (an owner or admin of the item's workspace, or a Platform Admin; for platform role items a Platform Admin; never the person under review), or with null back to the automatic reviewers. Append-only, audited. 404 unless the item belongs to that campaign; 409 access_review_closed, access_review_reviewer_ineligible, access_review_own_access (nobody chooses the reviewer of their own access). An assignee who no longer qualifies is ignored: the automatic reviewers decide again.",
         "responses": {
           "200": {
             "description": "Successful handler representation",
@@ -5519,7 +5519,7 @@
                 }
               }
             },
-            "description": "access_review_closed or access_review_reviewer_ineligible"
+            "description": "access_review_closed, access_review_reviewer_ineligible or access_review_own_access"
           },
           "415": {
             "description": "JSON content type required",

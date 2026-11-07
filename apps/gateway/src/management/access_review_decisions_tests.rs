@@ -462,7 +462,16 @@ async fn the_database_binds_decisions_and_assignments(pool: PgPool) {
         None,
         "a Platform Admin"
     );
-    // The decision clock is the server's; records never change.
+    // The decision clock is the server's (a forged time is replaced); records never change.
+    sqlx::query("INSERT INTO access_review_decisions(id,item_id,decision,decided_by,decided_at) VALUES($1,$2,'keep',$3,'2000-01-01')")
+        .bind(Uuid::new_v4()).bind(member_item).bind(f.admin.user_id).execute(&pool).await.unwrap();
+    let recent: bool = sqlx::query_scalar(
+        "SELECT bool_and(decided_at > now() - interval '1 hour') FROM access_review_decisions",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(recent, "server clock");
     for (sql, code) in [
         (
             "UPDATE access_review_decisions SET decision='flag_idp'",
@@ -508,5 +517,322 @@ async fn the_database_binds_decisions_and_assignments(pool: PgPool) {
         assign_sql(None, f.admin.user_id).await.as_deref(),
         Some("23514"),
         "assignment after close"
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn platform_role_items_are_decided_by_other_platform_admins(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let second = user(&pool, "second-admin", "admin").await;
+    let c = campaign(&f).await;
+    let auditor_item = item(&pool, &c, f.auditor.user_id, None).await;
+    let admin_item = item(&pool, &c, f.admin.user_id, None).await;
+    assert_eq!(
+        decide(&f, &f.owner, auditor_item, "keep").await.0,
+        StatusCode::NOT_FOUND,
+        "a workspace owner"
+    );
+    assert_eq!(
+        decide(&f, &f.admin, admin_item, "keep").await.0,
+        StatusCode::NOT_FOUND,
+        "own platform role"
+    );
+    assert_eq!(
+        decide(&f, &second, admin_item, "keep").await.0,
+        StatusCode::OK,
+        "another Platform Admin"
+    );
+    assert_eq!(
+        decide(&f, &f.admin, auditor_item, "keep").await.0,
+        StatusCode::OK
+    );
+    // A workspace owner is never a reviewer of platform roles.
+    let (status, body) = assign(&f, &f.admin, &c, auditor_item, Some(f.owner.user_id)).await;
+    assert_eq!(
+        (status, reason(&body)),
+        (
+            StatusCode::CONFLICT,
+            Some("access_review_reviewer_ineligible")
+        )
+    );
+    // Nobody chooses the reviewer of their own access.
+    let (status, body) = assign(&f, &f.admin, &c, admin_item, Some(second.user_id)).await;
+    assert_eq!(
+        (status, reason(&body)),
+        (StatusCode::CONFLICT, Some("access_review_own_access"))
+    );
+    let own = sqlx::query("INSERT INTO access_review_assignments(id,item_id,reviewer_user_id,assigned_by) VALUES($1,$2,$3,$4)")
+        .bind(Uuid::new_v4()).bind(admin_item).bind(second.user_id).bind(f.admin.user_id).execute(&pool).await;
+    assert_eq!(
+        sqlstate(own).as_deref(),
+        Some("23514"),
+        "own access assigned in the database"
+    );
+    assert_eq!(
+        assign(&f, &second, &c, admin_item, Some(second.user_id))
+            .await
+            .0,
+        StatusCode::OK,
+        "by another admin"
+    );
+    // A demoted Platform Admin no longer reviews platform roles.
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT omg_scope_lock_exclusive(72419512, omg_scope_key($1))")
+        .bind(second.user_id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND role='admin'",
+    )
+    .bind(second.user_id)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO platform_role_grants(user_id,role,source) VALUES($1,'user','manual')")
+        .bind(second.user_id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let demoted = BrowserPrincipal {
+        platform_admin: false,
+        platform_auditor: false,
+        ..second.clone()
+    };
+    assert!(inbox(&f, &demoted).await.is_empty());
+    assert_eq!(
+        decide(&f, &demoted, auditor_item, "keep").await.0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn an_assignment_falls_back_when_the_assignee_no_longer_qualifies(pool: PgPool) {
+    let f = fixture(&pool).await;
+    member(&pool, f.team, f.outsider.user_id, "admin").await;
+    let c = campaign(&f).await;
+    let member_item = item(&pool, &c, f.member.user_id, Some(f.team)).await;
+    let (status, _) = assign(&f, &f.admin, &c, member_item, Some(f.outsider.user_id)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        decide(&f, &f.owner, member_item, "keep").await.0,
+        StatusCode::NOT_FOUND,
+        "assigned elsewhere"
+    );
+    revoke_membership(&pool, f.team, f.outsider.user_id).await;
+    // The assignee lost the role: the automatic reviewers decide again.
+    assert!(emails(&inbox(&f, &f.owner).await).contains("Team:member@example.test"));
+    assert_eq!(
+        decide(&f, &f.owner, member_item, "keep").await.0,
+        StatusCode::OK
+    );
+    // Items nobody may decide are counted: each sole owner's own access, the
+    // only Platform Admin's own role; assigning one removes it from the count.
+    let (status, detail) = call(
+        &f.s,
+        &f.auditor,
+        "GET",
+        &format!("{REVIEWS}/{}", id(&c)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(detail["counts"]["without_reviewer"], 3, "{detail}");
+    let owner_item = item(&pool, &c, f.owner.user_id, Some(f.team)).await;
+    assert_eq!(
+        assign(&f, &f.admin, &c, owner_item, Some(f.admin.user_id))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let (_, detail) = call(
+        &f.s,
+        &f.auditor,
+        "GET",
+        &format!("{REVIEWS}/{}", id(&c)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(detail["counts"]["without_reviewer"], 2);
+    let kinds: Vec<Value> = sqlx::query_scalar("SELECT metadata FROM audit_events WHERE action='access_review.reviewer_assigned' ORDER BY created_at")
+        .fetch_all(&pool).await.unwrap();
+    assert_eq!(
+        kinds,
+        vec![json!({"kind":"assigned"}), json!({"kind":"assigned"})]
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn repeated_and_stale_decisions_change_nothing(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let c = campaign(&f).await;
+    let member_item = item(&pool, &c, f.member.user_id, Some(f.team)).await;
+    for _ in 0..3 {
+        assert_eq!(
+            decide(&f, &f.owner, member_item, "keep").await.0,
+            StatusCode::OK
+        );
+    }
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM access_review_decisions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let audited: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events WHERE action='access_review.decided'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!((rows, audited), (1, 1));
+    // The database refuses a decision once the access is no longer in effect.
+    revoke_membership(&pool, f.team, f.member.user_id).await;
+    let r = sqlx::query("INSERT INTO access_review_decisions(id,item_id,decision,decided_by) VALUES($1,$2,'keep',$3)")
+        .bind(Uuid::new_v4()).bind(member_item).bind(f.owner.user_id).execute(&pool).await;
+    assert_eq!(sqlstate(r).as_deref(), Some("23514"));
+    // A reviewer who loses platform access decides nothing.
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT omg_scope_lock_exclusive(72419512, omg_scope_key($1))")
+        .bind(f.owner.user_id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE users SET disabled_at=now() WHERE id=$1")
+        .bind(f.owner.user_id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let project_item = item(&pool, &c, f.owner.user_id, Some(f.project)).await;
+    assert_ne!(
+        decide(&f, &f.owner, project_item, "keep").await.0,
+        StatusCode::OK
+    );
+    assert_ne!(
+        call(&f.s, &f.owner, "GET", INBOX, Value::Null).await.0,
+        StatusCode::OK
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn a_decision_waits_for_a_concurrent_close_and_is_refused(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let c = campaign(&f).await;
+    let member_item = item(&pool, &c, f.member.user_id, Some(f.team)).await;
+    // Closing holds the campaign row; the decision waits for it, then sees
+    // the campaign closed.
+    let mut closing = pool.begin().await.unwrap();
+    sqlx::query("UPDATE access_review_campaigns SET closed_by=$2, closed_at=now() WHERE id=$1")
+        .bind(id(&c))
+        .bind(f.admin.user_id)
+        .execute(&mut *closing)
+        .await
+        .unwrap();
+    let release = async {
+        loop {
+            let waiting: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_locks WHERE NOT granted AND locktype IN ('transactionid','tuple')")
+                .fetch_one(&pool).await.unwrap();
+            if waiting > 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        closing.commit().await.unwrap();
+    };
+    let ((status, _), ()) = tokio::join!(decide(&f, &f.owner, member_item, "keep"), release);
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM access_review_decisions")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn the_inbox_matches_the_rule_and_pages(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let second = user(&pool, "second-admin", "admin").await;
+    member(&pool, f.team, f.outsider.user_id, "admin").await;
+    group_member(&pool, f.project, f.auditor.user_id).await;
+    let c = campaign(&f).await;
+    let member_item = item(&pool, &c, f.member.user_id, Some(f.team)).await;
+    assert_eq!(
+        assign(&f, &f.admin, &c, member_item, Some(second.user_id))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    for who in [
+        &f.admin,
+        &second,
+        &f.auditor,
+        &f.owner,
+        &f.member,
+        &f.outsider,
+    ] {
+        let got: std::collections::BTreeSet<String> = inbox(&f, who)
+            .await
+            .iter()
+            .map(|i| i["id"].as_str().unwrap().to_owned())
+            .collect();
+        let want: std::collections::BTreeSet<String> = sqlx::query_scalar::<_, Uuid>("SELECT id FROM access_review_items WHERE access_review_may_decide(id,$1) AND access_review_item_active(id)")
+            .bind(who.user_id).fetch_all(&pool).await.unwrap().into_iter().map(|u| u.to_string()).collect();
+        assert_eq!(got, want, "{}", who.email);
+    }
+    let all = inbox(&f, &f.owner).await;
+    assert!(all.len() >= 2);
+    let mut paged = Vec::new();
+    for offset in 0..all.len() {
+        let (_, page) = call(
+            &f.s,
+            &f.owner,
+            "GET",
+            &format!("{INBOX}?limit=1&offset={offset}"),
+            Value::Null,
+        )
+        .await;
+        paged.extend(
+            page["data"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|i| i["id"].clone()),
+        );
+    }
+    assert_eq!(
+        paged,
+        all.iter().map(|i| i["id"].clone()).collect::<Vec<_>>()
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn the_inbox_stays_fast_at_twenty_campaigns_of_five_thousand(pool: PgPool) {
+    let f = fixture(&pool).await;
+    sqlx::query("WITH u AS (INSERT INTO users(id,email) SELECT gen_random_uuid(),'bulk'||n||'@example.test' FROM generate_series(1,4997) n RETURNING id) INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source) SELECT $1,id,'member','manual' FROM u")
+        .bind(f.team).execute(&pool).await.unwrap();
+    for n in 0..20 {
+        let (status, c) = call(&f.s, &f.admin, "POST", REVIEWS, json!({"name":format!("Load {n}"),"subjects":["workspace_memberships"],"workspace_ids":[f.team]})).await;
+        assert_eq!(status, StatusCode::OK, "{c}");
+    }
+    let timed = async |who: &BrowserPrincipal| {
+        let started = std::time::Instant::now();
+        let (status, _) = call(&f.s, who, "GET", &format!("{INBOX}?limit=50"), Value::Null).await;
+        (
+            status,
+            started.elapsed() < std::time::Duration::from_secs(5),
+        )
+    };
+    assert_eq!(timed(&f.member).await, (StatusCode::OK, true), "a member");
+    assert_eq!(
+        timed(&f.owner).await,
+        (StatusCode::OK, true),
+        "the owner of every item"
+    );
+    assert_eq!(
+        timed(&f.admin).await,
+        (StatusCode::OK, true),
+        "a Platform Admin"
     );
 }

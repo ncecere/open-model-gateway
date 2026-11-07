@@ -9,4 +9,4 @@ Notes for changes on `main` after [v0.13.0](v0.13.0.md). They become the next re
 
 ## Behaviour changes
 
-- Management API: eight new operations (**271**); new `409` reasons `access_review_limit`, `access_review_too_large`, `access_review_empty`, `access_review_changed`, `access_review_closed`, `access_review_item_inactive`, `access_review_flag_requires_group` and `access_review_reviewer_ineligible`; new audit actions `access_review.created`, `access_review.closed` (resource `access_review`), `access_review.decided` and `access_review.reviewer_assigned` (resource `access_review_item`).
+- Management API: eight new operations (**271**); new `409` reasons `access_review_limit`, `access_review_too_large`, `access_review_empty`, `access_review_changed`, `access_review_closed`, `access_review_item_inactive`, `access_review_flag_requires_group`, `access_review_reviewer_ineligible` and `access_review_own_access`; new audit actions `access_review.created`, `access_review.closed` (resource `access_review`), `access_review.decided` and `access_review.reviewer_assigned` (resource `access_review_item`).

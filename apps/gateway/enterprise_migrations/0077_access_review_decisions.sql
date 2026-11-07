@@ -3,9 +3,12 @@
 -- decide is derived live (access_review_may_decide), the single rule the API
 -- and the guards share: the item's campaign is open; the reviewer is
 -- entitled and is not the item's own person; if a Platform Admin assigned
--- the item, only that reviewer (while still a candidate); otherwise a
--- current owner/admin of the item's workspace (membership items) or a
--- current Platform Admin (platform role items). A candidate for assignment
+-- the item to someone who is still a candidate, only that reviewer;
+-- otherwise (no assignment, or the assignee no longer qualifies) a current
+-- owner/admin of the item's workspace (membership items) or a current
+-- Platform Admin (platform role items). The latest row per item is the one
+-- with the highest seq (a per-item ordinal set by the guard under a per-item
+-- lock, so the wall clock never reorders). A candidate for assignment
 -- is a current owner/admin of the item's workspace or a Platform Admin
 -- (platform role items: a Platform Admin), never the item's own person.
 
@@ -38,9 +41,10 @@ CREATE TABLE access_review_assignments (
  -- NULL: back to the automatic reviewers.
  reviewer_user_id uuid REFERENCES users(id),
  assigned_by uuid NOT NULL REFERENCES users(id),
- assigned_at timestamptz NOT NULL DEFAULT clock_timestamp()
+ assigned_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ seq integer NOT NULL,
+ UNIQUE (item_id, seq)
 );
-CREATE INDEX access_review_assignments_latest ON access_review_assignments (item_id, assigned_at DESC, id DESC);
 CREATE INDEX access_review_assignments_reviewer ON access_review_assignments (reviewer_user_id) WHERE reviewer_user_id IS NOT NULL;
 
 CREATE FUNCTION access_review_may_decide(item uuid, reviewer uuid) RETURNS boolean LANGUAGE sql STABLE SET search_path = pg_catalog, public AS $$
@@ -48,11 +52,11 @@ CREATE FUNCTION access_review_may_decide(item uuid, reviewer uuid) RETURNS boole
   SELECT FROM public.access_review_items i
   JOIN public.access_review_campaigns c ON c.id = i.campaign_id AND c.closed_at IS NULL
   LEFT JOIN LATERAL (SELECT a.reviewer_user_id FROM public.access_review_assignments a
-                     WHERE a.item_id = i.id ORDER BY a.assigned_at DESC, a.id DESC LIMIT 1) a ON true
+                     WHERE a.item_id = i.id ORDER BY a.seq DESC LIMIT 1) a ON true
   WHERE i.id = item AND i.user_id <> reviewer
     AND EXISTS (SELECT FROM public.effective_platform_roles p WHERE p.user_id = reviewer)
-    AND CASE WHEN a.reviewer_user_id IS NOT NULL
-             THEN a.reviewer_user_id = reviewer AND public.access_review_candidate(i.id, reviewer)
+    AND CASE WHEN a.reviewer_user_id IS NOT NULL AND public.access_review_candidate(i.id, a.reviewer_user_id)
+             THEN a.reviewer_user_id = reviewer
              WHEN i.subject_kind = 'workspace_membership'
              THEN EXISTS (SELECT FROM public.effective_workspace_memberships e
                           WHERE e.workspace_id = i.workspace_id AND e.user_id = reviewer AND e.role IN ('owner','admin'))
@@ -65,15 +69,24 @@ CREATE TABLE access_review_decisions (
  -- remove arrives with the slice that applies it.
  decision text NOT NULL CHECK (decision IN ('keep','flag_idp')),
  decided_by uuid NOT NULL REFERENCES users(id),
- decided_at timestamptz NOT NULL DEFAULT clock_timestamp()
+ decided_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ seq integer NOT NULL,
+ UNIQUE (item_id, seq)
 );
-CREATE INDEX access_review_decisions_latest ON access_review_decisions (item_id, decided_at DESC, id DESC);
+-- The inbox's candidate rows by workspace.
+CREATE INDEX access_review_items_workspace ON access_review_items (workspace_id, campaign_id) WHERE workspace_id IS NOT NULL;
 
 -- A decision: by someone who may decide the item now, on an item still in
--- effect, flag_idp only for group-provided access; server clock.
+-- effect, flag_idp only for group-provided access; server clock. The
+-- campaign row is share-locked first, so a decision and closing the campaign
+-- serialize (closing takes the row for update).
 CREATE FUNCTION access_review_decisions_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
 BEGIN
+ PERFORM 1 FROM public.access_review_campaigns c JOIN public.access_review_items i ON i.campaign_id = c.id
+  WHERE i.id = NEW.item_id FOR SHARE OF c;
  NEW.decided_at := clock_timestamp();
+ PERFORM pg_advisory_xact_lock(hashtextextended('access_review_decisions:' || NEW.item_id::text, 0));
+ NEW.seq := coalesce((SELECT max(x.seq) FROM public.access_review_decisions x WHERE x.item_id = NEW.item_id), 0) + 1;
  IF NOT public.access_review_may_decide(NEW.item_id, NEW.decided_by)
     OR NOT public.access_review_item_active(NEW.item_id)
     OR (NEW.decision = 'flag_idp' AND NOT EXISTS (SELECT FROM public.access_review_items i WHERE i.id = NEW.item_id AND i.source = 'group')) THEN
@@ -86,12 +99,18 @@ CREATE TRIGGER access_review_decisions_immutable BEFORE UPDATE OR DELETE ON acce
 CREATE TRIGGER access_review_decisions_no_truncate BEFORE TRUNCATE ON access_review_decisions FOR EACH STATEMENT EXECUTE FUNCTION immutable_history();
 REVOKE ALL ON FUNCTION access_review_decisions_guard() FROM PUBLIC;
 
--- An assignment: by a current Platform Admin, while the campaign is open, to a
--- candidate reviewer (or NULL); server clock.
+-- An assignment: by a current Platform Admin who is not the person under
+-- review, while the campaign is open, to a candidate reviewer (or NULL);
+-- server clock; serialized with closing as decisions are.
 CREATE FUNCTION access_review_assignments_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
 BEGIN
+ PERFORM 1 FROM public.access_review_campaigns c JOIN public.access_review_items i ON i.campaign_id = c.id
+  WHERE i.id = NEW.item_id FOR SHARE OF c;
  NEW.assigned_at := clock_timestamp();
+ PERFORM pg_advisory_xact_lock(hashtextextended('access_review_assignments:' || NEW.item_id::text, 0));
+ NEW.seq := coalesce((SELECT max(y.seq) FROM public.access_review_assignments y WHERE y.item_id = NEW.item_id), 0) + 1;
  IF NOT EXISTS (SELECT FROM public.effective_platform_roles p WHERE p.user_id = NEW.assigned_by AND p.role = 'admin')
+    OR EXISTS (SELECT FROM public.access_review_items i WHERE i.id = NEW.item_id AND i.user_id = NEW.assigned_by)
     OR NOT EXISTS (SELECT FROM public.access_review_items i JOIN public.access_review_campaigns c ON c.id = i.campaign_id
                    WHERE i.id = NEW.item_id AND c.closed_at IS NULL)
     OR (NEW.reviewer_user_id IS NOT NULL AND NOT public.access_review_candidate(NEW.item_id, NEW.reviewer_user_id)) THEN

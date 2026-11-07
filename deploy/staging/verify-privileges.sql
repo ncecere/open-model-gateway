@@ -1295,6 +1295,16 @@ BEGIN
     BEGIN UPDATE access_review_decisions SET decision='flag_idp' WHERE item_id=it; RAISE EXCEPTION 'decision mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
     BEGIN DELETE FROM access_review_decisions WHERE item_id=it; RAISE EXCEPTION 'decision removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
     BEGIN DELETE FROM access_review_assignments WHERE item_id=it; RAISE EXCEPTION 'assignment removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+    BEGIN INSERT INTO access_review_assignments(id,item_id,reviewer_user_id,assigned_by,assigned_at) VALUES(gen_random_uuid(),it,NULL,t_reviewer,now()-interval '1 day'); RAISE EXCEPTION 'assignment time forgeable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+    -- Group-provided access is flagged for the IdP; nothing after closing.
+    DECLARE g3 uuid:=gen_random_uuid(); gi uuid:=gen_random_uuid(); BEGIN
+     INSERT INTO workspace_membership_grants(id,workspace_id,user_id,role,source,mapping_id) VALUES(g3,ws,t_author,'member','group',gen_random_uuid());
+     INSERT INTO access_review_items(id,campaign_id,subject_kind,membership_grant_id) VALUES(gi,c2,'workspace_membership',g3);
+     INSERT INTO access_review_assignments(id,item_id,reviewer_user_id,assigned_by) VALUES(gen_random_uuid(),gi,t_reviewer,t_reviewer);
+     INSERT INTO access_review_decisions(id,item_id,decision,decided_by) VALUES(gen_random_uuid(),gi,'flag_idp',t_reviewer);
+     UPDATE access_review_campaigns SET closed_by=t_reviewer,closed_at=now() WHERE id=c2;
+     BEGIN INSERT INTO access_review_decisions(id,item_id,decision,decided_by) VALUES(gen_random_uuid(),gi,'keep',t_reviewer); RAISE EXCEPTION 'decision after close'; EXCEPTION WHEN check_violation THEN NULL; END;
+    END;
    END;
   END;
  END;

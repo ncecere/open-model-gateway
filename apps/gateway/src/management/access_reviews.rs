@@ -6,6 +6,7 @@
 //! slices. Browser-only: Platform Admins start campaigns; Platform Admins and
 //! Auditors read them.
 use super::*;
+use crate::governance::locks;
 
 /// Open (not closed) campaigns at once.
 const MAX_OPEN: i64 = 20;
@@ -28,7 +29,7 @@ pub(super) struct NewCampaign {
 const CAMPAIGN_JSON: &str = "jsonb_build_object('id',c.id,'name',c.name,'subjects',to_jsonb(c.subjects),'workspace_ids',to_jsonb(c.workspace_ids),'created_by',c.created_by,'created_at',c.created_at,'due_at',c.due_at,'closed_at',c.closed_at,'item_count',(SELECT count(*) FROM access_review_items i WHERE i.campaign_id=c.id))";
 
 /// The latest decision and assignment of item `i` (as `d` and `a`).
-const LATEST_DECISION: &str = "LEFT JOIN LATERAL (SELECT x.decision,x.decided_by,x.decided_at FROM access_review_decisions x WHERE x.item_id=i.id ORDER BY x.decided_at DESC,x.id DESC LIMIT 1) d ON true LEFT JOIN LATERAL (SELECT y.reviewer_user_id FROM access_review_assignments y WHERE y.item_id=i.id ORDER BY y.assigned_at DESC,y.id DESC LIMIT 1) a ON true";
+const LATEST_DECISION: &str = "LEFT JOIN LATERAL (SELECT x.decision,x.decided_by,x.decided_at FROM access_review_decisions x WHERE x.item_id=i.id ORDER BY x.seq DESC LIMIT 1) d ON true LEFT JOIN LATERAL (SELECT y.reviewer_user_id FROM access_review_assignments y WHERE y.item_id=i.id ORDER BY y.seq DESC LIMIT 1) a ON true";
 /// An item as reviewers and platform readers see it: the snapshot's role,
 /// source and grant time; the workspace name and person as they are now;
 /// whether it is still in effect; the latest decision and assignment.
@@ -38,7 +39,7 @@ const ITEM_FROM: &str = "access_review_items i JOIN users u ON u.id=i.user_id LE
 /// One campaign with its item counts (by kind, by source, and how many items'
 /// grants are no longer active).
 async fn one(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> ApiResult {
-    let v: Value = sqlx::query_scalar(&format!("SELECT {CAMPAIGN_JSON} || jsonb_build_object('counts',(SELECT jsonb_build_object('by_kind',jsonb_build_object('workspace_membership',count(*) FILTER (WHERE i.subject_kind='workspace_membership'),'platform_role',count(*) FILTER (WHERE i.subject_kind='platform_role')),'by_source',jsonb_build_object('manual',count(*) FILTER (WHERE i.source='manual'),'group',count(*) FILTER (WHERE i.source='group'),'bootstrap',count(*) FILTER (WHERE i.source='bootstrap')),'inactive',count(*) FILTER (WHERE NOT access_review_item_active(i.id)),'by_decision',jsonb_build_object('pending',count(*) FILTER (WHERE d.decision IS NULL),'keep',count(*) FILTER (WHERE d.decision='keep'),'flag_idp',count(*) FILTER (WHERE d.decision='flag_idp'))) FROM access_review_items i {LATEST_DECISION} WHERE i.campaign_id=c.id)) FROM access_review_campaigns c WHERE c.id=$1"))
+    let v: Value = sqlx::query_scalar(&format!("SELECT {CAMPAIGN_JSON} || jsonb_build_object('counts',(SELECT jsonb_build_object('by_kind',jsonb_build_object('workspace_membership',count(*) FILTER (WHERE i.subject_kind='workspace_membership'),'platform_role',count(*) FILTER (WHERE i.subject_kind='platform_role')),'by_source',jsonb_build_object('manual',count(*) FILTER (WHERE i.source='manual'),'group',count(*) FILTER (WHERE i.source='group'),'bootstrap',count(*) FILTER (WHERE i.source='bootstrap')),'inactive',count(*) FILTER (WHERE NOT access_review_item_active(i.id)),'by_decision',jsonb_build_object('pending',count(*) FILTER (WHERE d.decision IS NULL),'keep',count(*) FILTER (WHERE d.decision='keep'),'flag_idp',count(*) FILTER (WHERE d.decision='flag_idp')),'without_reviewer',count(*) FILTER (WHERE access_review_item_active(i.id) AND NOT (a.reviewer_user_id IS NOT NULL AND access_review_candidate(i.id,a.reviewer_user_id)) AND NOT EXISTS (SELECT FROM effective_platform_roles r LEFT JOIN effective_workspace_memberships e ON e.user_id=r.user_id AND e.workspace_id=i.workspace_id AND e.role IN ('owner','admin') WHERE r.user_id<>i.user_id AND CASE WHEN i.subject_kind='workspace_membership' THEN e.user_id IS NOT NULL ELSE r.role='admin' END))) FROM access_review_items i {LATEST_DECISION} WHERE i.campaign_id=c.id)) FROM access_review_campaigns c WHERE c.id=$1"))
         .bind(id)
         .fetch_optional(&mut **tx)
         .await?
@@ -294,9 +295,11 @@ async fn one_item(tx: &mut Transaction<'_, Postgres>, item: Uuid) -> ApiResult {
 
 /// `GET /api/v1/me/access-reviews`: the items the viewer may decide now (open
 /// campaigns, still in effect), each with its campaign and latest decision.
-/// The cheap prefilter (workspaces the viewer administers, platform items for
-/// Platform Admins, items assigned to the viewer) narrows the rows; the
-/// shared rule decides.
+/// The viewer's authority is computed once; candidate rows come from indexes
+/// (items of workspaces the viewer administers, platform items for Platform
+/// Admins, items assigned to the viewer) and each is checked with the same
+/// rule as `access_review_may_decide` (a test keeps them equal). Every
+/// decision is still checked by that function and the database guard.
 pub(super) async fn inbox(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
@@ -305,7 +308,7 @@ pub(super) async fn inbox(
     let (l, o) = p.bounds()?;
     let mut tx = resources::read_snapshot(&s).await?;
     resources::platform_role_snapshot(&mut tx, u.user_id).await?;
-    let data: Vec<Value> = sqlx::query_scalar(&format!("SELECT {ITEM_JSON} || jsonb_build_object('campaign_name',c.name,'due_at',c.due_at) FROM {ITEM_FROM} JOIN access_review_campaigns c ON c.id=i.campaign_id AND c.closed_at IS NULL {LATEST_DECISION} WHERE (i.workspace_id IN (SELECT e.workspace_id FROM effective_workspace_memberships e WHERE e.user_id=$1 AND e.role IN ('owner','admin')) OR (i.subject_kind='platform_role' AND EXISTS (SELECT FROM effective_platform_roles r WHERE r.user_id=$1 AND r.role='admin')) OR a.reviewer_user_id=$1) AND access_review_may_decide(i.id,$1) AND access_review_item_active(i.id) ORDER BY c.due_at, c.id, i.subject_kind DESC, i.workspace_id, i.user_id, i.id LIMIT $2 OFFSET $3"))
+    let data: Vec<Value> = sqlx::query_scalar(&format!("WITH ws AS MATERIALIZED (SELECT e.workspace_id FROM effective_workspace_memberships e WHERE e.user_id=$1 AND e.role IN ('owner','admin')), adm AS MATERIALIZED (SELECT EXISTS (SELECT FROM effective_platform_roles r WHERE r.user_id=$1 AND r.role='admin') AS yes), cand AS MATERIALIZED (SELECT i.id FROM access_review_items i JOIN access_review_campaigns c ON c.id=i.campaign_id AND c.closed_at IS NULL WHERE i.workspace_id IN (SELECT workspace_id FROM ws) UNION SELECT i.id FROM access_review_items i JOIN access_review_campaigns c ON c.id=i.campaign_id AND c.closed_at IS NULL WHERE i.subject_kind='platform_role' AND (SELECT yes FROM adm) UNION SELECT y.item_id FROM access_review_assignments y WHERE y.reviewer_user_id=$1) SELECT {ITEM_JSON} || jsonb_build_object('campaign_name',c.name,'due_at',c.due_at) FROM cand JOIN {ITEM_FROM} ON i.id=cand.id JOIN access_review_campaigns c ON c.id=i.campaign_id AND c.closed_at IS NULL {LATEST_DECISION} LEFT JOIN workspace_membership_grants m ON m.id=i.membership_grant_id LEFT JOIN platform_role_grants pg ON pg.id=i.platform_grant_id WHERE i.user_id<>$1 AND coalesce(m.revoked_at,pg.revoked_at) IS NULL AND u.disabled_at IS NULL AND u.cleaned_at IS NULL AND (w.id IS NULL OR w.disabled_at IS NULL) AND CASE WHEN a.reviewer_user_id IS NOT NULL AND access_review_candidate(i.id,a.reviewer_user_id) THEN a.reviewer_user_id=$1 WHEN i.subject_kind='workspace_membership' THEN i.workspace_id IN (SELECT workspace_id FROM ws) ELSE (SELECT yes FROM adm) END ORDER BY c.due_at, c.id, i.subject_kind DESC, i.workspace_id, i.user_id, i.id LIMIT $2 OFFSET $3"))
         .bind(u.user_id)
         .bind(l)
         .bind(o)
@@ -328,7 +331,15 @@ pub(super) async fn decide(
         return Err(invalid().into());
     }
     let mut tx = crate::db::begin(&s.pool).await?;
+    // The reviewer's own scope (shared), so a concurrent demotion of the
+    // reviewer serializes with the decision; then the campaign row, so
+    // closing the campaign does too.
+    locks::shared(&mut tx, [locks::Scope::User(u.user_id)]).await?;
     resources::platform_role(&mut tx, u.user_id).await?;
+    sqlx::query("SELECT 1 FROM access_review_campaigns c JOIN access_review_items i ON i.campaign_id=c.id WHERE i.id=$1 FOR SHARE OF c")
+        .bind(item)
+        .fetch_optional(&mut *tx)
+        .await?;
     let (may, active, group, ws): (bool, bool, bool, Option<Uuid>) = sqlx::query_as("SELECT access_review_may_decide(i.id,$2), access_review_item_active(i.id), i.source='group', i.workspace_id FROM access_review_items i WHERE i.id=$1")
         .bind(item)
         .bind(u.user_id)
@@ -353,6 +364,18 @@ pub(super) async fn decide(
             "Only access provided by an identity provider group is flagged for the identity provider".into(),
             json!({}),
         ));
+    }
+    // The same reviewer repeating the latest decision changes nothing.
+    let unchanged: bool = sqlx::query_scalar("SELECT coalesce((SELECT x.decision=$2 AND x.decided_by=$3 FROM access_review_decisions x WHERE x.item_id=$1 ORDER BY x.seq DESC LIMIT 1),false)")
+        .bind(item)
+        .bind(&b.decision)
+        .bind(u.user_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    if unchanged {
+        let result = one_item(&mut tx, item).await?;
+        tx.commit().await?;
+        return Ok(result);
     }
     sqlx::query(
         "INSERT INTO access_review_decisions(id,item_id,decision,decided_by) VALUES($1,$2,$3,$4)",
@@ -389,14 +412,22 @@ pub(super) async fn assign(
 ) -> Result<Json<Value>, ManagementError> {
     let mut tx = resources::installation_tx(&s).await?;
     resources::platform_write(&mut tx, &u).await?;
-    let state: Option<(bool, Option<Uuid>)> = sqlx::query_as("SELECT c.closed_at IS NOT NULL, i.workspace_id FROM access_review_items i JOIN access_review_campaigns c ON c.id=i.campaign_id WHERE i.id=$1 AND c.id=$2")
+    let state: Option<(bool, Option<Uuid>, Uuid)> = sqlx::query_as("SELECT c.closed_at IS NOT NULL, i.workspace_id, i.user_id FROM access_review_items i JOIN access_review_campaigns c ON c.id=i.campaign_id WHERE i.id=$1 AND c.id=$2 FOR SHARE OF c")
         .bind(item)
         .bind(id)
         .fetch_optional(&mut *tx)
         .await?;
-    let Some((closed, ws)) = state else {
+    let Some((closed, ws, subject)) = state else {
         return Err(missing().into());
     };
+    if subject == u.user_id {
+        return Err(ManagementError::detailed(
+            StatusCode::CONFLICT,
+            "access_review_own_access",
+            "Another Platform Admin decides who reviews your own access".into(),
+            json!({}),
+        ));
+    }
     if closed {
         return Err(ManagementError::detailed(
             StatusCode::CONFLICT,
@@ -434,7 +465,7 @@ pub(super) async fn assign(
         "access_review.reviewer_assigned",
         "access_review_item",
         Some(item),
-        json!({}),
+        json!({"kind": if b.user_id.is_some() { "assigned" } else { "cleared" }}),
     )
     .await?;
     let result = one_item(&mut tx, item).await?;
