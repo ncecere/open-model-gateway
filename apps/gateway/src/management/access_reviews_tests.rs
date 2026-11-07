@@ -724,16 +724,33 @@ async fn the_database_derives_and_binds_every_item(pool: PgPool) {
     );
     tx.rollback().await.unwrap();
     // Only a Platform Admin starts one; due 1 to 90 days out; a non-blank name.
-    for (label, name, days, who) in [
-        ("non-admin", "X", 7, f.auditor.user_id),
-        ("due too late", "X", 91, f.admin.user_id),
-        ("blank name", " ", 7, f.admin.user_id),
-        ("control character", "a\u{1}b", 7, f.admin.user_id),
-    ] {
-        let r = sqlx::query("INSERT INTO access_review_campaigns(id,name,subjects,workspace_ids,created_by,due_at) VALUES($1,$2,'{platform_roles}','{}',$3,now()+make_interval(days=>$4))")
-            .bind(Uuid::new_v4()).bind(name).bind(who).bind(days).execute(&pool).await;
-        assert_eq!(sqlstate(r).as_deref(), Some("23514"), "{label}");
-    }
+    let direct = |name: &'static str, days: i32, who: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlstate(sqlx::query("INSERT INTO access_review_campaigns(id,name,subjects,workspace_ids,created_by,due_at) VALUES($1,$2,'{platform_roles}','{}',$3,now()+make_interval(days=>$4))")
+                .bind(Uuid::new_v4()).bind(name).bind(who).bind(days).execute(&pool).await)
+        }
+    };
+    assert_eq!(
+        direct("X", 7, f.auditor.user_id).await.as_deref(),
+        Some("23514"),
+        "non-admin"
+    );
+    assert_eq!(
+        direct("X", 91, f.admin.user_id).await.as_deref(),
+        Some("23514"),
+        "due too late"
+    );
+    assert_eq!(
+        direct(" ", 7, f.admin.user_id).await.as_deref(),
+        Some("23514"),
+        "blank name"
+    );
+    assert_eq!(
+        direct("a\u{1}b", 7, f.admin.user_id).await.as_deref(),
+        Some("23514"),
+        "control character"
+    );
     // Closing: once, by a current Platform Admin; nothing else changes.
     let close = "UPDATE access_review_campaigns SET closed_by=$2, closed_at=now() WHERE id=$1";
     assert_eq!(
