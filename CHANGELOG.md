@@ -10,7 +10,7 @@ Changes after v0.13.0: [unreleased notes](docs/releases/unreleased.md).
 
 ## [0.13.0]
 
-Reviewed onboarding templates for Teams and Projects (#84). A Platform Admin writes a template, a different Platform Admin reviews it, and once published it creates a Team or Project in one transaction: owner and members per slot, catalogs, catalog models and tighten-only local limits. Anything that no longer fits refuses the whole application. Admin › Workspace templates in the dashboard. **Migrations `0074`–`0075`** (schema now 0075) and **runtime-grant changes**; eight new management operations (263) and an optional `slot` in the error envelope. See [release and upgrade notes](docs/releases/v0.13.0.md).
+Reviewed onboarding templates for Teams and Projects (#84). A Platform Admin writes a template, a different Platform Admin reviews it, and once published it creates a Team or Project in one transaction: owner and members per slot, catalogs, catalog models and tighten-only local limits. Anything that no longer fits refuses the whole application. Admin › Workspace templates in the dashboard. **Migrations `0074`–`0075`** (schema now 0075) and **runtime-grant changes**; eight new management operations (263), five new `409` reasons and an optional `slot` in the error envelope. Workspace **Models** offers **Request** only to members (#453). See [release and upgrade notes](docs/releases/v0.13.0.md).
 
 ## [0.12.0]
 
