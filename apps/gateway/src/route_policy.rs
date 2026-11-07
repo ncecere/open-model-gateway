@@ -375,6 +375,32 @@ pub(crate) const ROUTES: &[Route] = &[
         PlatformWrite,
         DENIED
     ),
+    // #90: access review campaigns, browser-only (Platform Admins start them;
+    // Platform Admins and Auditors read).
+    route!(
+        "GET",
+        "/api/v1/platform/access-reviews",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "POST",
+        "/api/v1/platform/access-reviews",
+        PlatformWrite,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/access-reviews/{id}",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/access-reviews/{id}/items",
+        PlatformRead,
+        DENIED
+    ),
     route!("GET", "/api/v1/me", Browser, DENIED),
     route!("GET", "/api/v1/me/summary", Browser, DENIED),
     route!("GET", "/api/v1/me/keys", Browser, DENIED),

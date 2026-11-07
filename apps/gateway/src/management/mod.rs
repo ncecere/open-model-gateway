@@ -1,5 +1,6 @@
 mod access;
 mod access_requests;
+mod access_reviews;
 mod admin_tokens;
 mod alerts;
 mod audit_export;
@@ -655,6 +656,7 @@ fn routes() -> Router<Store> {
         .merge(scheduled_reports::routes())
         .merge(access_requests::routes())
         .merge(workspace_templates::routes())
+        .merge(access_reviews::routes())
         .merge(admin_tokens::routes())
         .merge(provider_costs::routes())
         .merge(directory::routes())

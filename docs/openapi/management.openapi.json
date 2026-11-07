@@ -3129,6 +3129,353 @@
           }
         ]
       },
+      "AccessReviewCampaign": {
+        "additionalProperties": false,
+        "properties": {
+          "closed_at": {
+            "$ref": "#/components/schemas/IdentityNullableTime"
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "created_by": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "due_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "item_count": {
+            "maximum": 5000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "subjects": {
+            "items": {
+              "enum": [
+                "workspace_memberships",
+                "platform_roles"
+              ],
+              "type": "string"
+            },
+            "maxItems": 2,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "workspace_ids": {
+            "items": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            },
+            "maxItems": 50,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "subjects",
+          "workspace_ids",
+          "created_by",
+          "created_at",
+          "due_at",
+          "closed_at",
+          "item_count"
+        ],
+        "type": "object"
+      },
+      "AccessReviewCampaignDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "closed_at": {
+            "$ref": "#/components/schemas/IdentityNullableTime"
+          },
+          "counts": {
+            "additionalProperties": false,
+            "description": "Items by kind and by source; inactive: items whose grant has since been revoked.",
+            "properties": {
+              "bootstrap": {
+                "maximum": 5000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "group": {
+                "maximum": 5000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "inactive": {
+                "maximum": 5000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "manual": {
+                "maximum": 5000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "platform_role": {
+                "maximum": 5000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "workspace_membership": {
+                "maximum": 5000,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "workspace_membership",
+              "platform_role",
+              "manual",
+              "group",
+              "bootstrap",
+              "inactive"
+            ],
+            "type": "object"
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "created_by": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "due_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "item_count": {
+            "maximum": 5000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "subjects": {
+            "items": {
+              "enum": [
+                "workspace_memberships",
+                "platform_roles"
+              ],
+              "type": "string"
+            },
+            "maxItems": 2,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "workspace_ids": {
+            "items": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            },
+            "maxItems": 50,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "subjects",
+          "workspace_ids",
+          "created_by",
+          "created_at",
+          "due_at",
+          "closed_at",
+          "item_count",
+          "counts"
+        ],
+        "type": "object"
+      },
+      "AccessReviewCampaignStarted": {
+        "additionalProperties": false,
+        "description": "A campaign as started: open, with its item counts.",
+        "properties": {
+          "closed_at": {
+            "description": "A campaign starts open.",
+            "type": "null"
+          },
+          "counts": {
+            "additionalProperties": false,
+            "description": "Items by kind and by source; inactive: items whose grant has since been revoked.",
+            "properties": {
+              "bootstrap": {
+                "maximum": 5000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "group": {
+                "maximum": 5000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "inactive": {
+                "maximum": 5000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "manual": {
+                "maximum": 5000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "platform_role": {
+                "maximum": 5000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "workspace_membership": {
+                "maximum": 5000,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "workspace_membership",
+              "platform_role",
+              "manual",
+              "group",
+              "bootstrap",
+              "inactive"
+            ],
+            "type": "object"
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "created_by": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "due_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "item_count": {
+            "maximum": 5000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "subjects": {
+            "items": {
+              "enum": [
+                "workspace_memberships",
+                "platform_roles"
+              ],
+              "type": "string"
+            },
+            "maxItems": 2,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "workspace_ids": {
+            "items": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            },
+            "maxItems": 50,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "subjects",
+          "workspace_ids",
+          "created_by",
+          "created_at",
+          "due_at",
+          "closed_at",
+          "item_count",
+          "counts"
+        ],
+        "type": "object"
+      },
+      "AccessReviewItem": {
+        "additionalProperties": false,
+        "description": "One grant as it was when the campaign started. workspace_id and workspace_name are null for platform roles; email is null once the person's data has been removed.",
+        "properties": {
+          "active": {
+            "description": "false once the grant has been revoked after the snapshot.",
+            "type": "boolean"
+          },
+          "display_name": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "email": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "granted_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "role": {
+            "enum": [
+              "owner",
+              "admin",
+              "member",
+              "user",
+              "auditor"
+            ],
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "manual",
+              "group",
+              "bootstrap"
+            ],
+            "type": "string"
+          },
+          "subject_kind": {
+            "enum": [
+              "workspace_membership",
+              "platform_role"
+            ],
+            "type": "string"
+          },
+          "user_id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "workspace_id": {
+            "$ref": "#/components/schemas/IdentityNullableUuid"
+          },
+          "workspace_name": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          }
+        },
+        "required": [
+          "id",
+          "subject_kind",
+          "workspace_id",
+          "workspace_name",
+          "user_id",
+          "email",
+          "display_name",
+          "role",
+          "source",
+          "granted_at",
+          "active"
+        ],
+        "type": "object"
+      },
       "AccessRoleGrant": {
         "additionalProperties": false,
         "properties": {
@@ -4890,6 +5237,8 @@
               "reason": {
                 "enum": [
                   "access_request_rate_limited",
+                  "access_review_limit",
+                  "access_review_too_large",
                   "alert_rule_kind_fixed",
                   "alert_rule_limit",
                   "bulk_incomplete",
@@ -44010,6 +44359,42 @@
         ],
         "type": "object"
       },
+      "get_api_v1_platform_access_reviewsRequest": false,
+      "get_api_v1_platform_access_reviewsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/AccessReviewCampaign"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "type": "object"
+      },
+      "get_api_v1_platform_access_reviews_by_idRequest": false,
+      "get_api_v1_platform_access_reviews_by_idResponse": {
+        "$ref": "#/components/schemas/AccessReviewCampaignDetail"
+      },
+      "get_api_v1_platform_access_reviews_by_id_itemsRequest": false,
+      "get_api_v1_platform_access_reviews_by_id_itemsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/AccessReviewItem"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "type": "object"
+      },
       "get_api_v1_platform_admin_tokensRequest": false,
       "get_api_v1_platform_admin_tokensResponse": {
         "additionalProperties": false,
@@ -46843,6 +47228,106 @@
       "post_api_v1_platform_access_requests_by_id_denyRequest": false,
       "post_api_v1_platform_access_requests_by_id_denyResponse": {
         "$ref": "#/components/schemas/AccessDeniedMembershipRequest"
+      },
+      "post_api_v1_platform_access_reviewsRequest": {
+        "description": "Serde accepts the closed object or the positional array [name, subjects, workspace_ids, due_in_days] (the last two optional).",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "due_in_days": {
+                "description": "Days until the campaign is due; null or omitted: 14.",
+                "maximum": 90,
+                "minimum": 1,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "name": {
+                "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
+                "maxLength": 120,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
+                "type": "string"
+              },
+              "subjects": {
+                "description": "Each kind at most once (the enum and uniqueItems bound it to two).",
+                "items": {
+                  "enum": [
+                    "workspace_memberships",
+                    "platform_roles"
+                  ],
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "workspace_ids": {
+                "description": "Narrows workspace memberships to these existing Teams/Projects (empty: all), at most 50. Only with workspace_memberships; the handler refuses others with 400.",
+                "items": {
+                  "$ref": "#/components/schemas/IdentityUuid"
+                },
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "name",
+              "subjects"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 4,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank.",
+                "maxLength": 120,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
+                "type": "string"
+              },
+              {
+                "description": "Each kind at most once (the enum and uniqueItems bound it to two).",
+                "items": {
+                  "enum": [
+                    "workspace_memberships",
+                    "platform_roles"
+                  ],
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              },
+              {
+                "description": "Narrows workspace memberships to these existing Teams/Projects (empty: all), at most 50. Only with workspace_memberships; the handler refuses others with 400.",
+                "items": {
+                  "$ref": "#/components/schemas/IdentityUuid"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              {
+                "description": "Days until the campaign is due; null or omitted: 14.",
+                "maximum": 90,
+                "minimum": 1,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            ],
+            "type": "array"
+          }
+        ]
+      },
+      "post_api_v1_platform_access_reviewsResponse": {
+        "$ref": "#/components/schemas/AccessReviewCampaignStarted"
       },
       "post_api_v1_platform_admin_tokensRequest": {
         "oneOf": [
@@ -52890,6 +53375,385 @@
         },
         "x-omg-response-schema": {
           "$ref": "#/components/schemas/post_api_v1_platform_access_requests_by_id_denyResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/api/v1/platform/access-reviews": {
+      "get": {
+        "description": "#90: Platform Admin/Auditor, browser only. Access review campaigns, newest first.",
+        "operationId": "get_api_v1_platform_access_reviews",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 100,
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "schema": {
+              "default": 0,
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_access_reviewsResponse"
+                }
+              }
+            },
+            "description": "Successful handler representation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Invalid input or malformed extraction"
+          },
+          "401": {
+            "$ref": "#/components/responses/ManagementMiddleware401Variant2"
+          },
+          "403": {
+            "$ref": "#/components/responses/ManagementMiddleware403Variant3"
+          },
+          "413": {
+            "$ref": "#/components/responses/ManagementMiddleware413Variant1"
+          },
+          "429": {
+            "$ref": "#/components/responses/ManagementMiddleware429Variant1"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+          }
+        },
+        "security": [
+          {
+            "browserSession": []
+          }
+        ],
+        "x-omg-access": "PlatformRead",
+        "x-omg-middleware-responses": {
+          "$ref": "#/x-omg-middleware-contracts/management"
+        },
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_api_v1_platform_access_reviewsRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_api_v1_platform_access_reviewsResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      },
+      "post": {
+        "description": "#90: Platform Admin, browser only. Starts a one-shot access review campaign and snapshots, in one statement, the live grants it covers: shared (Team/Project) memberships, optionally narrowed to listed workspaces, and/or platform roles. Never personal workspaces, revoked grants, disabled workspaces or disabled or cleaned-up users. Due 1 to 90 days later (default 14). 409 access_review_limit at 20 open campaigns; 409 access_review_too_large above 5,000 items.",
+        "operationId": "post_api_v1_platform_access_reviews",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_access_reviewsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_access_reviewsResponse"
+                }
+              }
+            },
+            "description": "Successful handler representation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Invalid input or malformed extraction"
+          },
+          "401": {
+            "$ref": "#/components/responses/ManagementMiddleware401Variant2"
+          },
+          "403": {
+            "$ref": "#/components/responses/ManagementMiddleware403Variant3"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "access_review_limit or access_review_too_large"
+          },
+          "413": {
+            "$ref": "#/components/responses/ManagementMiddleware413Variant1"
+          },
+          "415": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "JSON content type required"
+          },
+          "422": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Axum JSON extraction refusal"
+          },
+          "429": {
+            "$ref": "#/components/responses/ManagementMiddleware429Variant1"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+          }
+        },
+        "security": [
+          {
+            "browserSession": [],
+            "csrfToken": [],
+            "origin": []
+          }
+        ],
+        "x-omg-access": "PlatformWrite",
+        "x-omg-middleware-responses": {
+          "$ref": "#/x-omg-middleware-contracts/management"
+        },
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_access_reviewsRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_access_reviewsResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/api/v1/platform/access-reviews/{id}": {
+      "get": {
+        "description": "#90: a campaign with its item counts.",
+        "operationId": "get_api_v1_platform_access_reviews_by_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_access_reviews_by_idResponse"
+                }
+              }
+            },
+            "description": "Successful handler representation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Invalid input or malformed extraction"
+          },
+          "401": {
+            "$ref": "#/components/responses/ManagementMiddleware401Variant2"
+          },
+          "403": {
+            "$ref": "#/components/responses/ManagementMiddleware403Variant3"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown campaign"
+          },
+          "413": {
+            "$ref": "#/components/responses/ManagementMiddleware413Variant1"
+          },
+          "429": {
+            "$ref": "#/components/responses/ManagementMiddleware429Variant1"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+          }
+        },
+        "security": [
+          {
+            "browserSession": []
+          }
+        ],
+        "x-omg-access": "PlatformRead",
+        "x-omg-middleware-responses": {
+          "$ref": "#/x-omg-middleware-contracts/management"
+        },
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_api_v1_platform_access_reviews_by_idRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_api_v1_platform_access_reviews_by_idResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/api/v1/platform/access-reviews/{id}/items": {
+      "get": {
+        "description": "#90: a campaign's items: memberships by workspace, then platform roles, each with the person as the platform user directory shows them and whether the grant is still active.",
+        "operationId": "get_api_v1_platform_access_reviews_by_id_items",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 100,
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "schema": {
+              "default": 0,
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_access_reviews_by_id_itemsResponse"
+                }
+              }
+            },
+            "description": "Successful handler representation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Invalid input or malformed extraction"
+          },
+          "401": {
+            "$ref": "#/components/responses/ManagementMiddleware401Variant2"
+          },
+          "403": {
+            "$ref": "#/components/responses/ManagementMiddleware403Variant3"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown campaign"
+          },
+          "413": {
+            "$ref": "#/components/responses/ManagementMiddleware413Variant1"
+          },
+          "429": {
+            "$ref": "#/components/responses/ManagementMiddleware429Variant1"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+          }
+        },
+        "security": [
+          {
+            "browserSession": []
+          }
+        ],
+        "x-omg-access": "PlatformRead",
+        "x-omg-middleware-responses": {
+          "$ref": "#/x-omg-middleware-contracts/management"
+        },
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_api_v1_platform_access_reviews_by_id_itemsRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_api_v1_platform_access_reviews_by_id_itemsResponse"
         },
         "x-omg-token-policy": "Denied"
       }

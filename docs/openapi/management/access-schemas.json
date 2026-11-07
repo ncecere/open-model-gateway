@@ -6421,6 +6421,489 @@
           "description": "true when this idempotency key's recorded application is returned; nothing was created by this request."
         }
       }
+    },
+    "post_api_v1_platform_access_reviewsRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "name",
+            "subjects"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
+              "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank."
+            },
+            "subjects": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "workspace_memberships",
+                  "platform_roles"
+                ]
+              },
+              "minItems": 1,
+              "uniqueItems": true,
+              "description": "Each kind at most once (the enum and uniqueItems bound it to two)."
+            },
+            "workspace_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/IdentityUuid"
+              },
+              "uniqueItems": true,
+              "description": "Narrows workspace memberships to these existing Teams/Projects (empty: all), at most 50. Only with workspace_memberships; the handler refuses others with 400."
+            },
+            "due_in_days": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 90,
+              "description": "Days until the campaign is due; null or omitted: 14."
+            }
+          }
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\u0000-\\u001F\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$",
+              "description": "Non-blank text without control characters, at most 120 characters (valid_name counts characters, as maxLength does; #405). The pattern spells str::trim's Unicode White_Space set explicitly instead of \\s (ECMA-262 `\\s` counts U+FEFF and not U+0085, Rust's trim the reverse), so every validator and the handler agree on what is blank."
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "workspace_memberships",
+                  "platform_roles"
+                ]
+              },
+              "minItems": 1,
+              "uniqueItems": true,
+              "description": "Each kind at most once (the enum and uniqueItems bound it to two)."
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/IdentityUuid"
+              },
+              "uniqueItems": true,
+              "description": "Narrows workspace memberships to these existing Teams/Projects (empty: all), at most 50. Only with workspace_memberships; the handler refuses others with 400."
+            },
+            {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 90,
+              "description": "Days until the campaign is due; null or omitted: 14."
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 4,
+          "items": false
+        }
+      ],
+      "description": "Serde accepts the closed object or the positional array [name, subjects, workspace_ids, due_in_days] (the last two optional)."
+    },
+    "AccessReviewCampaign": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "subjects",
+        "workspace_ids",
+        "created_by",
+        "created_at",
+        "due_at",
+        "closed_at",
+        "item_count"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "workspace_memberships",
+              "platform_roles"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true
+        },
+        "workspace_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "maxItems": 50,
+          "uniqueItems": true
+        },
+        "created_by": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "due_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "closed_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "item_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5000
+        }
+      }
+    },
+    "AccessReviewCampaignDetail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "subjects",
+        "workspace_ids",
+        "created_by",
+        "created_at",
+        "due_at",
+        "closed_at",
+        "item_count",
+        "counts"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "workspace_memberships",
+              "platform_roles"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true
+        },
+        "workspace_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "maxItems": 50,
+          "uniqueItems": true
+        },
+        "created_by": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "due_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "closed_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "item_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5000
+        },
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "workspace_membership",
+            "platform_role",
+            "manual",
+            "group",
+            "bootstrap",
+            "inactive"
+          ],
+          "properties": {
+            "workspace_membership": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5000
+            },
+            "platform_role": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5000
+            },
+            "manual": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5000
+            },
+            "group": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5000
+            },
+            "bootstrap": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5000
+            },
+            "inactive": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5000
+            }
+          },
+          "description": "Items by kind and by source; inactive: items whose grant has since been revoked."
+        }
+      }
+    },
+    "AccessReviewItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "subject_kind",
+        "workspace_id",
+        "workspace_name",
+        "user_id",
+        "email",
+        "display_name",
+        "role",
+        "source",
+        "granted_at",
+        "active"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "subject_kind": {
+          "type": "string",
+          "enum": [
+            "workspace_membership",
+            "platform_role"
+          ]
+        },
+        "workspace_id": {
+          "$ref": "#/components/schemas/IdentityNullableUuid"
+        },
+        "workspace_name": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "user_id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "email": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "display_name": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "owner",
+            "admin",
+            "member",
+            "user",
+            "auditor"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "manual",
+            "group",
+            "bootstrap"
+          ]
+        },
+        "granted_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "active": {
+          "type": "boolean",
+          "description": "false once the grant has been revoked after the snapshot."
+        }
+      },
+      "description": "One grant as it was when the campaign started. workspace_id and workspace_name are null for platform roles; email is null once the person's data has been removed."
+    },
+    "get_api_v1_platform_access_reviewsResponse": {
+      "type": "object",
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/AccessReviewCampaign"
+          }
+        }
+      }
+    },
+    "post_api_v1_platform_access_reviewsResponse": {
+      "$ref": "#/components/schemas/AccessReviewCampaignStarted"
+    },
+    "get_api_v1_platform_access_reviews_by_idResponse": {
+      "$ref": "#/components/schemas/AccessReviewCampaignDetail"
+    },
+    "get_api_v1_platform_access_reviews_by_id_itemsResponse": {
+      "type": "object",
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/AccessReviewItem"
+          }
+        }
+      }
+    },
+    "get_api_v1_platform_access_reviewsRequest": false,
+    "get_api_v1_platform_access_reviews_by_idRequest": false,
+    "get_api_v1_platform_access_reviews_by_id_itemsRequest": false,
+    "AccessReviewCampaignStarted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "subjects",
+        "workspace_ids",
+        "created_by",
+        "created_at",
+        "due_at",
+        "closed_at",
+        "item_count",
+        "counts"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "workspace_memberships",
+              "platform_roles"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true
+        },
+        "workspace_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "maxItems": 50,
+          "uniqueItems": true
+        },
+        "created_by": {
+          "$ref": "#/components/schemas/IdentityUuid"
+        },
+        "created_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "due_at": {
+          "$ref": "#/components/schemas/IdentityTime"
+        },
+        "closed_at": {
+          "type": "null",
+          "description": "A campaign starts open."
+        },
+        "item_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5000
+        },
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "workspace_membership",
+            "platform_role",
+            "manual",
+            "group",
+            "bootstrap",
+            "inactive"
+          ],
+          "properties": {
+            "workspace_membership": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5000
+            },
+            "platform_role": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5000
+            },
+            "manual": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5000
+            },
+            "group": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5000
+            },
+            "bootstrap": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5000
+            },
+            "inactive": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5000
+            }
+          },
+          "description": "Items by kind and by source; inactive: items whose grant has since been revoked."
+        }
+      },
+      "description": "A campaign as started: open, with its item counts."
     }
   }
 }

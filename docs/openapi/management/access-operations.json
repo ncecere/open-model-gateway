@@ -4991,6 +4991,268 @@
       },
       "scope": null,
       "token_policy": "Denied"
+    },
+    "GET /api/v1/platform/access-reviews": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "#90: Platform Admin/Auditor, browser only. Access review campaigns, newest first.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_access_reviewsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000,
+              "default": 0
+            }
+          }
+        ]
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/platform/access-reviews": {
+      "access": "PlatformWrite",
+      "operation": {
+        "description": "#90: Platform Admin, browser only. Starts a one-shot access review campaign and snapshots, in one statement, the live grants it covers: shared (Team/Project) memberships, optionally narrowed to listed workspaces, and/or platform roles. Never personal workspaces, revoked grants, disabled workspaces or disabled or cleaned-up users. Due 1 to 90 days later (default 14). 409 access_review_limit at 20 open campaigns; 409 access_review_too_large above 5,000 items.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_access_reviewsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "access_review_limit or access_review_too_large"
+          },
+          "422": {
+            "description": "Axum JSON extraction refusal",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON content type required",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_access_reviewsRequest"
+              }
+            }
+          }
+        }
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/platform/access-reviews/{id}": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "#90: a campaign with its item counts.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_access_reviews_by_idResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown campaign"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
+      },
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/platform/access-reviews/{id}/items": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "#90: a campaign's items: memberships by workspace, then platform roles, each with the person as the platform user directory shows them and whether the grant is still active.",
+        "responses": {
+          "200": {
+            "description": "Successful handler representation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_platform_access_reviews_by_id_itemsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown campaign"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000,
+              "default": 0
+            }
+          }
+        ]
+      },
+      "scope": null,
+      "token_policy": "Denied"
     }
   }
 }

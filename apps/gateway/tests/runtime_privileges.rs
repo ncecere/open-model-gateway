@@ -88,6 +88,8 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         "workspace_templates",
         "workspace_template_versions",
         "workspace_template_applications",
+        "access_review_campaigns",
+        "access_review_items",
         "budget_totals",
         "rate_minute_counters",
         "inflight_counters",

@@ -765,6 +765,13 @@ async fn every_json_management_write_rejects_unknown_fields_after_valid_control(
         &f.admin,
         json!({"name":"Matrix template 2","content":template_content})
     );
+    case!(
+        "access_reviews::create",
+        "POST",
+        "/api/v1/platform/access-reviews",
+        &f.admin,
+        json!({"name":"Matrix review","subjects":["platform_roles"]})
+    );
     let reviewer = user(&pool, "matrix-template-reviewer", "admin").await;
     let tid = id(&template);
     for step in ["review", "publish"] {

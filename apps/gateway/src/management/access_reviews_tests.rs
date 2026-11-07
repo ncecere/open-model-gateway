@@ -14,7 +14,7 @@ async fn items(f: &Fixture, campaign: &Value) -> Vec<Value> {
         &f.s,
         &f.auditor,
         "GET",
-        &format!("{REVIEWS}/{}/items?limit=500", id(campaign)),
+        &format!("{REVIEWS}/{}/items?limit=200", id(campaign)),
         Value::Null,
     )
     .await;
@@ -272,14 +272,17 @@ async fn campaign_bodies_and_bounds_are_strict(pool: PgPool) {
             "too many filters",
             json!({"name":"A","subjects":["workspace_memberships"],"workspace_ids":vec![f.team;51]}),
         ),
-        (
-            "unknown field",
-            json!({"name":"A","subjects":["platform_roles"],"reviewers":[]}),
-        ),
     ] {
         let (status, _) = start(&f, body).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{label}");
     }
+    // Unknown fields are refused by the JSON extractor, as on every strict body.
+    let (status, _) = start(
+        &f,
+        json!({"name":"A","subjects":["platform_roles"],"reviewers":[]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "unknown field");
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM access_review_campaigns")
             .fetch_one(&pool)
