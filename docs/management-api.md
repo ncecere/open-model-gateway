@@ -144,7 +144,7 @@ Migration **0066_access_requests.sql** and the updated runtime grants must be ap
 
 ## Onboarding templates (#84)
 
-Reviewed templates for new Teams and Projects. Browser-session **Platform Admin only** for writes (Platform Auditors read; every admin token denied), with Origin and CSRF. Applying a published version creates a workspace (below); the dashboard follows in a later slice.
+Reviewed templates for new Teams and Projects. Browser-session **Platform Admin only** for writes (Platform Auditors read; every admin token denied), with Origin and CSRF. Applying a published version creates a workspace (below). The dashboard covers both: see [dashboard](dashboard.md#workspace-templates-84).
 
 | Method/path | Behavior |
 | --- | --- |
