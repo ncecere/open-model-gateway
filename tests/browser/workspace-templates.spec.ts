@@ -86,5 +86,7 @@ test("a template is reviewed by another admin, published, and creates a Team", a
   } finally {
     await api(operator.page, "DELETE", `/platform/users/${alexId}/roles/admin`);
     await operator.context.close();
+    // Later specs reuse each persona's stored session: refresh alex's after the role change.
+    await (await signIn(browser, "alex")).context.close();
   }
 });

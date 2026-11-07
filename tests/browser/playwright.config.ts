@@ -39,6 +39,7 @@ export default defineConfig({
     { name: "provider-cost-upload", testMatch: /provider-cost-upload\.spec\.ts/ },
     { name: "access-refresh", testMatch: /access-refresh\.spec\.ts/ },
     { name: "access-requests", testMatch: /access-requests\.spec\.ts/, dependencies: ["journey"] },
+    { name: "workspace-templates", testMatch: /workspace-templates\.spec\.ts/, dependencies: ["journey"] },
     { name: "accessibility", testMatch: /accessibility\.spec\.ts/, dependencies: ["journey"] },
   ],
 });
