@@ -170,6 +170,26 @@ describe("Access-request notifications (#83)", () => {
   });
 });
 
+describe("Access review reminders (#90)", () => {
+  const due: Notification = { source: "access_review", id: "camp-1", state: "due_soon", campaign_name: "Q4 review", due_at: "2026-11-20T12:00:00Z", at: "2026-11-19T12:00:00Z", read: false };
+  const overdue: Notification = { source: "access_review", id: "camp-2", state: "overdue", campaign_name: "Q3 review", due_at: "2026-10-01T12:00:00Z", at: "2026-10-01T12:00:00Z", read: true };
+  it("names the campaign and its state, never what is under review, and offers no alert actions", async () => {
+    const user = userEvent.setup();
+    serve(session, path => path.startsWith("/api/v1/me/notifications?") ? { data: [due, overdue], has_more: false } : undefined);
+    const { client } = await mount("/notifications");
+    await screen.findByText("Access review “Q4 review” is due soon");
+    expect(screen.getByText("Access review “Q3 review” is overdue")).toBeTruthy();
+    expect(screen.getByText("Due soon")).toBeTruthy();
+    expect(screen.getByText("Overdue")).toBeTruthy();
+    expect(screen.getAllByText("Access review").length).toBe(2);
+    const row = screen.getByText("Access review “Q4 review” is due soon").closest("tr")!;
+    await user.click(within(row).getByRole("button", { name: /actions/i }));
+    expect(await screen.findByRole("menuitem", { name: "Mark as read" })).toBeTruthy();
+    for (const action of ["Open rule", "Open keys", "Open holds", "Open requests"]) expect(screen.queryByRole("menuitem", { name: action })).toBeNull();
+    client.clear();
+  });
+});
+
 const agedHold: Notification = { ...keyExpiring, id: "e3", kind: "aged_unknown_hold", severity: "warning", summary: "Holds with unknown cost are over 24 hours old", details: { threshold_hours: 24 } };
 describe("Aged unknown-hold notifications (#101)", () => {
   it("offers Open holds to the Holds tab, never a rule or a key list", async () => {

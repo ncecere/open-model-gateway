@@ -5852,6 +5852,51 @@
         ],
         "type": "object"
       },
+      "IdentityAccessReviewNotification": {
+        "additionalProperties": false,
+        "description": "#90: an access review reminder, derived live on every read: an open campaign in which the viewer has items they may decide that nobody has decided yet. Gone once those are decided, assigned to someone else, or the campaign closes. In-app only: never emailed or sent to webhooks.",
+        "properties": {
+          "at": {
+            "$ref": "#/components/schemas/IdentityTime",
+            "description": "When the campaign started (open), 24 hours before its due date (due_soon) or its due date (overdue)."
+          },
+          "campaign_name": {
+            "type": "string"
+          },
+          "due_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "id": {
+            "$ref": "#/components/schemas/IdentityUuid",
+            "description": "The campaign's id (also what POST /me/notifications/read takes)."
+          },
+          "read": {
+            "description": "Read by this viewer in this state; unread again when the state changes.",
+            "type": "boolean"
+          },
+          "source": {
+            "const": "access_review"
+          },
+          "state": {
+            "description": "due_soon within 24 hours of the due date; overdue after it.",
+            "enum": [
+              "open",
+              "due_soon",
+              "overdue"
+            ]
+          }
+        },
+        "required": [
+          "source",
+          "id",
+          "state",
+          "campaign_name",
+          "due_at",
+          "at",
+          "read"
+        ],
+        "type": "object"
+      },
       "IdentityAdminCeilingNotification": {
         "allOf": [
           {
@@ -44785,6 +44830,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/IdentityRequestNotification"
+                },
+                {
+                  "$ref": "#/components/schemas/IdentityAccessReviewNotification"
                 }
               ]
             },

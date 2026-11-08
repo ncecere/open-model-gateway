@@ -10,7 +10,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { BellRing, CheckCheck, History, Plus, Webhook } from "lucide-react";
 import { AlertWebhooks } from "./alert-webhooks";
 import { api, platformPath, type Provider, type Session, type Workspace } from "../lib/api";
-import { conditionText, draftOf, emailStatusText, eventsPath, kindHints, kindLabels, kindsFor, layerLabels, layersFor, lockWaitChoices, newDraft, isRequestNotification, notificationsPath, requestNotificationText, recipientsText, resolutionLabels, ruleBody, sourceText, ruleErrors, rulePath, rulesPath, spendPeriodLabels, unknownCostNote, whereText, type AlertEvent, type AlertKind, type AlertRule, type AlertScope, type BudgetLayer, type Notification, type RuleDraft, type RuleList, type SpendPeriod } from "../lib/alerts";
+import { conditionText, draftOf, emailStatusText, eventsPath, kindHints, kindLabels, kindsFor, layerLabels, layersFor, lockWaitChoices, newDraft, isRequestNotification, notificationsPath, requestNotificationText, recipientsText, resolutionLabels, ruleBody, sourceText, ruleErrors, rulePath, rulesPath, spendPeriodLabels, unknownCostNote, whereText, type AlertEvent, type AlertKind, type AlertRule, type AlertScope, type BudgetLayer, type Notification, type RuleDraft, type RuleList, type SpendPeriod, isReviewNotification, isAlertNotification, reviewNotificationText, reviewStateLabels, reviewStateTone } from "../lib/alerts";
 import { permissions, type DashboardSearch } from "../lib/permissions";
 import { Button, ErrorNotice, FormField, Heading, Input, NativeSelect, Stack, Textarea, useAction, useApi, useChoices } from "../components/ui";
 import { ResourcePage } from "../components/resource-page";
@@ -229,7 +229,7 @@ export function NotificationsPage({ session }: { session: Session }) {
     return session.capabilities.platform_write ? { page: "platform-access-requests" } : undefined;
   };
   const ruleLink = (n: Notification): DashboardSearch | undefined => {
-    if (isRequestNotification(n)) return;
+    if (!isAlertNotification(n)) return;
     if (n.builtin && n.workspace) return { page: "workspace-settings", ws: n.workspace.id, tab: "alerts" };
     if (n.rule?.deleted) return;
     if (n.rule?.scope === "installation" && session.capabilities.platform_read) return { page: "alert-rule-detail", record: n.rule.id };
@@ -238,18 +238,20 @@ export function NotificationsPage({ session }: { session: Session }) {
   };
   // Key-expiry reminders (#100) have no rule: the action opens the workspace's
   // keys list, never a key identifier.
-  const keysLink = (n: Notification): DashboardSearch | undefined => !isRequestNotification(n) && n.kind === "key_expiring" && n.workspace ? { page: "keys", ws: n.workspace.id } : undefined;
+  const keysLink = (n: Notification): DashboardSearch | undefined => isAlertNotification(n) && n.kind === "key_expiring" && n.workspace ? { page: "keys", ws: n.workspace.id } : undefined;
   // Aged unknown-hold incidents (#101) open the Holds tab: the workspace's own, or Admin's queue.
-  const holdsLink = (n: Notification): DashboardSearch | undefined => isRequestNotification(n) ? undefined : agedHoldLink(session, n);
-  const title = (n: Notification) => isRequestNotification(n) ? requestNotificationText(n) : n.summary;
+  const holdsLink = (n: Notification): DashboardSearch | undefined => isAlertNotification(n) ? agedHoldLink(session, n) : undefined;
+  // A reminder names its campaign and due date only.
+  const whereOf = (n: Notification) => isRequestNotification(n) ? n.workspace_name_at_request : isReviewNotification(n) ? `Due ${new Date(n.due_at).toLocaleDateString()}` : whereText(n);
+  const title = (n: Notification) => isRequestNotification(n) ? requestNotificationText(n) : isReviewNotification(n) ? reviewNotificationText(n) : n.summary;
   const columns: DataTableColumn<Notification>[] = [
-    { id: "alert", header: "Alert", accessor: title, rowHeader: true, hideable: false, cell: n => <CellText primary={n.read ? title(n) : <strong>{title(n)}</strong>} secondary={isRequestNotification(n) ? "Access request" : eventSecondary(n)} title={isRequestNotification(n) ? undefined : unknownCostNote(n)} /> },
-    { id: "where", header: "Where", accessor: n => isRequestNotification(n) ? n.workspace_name_at_request : whereText(n), cell: n => isRequestNotification(n) ? n.workspace_name_at_request : whereText(n) },
-    { id: "state", header: "State", accessor: n => n.state, cell: n => isRequestNotification(n) ? <StatusBadge tone={accessRequestStatusTone[n.state]}>{accessRequestStatusLabels[n.state]}</StatusBadge> : <EventState event={n} /> },
-    { id: "when", header: "When", accessor: n => isRequestNotification(n) ? n.at : n.fired_at, cell: n => <TableTime value={isRequestNotification(n) ? n.at : n.fired_at} /> },
+    { id: "alert", header: "Alert", accessor: title, rowHeader: true, hideable: false, cell: n => <CellText primary={n.read ? title(n) : <strong>{title(n)}</strong>} secondary={isRequestNotification(n) ? "Access request" : isReviewNotification(n) ? "Access review" : eventSecondary(n)} title={isAlertNotification(n) ? unknownCostNote(n) : undefined} /> },
+    { id: "where", header: "Where", accessor: n => whereOf(n), cell: n => whereOf(n) },
+    { id: "state", header: "State", accessor: n => n.state, cell: n => isRequestNotification(n) ? <StatusBadge tone={accessRequestStatusTone[n.state]}>{accessRequestStatusLabels[n.state]}</StatusBadge> : isReviewNotification(n) ? <StatusBadge tone={reviewStateTone[n.state]}>{reviewStateLabels[n.state]}</StatusBadge> : <EventState event={n} /> },
+    { id: "when", header: "When", accessor: n => isAlertNotification(n) ? n.fired_at : n.at, cell: n => <TableTime value={isAlertNotification(n) ? n.fired_at : n.at} /> },
   ];
   return <Stack gap={6} className={s.page}>
-    <Heading title="Notifications" description="Alerts and access requests for what you look after." actions={<Button variant="secondary" loading={busy} onClick={() => void markRead({ all: true })}><CheckCheck aria-hidden /> Mark all read</Button>} />
+    <Heading title="Notifications" description="Alerts, access requests and access reviews for what you look after." actions={<Button variant="secondary" loading={busy} onClick={() => void markRead({ all: true })}><CheckCheck aria-hidden /> Mark all read</Button>} />
     <DirectoryTable<Notification> path={notificationsPath} label="Notifications" storageKey="notifications" columns={columns} rowKey={n => n.id} rowLabel={title}
       facets={[{ id: "status", label: "Show", allLabel: "All", options: [{ value: "unread", label: "Unread" }] }]}
       rowActions={n => { const link = ruleLink(n), keys = keysLink(n), holds = holdsLink(n), request = requestLink(n); return [
@@ -259,6 +261,6 @@ export function NotificationsPage({ session }: { session: Session }) {
         { label: "Open holds", hidden: !holds, render: holds ? <ResourceLink search={holds} /> : undefined },
         { label: "Open requests", hidden: !request, render: request ? <ResourceLink search={request} /> : undefined },
       ]; }}
-      empty={{ icon: <BellRing />, title: "No notifications.", description: "Alerts for your budgets and workspaces show up here." }} />
+      empty={{ icon: <BellRing />, title: "No notifications.", description: "Alerts, access requests and access review reminders for what you look after show up here." }} />
   </Stack>;
 }

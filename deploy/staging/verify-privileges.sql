@@ -1295,6 +1295,11 @@ BEGIN
     -- 0078: a remove decision is recorded only with the removal of the access.
     BEGIN SET CONSTRAINTS access_review_removal_applied IMMEDIATE; INSERT INTO access_review_decisions(id,item_id,decision,decided_by) VALUES(gen_random_uuid(),it,'remove',t_reviewer); RAISE EXCEPTION 'remove recorded without the removal'; EXCEPTION WHEN check_violation THEN NULL; END;
     SET CONSTRAINTS access_review_removal_applied DEFERRED;
+    -- 0079: reminder read marks are insert-only with the server's time.
+    INSERT INTO access_review_notification_reads(user_id,campaign_id,state) VALUES(t_reviewer,c2,'open');
+    BEGIN INSERT INTO access_review_notification_reads(user_id,campaign_id,state,read_at) VALUES(t_reviewer,c2,'overdue',now()-interval '1 year'); RAISE EXCEPTION 'reminder read time forgeable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+    BEGIN UPDATE access_review_notification_reads SET state='due_soon' WHERE campaign_id=c2; RAISE EXCEPTION 'reminder read mark mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+    BEGIN DELETE FROM access_review_notification_reads WHERE campaign_id=c2; RAISE EXCEPTION 'reminder read mark removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
     -- With the removal (the grant revoked under its scope lock), a remove decision commits.
     BEGIN
      INSERT INTO access_review_decisions(id,item_id,decision,decided_by) VALUES(gen_random_uuid(),it,'remove',t_reviewer);

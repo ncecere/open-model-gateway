@@ -895,9 +895,11 @@ async fn notifications(
     let visible = visible();
     // Incidents and (#83) access-request events, newest first.
     let requests = super::request_notifications::items("$1", "$6");
+    // #90: and access review reminders.
+    let reminders = super::access_reviews::reminder_items("$1", "$6");
     // The page is chosen from light rows; an incident's JSON (with its
     // delivery subselects) is built only for the incidents on the page.
-    let mut data: Vec<Value> = sqlx::query_scalar(&format!("WITH page AS (SELECT at,id,item,is_read FROM (SELECT e.fired_at AS at,e.id,NULL::jsonb AS item,x.event_id IS NOT NULL AS is_read {EVENT_FROM} LEFT JOIN alert_reads x ON x.event_id=e.id AND x.user_id=$1 WHERE {visible} UNION ALL SELECT at,id,item,is_read FROM ({requests}) q) n WHERE NOT $3 OR NOT n.is_read ORDER BY n.at DESC,n.id LIMIT $4 OFFSET $5) SELECT COALESCE(pg.item,(SELECT {EVENT_JSON}||jsonb_build_object('read',pg.is_read) {EVENT_FROM} WHERE e.id=pg.id)) FROM page pg ORDER BY pg.at DESC,pg.id"))
+    let mut data: Vec<Value> = sqlx::query_scalar(&format!("WITH page AS (SELECT at,id,item,is_read FROM (SELECT e.fired_at AS at,e.id,NULL::jsonb AS item,x.event_id IS NOT NULL AS is_read {EVENT_FROM} LEFT JOIN alert_reads x ON x.event_id=e.id AND x.user_id=$1 WHERE {visible} UNION ALL SELECT at,id,item,is_read FROM ({requests}) q UNION ALL SELECT at,id,item,is_read FROM ({reminders}) r) n WHERE NOT $3 OR NOT n.is_read ORDER BY n.at DESC,n.id LIMIT $4 OFFSET $5) SELECT COALESCE(pg.item,(SELECT {EVENT_JSON}||jsonb_build_object('read',pg.is_read) {EVENT_FROM} WHERE e.id=pg.id)) FROM page pg ORDER BY pg.at DESC,pg.id"))
         .bind(u.user_id)
         .bind(reader)
         .bind(unread)
@@ -935,9 +937,18 @@ async fn notification_summary(
     .bind(admin)
     .fetch_one(&mut *tx)
     .await?;
+    // #90: unread access review reminders, at most 100 likewise.
+    let reminders = super::access_reviews::reminder_items("$1", "$2");
+    let unread_reminders: i64 = sqlx::query_scalar(&format!(
+        "SELECT count(*) FROM (SELECT 1 FROM ({reminders}) n WHERE NOT n.is_read LIMIT 100) c"
+    ))
+    .bind(u.user_id)
+    .bind(admin)
+    .fetch_one(&mut *tx)
+    .await?;
     tx.commit().await?;
     Ok(Json(
-        json!({"unread": unread + unread_requests, "firing": firing}),
+        json!({"unread": unread + unread_requests + unread_reminders, "firing": firing}),
     ))
 }
 #[derive(Deserialize)]
@@ -977,8 +988,19 @@ async fn mark_read(
         .execute(&mut *tx)
         .await?
         .rows_affected();
+    // #90: and the visible access review reminders, in their current state.
+    let marked_reminders =
+        sqlx::query(&super::access_reviews::reminder_mark_read("$1", "$2", "$3"))
+            .bind(u.user_id)
+            .bind(admin)
+            .bind(&b.ids)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
     tx.commit().await?;
-    Ok(Json(json!({"marked": marked + marked_requests})))
+    Ok(Json(
+        json!({"marked": marked + marked_requests + marked_reminders}),
+    ))
 }
 
 #[cfg(test)]

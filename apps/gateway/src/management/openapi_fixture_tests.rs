@@ -1705,6 +1705,24 @@ async fn access_review_inbox_fixtures(
     let group_item = item_of(grouped).await;
     let decide = |item: Uuid| format!("{INBOX}/{item}/decision");
     let inbox = target(INBOX, "limit=50&offset=0");
+    // #90 slice 4: the owner's feed now carries an access review reminder.
+    let r = send(
+        client,
+        base,
+        Some(owner),
+        "GET",
+        "/api/v1/me/notifications",
+        None,
+    )
+    .await;
+    assert!(
+        body(&r)["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["source"] == "access_review")
+    );
+    observed.observe(&r);
     let r = send(client, base, Some(owner), "GET", &inbox, None).await;
     assert!(!body(&r)["data"].as_array().unwrap().is_empty());
     observed.observe(&r);

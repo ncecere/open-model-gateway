@@ -46,8 +46,18 @@ export type RequestNotification = {
   target_kind: "workspace_membership" | "model_selection"; workspace_id: string; workspace_name_at_request: string; model_name_at_request: string;
   at: string; read: boolean;
 };
-export type Notification = AlertNotification | RequestNotification;
+/** #90: an access review reminder: an open campaign with access the viewer still has to review. */
+export type ReviewNotification = { source: "access_review"; id: string; state: "open" | "due_soon" | "overdue"; campaign_name: string; due_at: string; at: string; read: boolean };
+export type Notification = AlertNotification | RequestNotification | ReviewNotification;
 export const isRequestNotification = (n: Notification): n is RequestNotification => n.source === "access_request";
+export const isReviewNotification = (n: Notification): n is ReviewNotification => n.source === "access_review";
+export const isAlertNotification = (n: Notification): n is AlertNotification => n.source === undefined;
+export const reviewStateLabels: Record<ReviewNotification["state"], string> = { open: "To review", due_soon: "Due soon", overdue: "Overdue" };
+export const reviewStateTone: Record<ReviewNotification["state"], "info" | "warning" | "danger"> = { open: "info", due_soon: "warning", overdue: "danger" };
+/** One line for a reminder: the campaign's name only, never what is under review. */
+export function reviewNotificationText(n: ReviewNotification): string {
+  return n.state === "overdue" ? `Access review “${n.campaign_name}” is overdue` : n.state === "due_soon" ? `Access review “${n.campaign_name}” is due soon` : `Access to review in “${n.campaign_name}”`;
+}
 const decidedText: Record<RequestNotification["state"], string> = { pending: "is pending", approved: "was approved", denied: "was denied", expired: "expired" };
 /** One line for a request event, from frozen references only. */
 export function requestNotificationText(n: RequestNotification): string {
