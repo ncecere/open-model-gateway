@@ -165,7 +165,7 @@ Template names are unique ignoring case and surrounding spaces; a template has a
 
 ## Access reviews (#90)
 
-One-shot access review campaigns over shared access. Browser-session only (every admin token is denied): **Platform Admins** start and close campaigns and assign reviewers; Platform Admins and **Auditors** read them; **reviewers** decide on their items. The dashboard follows in a later slice of #90.
+One-shot access review campaigns over shared access. Browser-session only (every admin token is denied): **Platform Admins** start and close campaigns and assign reviewers; Platform Admins and **Auditors** read them; **reviewers** decide on their items. The dashboard covers all of it: see [dashboard](dashboard.md#access-reviews-90).
 
 | Method/path | Behavior |
 | --- | --- |

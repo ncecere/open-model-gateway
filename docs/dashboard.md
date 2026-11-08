@@ -24,6 +24,12 @@ A member of a Team or Project who cannot add models sees **Request** on each mod
 
 Admin › **Workspace templates** (`/admin/workspace-templates`) lists templates with their published and latest version. A Platform Admin creates a template (a name and its content, as JSON references: kind, catalogs, models, limits and slots); version 1 waits for review. A template's page lists its versions with their state (waiting for review, reviewed, published, retired) and content hash, and offers each version only the step the viewer can take: **Approve** (shown disabled to the version's own author), **Publish**, **Create workspace** (the published version) and **Retire**. **Create workspace** asks for the workspace name and a person for each slot (people are searched by email), creates everything together or nothing, and opens the new Team or Project. Platform Auditors see templates and versions without actions.
 
+## Access reviews (#90)
+
+Admin › **Access reviews** (`/admin/access-reviews`) lists one-off reviews with what they cover, their size, due date and status. A Platform Admin starts one: a name, what to review (Team and Project memberships, Admin and Auditor roles, or both), optionally only some Teams and Projects, and a due date (1 to 90 days). A review's page summarizes its decisions (to decide, kept, removed, flagged, without a reviewer) and lists every item with its latest decision and whether its reviewer is automatic or assigned; a Platform Admin assigns an item to another reviewer, resets it, or closes the review. Auditors read only.
+
+**Review access** (`/access-reviews`, in the Workspace sidebar) lists what the signed-in person is asked to review now: the memberships of the Teams and Projects they own or administer, platform roles if they are a Platform Admin, and anything assigned to them, never their own access. Each item can be kept, removed (manual access; the confirmation says what the removal does, and it applies at once) or flagged for the identity provider (group access). Reminders in **Notifications** open this page.
+
 ## Canonical links
 
 Identifiers are UUIDs, not organization paths or public model aliases:
@@ -41,6 +47,7 @@ Identifiers are UUIDs, not organization paths or public model aliases:
 | Profile/invitation acceptance | `/profile`, `/invitations/accept` |
 | Access requests | `/access-requests` (Workspace portal), `/admin/access-requests` (Admin) |
 | Workspace templates | `/admin/workspace-templates`, `/admin/workspace-templates/{id}` (Admin) |
+| Access reviews | `/access-reviews` (Workspace portal), `/admin/access-reviews`, `/admin/access-reviews/{id}` (Admin) |
 
 The router and location helpers are `src/router.tsx` and `src/lib/locations.ts`. Tabs use `?tab=`; catalog search/status/pagination and cost dates/filters are URL-backed. Recognized root navigation metadata is canonicalized, but removed organization URLs/`org` contexts are not retained as an organization compatibility feature. Invalid/unavailable workspace navigation is restored to an authorized destination rather than used to fetch foreign data.
 

@@ -46,6 +46,7 @@ import { SignInSettingsPage } from "./settings/sign-in";
 import { AdminAlertsPage, AlertRulePage, NotificationsPage } from "./alerts";
 import { AccessRequestsPage, PlatformAccessRequestsPage } from "./access-requests";
 import { WorkspaceTemplateDetail, WorkspaceTemplatesPage } from "./workspace-templates";
+import { AccessReviewDetail, AccessReviewInbox, PlatformAccessReviewsPage } from "./access-reviews";
 import s from "./shared.module.css";
 import signIn from "./sign-in.module.css";
 import { Card, CardBody } from "../components/ui/card/card";
@@ -111,6 +112,9 @@ export function DashboardContent({ session, search, workspace, navigate, workspa
     case "access-requests": return <AccessRequestsPage tab={search.tab} onTabChange={changeTab} />;
     case "platform-access-requests": return <PlatformAccessRequestsPage session={session} />;
     case "workspace-templates": return <WorkspaceTemplatesPage session={session} />;
+    case "access-reviews": return <AccessReviewInbox />;
+    case "platform-access-reviews": return <PlatformAccessReviewsPage session={session} />;
+    case "access-review-detail": return search.record ? <AccessReviewDetail session={session} id={search.record} /> : <PermissionNotice title="Missing access review identifier" />;
     case "workspace-template-detail": return search.record ? <WorkspaceTemplateDetail session={session} id={search.record} /> : <PermissionNotice title="Missing template identifier" />;
     case "platform-costs": return <PlatformCosts session={session} />;
     case "platform-logs": return <LogsPage scope={{ kind: "platform" }} />;
