@@ -31,7 +31,7 @@ function mount(node: React.ReactElement) {
   render(<QueryClientProvider client={testClient()}><DashboardNavigationProvider search={{ page: "access-reviews" }} navigate={vi.fn()}><ActionProvider>{node}</ActionProvider></DashboardNavigationProvider></QueryClientProvider>);
   return userEvent.setup();
 }
-const base: ReviewItem = { id: "i-1", campaign_id: "c-1", subject_kind: "workspace_membership", workspace_id: "team", workspace_name: "Product", user_id: "u-1", email: "blair@example.invalid", display_name: "Blair", role: "member", source: "manual", granted_at: "2026-10-01T00:00:00Z", active: true, decision: null, decided_by: null, decided_at: null, reviewer_user_id: null };
+const base: ReviewItem = { id: "i-1", campaign_id: "c-1", subject_kind: "workspace_membership", workspace_id: "team", workspace_name: "Product", user_id: "u-1", email: "blair@example.invalid", display_name: "Blair", role: "member", source: "manual", granted_at: "2026-10-01T00:00:00Z", active: true, decision: null, decided_by: null, decided_at: null, reviewer_user_id: null, reviewable: true };
 const asAdminOf = (ws: string) => ({ ...session, workspaces: [...session.workspaces.filter(w => w.id !== ws), { ...team, id: ws, role: "admin" as const }] });
 const inbox = (patch: Partial<InboxItem>): InboxItem => ({ ...base, campaign_name: "Q4 review", due_at: "2026-11-20T00:00:00Z", ...patch });
 const campaign: ReviewCampaignDetail = { id: "c-1", name: "Q4 review", subjects: ["workspace_memberships", "platform_roles"], workspace_ids: [], created_by: "admin", created_at: "2026-11-06T00:00:00Z", due_at: "2099-11-20T00:00:00Z", closed_at: null, item_count: 3,
@@ -141,6 +141,7 @@ describe("An access review (#90)", () => {
     expect(screen.getByText(/2 undecided · 1 kept · 0 removed · 0 flagged · 1 without a reviewer/)).toBeTruthy();
     expect(screen.getByText("Kept")).toBeTruthy();
     expect(screen.getByText("Assigned")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Export CSV" }).getAttribute("href")).toBe("/api/v1/platform/access-reviews/c-1/export");
     await user.click(screen.getByRole("button", { name: "Actions for Xan, Member of Product" }));
     await user.click(await screen.findByRole("menuitem", { name: "Back to automatic reviewers…" }));
     await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Reset" }));
@@ -156,6 +157,12 @@ describe("An access review (#90)", () => {
     await user.click(screen.getByRole("button", { name: "Close review" }));
     await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Close review" }));
     await waitFor(() => expect(writes(fetch).map(([p]) => p)).toEqual([reviewerPath("c-1", "i-2"), reviewerPath("c-1", "i-1"), reviewClosePath("c-1")]));
+  });
+  it("marks items nobody may review", async () => {
+    // Decided or not, as the count counts them.
+    serve({ [reviewPath("c-1")]: () => campaign, [reviewItemsPath("c-1")]: () => ({ data: [{ ...base, reviewable: false, role: "owner" as const }, { ...base, id: "i-9", user_id: "u-9", display_name: "Kept", reviewable: false, decision: "keep" as const }] }) });
+    mount(<AccessReviewDetail session={admin} id="c-1" />);
+    expect((await screen.findAllByText("No reviewer")).length).toBe(2);
   });
   it("offers no reviewer change on the admin's own access", async () => {
     serve({ [reviewPath("c-1")]: () => campaign, [reviewItemsPath("c-1")]: () => ({ data: [{ ...base, user_id: admin.user.id, subject_kind: "platform_role", workspace_id: null, workspace_name: null, role: "admin", display_name: "Me" }] }) });

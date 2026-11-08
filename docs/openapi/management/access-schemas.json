@@ -6768,7 +6768,8 @@
         "decision",
         "decided_by",
         "decided_at",
-        "reviewer_user_id"
+        "reviewer_user_id",
+        "reviewable"
       ],
       "properties": {
         "id": {
@@ -6844,6 +6845,10 @@
         },
         "reviewer_user_id": {
           "$ref": "#/components/schemas/IdentityNullableUuid"
+        },
+        "reviewable": {
+          "type": "boolean",
+          "description": "Whether anyone may decide it now: its review is open, it is in effect, and a reviewer still qualifies (an assignee, or else another owner/admin of its workspace, or another Platform Admin for platform roles). Always true in the inbox."
         }
       },
       "description": "One grant as it was when the campaign started (role, source, grant time); the workspace name and the person are shown as they are now. workspace_id and workspace_name are null for platform roles; email is null once the person's data has been removed."
@@ -7315,7 +7320,8 @@
         "decision",
         "decided_by",
         "decided_at",
-        "reviewer_user_id"
+        "reviewer_user_id",
+        "reviewable"
       ],
       "properties": {
         "id": {
@@ -7386,6 +7392,10 @@
         },
         "reviewer_user_id": {
           "$ref": "#/components/schemas/IdentityNullableUuid"
+        },
+        "reviewable": {
+          "type": "boolean",
+          "description": "Whether anyone may decide it now: its review is open, it is in effect, and a reviewer still qualifies (an assignee, or else another owner/admin of its workspace, or another Platform Admin for platform roles). Always true in the inbox."
         }
       },
       "description": "An item with the decision just recorded."
@@ -7411,7 +7421,8 @@
         "decided_at",
         "reviewer_user_id",
         "campaign_name",
-        "due_at"
+        "due_at",
+        "reviewable"
       ],
       "properties": {
         "id": {
@@ -7493,6 +7504,10 @@
         },
         "due_at": {
           "$ref": "#/components/schemas/IdentityTime"
+        },
+        "reviewable": {
+          "type": "boolean",
+          "description": "Whether anyone may decide it now: its review is open, it is in effect, and a reviewer still qualifies (an assignee, or else another owner/admin of its workspace, or another Platform Admin for platform roles). Always true in the inbox."
         }
       },
       "description": "An item the viewer may decide, with its campaign's name and due date."
@@ -7517,6 +7532,11 @@
     },
     "post_api_v1_platform_access_reviews_by_id_items_by_item_reviewerResponse": {
       "$ref": "#/components/schemas/AccessReviewItem"
+    },
+    "get_api_v1_platform_access_reviews_by_id_exportRequest": false,
+    "get_api_v1_platform_access_reviews_by_id_exportResponse": {
+      "type": "string",
+      "minLength": 1
     }
   }
 }

@@ -3801,6 +3801,14 @@ async fn access_review_fixtures(c: &Client, admin: &Browser, f: &Fixture, pool: 
     let items = format!("{REVIEWS}/{}/items", id(&both));
     c.ok(&auditor, "GET", &target(&items, "limit=50&offset=0"), None)
         .await;
+    // #90 slice 5b: the review's CSV export.
+    c.ok(
+        &auditor,
+        "GET",
+        &format!("{REVIEWS}/{}/export", id(&both)),
+        None,
+    )
+    .await;
     // A filtered campaign closed (after its open-state positives above).
     c.ok(
         admin,

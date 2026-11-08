@@ -5573,6 +5573,84 @@
       },
       "scope": null,
       "token_policy": "Denied"
+    },
+    "GET /api/v1/platform/access-reviews/{id}/export": {
+      "access": "PlatformRead",
+      "operation": {
+        "description": "#90: Platform Admin/Auditor, browser only. Every item of the review as CSV, one row per item with its latest decision, decider and reviewer (emails as the platform user directory shows them); cells a spreadsheet would run as a formula are prefixed with an apostrophe. At most 5,000 rows. Audited access_review.exported with the row count.",
+        "x-omg-body-absent": true,
+        "responses": {
+          "200": {
+            "description": "CSV text (header row, then one row per item), never a JSON document.",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "X-Content-Type-Options": {
+                "required": true,
+                "schema": {
+                  "const": "nosniff"
+                }
+              },
+              "Content-Disposition": {
+                "required": true,
+                "schema": {
+                  "const": "attachment; filename=\"access-review.csv\""
+                }
+              }
+            },
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^item_id,subject_kind,workspace_id,workspace_name,user_id,email,display_name,role,source,granted_at,active,reviewable,decision,decided_by,decided_by_email,decided_at,reviewer_user_id,reviewer_email"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or malformed extraction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown campaign"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ]
+      },
+      "scope": null,
+      "token_policy": "Denied"
     }
   }
 }
