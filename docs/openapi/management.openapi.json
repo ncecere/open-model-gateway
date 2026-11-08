@@ -3746,6 +3746,10 @@
           "id": {
             "$ref": "#/components/schemas/IdentityUuid"
           },
+          "reviewable": {
+            "description": "Whether anyone may decide it now: in effect, with a reviewer who still qualifies (an assignee, or else another owner/admin of its workspace, or another Platform Admin for platform roles).",
+            "type": "boolean"
+          },
           "reviewer_user_id": {
             "$ref": "#/components/schemas/IdentityNullableUuid"
           },
@@ -3801,7 +3805,8 @@
           "decided_at",
           "reviewer_user_id",
           "campaign_name",
-          "due_at"
+          "due_at",
+          "reviewable"
         ],
         "type": "object"
       },
@@ -3847,6 +3852,10 @@
           "id": {
             "$ref": "#/components/schemas/IdentityUuid"
           },
+          "reviewable": {
+            "description": "Whether anyone may decide it now: in effect, with a reviewer who still qualifies (an assignee, or else another owner/admin of its workspace, or another Platform Admin for platform roles).",
+            "type": "boolean"
+          },
           "reviewer_user_id": {
             "$ref": "#/components/schemas/IdentityNullableUuid"
           },
@@ -3900,7 +3909,8 @@
           "decision",
           "decided_by",
           "decided_at",
-          "reviewer_user_id"
+          "reviewer_user_id",
+          "reviewable"
         ],
         "type": "object"
       },
@@ -3941,6 +3951,10 @@
           "id": {
             "$ref": "#/components/schemas/IdentityUuid"
           },
+          "reviewable": {
+            "description": "Whether anyone may decide it now: in effect, with a reviewer who still qualifies (an assignee, or else another owner/admin of its workspace, or another Platform Admin for platform roles).",
+            "type": "boolean"
+          },
           "reviewer_user_id": {
             "$ref": "#/components/schemas/IdentityNullableUuid"
           },
@@ -3994,7 +4008,8 @@
           "decision",
           "decided_by",
           "decided_at",
-          "reviewer_user_id"
+          "reviewer_user_id",
+          "reviewable"
         ],
         "type": "object"
       },
@@ -44975,6 +44990,11 @@
       "get_api_v1_platform_access_reviews_by_idResponse": {
         "$ref": "#/components/schemas/AccessReviewCampaignDetail"
       },
+      "get_api_v1_platform_access_reviews_by_id_exportRequest": false,
+      "get_api_v1_platform_access_reviews_by_id_exportResponse": {
+        "minLength": 1,
+        "type": "string"
+      },
       "get_api_v1_platform_access_reviews_by_id_itemsRequest": false,
       "get_api_v1_platform_access_reviews_by_id_itemsResponse": {
         "additionalProperties": false,
@@ -54629,6 +54649,113 @@
         },
         "x-omg-response-schema": {
           "$ref": "#/components/schemas/post_api_v1_platform_access_reviews_by_id_closeResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/api/v1/platform/access-reviews/{id}/export": {
+      "get": {
+        "description": "#90: Platform Admin/Auditor, browser only. Every item of the review as CSV, one row per item with its latest decision, decider and reviewer (emails as the platform user directory shows them); cells a spreadsheet would run as a formula are prefixed with an apostrophe. At most 5,000 rows. Audited access_review.exported with the row count.",
+        "operationId": "get_api_v1_platform_access_reviews_by_id_export",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "minLength": 1,
+                  "pattern": "^item_id,subject_kind,workspace_id,workspace_name,user_id,email,display_name,role,source,granted_at,active,reviewable,decision,decided_by,decided_by_email,decided_at,reviewer_user_id,reviewer_email",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "CSV text (header row, then one row per item), never a JSON document.",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Content-Disposition": {
+                "required": true,
+                "schema": {
+                  "const": "attachment; filename=\"access-review.csv\""
+                }
+              },
+              "X-Content-Type-Options": {
+                "required": true,
+                "schema": {
+                  "const": "nosniff"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Invalid input or malformed extraction"
+          },
+          "401": {
+            "$ref": "#/components/responses/ManagementMiddleware401Variant2"
+          },
+          "403": {
+            "$ref": "#/components/responses/ManagementMiddleware403Variant3"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown campaign"
+          },
+          "413": {
+            "$ref": "#/components/responses/ManagementMiddleware413Variant1"
+          },
+          "429": {
+            "$ref": "#/components/responses/ManagementMiddleware429Variant1"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+          }
+        },
+        "security": [
+          {
+            "browserSession": []
+          }
+        ],
+        "x-omg-access": "PlatformRead",
+        "x-omg-body-absent": true,
+        "x-omg-middleware-responses": {
+          "$ref": "#/x-omg-middleware-contracts/management"
+        },
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_api_v1_platform_access_reviews_by_id_exportRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_api_v1_platform_access_reviews_by_id_exportResponse"
         },
         "x-omg-token-policy": "Denied"
       }

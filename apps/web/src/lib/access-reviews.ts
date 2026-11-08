@@ -27,6 +27,8 @@ export type ReviewItem = {
   workspace_id: string | null; workspace_name: string | null; user_id: string; email: string | null; display_name: string | null;
   role: "owner" | "admin" | "member" | "auditor"; source: "manual" | "group" | "bootstrap"; granted_at: string; active: boolean;
   decision: ReviewDecision | null; decided_by: string | null; decided_at: string | null; reviewer_user_id: string | null;
+  /** Whether anyone may decide it now (#469). */
+  reviewable: boolean;
 };
 export type InboxItem = ReviewItem & { campaign_name: string; due_at: string };
 
@@ -34,6 +36,7 @@ export const reviewsPath = `${platformPath}/access-reviews`;
 export const reviewPath = (id: string) => `${reviewsPath}/${encodeURIComponent(id)}`;
 export const reviewItemsPath = (id: string) => `${reviewPath(id)}/items`;
 export const reviewClosePath = (id: string) => `${reviewPath(id)}/close`;
+export const reviewExportPath = (id: string) => `${reviewPath(id)}/export`;
 export const reviewerPath = (id: string, item: string) => `${reviewPath(id)}/items/${encodeURIComponent(item)}/reviewer`;
 export const inboxPath = "/api/v1/me/access-reviews";
 export const decisionPath = (item: string) => `${inboxPath}/${encodeURIComponent(item)}/decision`;

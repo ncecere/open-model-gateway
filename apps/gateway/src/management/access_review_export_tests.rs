@@ -68,11 +68,9 @@ async fn platform_readers_export_every_item_with_its_decision(pool: PgPool) {
         let (status, headers, body) = export(&f, who, id(&c)).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(headers["content-type"], "text/csv; charset=utf-8");
-        assert!(
-            headers["content-disposition"]
-                .to_str()
-                .unwrap()
-                .starts_with("attachment; filename=\"access-review-")
+        assert_eq!(
+            headers["content-disposition"],
+            "attachment; filename=\"access-review.csv\""
         );
         assert_eq!(headers["cache-control"], "no-store");
         let lines: Vec<&str> = body.split("\r\n").filter(|l| !l.is_empty()).collect();
@@ -83,9 +81,9 @@ async fn platform_readers_export_every_item_with_its_decision(pool: PgPool) {
         assert_eq!(lines.len() - 1, c["item_count"].as_u64().unwrap() as usize);
         let member = lines
             .iter()
-            .find(|l| l.starts_with(&member_item.to_string()))
+            .find(|l| l.starts_with(&format!("\"{member_item}\"")))
             .unwrap();
-        assert!(member.contains(",keep,"), "{member}");
+        assert!(member.contains(",\"keep\","), "{member}");
         assert!(member.contains("owner@example.test"), "the decider's email");
         assert!(
             member.contains("\"'=HYPERLINK(\"\"http://x\"\")\""),

@@ -13,7 +13,7 @@
  */
 import { ClipboardCheck, Plus } from "lucide-react";
 import { api, platformPath, type Session } from "../lib/api";
-import { accessText, itemLabel, removalTarget, campaignState, campaignStateLabels, campaignStateTone, decisionLabels, decisionPath, decisionTone, inboxPath, personText, removalConsequence, reviewClosePath, reviewerPath, reviewItemsPath, reviewPath, reviewsPath, sourceLabels, subjectLabels, type InboxItem, type ReviewCampaign, type ReviewCampaignDetail, type ReviewItem } from "../lib/access-reviews";
+import { accessText, itemLabel, removalTarget, campaignState, campaignStateLabels, campaignStateTone, decisionLabels, decisionPath, decisionTone, inboxPath, personText, removalConsequence, reviewClosePath, reviewExportPath, reviewerPath, reviewItemsPath, reviewPath, reviewsPath, sourceLabels, subjectLabels, type InboxItem, type ReviewCampaign, type ReviewCampaignDetail, type ReviewItem } from "../lib/access-reviews";
 import { nameField, type Field } from "../lib/forms";
 import type { DirectoryUser, DirectoryWorkspace } from "../lib/people";
 import { Button, ErrorNotice, Heading, Inline, Stack, useAction, useApi } from "../components/ui";
@@ -21,6 +21,7 @@ import { DirectoryTable } from "../components/people";
 import { ResourceLink } from "../components/navigation-link";
 import { useResourceName } from "../components/layout/breadcrumbs";
 import { StatusBadge } from "../components/ui/badge/badge";
+import { TextLink } from "../components/ui/text-link/text-link";
 import { CellText, type DataTableColumn } from "../components/ui/data-table/data-table";
 import s from "./shared.module.css";
 
@@ -130,12 +131,12 @@ export function AccessReviewDetail({ session, id }: { session: Session; id: stri
     personColumn<ReviewItem>(),
     accessColumn<ReviewItem>(),
     { id: "decision", header: "Decision", accessor: i => i.decision ?? "", cell: i => <DecisionCell item={i} /> },
-    { id: "reviewer", header: "Reviewer", accessor: i => i.reviewer_user_id ?? "", cell: i => i.reviewer_user_id ? <span title="An assignee who can no longer review it is ignored: the automatic reviewers decide again.">Assigned</span> : <span className={s.muted}>Automatic</span> },
+    { id: "reviewer", header: "Reviewer", accessor: i => i.active && !i.reviewable ? "none" : i.reviewer_user_id ?? "", cell: i => i.active && !i.reviewable && !i.decision ? <StatusBadge tone="warning">No reviewer</StatusBadge> : i.reviewer_user_id ? <span title="An assignee who can no longer review it is ignored: the automatic reviewers decide again.">Assigned</span> : <span className={s.muted}>Automatic</span> },
   ];
   const summary = `${n.by_decision.pending} undecided · ${n.by_decision.keep} kept · ${n.by_decision.remove} removed · ${n.by_decision.flag_idp} flagged${n.without_reviewer ? ` · ${n.without_reviewer} without a reviewer` : ""}${n.inactive ? ` · ${n.inactive} no longer in effect` : ""}`;
   return <Stack gap={6} className={s.page}>
     <Heading title={c.name} description={`${c.subjects.map(x => subjectLabels[x]).join(" and ")} · ${c.item_count} items · due ${new Date(c.due_at).toLocaleDateString()} · ${summary}`}
-      actions={<Inline gap={2}><StatusBadge tone={campaignStateTone[state]}>{campaignStateLabels[state]}</StatusBadge>{writable && open && <Button variant="secondary" onClick={close}>Close review</Button>}</Inline>} />
+      actions={<Inline gap={2}><StatusBadge tone={campaignStateTone[state]}>{campaignStateLabels[state]}</StatusBadge><TextLink href={reviewExportPath(id)} download>Export CSV</TextLink>{writable && open && <Button variant="secondary" onClick={close}>Close review</Button>}</Inline>} />
     <DirectoryTable<ReviewItem> path={reviewItemsPath(id)} label="Items" storageKey="access-review-items" columns={columns} rowKey={i => i.id} rowLabel={itemLabel}
       rowActions={i => !writable || !open || i.user_id === session.user.id ? [] : [
         { label: "Assign reviewer…", hidden: !i.active, onSelect: () => assign(i) },

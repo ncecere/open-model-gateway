@@ -33,13 +33,26 @@ const LATEST_DECISION: &str = "LEFT JOIN LATERAL (SELECT x.decision,x.decided_by
 /// An item as reviewers and platform readers see it: the snapshot's role,
 /// source and grant time; the workspace name and person as they are now;
 /// whether it is still in effect; the latest decision and assignment.
-const ITEM_JSON: &str = "jsonb_build_object('id',i.id,'campaign_id',i.campaign_id,'subject_kind',i.subject_kind,'workspace_id',i.workspace_id,'workspace_name',w.name,'user_id',i.user_id,'email',u.email,'display_name',u.display_name,'role',i.role,'source',i.source,'granted_at',i.granted_at,'active',access_review_item_active(i.id),'decision',d.decision,'decided_by',d.decided_by,'decided_at',d.decided_at,'reviewer_user_id',a.reviewer_user_id)";
+const ITEM_JSON: &str = "jsonb_build_object('id',i.id,'campaign_id',i.campaign_id,'subject_kind',i.subject_kind,'workspace_id',i.workspace_id,'workspace_name',w.name,'user_id',i.user_id,'email',u.email,'display_name',u.display_name,'role',i.role,'source',i.source,'granted_at',i.granted_at,'active',access_review_item_active(i.id),'decision',d.decision,'decided_by',d.decided_by,'decided_at',d.decided_at,'reviewer_user_id',a.reviewer_user_id,'reviewable',(access_review_item_active(i.id) AND ((a.reviewer_user_id IS NOT NULL AND access_review_candidate(i.id,a.reviewer_user_id)) OR CASE WHEN i.subject_kind='workspace_membership' THEN EXISTS (SELECT 1 FROM rv_ws x WHERE x.workspace_id=i.workspace_id AND cardinality(array_remove(x.ids,i.user_id))>0) ELSE EXISTS (SELECT 1 FROM rv_admins y WHERE y.user_id<>i.user_id) END)))";
+/// Whether anyone may decide item `i` now (#469): it is in effect and has a
+/// reviewer who still qualifies (an assignee, or else another owner/admin of
+/// its workspace, or another Platform Admin for platform roles). Needs the
+/// [`reviewer_sets`] CTEs and the latest assignment `a`.
+const REVIEWABLE: &str = "(access_review_item_active(i.id) AND ((a.reviewer_user_id IS NOT NULL AND access_review_candidate(i.id,a.reviewer_user_id)) OR CASE WHEN i.subject_kind='workspace_membership' THEN EXISTS (SELECT 1 FROM rv_ws x WHERE x.workspace_id=i.workspace_id AND cardinality(array_remove(x.ids,i.user_id))>0) ELSE EXISTS (SELECT 1 FROM rv_admins y WHERE y.user_id<>i.user_id) END))";
+/// CTEs for [`REVIEWABLE`], computed once per query: the Platform Admins, and
+/// the owners and admins of each workspace with items in `campaigns`.
+fn reviewer_sets(campaigns: &str) -> String {
+    format!(
+        "rv_admins AS MATERIALIZED (SELECT r.user_id FROM effective_platform_roles r WHERE r.role='admin'), rv_ws AS MATERIALIZED (SELECT e.workspace_id, array_agg(e.user_id) AS ids FROM effective_workspace_memberships e WHERE e.role IN ('owner','admin') AND e.workspace_id IN (SELECT ri.workspace_id FROM access_review_items ri WHERE ri.campaign_id IN ({campaigns})) GROUP BY e.workspace_id)"
+    )
+}
 const ITEM_FROM: &str = "access_review_items i JOIN users u ON u.id=i.user_id LEFT JOIN workspaces w ON w.id=i.workspace_id";
 
 /// One campaign with its item counts (by kind, by source, and how many items'
 /// grants are no longer active).
 async fn one(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> ApiResult {
-    let v: Value = sqlx::query_scalar(&format!("SELECT {CAMPAIGN_JSON} || jsonb_build_object('counts',(SELECT jsonb_build_object('by_kind',jsonb_build_object('workspace_membership',count(*) FILTER (WHERE i.subject_kind='workspace_membership'),'platform_role',count(*) FILTER (WHERE i.subject_kind='platform_role')),'by_source',jsonb_build_object('manual',count(*) FILTER (WHERE i.source='manual'),'group',count(*) FILTER (WHERE i.source='group'),'bootstrap',count(*) FILTER (WHERE i.source='bootstrap')),'inactive',count(*) FILTER (WHERE NOT access_review_item_active(i.id)),'by_decision',jsonb_build_object('pending',count(*) FILTER (WHERE d.decision IS NULL),'keep',count(*) FILTER (WHERE d.decision='keep'),'flag_idp',count(*) FILTER (WHERE d.decision='flag_idp'),'remove',count(*) FILTER (WHERE d.decision='remove')),'without_reviewer',count(*) FILTER (WHERE access_review_item_active(i.id) AND NOT (a.reviewer_user_id IS NOT NULL AND access_review_candidate(i.id,a.reviewer_user_id)) AND NOT EXISTS (SELECT FROM effective_platform_roles r LEFT JOIN effective_workspace_memberships e ON e.user_id=r.user_id AND e.workspace_id=i.workspace_id AND e.role IN ('owner','admin') WHERE r.user_id<>i.user_id AND CASE WHEN i.subject_kind='workspace_membership' THEN e.user_id IS NOT NULL ELSE r.role='admin' END))) FROM access_review_items i {LATEST_DECISION} WHERE i.campaign_id=c.id)) FROM access_review_campaigns c WHERE c.id=$1"))
+    let sets = reviewer_sets("$1");
+    let v: Value = sqlx::query_scalar(&format!("WITH {sets} SELECT {CAMPAIGN_JSON} || jsonb_build_object('counts',(SELECT jsonb_build_object('by_kind',jsonb_build_object('workspace_membership',count(*) FILTER (WHERE i.subject_kind='workspace_membership'),'platform_role',count(*) FILTER (WHERE i.subject_kind='platform_role')),'by_source',jsonb_build_object('manual',count(*) FILTER (WHERE i.source='manual'),'group',count(*) FILTER (WHERE i.source='group'),'bootstrap',count(*) FILTER (WHERE i.source='bootstrap')),'inactive',count(*) FILTER (WHERE NOT access_review_item_active(i.id)),'by_decision',jsonb_build_object('pending',count(*) FILTER (WHERE d.decision IS NULL),'keep',count(*) FILTER (WHERE d.decision='keep'),'flag_idp',count(*) FILTER (WHERE d.decision='flag_idp'),'remove',count(*) FILTER (WHERE d.decision='remove')),'without_reviewer',count(*) FILTER (WHERE access_review_item_active(i.id) AND NOT {REVIEWABLE})) FROM access_review_items i {LATEST_DECISION} WHERE i.campaign_id=c.id)) FROM access_review_campaigns c WHERE c.id=$1"))
         .bind(id)
         .fetch_optional(&mut **tx)
         .await?
@@ -96,7 +109,8 @@ pub(super) async fn items(
     if !exists {
         return Err(missing());
     }
-    let data: Vec<Value> = sqlx::query_scalar(&format!("SELECT {ITEM_JSON} FROM {ITEM_FROM} {LATEST_DECISION} WHERE i.campaign_id=$1 ORDER BY i.subject_kind DESC, i.workspace_id, i.user_id, i.id LIMIT $2 OFFSET $3"))
+    let sets = reviewer_sets("$1");
+    let data: Vec<Value> = sqlx::query_scalar(&format!("WITH {sets} SELECT {ITEM_JSON} FROM {ITEM_FROM} {LATEST_DECISION} WHERE i.campaign_id=$1 ORDER BY i.subject_kind DESC, i.workspace_id, i.user_id, i.id LIMIT $2 OFFSET $3"))
         .bind(id)
         .bind(l)
         .bind(o)
@@ -283,8 +297,9 @@ pub(super) struct Assignment {
 
 /// One item as the API shows it.
 async fn one_item(tx: &mut Transaction<'_, Postgres>, item: Uuid) -> ApiResult {
+    let sets = reviewer_sets("SELECT campaign_id FROM access_review_items WHERE id=$1");
     let v: Value = sqlx::query_scalar(&format!(
-        "SELECT {ITEM_JSON} FROM {ITEM_FROM} {LATEST_DECISION} WHERE i.id=$1"
+        "WITH {sets} SELECT {ITEM_JSON} FROM {ITEM_FROM} {LATEST_DECISION} WHERE i.id=$1"
     ))
     .bind(item)
     .fetch_optional(&mut **tx)
@@ -372,7 +387,8 @@ pub(super) async fn inbox(
         "(SELECT workspace_id FROM ws)",
         "(SELECT yes FROM adm)",
     );
-    let data: Vec<Value> = sqlx::query_scalar(&format!("WITH ws AS MATERIALIZED (SELECT e.workspace_id FROM effective_workspace_memberships e WHERE e.user_id=$1 AND e.role IN ('owner','admin')), adm AS MATERIALIZED (SELECT EXISTS (SELECT FROM effective_platform_roles r WHERE r.user_id=$1 AND r.role='admin') AS yes), cand AS MATERIALIZED (SELECT i.id FROM access_review_items i JOIN access_review_campaigns c ON c.id=i.campaign_id AND c.closed_at IS NULL WHERE i.workspace_id IN (SELECT workspace_id FROM ws) UNION SELECT i.id FROM access_review_items i JOIN access_review_campaigns c ON c.id=i.campaign_id AND c.closed_at IS NULL WHERE i.subject_kind='platform_role' AND (SELECT yes FROM adm) UNION SELECT y.item_id FROM access_review_assignments y WHERE y.reviewer_user_id=$1) SELECT {ITEM_JSON} || jsonb_build_object('campaign_name',c.name,'due_at',c.due_at) FROM cand JOIN {ITEM_FROM} ON i.id=cand.id JOIN access_review_campaigns c ON c.id=i.campaign_id AND c.closed_at IS NULL {LATEST_DECISION} {reviews} ORDER BY c.due_at, c.id, i.subject_kind DESC, i.workspace_id, i.user_id, i.id LIMIT $2 OFFSET $3"))
+    let sets = reviewer_sets("SELECT id FROM access_review_campaigns WHERE closed_at IS NULL");
+    let data: Vec<Value> = sqlx::query_scalar(&format!("WITH {sets}, ws AS MATERIALIZED (SELECT e.workspace_id FROM effective_workspace_memberships e WHERE e.user_id=$1 AND e.role IN ('owner','admin')), adm AS MATERIALIZED (SELECT EXISTS (SELECT FROM effective_platform_roles r WHERE r.user_id=$1 AND r.role='admin') AS yes), cand AS MATERIALIZED (SELECT i.id FROM access_review_items i JOIN access_review_campaigns c ON c.id=i.campaign_id AND c.closed_at IS NULL WHERE i.workspace_id IN (SELECT workspace_id FROM ws) UNION SELECT i.id FROM access_review_items i JOIN access_review_campaigns c ON c.id=i.campaign_id AND c.closed_at IS NULL WHERE i.subject_kind='platform_role' AND (SELECT yes FROM adm) UNION SELECT y.item_id FROM access_review_assignments y WHERE y.reviewer_user_id=$1) SELECT {ITEM_JSON} || jsonb_build_object('campaign_name',c.name,'due_at',c.due_at) FROM cand JOIN {ITEM_FROM} ON i.id=cand.id JOIN access_review_campaigns c ON c.id=i.campaign_id AND c.closed_at IS NULL {LATEST_DECISION} {reviews} ORDER BY c.due_at, c.id, i.subject_kind DESC, i.workspace_id, i.user_id, i.id LIMIT $2 OFFSET $3"))
         .bind(u.user_id)
         .bind(l)
         .bind(o)
@@ -678,12 +694,110 @@ pub(super) async fn assign(
     Ok(result)
 }
 
+/// Columns of [`export`], in order.
+const EXPORT_COLUMNS: [&str; 18] = [
+    "item_id",
+    "subject_kind",
+    "workspace_id",
+    "workspace_name",
+    "user_id",
+    "email",
+    "display_name",
+    "role",
+    "source",
+    "granted_at",
+    "active",
+    "reviewable",
+    "decision",
+    "decided_by",
+    "decided_by_email",
+    "decided_at",
+    "reviewer_user_id",
+    "reviewer_email",
+];
+
+/// `GET /api/v1/platform/access-reviews/{id}/export`: every item of a
+/// campaign with its latest decision, decider and reviewer, as CSV (cells a
+/// spreadsheet would run as a formula are neutralized). Platform Admins and
+/// Auditors; audited with the item count. At most 5,000 rows (a campaign's
+/// cap).
+pub(super) async fn export(
+    State(s): State<Store>,
+    Extension(u): Extension<BrowserPrincipal>,
+    Path(id): Path<Uuid>,
+) -> Result<Response, ManagementError> {
+    let mut tx = crate::db::begin(&s.pool).await?;
+    resources::platform_read(&mut tx, &u).await?;
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM access_review_campaigns WHERE id=$1)")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+    if !exists {
+        return Err(missing().into());
+    }
+    let sets = reviewer_sets("$1");
+    let rows: Vec<Value> = sqlx::query_scalar(&format!("WITH {sets} SELECT jsonb_build_array(i.id,i.subject_kind,i.workspace_id,w.name,i.user_id,u.email,u.display_name,i.role,i.source,i.granted_at,access_review_item_active(i.id),{REVIEWABLE},d.decision,d.decided_by,(SELECT x.email FROM users x WHERE x.id=d.decided_by),d.decided_at,a.reviewer_user_id,(SELECT y.email FROM users y WHERE y.id=a.reviewer_user_id)) FROM {ITEM_FROM} {LATEST_DECISION} WHERE i.campaign_id=$1 ORDER BY i.subject_kind DESC, i.workspace_id, i.user_id, i.id"))
+        .bind(id)
+        .fetch_all(&mut *tx)
+        .await?;
+    audit(
+        &mut tx,
+        &u,
+        None,
+        "access_review.exported",
+        "access_review",
+        Some(id),
+        json!({"count":rows.len()}),
+    )
+    .await?;
+    tx.commit().await?;
+    let mut csv = EXPORT_COLUMNS.join(",");
+    csv.push_str("\r\n");
+    for row in &rows {
+        let cells: Vec<String> = row
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|v| {
+                governance::reports::csv_cell(&match v {
+                    Value::Null => String::new(),
+                    Value::String(s) => s.clone(),
+                    v => v.to_string(),
+                })
+            })
+            .collect();
+        csv.push_str(&cells.join(","));
+        csv.push_str("\r\n");
+    }
+    Ok((
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "text/csv; charset=utf-8".to_owned(),
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                "attachment; filename=\"access-review.csv\"".to_owned(),
+            ),
+            (axum::http::header::CACHE_CONTROL, "no-store".to_owned()),
+            (
+                axum::http::header::X_CONTENT_TYPE_OPTIONS,
+                "nosniff".to_owned(),
+            ),
+        ],
+        csv,
+    )
+        .into_response())
+}
+
 pub(super) fn routes() -> Router<Store> {
     Router::new()
         .route("/api/v1/platform/access-reviews", get(list).post(create))
         .route("/api/v1/platform/access-reviews/{id}", get(detail))
         .route("/api/v1/platform/access-reviews/{id}/items", get(items))
         .route("/api/v1/platform/access-reviews/{id}/close", post(close))
+        .route("/api/v1/platform/access-reviews/{id}/export", get(export))
         .route(
             "/api/v1/platform/access-reviews/{id}/items/{item}/reviewer",
             post(assign),
