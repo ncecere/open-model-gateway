@@ -181,3 +181,196 @@ async fn each_item_says_whether_anyone_may_review_it(pool: PgPool) {
         (StatusCode::OK, Some(true))
     );
 }
+
+async fn revoke_membership(pool: &PgPool, ws: Uuid, user: Uuid) {
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT omg_scope_lock_exclusive(72419512, omg_scope_key($1))")
+        .bind(user)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE workspace_membership_grants SET revoked_at=now() WHERE workspace_id=$1 AND user_id=$2 AND revoked_at IS NULL")
+        .bind(ws).bind(user).execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn reviewable_agrees_with_who_may_decide(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let second = user(&pool, "second-member", "user").await;
+    member(&pool, f.team, second.user_id, "member").await;
+    member(&pool, f.team, f.outsider.user_id, "admin").await;
+    let open = start(&f).await;
+    let closed = start(&f).await;
+    let item_of = async |c: &Value, user: Uuid, ws: Option<Uuid>| -> String {
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM access_review_items WHERE campaign_id=$1 AND user_id=$2 AND workspace_id IS NOT DISTINCT FROM $3")
+            .bind(id(c)).bind(user).bind(ws).fetch_one(&pool).await.unwrap().to_string()
+    };
+    // An assignee who still qualifies (a Platform Admin), and one who stops
+    // qualifying (the Team admin, who then loses the role).
+    let owner_item = item_of(&open, f.owner.user_id, Some(f.team)).await;
+    let member_item = item_of(&open, f.member.user_id, Some(f.team)).await;
+    for (item, reviewer) in [
+        (&owner_item, f.admin.user_id),
+        (&member_item, f.outsider.user_id),
+    ] {
+        let (status, _) = call(
+            &f.s,
+            &f.admin,
+            "POST",
+            &format!("{REVIEWS}/{}/items/{item}/reviewer", id(&open)),
+            json!({"user_id":reviewer}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    revoke_membership(&pool, f.team, f.outsider.user_id).await;
+    // An item no longer in effect.
+    revoke_membership(&pool, f.team, second.user_id).await;
+    let (status, _) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        &format!("{REVIEWS}/{}/close", id(&closed)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let mut compared = 0;
+    for c in [&open, &closed] {
+        let (_, page) = call(
+            &f.s,
+            &f.auditor,
+            "GET",
+            &format!("{REVIEWS}/{}/items?limit=200", id(c)),
+            Value::Null,
+        )
+        .await;
+        for item in page["data"].as_array().unwrap() {
+            let truth: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM users r WHERE access_review_may_decide($1, r.id))",
+            )
+            .bind(Uuid::parse_str(item["id"].as_str().unwrap()).unwrap())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                item["reviewable"].as_bool().unwrap(),
+                item["active"] == true && truth,
+                "reviewable disagrees with who may decide"
+            );
+            compared += 1;
+        }
+    }
+    assert!(compared >= 10);
+    // The inbox only holds items its viewer may decide: all reviewable.
+    let (_, inbox) = call(
+        &f.s,
+        &f.admin,
+        "GET",
+        "/api/v1/me/access-reviews?limit=200",
+        Value::Null,
+    )
+    .await;
+    assert!(!inbox["data"].as_array().unwrap().is_empty());
+    assert!(
+        inbox["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["reviewable"] == true)
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn export_cells_are_safe_and_complete(pool: PgPool) {
+    let f = fixture(&pool).await;
+    // A workspace name and an email a spreadsheet would run, a name with a quote and a line break.
+    sqlx::query("UPDATE workspaces SET name='+SUM(A1)' WHERE id=$1")
+        .bind(f.team)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE users SET email='@evil@example.test', display_name='Quote \"x\" here' WHERE id=$1",
+    )
+    .bind(f.member.user_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let c = start(&f).await;
+    let auditor_item: Uuid = sqlx::query_scalar(
+        "SELECT id FROM access_review_items WHERE campaign_id=$1 AND user_id=$2",
+    )
+    .bind(id(&c))
+    .bind(f.auditor.user_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let second = user(&pool, "second-admin", "admin").await;
+    let (status, _) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        &format!("{REVIEWS}/{}/items/{auditor_item}/reviewer", id(&c)),
+        json!({"user_id":second.user_id}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    // A person whose data is removed after the snapshot: empty cells, never stale values.
+    sqlx::query("UPDATE users SET email=NULL, display_name=NULL WHERE id=$1")
+        .bind(f.outsider.user_id)
+        .execute(&pool)
+        .await
+        .ok();
+    let (status, headers, body) = export(&f, &f.auditor, id(&c)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["x-content-type-options"], "nosniff");
+    assert!(body.contains("\"'+SUM(A1)\""), "workspace name neutralized");
+    assert!(
+        body.contains("\"'@evil@example.test\""),
+        "email neutralized"
+    );
+    assert!(
+        body.contains("\"Quote \"\"x\"\" here\""),
+        "quotes doubled inside the cell"
+    );
+    let assigned = body
+        .split("\r\n")
+        .find(|l| l.starts_with(&format!("\"{auditor_item}\"")))
+        .unwrap();
+    assert!(
+        assigned.ends_with(&format!(
+            "\"{}\",\"second-admin@example.test\"",
+            second.user_id
+        )),
+        "the assigned reviewer"
+    );
+    // A closed review exports too; HEAD exports and records nothing.
+    let (status, _) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        &format!("{REVIEWS}/{}/close", id(&c)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(export(&f, &f.auditor, id(&c)).await.0, StatusCode::OK);
+    let head = routes()
+        .layer(Extension(ManagementPrincipal::Browser(f.auditor.clone())))
+        .layer(Extension(f.auditor.clone()))
+        .with_state(f.s.clone())
+        .oneshot(
+            Request::builder()
+                .method("HEAD")
+                .uri(format!("{REVIEWS}/{}/export", id(&c)))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(head.status(), StatusCode::METHOD_NOT_ALLOWED);
+    let audited: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE action='access_review.exported' AND resource_id=$1").bind(id(&c)).fetch_one(&pool).await.unwrap();
+    assert_eq!(audited, 2);
+}

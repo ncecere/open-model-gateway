@@ -131,7 +131,7 @@ export function AccessReviewDetail({ session, id }: { session: Session; id: stri
     personColumn<ReviewItem>(),
     accessColumn<ReviewItem>(),
     { id: "decision", header: "Decision", accessor: i => i.decision ?? "", cell: i => <DecisionCell item={i} /> },
-    { id: "reviewer", header: "Reviewer", accessor: i => i.active && !i.reviewable ? "none" : i.reviewer_user_id ?? "", cell: i => i.active && !i.reviewable && !i.decision ? <StatusBadge tone="warning">No reviewer</StatusBadge> : i.reviewer_user_id ? <span title="An assignee who can no longer review it is ignored: the automatic reviewers decide again.">Assigned</span> : <span className={s.muted}>Automatic</span> },
+    { id: "reviewer", header: "Reviewer", accessor: i => i.active && !i.reviewable ? "none" : i.reviewer_user_id ?? "", cell: i => i.active && !i.reviewable ? <StatusBadge tone="warning">No reviewer</StatusBadge> : i.reviewer_user_id ? <span title="An assignee who can no longer review it is ignored: the automatic reviewers decide again.">Assigned</span> : <span className={s.muted}>Automatic</span> },
   ];
   const summary = `${n.by_decision.pending} undecided · ${n.by_decision.keep} kept · ${n.by_decision.remove} removed · ${n.by_decision.flag_idp} flagged${n.without_reviewer ? ` · ${n.without_reviewer} without a reviewer` : ""}${n.inactive ? ` · ${n.inactive} no longer in effect` : ""}`;
   return <Stack gap={6} className={s.page}>

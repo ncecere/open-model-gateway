@@ -159,9 +159,10 @@ describe("An access review (#90)", () => {
     await waitFor(() => expect(writes(fetch).map(([p]) => p)).toEqual([reviewerPath("c-1", "i-2"), reviewerPath("c-1", "i-1"), reviewClosePath("c-1")]));
   });
   it("marks items nobody may review", async () => {
-    serve({ [reviewPath("c-1")]: () => campaign, [reviewItemsPath("c-1")]: () => ({ data: [{ ...base, reviewable: false, role: "owner" as const }] }) });
+    // Decided or not, as the count counts them.
+    serve({ [reviewPath("c-1")]: () => campaign, [reviewItemsPath("c-1")]: () => ({ data: [{ ...base, reviewable: false, role: "owner" as const }, { ...base, id: "i-9", user_id: "u-9", display_name: "Kept", reviewable: false, decision: "keep" as const }] }) });
     mount(<AccessReviewDetail session={admin} id="c-1" />);
-    expect(await screen.findByText("No reviewer")).toBeTruthy();
+    expect((await screen.findAllByText("No reviewer")).length).toBe(2);
   });
   it("offers no reviewer change on the admin's own access", async () => {
     serve({ [reviewPath("c-1")]: () => campaign, [reviewItemsPath("c-1")]: () => ({ data: [{ ...base, user_id: admin.user.id, subject_kind: "platform_role", workspace_id: null, workspace_name: null, role: "admin", display_name: "Me" }] }) });

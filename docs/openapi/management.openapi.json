@@ -3747,7 +3747,7 @@
             "$ref": "#/components/schemas/IdentityUuid"
           },
           "reviewable": {
-            "description": "Whether anyone may decide it now: in effect, with a reviewer who still qualifies (an assignee, or else another owner/admin of its workspace, or another Platform Admin for platform roles).",
+            "description": "Whether anyone may decide it now: its review is open, it is in effect, and a reviewer still qualifies (an assignee, or else another owner/admin of its workspace, or another Platform Admin for platform roles). Always true in the inbox.",
             "type": "boolean"
           },
           "reviewer_user_id": {
@@ -3853,7 +3853,7 @@
             "$ref": "#/components/schemas/IdentityUuid"
           },
           "reviewable": {
-            "description": "Whether anyone may decide it now: in effect, with a reviewer who still qualifies (an assignee, or else another owner/admin of its workspace, or another Platform Admin for platform roles).",
+            "description": "Whether anyone may decide it now: its review is open, it is in effect, and a reviewer still qualifies (an assignee, or else another owner/admin of its workspace, or another Platform Admin for platform roles). Always true in the inbox.",
             "type": "boolean"
           },
           "reviewer_user_id": {
@@ -3952,7 +3952,7 @@
             "$ref": "#/components/schemas/IdentityUuid"
           },
           "reviewable": {
-            "description": "Whether anyone may decide it now: in effect, with a reviewer who still qualifies (an assignee, or else another owner/admin of its workspace, or another Platform Admin for platform roles).",
+            "description": "Whether anyone may decide it now: its review is open, it is in effect, and a reviewer still qualifies (an assignee, or else another owner/admin of its workspace, or another Platform Admin for platform roles). Always true in the inbox.",
             "type": "boolean"
           },
           "reviewer_user_id": {
