@@ -839,32 +839,44 @@ async fn revoke_role(
     if !platform_role_valid(&role) {
         return Err(invalid());
     }
-    revoke_role_locked(&mut tx, &u, id, &role).await?;
+    revoke_role_locked(&mut tx, &u, id, &role, None).await?;
     tx.commit().await?;
     Ok(ok())
 }
-/// Revokes a person's manual and bootstrap grants of `role` under the
-/// exclusive catalog lock (`catalog_tx(write)`): the last Platform Admin and
-/// any workspace's last owner protected, the person deactivated if no
-/// platform role remains (entitlement loss); audited. Shared by the role
-/// route and #90 access review removals.
+/// Revokes a person's manual and bootstrap grants of `role` (or, with
+/// `only`, that one grant: #90 access review removals, where every other
+/// grant is its own item) under the exclusive catalog lock
+/// (`catalog_tx(write)`): the last Platform Admin and any workspace's last
+/// owner protected, counting every grant that stays; the person deactivated
+/// if no platform role remains (entitlement loss); audited.
 pub(super) async fn revoke_role_locked(
     tx: &mut Transaction<'_, Postgres>,
     u: &impl Actor,
     id: Uuid,
     role: &str,
+    only: Option<Uuid>,
 ) -> Result<(), ApiError> {
+    // The grants this revokes (without `only`: as before, every manual and
+    // bootstrap grant of the role, so group grants are the ones retained).
+    const REVOKED: &str = "user_id=$1 AND role=$2 AND source IN ('manual','bootstrap') AND revoked_at IS NULL AND ($3::uuid IS NULL OR id=$3)";
     if role == "admin" {
-        let retained:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM platform_role_grants WHERE user_id=$1 AND role='admin' AND source='group' AND revoked_at IS NULL)").bind(id).fetch_one(&mut **tx).await?;
+        let retained:bool=sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM platform_role_grants WHERE user_id=$1 AND role='admin' AND revoked_at IS NULL AND NOT ({REVOKED}))")).bind(id).bind(role).bind(only).fetch_one(&mut **tx).await?;
         if !retained {
             protect_admin(tx, id).await?;
         }
     }
-    let remaining:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM platform_role_grants WHERE user_id=$1 AND revoked_at IS NULL AND NOT(role=$2 AND source IN ('manual','bootstrap')))").bind(id).bind(role).fetch_one(&mut **tx).await?;
+    let remaining:bool=sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM platform_role_grants WHERE user_id=$1 AND revoked_at IS NULL AND NOT ({REVOKED}))")).bind(id).bind(role).bind(only).fetch_one(&mut **tx).await?;
     if !remaining {
         protect_owners(tx, id).await?;
     }
-    sqlx::query("UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND role=$2 AND source IN ('manual','bootstrap') AND revoked_at IS NULL").bind(id).bind(role).execute(&mut **tx).await?;
+    sqlx::query(&format!(
+        "UPDATE platform_role_grants SET revoked_at=now() WHERE {REVOKED}"
+    ))
+    .bind(id)
+    .bind(role)
+    .bind(only)
+    .execute(&mut **tx)
+    .await?;
     deactivate_unentitled(tx, &[id]).await?;
     audit(
         tx,

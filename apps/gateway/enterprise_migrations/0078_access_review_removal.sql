@@ -2,7 +2,7 @@
 -- in the same transaction through the existing removal paths (membership:
 -- the members path; platform role: the role path), so a remove decision is
 -- recorded only with the removal: a deferred check refuses any remove
--- decision whose access is still in effect at commit. remove applies only to
+-- decision whose own grant is not revoked at commit. remove applies only to
 -- manual or bootstrap access (group-provided access is flagged for the
 -- identity provider), and an owner's membership only by an owner of that
 -- workspace or a Platform Admin, as on the members routes.
@@ -31,9 +31,15 @@ BEGIN
  RETURN NEW;
 END $$;
 
+-- At commit, the item's own grant must be revoked (not merely the item
+-- inactive for another reason, such as its person or workspace disabled).
 CREATE FUNCTION access_review_removal_applied() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
 BEGIN
- IF NEW.decision = 'remove' AND public.access_review_item_active(NEW.item_id) THEN
+ IF NEW.decision = 'remove' AND NOT EXISTS (
+     SELECT FROM public.access_review_items i
+     LEFT JOIN public.workspace_membership_grants m ON m.id = i.membership_grant_id
+     LEFT JOIN public.platform_role_grants p ON p.id = i.platform_grant_id
+     WHERE i.id = NEW.item_id AND coalesce(m.revoked_at, p.revoked_at) IS NOT NULL) THEN
   RAISE EXCEPTION 'a remove decision is recorded only with the removal of the access' USING ERRCODE = '23514';
  END IF;
  RETURN NULL;

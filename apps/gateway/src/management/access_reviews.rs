@@ -404,6 +404,10 @@ pub(super) async fn decide(
     Ok(result)
 }
 
+/// An item as a removal needs it: kind, workspace, person, role, platform
+/// grant, and whether the viewer may decide it.
+type RemovalTarget = (String, Option<Uuid>, Uuid, String, Option<Uuid>, bool);
+
 /// A "remove" decision (#90 slice 3): the access is removed at once, in the
 /// same transaction, through the path the direct routes use (memberships:
 /// the members path, owner-only for owners, the last owner protected, keys
@@ -416,18 +420,32 @@ async fn remove(
     u: &BrowserPrincipal,
     item: Uuid,
 ) -> Result<Json<Value>, ManagementError> {
-    let found: Option<(String, Option<Uuid>, Uuid, String)> = sqlx::query_as(
-        "SELECT subject_kind, workspace_id, user_id, role FROM access_review_items WHERE id=$1",
+    // Authorized first, without any lock: someone who may not decide the
+    // item never takes a removal's locks (the exclusive catalog lock, or the
+    // person's scope). Everything is checked again under the locks.
+    let found: Option<RemovalTarget> = sqlx::query_as(
+        "SELECT subject_kind, workspace_id, user_id, role, platform_grant_id, access_review_may_decide(id,$2) FROM access_review_items WHERE id=$1",
     )
     .bind(item)
+    .bind(u.user_id)
     .fetch_optional(&s.pool)
     .await?;
-    let Some((kind, ws, subject, role)) = found else {
+    let Some((kind, ws, subject, role, platform_grant, true)) = found else {
         return Err(missing().into());
     };
     let mut tx = if kind == "workspace_membership" {
         let ws = ws.ok_or_else(missing)?;
         let mut tx = resources::installation_tx(s).await?;
+        // The workspace row, as the members routes lock it, then the
+        // member's and their key lineages' scopes with the reviewer's own in
+        // one canonical call. The reviewer's scope is taken exclusively (the
+        // call has one mode): it only holds the reviewer's own admission for
+        // the transaction, and keeps a concurrent demotion of the reviewer
+        // ordered with this removal.
+        sqlx::query("SELECT 1 FROM workspaces WHERE id=$1 FOR NO KEY UPDATE")
+            .bind(ws)
+            .execute(&mut *tx)
+            .await?;
         members::lock_member_removal(&mut tx, u, ws, subject, vec![locks::Scope::User(u.user_id)])
             .await?;
         tx
@@ -499,12 +517,14 @@ async fn remove(
         "access_review.decided",
         "access_review_item",
         Some(item),
-        json!({"kind":"remove"}),
+        json!({"kind":"remove","role":role}),
     )
     .await?;
+    // Only the item's own grant: another grant of the same role (manual,
+    // bootstrap or group) is a separate item, and stays.
     let removed = match ws {
         Some(ws) => members::revoke_member_locked(&mut tx, u, ws, subject).await,
-        None => directory::revoke_role_locked(&mut tx, u, subject, &role).await,
+        None => directory::revoke_role_locked(&mut tx, u, subject, &role, platform_grant).await,
     };
     if let Err(e) = removed {
         if e.0 == StatusCode::CONFLICT {

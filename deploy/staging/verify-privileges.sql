@@ -1295,6 +1295,15 @@ BEGIN
     -- 0078: a remove decision is recorded only with the removal of the access.
     BEGIN SET CONSTRAINTS access_review_removal_applied IMMEDIATE; INSERT INTO access_review_decisions(id,item_id,decision,decided_by) VALUES(gen_random_uuid(),it,'remove',t_reviewer); RAISE EXCEPTION 'remove recorded without the removal'; EXCEPTION WHEN check_violation THEN NULL; END;
     SET CONSTRAINTS access_review_removal_applied DEFERRED;
+    -- With the removal (the grant revoked under its scope lock), a remove decision commits.
+    BEGIN
+     INSERT INTO access_review_decisions(id,item_id,decision,decided_by) VALUES(gen_random_uuid(),it,'remove',t_reviewer);
+     PERFORM omg_scope_lock_exclusive(72419512, omg_scope_key(t_author));
+     UPDATE workspace_membership_grants SET revoked_at=now() WHERE id=g2;
+     SET CONSTRAINTS access_review_removal_applied IMMEDIATE;
+     RAISE EXCEPTION 'probe rollback' USING ERRCODE='P0001';
+    EXCEPTION WHEN raise_exception THEN NULL; END;
+    SET CONSTRAINTS access_review_removal_applied DEFERRED;
     BEGIN UPDATE access_review_decisions SET decision='flag_idp' WHERE item_id=it; RAISE EXCEPTION 'decision mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
     BEGIN DELETE FROM access_review_decisions WHERE item_id=it; RAISE EXCEPTION 'decision removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
     BEGIN DELETE FROM access_review_assignments WHERE item_id=it; RAISE EXCEPTION 'assignment removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
