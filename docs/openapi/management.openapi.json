@@ -3220,12 +3220,18 @@
                     "maximum": 5000,
                     "minimum": 0,
                     "type": "integer"
+                  },
+                  "remove": {
+                    "maximum": 5000,
+                    "minimum": 0,
+                    "type": "integer"
                   }
                 },
                 "required": [
                   "pending",
                   "keep",
-                  "flag_idp"
+                  "flag_idp",
+                  "remove"
                 ],
                 "type": "object"
               },
@@ -3382,12 +3388,18 @@
                     "maximum": 5000,
                     "minimum": 0,
                     "type": "integer"
+                  },
+                  "remove": {
+                    "maximum": 5000,
+                    "minimum": 0,
+                    "type": "integer"
                   }
                 },
                 "required": [
                   "pending",
                   "keep",
-                  "flag_idp"
+                  "flag_idp",
+                  "remove"
                 ],
                 "type": "object"
               },
@@ -3546,12 +3558,18 @@
                     "maximum": 5000,
                     "minimum": 0,
                     "type": "integer"
+                  },
+                  "remove": {
+                    "maximum": 5000,
+                    "minimum": 0,
+                    "type": "integer"
                   }
                 },
                 "required": [
                   "pending",
                   "keep",
-                  "flag_idp"
+                  "flag_idp",
+                  "remove"
                 ],
                 "type": "object"
               },
@@ -3705,6 +3723,7 @@
             "enum": [
               "keep",
               "flag_idp",
+              "remove",
               null
             ],
             "type": [
@@ -3808,6 +3827,7 @@
             "enum": [
               "keep",
               "flag_idp",
+              "remove",
               null
             ],
             "type": [
@@ -3904,7 +3924,8 @@
           "decision": {
             "enum": [
               "keep",
-              "flag_idp"
+              "flag_idp",
+              "remove"
             ],
             "type": "string"
           },
@@ -5745,6 +5766,9 @@
                   "access_review_item_inactive",
                   "access_review_limit",
                   "access_review_own_access",
+                  "access_review_owner_removal",
+                  "access_review_removal_refused",
+                  "access_review_remove_requires_manual",
                   "access_review_reviewer_ineligible",
                   "access_review_too_large",
                   "alert_rule_kind_fixed",
@@ -47630,7 +47654,8 @@
               "decision": {
                 "enum": [
                   "keep",
-                  "flag_idp"
+                  "flag_idp",
+                  "remove"
                 ],
                 "type": "string"
               }
@@ -47648,7 +47673,8 @@
               {
                 "enum": [
                   "keep",
-                  "flag_idp"
+                  "flag_idp",
+                  "remove"
                 ],
                 "type": "string"
               }
@@ -53085,7 +53111,7 @@
     },
     "/api/v1/me/access-reviews/{item}/decision": {
       "post": {
-        "description": "#90: records the signed-in reviewer's decision on an item (append-only; the latest counts; repeating one's own latest decision changes nothing). keep, or flag_idp for access provided by an identity provider group. An item the viewer may not decide (not theirs, unknown, or its campaign closed) is 404. 409: access_review_item_inactive (the access is no longer in effect), access_review_flag_requires_group.",
+        "description": "#90: records the signed-in reviewer's decision on an item (append-only; the latest counts; repeating one's own latest decision changes nothing). keep; flag_idp for access provided by an identity provider group; remove for manual or bootstrap access, which removes it at once through the same path as the direct routes (memberships: owner-only for owners, the last owner protected, keys revoked once no membership remains; platform roles: the last Platform Admin protected, entitlement loss when no role remains) and is final. An item the viewer may not decide (not theirs, unknown, or its campaign closed) is 404. 409: access_review_item_inactive (the access is no longer in effect), access_review_flag_requires_group, access_review_remove_requires_manual, access_review_owner_removal, access_review_removal_refused (the removal path refused it; nothing is recorded).",
         "operationId": "post_api_v1_me_access_reviews_by_item_decision",
         "parameters": [
           {
@@ -53157,7 +53183,7 @@
                 }
               }
             },
-            "description": "access_review_item_inactive or access_review_flag_requires_group"
+            "description": "access_review_item_inactive, access_review_flag_requires_group, access_review_remove_requires_manual, access_review_owner_removal or access_review_removal_refused"
           },
           "413": {
             "$ref": "#/components/responses/ManagementMiddleware413Variant1"

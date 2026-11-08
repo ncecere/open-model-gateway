@@ -12,6 +12,8 @@ mod access_requests_model_tests;
 mod access_requests_tests;
 #[path = "access_review_decisions_tests.rs"]
 mod access_review_decisions_tests;
+#[path = "access_review_removal_tests.rs"]
+mod access_review_removal_tests;
 #[path = "access_reviews_tests.rs"]
 mod access_reviews_tests;
 #[path = "admin_token_revalidation_tests.rs"]

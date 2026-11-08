@@ -399,17 +399,39 @@ async fn unset_member(
     ws: Uuid,
     user: Uuid,
 ) -> Result<(), ApiError> {
-    // The member, then the lineages of their keys here (revoked below once
-    // no membership remains), before any write. #37 PR2 item 1 exception:
-    // an admin token's owner scope is merged into this same call; see
-    // `manual_member`'s own doc for why (opposing owner/target order).
+    lock_member_removal(tx, u, ws, user, Vec::new()).await?;
+    revoke_member_locked(tx, u, ws, user).await
+}
+/// The locks a member's removal takes before any write: the member, then the
+/// lineages of their keys here, plus `extra` scopes (#90: the reviewer's own),
+/// in one canonical call. #37 PR2 item 1 exception: an admin token's owner
+/// scope is merged into this same call; see `manual_member`'s own doc for
+/// why (opposing owner/target order).
+pub(super) async fn lock_member_removal(
+    tx: &mut Transaction<'_, Postgres>,
+    u: &impl Actor,
+    ws: Uuid,
+    user: Uuid,
+    extra: Vec<locks::Scope>,
+) -> Result<(), ApiError> {
     let mut scopes = locks::key_lineages(tx, "issued_to_user_id=$2", Some(ws), Some(user)).await?;
     scopes.push(locks::Scope::User(user));
+    scopes.extend(extra);
     if let Some(owner) = resources::owner_scope(u) {
         scopes.push(owner);
     }
     locks::exclusive(tx, scopes).await?;
-    resources::revalidate_admin_token_locked(tx, u).await?;
+    resources::revalidate_admin_token_locked(tx, u).await
+}
+/// A member's removal once [`lock_member_removal`] holds its locks: the
+/// manual grant (the last owner protected), then their keys here once no
+/// membership remains; audited. Group-managed entries stay.
+pub(super) async fn revoke_member_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    u: &impl Actor,
+    ws: Uuid,
+    user: Uuid,
+) -> Result<(), ApiError> {
     let old:Option<String>=sqlx::query_scalar("SELECT role FROM workspace_membership_grants WHERE workspace_id=$1 AND user_id=$2 AND source='manual' AND revoked_at IS NULL").bind(ws).bind(user).fetch_optional(&mut **tx).await?;
     if old.as_deref() == Some("owner") {
         protect_owner(tx, ws, user).await?;
