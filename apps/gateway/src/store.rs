@@ -121,6 +121,7 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "access_review_items",
     "access_review_assignments",
     "access_review_decisions",
+    "access_review_notification_reads",
     "installation_settings",
     // 0011 alerts
     "alert_rules",

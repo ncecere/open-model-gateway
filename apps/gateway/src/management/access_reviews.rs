@@ -293,6 +293,50 @@ async fn one_item(tx: &mut Transaction<'_, Postgres>, item: Uuid) -> ApiResult {
     Ok(Json(v))
 }
 
+/// The reviewer rule for item `i` (with `u` its person, `w` its workspace and
+/// `a` its latest assignment joined), the same as `access_review_may_decide`
+/// for an open campaign and a still-in-effect item: joins the item's grant
+/// and filters on it being in effect, then the viewer `user` (not the person
+/// under review) is the assignee who still qualifies, or without one an
+/// owner/admin of the item's workspace (`admin_ws`: the viewer's owner/admin
+/// workspace ids) or, for platform items, a Platform Admin (`admin`).
+fn reviewer_rule(user: &str, admin_ws: &str, admin: &str) -> String {
+    format!(
+        "LEFT JOIN workspace_membership_grants m ON m.id=i.membership_grant_id LEFT JOIN platform_role_grants pg ON pg.id=i.platform_grant_id WHERE i.user_id<>{user} AND coalesce(m.revoked_at,pg.revoked_at) IS NULL AND u.disabled_at IS NULL AND u.cleaned_at IS NULL AND (w.id IS NULL OR w.disabled_at IS NULL) AND CASE WHEN a.reviewer_user_id IS NOT NULL AND access_review_candidate(i.id,a.reviewer_user_id) THEN a.reviewer_user_id={user} WHEN i.subject_kind='workspace_membership' THEN i.workspace_id IN {admin_ws} ELSE {admin} END"
+    )
+}
+
+/// #90 slice 4: rows `(at, id, item, is_read, state)` of the viewer's access
+/// review reminders, for the in-app notification feed: one per open campaign
+/// in which the viewer (`user`, a live Platform Admin flag `admin`) has items
+/// they may decide that nobody has decided yet, derived live. The state is
+/// `open`, `due_soon` (within 24 hours of the due date) or `overdue`; a read
+/// mark is per campaign and state. Name and due date only, never items.
+pub(super) fn reminder_items(user: &str, admin: &str) -> String {
+    let admin_ws = format!(
+        "(SELECT e.workspace_id FROM effective_workspace_memberships e WHERE e.user_id={user} AND e.role IN ('owner','admin'))"
+    );
+    let rule = reviewer_rule(user, &admin_ws, admin);
+    format!(
+        "SELECT n.at,c.id,jsonb_build_object('source','access_review','id',c.id,'state',n.state,'campaign_name',c.name,'due_at',c.due_at,'at',n.at,'read',x.campaign_id IS NOT NULL) AS item,x.campaign_id IS NOT NULL AS is_read,n.state \
+         FROM access_review_campaigns c \
+         CROSS JOIN LATERAL (SELECT CASE WHEN c.due_at<=clock_timestamp() THEN 'overdue' WHEN c.due_at<=clock_timestamp()+interval '24 hours' THEN 'due_soon' ELSE 'open' END AS state, CASE WHEN c.due_at<=clock_timestamp() THEN c.due_at WHEN c.due_at<=clock_timestamp()+interval '24 hours' THEN greatest(c.created_at,c.due_at-interval '24 hours') ELSE c.created_at END AS at) n \
+         LEFT JOIN access_review_notification_reads x ON x.campaign_id=c.id AND x.user_id={user} AND x.state=n.state \
+         WHERE c.closed_at IS NULL AND EXISTS (SELECT 1 FROM {ITEM_FROM} LEFT JOIN LATERAL (SELECT y.reviewer_user_id FROM access_review_assignments y WHERE y.item_id=i.id ORDER BY y.seq DESC LIMIT 1) a ON true {rule} AND i.campaign_id=c.id AND (i.workspace_id IN {admin_ws} OR (i.subject_kind='platform_role' AND {admin}) OR a.reviewer_user_id={user}) AND NOT EXISTS (SELECT 1 FROM access_review_decisions d WHERE d.item_id=i.id))"
+    )
+}
+
+/// Marks the viewer's visible, unread reminders read: all of them (at most
+/// 1000 per call), or those among `ids` (campaign ids; others ignored).
+pub(super) fn reminder_mark_read(user: &str, admin: &str, ids: &str) -> String {
+    let items = reminder_items(user, admin);
+    format!(
+        "INSERT INTO access_review_notification_reads(user_id,campaign_id,state) \
+         SELECT {user},n.id,n.state FROM ({items}) n WHERE NOT n.is_read AND ({ids}::uuid[] IS NULL OR n.id=ANY({ids})) \
+         ORDER BY n.at DESC LIMIT 1000 ON CONFLICT DO NOTHING"
+    )
+}
+
 /// `GET /api/v1/me/access-reviews`: the items the viewer may decide now (open
 /// campaigns, still in effect), each with its campaign and latest decision.
 /// The viewer's authority is computed once; candidate rows come from indexes
@@ -308,7 +352,12 @@ pub(super) async fn inbox(
     let (l, o) = p.bounds()?;
     let mut tx = resources::read_snapshot(&s).await?;
     resources::platform_role_snapshot(&mut tx, u.user_id).await?;
-    let data: Vec<Value> = sqlx::query_scalar(&format!("WITH ws AS MATERIALIZED (SELECT e.workspace_id FROM effective_workspace_memberships e WHERE e.user_id=$1 AND e.role IN ('owner','admin')), adm AS MATERIALIZED (SELECT EXISTS (SELECT FROM effective_platform_roles r WHERE r.user_id=$1 AND r.role='admin') AS yes), cand AS MATERIALIZED (SELECT i.id FROM access_review_items i JOIN access_review_campaigns c ON c.id=i.campaign_id AND c.closed_at IS NULL WHERE i.workspace_id IN (SELECT workspace_id FROM ws) UNION SELECT i.id FROM access_review_items i JOIN access_review_campaigns c ON c.id=i.campaign_id AND c.closed_at IS NULL WHERE i.subject_kind='platform_role' AND (SELECT yes FROM adm) UNION SELECT y.item_id FROM access_review_assignments y WHERE y.reviewer_user_id=$1) SELECT {ITEM_JSON} || jsonb_build_object('campaign_name',c.name,'due_at',c.due_at) FROM cand JOIN {ITEM_FROM} ON i.id=cand.id JOIN access_review_campaigns c ON c.id=i.campaign_id AND c.closed_at IS NULL {LATEST_DECISION} LEFT JOIN workspace_membership_grants m ON m.id=i.membership_grant_id LEFT JOIN platform_role_grants pg ON pg.id=i.platform_grant_id WHERE i.user_id<>$1 AND coalesce(m.revoked_at,pg.revoked_at) IS NULL AND u.disabled_at IS NULL AND u.cleaned_at IS NULL AND (w.id IS NULL OR w.disabled_at IS NULL) AND CASE WHEN a.reviewer_user_id IS NOT NULL AND access_review_candidate(i.id,a.reviewer_user_id) THEN a.reviewer_user_id=$1 WHEN i.subject_kind='workspace_membership' THEN i.workspace_id IN (SELECT workspace_id FROM ws) ELSE (SELECT yes FROM adm) END ORDER BY c.due_at, c.id, i.subject_kind DESC, i.workspace_id, i.user_id, i.id LIMIT $2 OFFSET $3"))
+    let reviews = reviewer_rule(
+        "$1",
+        "(SELECT workspace_id FROM ws)",
+        "(SELECT yes FROM adm)",
+    );
+    let data: Vec<Value> = sqlx::query_scalar(&format!("WITH ws AS MATERIALIZED (SELECT e.workspace_id FROM effective_workspace_memberships e WHERE e.user_id=$1 AND e.role IN ('owner','admin')), adm AS MATERIALIZED (SELECT EXISTS (SELECT FROM effective_platform_roles r WHERE r.user_id=$1 AND r.role='admin') AS yes), cand AS MATERIALIZED (SELECT i.id FROM access_review_items i JOIN access_review_campaigns c ON c.id=i.campaign_id AND c.closed_at IS NULL WHERE i.workspace_id IN (SELECT workspace_id FROM ws) UNION SELECT i.id FROM access_review_items i JOIN access_review_campaigns c ON c.id=i.campaign_id AND c.closed_at IS NULL WHERE i.subject_kind='platform_role' AND (SELECT yes FROM adm) UNION SELECT y.item_id FROM access_review_assignments y WHERE y.reviewer_user_id=$1) SELECT {ITEM_JSON} || jsonb_build_object('campaign_name',c.name,'due_at',c.due_at) FROM cand JOIN {ITEM_FROM} ON i.id=cand.id JOIN access_review_campaigns c ON c.id=i.campaign_id AND c.closed_at IS NULL {LATEST_DECISION} {reviews} ORDER BY c.due_at, c.id, i.subject_kind DESC, i.workspace_id, i.user_id, i.id LIMIT $2 OFFSET $3"))
         .bind(u.user_id)
         .bind(l)
         .bind(o)

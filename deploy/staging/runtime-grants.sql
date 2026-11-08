@@ -207,6 +207,8 @@ GRANT SELECT ON public.access_review_assignments,public.access_review_decisions 
 GRANT INSERT(id,item_id,reviewer_user_id,assigned_by) ON public.access_review_assignments TO gateway_runtime;
 GRANT INSERT(id,item_id,decision,decided_by) ON public.access_review_decisions TO gateway_runtime;
 GRANT EXECUTE ON FUNCTION public.access_review_item_active(uuid),public.access_review_candidate(uuid,uuid),public.access_review_may_decide(uuid,uuid) TO gateway_runtime;
+-- #90 slice 4: reminder read marks, insert-only with the server's read time.
+GRANT SELECT,INSERT(user_id,campaign_id,state) ON public.access_review_notification_reads TO gateway_runtime;
 -- Installation spend rules (0026) edit their period and reference amount.
 GRANT UPDATE(name,enabled,budget_layers,thresholds,spike_factor_percent,min_spend_microusd,
  window_minutes,error_rate_percent,min_requests,consecutive_failures,provider_connection_id,

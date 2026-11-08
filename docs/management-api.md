@@ -165,7 +165,7 @@ Template names are unique ignoring case and surrounding spaces; a template has a
 
 ## Access reviews (#90)
 
-One-shot access review campaigns over shared access. Browser-session only (every admin token is denied): **Platform Admins** start and close campaigns and assign reviewers; Platform Admins and **Auditors** read them; **reviewers** decide on their items. Reminders and the dashboard follow in later slices of #90.
+One-shot access review campaigns over shared access. Browser-session only (every admin token is denied): **Platform Admins** start and close campaigns and assign reviewers; Platform Admins and **Auditors** read them; **reviewers** decide on their items. The dashboard follows in a later slice of #90.
 
 | Method/path | Behavior |
 | --- | --- |
@@ -187,6 +187,8 @@ One-shot access review campaigns over shared access. Browser-session only (every
 Migration **0076_access_review_campaigns** adds `access_review_campaigns` (started by a current Platform Admin on the server clock, due 1 to 90 days out, a non-blank name without control characters; only closing changes it, once, by a current Platform Admin) and `access_review_items` (an item names its grant and the database copies the workspace, person, role, source and grant time from it; items are accepted only in the transaction that starts their campaign, while it is open, and never change). Nothing is deleted. Runtime grants: `SELECT`, column `INSERT` of the identifying columns, and `UPDATE` of the closing columns.
 
 Migration **0077_access_review_decisions** adds the append-only `access_review_assignments` and `access_review_decisions` (the guards set the clocks and apply the reviewer rule; `flag_idp` only for group-provided access; nothing after the campaign closes or once the access is no longer in effect) and the shared rule as functions (`access_review_may_decide`, `access_review_candidate`, `access_review_item_active`). Runtime grants: `SELECT`, column `INSERT` without the clocks, and `EXECUTE` on the three functions.
+
+**Reminders.** Each reviewer's in-app **Notifications** (`GET /me/notifications`, `source: "access_review"`) carry one reminder per open campaign in which they have items they may decide that nobody has decided yet: `{id (the campaign), state, campaign_name, due_at, at, read}`, where `state` is `open`, `due_soon` (within 24 hours of the due date) or `overdue`. It is derived live on every read (the same reviewer rule as the inbox), gone once those items are decided, assigned to someone else, or the campaign closes, and unread again when its state changes (read marks per campaign and state; `POST /me/notifications/read` marks them; the summary's `unread` counts up to 100 of them). In-app only: never emailed or sent to webhooks. Migration **0079_access_review_notifications** adds the insert-only `access_review_notification_reads` (runtime `SELECT` and `INSERT` without the read time).
 
 Migration **0078_access_review_removal** allows `remove` (manual or bootstrap access only; an owner's membership only by an owner of the workspace or a Platform Admin) and adds a deferred check that refuses, at commit, a `remove` decision whose own grant is not revoked.
 
