@@ -141,7 +141,7 @@ async fn reviewers_see_and_decide_only_their_items(pool: PgPool) {
         (&f.owner, Uuid::new_v4()),
     ] {
         let (status, _) = decide(&f, who, target, "keep").await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "{} {target}", who.email);
+        assert_eq!(status, StatusCode::NOT_FOUND, "not theirs to decide");
     }
     // Keep; a reviewer may change the decision; the latest counts.
     let (status, d) = decide(&f, &f.owner, member_item, "keep").await;
@@ -281,7 +281,7 @@ async fn a_platform_admin_assigns_an_item_to_an_eligible_reviewer(pool: PgPool) 
                 StatusCode::CONFLICT,
                 Some("access_review_reviewer_ineligible")
             ),
-            "{who}"
+            "an ineligible reviewer"
         );
     }
     // Platform Admins only; the item must be in that campaign.
