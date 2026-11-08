@@ -13,7 +13,7 @@
  */
 import { ClipboardCheck, Plus } from "lucide-react";
 import { api, platformPath, type Session } from "../lib/api";
-import { accessText, campaignState, campaignStateLabels, campaignStateTone, decisionLabels, decisionPath, decisionTone, inboxPath, personText, removalConsequence, reviewClosePath, reviewerPath, reviewItemsPath, reviewPath, reviewsPath, sourceLabels, subjectLabels, type InboxItem, type ReviewCampaign, type ReviewCampaignDetail, type ReviewItem } from "../lib/access-reviews";
+import { accessText, itemLabel, removalTarget, campaignState, campaignStateLabels, campaignStateTone, decisionLabels, decisionPath, decisionTone, inboxPath, personText, removalConsequence, reviewClosePath, reviewerPath, reviewItemsPath, reviewPath, reviewsPath, sourceLabels, subjectLabels, type InboxItem, type ReviewCampaign, type ReviewCampaignDetail, type ReviewItem } from "../lib/access-reviews";
 import { nameField, type Field } from "../lib/forms";
 import type { DirectoryUser, DirectoryWorkspace } from "../lib/people";
 import { Button, ErrorNotice, Heading, Inline, Stack, useAction, useApi } from "../components/ui";
@@ -25,19 +25,29 @@ import { CellText, type DataTableColumn } from "../components/ui/data-table/data
 import s from "./shared.module.css";
 
 function DecisionCell({ item }: { item: ReviewItem }) {
-  if (item.decision) return <StatusBadge tone={decisionTone[item.decision]}>{decisionLabels[item.decision]}</StatusBadge>;
+  if (item.decision) return <Inline gap={2}><StatusBadge tone={decisionTone[item.decision]}>{decisionLabels[item.decision]}</StatusBadge>{!item.active && item.decision !== "remove" && <span className={s.muted}>No longer in effect</span>}</Inline>;
   return item.active ? <span className={s.muted}>Not decided</span> : <span className={s.muted}>No longer in effect</span>;
 }
 const personColumn = <T extends ReviewItem>(): DataTableColumn<T> => ({ id: "person", header: "Person", accessor: personText, rowHeader: true, hideable: false, cell: i => <CellText primary={personText(i)} secondary={i.display_name ? i.email ?? undefined : undefined} /> });
 const accessColumn = <T extends ReviewItem>(): DataTableColumn<T> => ({ id: "access", header: "Access", accessor: accessText, cell: i => <CellText primary={accessText(i)} secondary={sourceLabels[i.source]} /> });
 
+/**
+ * Removing an owner's membership needs an owner of that workspace or a
+ * Platform Admin (as on the members routes); the server refuses others.
+ */
+function mayRemove(session: Session, i: ReviewItem): boolean {
+  if (i.source === "group") return false;
+  if (i.subject_kind !== "workspace_membership" || i.role !== "owner") return true;
+  return session.capabilities.platform_write || session.workspaces.some(w => w.id === i.workspace_id && w.role === "owner");
+}
+
 /** Review access: the viewer's items to decide. */
-export function AccessReviewInbox() {
+export function AccessReviewInbox({ session }: { session: Session }) {
   const ask = useAction();
   const decide = (i: InboxItem, decision: "keep" | "flag_idp" | "remove") => ask({
-    title: decision === "remove" ? `Remove ${personText(i)}'s access?` : decision === "flag_idp" ? "Flag for the identity provider?" : `Keep ${personText(i)}'s access?`,
+    title: decision === "remove" ? `Remove ${removalTarget(i)}?` : decision === "flag_idp" ? `Flag ${personText(i)}'s access for the identity provider?` : `Keep ${personText(i)} as ${accessText(i)}?`,
     danger: decision === "remove",
-    description: decision === "remove" ? removalConsequence(i) : decision === "flag_idp" ? "This access comes from an identity provider group: it is fixed there, not here. The flag records your decision for the review." : `${accessText(i)} stays as it is.`,
+    description: decision === "remove" ? removalConsequence(i) : decision === "flag_idp" ? "This access comes from an identity provider group: it is fixed there, not here. The flag records your decision for the review." : `${personText(i)} keeps this access.`,
     submitLabel: decision === "remove" ? "Remove access" : decision === "flag_idp" ? "Flag" : "Keep",
     successNotice: decision === "remove" ? "Access removed." : decision === "flag_idp" ? "Flagged." : "Kept.",
     run: (_, signal) => api<ReviewItem>(decisionPath(i.id), { method: "POST", body: { decision }, signal }),
@@ -50,11 +60,11 @@ export function AccessReviewInbox() {
   ];
   return <Stack gap={6} className={s.page}>
     <Heading title="Review access" description="Access you are asked to review: memberships of the Teams and Projects you own or administer, platform roles if you are a Platform Admin, and anything assigned to you. Keep it, remove it, or flag access from an identity provider group." />
-    <DirectoryTable<InboxItem> path={inboxPath} label="Access to review" storageKey="access-review-inbox" columns={columns} rowKey={i => i.id} rowLabel={personText}
+    <DirectoryTable<InboxItem> path={inboxPath} label="Access to review" storageKey="access-review-inbox" columns={columns} rowKey={i => i.id} rowLabel={itemLabel}
       rowActions={i => [
         { label: "Keep…", onSelect: () => decide(i, "keep") },
         { label: "Flag for identity provider…", hidden: i.source !== "group", onSelect: () => decide(i, "flag_idp") },
-        { label: "Remove…", danger: true, hidden: i.source === "group", onSelect: () => decide(i, "remove") },
+        { label: "Remove…", danger: true, hidden: !mayRemove(session, i), onSelect: () => decide(i, "remove") },
       ]}
       empty={{ icon: <ClipboardCheck />, title: "Nothing to review.", description: "Access reviews you take part in appear here." }} />
   </Stack>;
@@ -64,7 +74,7 @@ const workspaceField: Field = {
   name: "workspace_ids", label: "Only these Teams and Projects", type: "search", hint: "Optional", placeholder: "Search teams and projects", maxSelections: 50,
   help: "Leave empty to review every Team and Project. Applies to memberships only.",
   visibleWhen: v => (v.subjects ?? "").includes("workspace_memberships"),
-  search: { path: `${platformPath}/workspaces`, multiple: true, emptyText: "No Team or Project matches.", option: ((w: DirectoryWorkspace) => w.kind === "personal" ? undefined : { value: w.id, label: w.name }) as never },
+  search: { path: `${platformPath}/workspaces?status=active`, multiple: true, emptyText: "No Team or Project matches.", option: ((w: DirectoryWorkspace) => ({ value: w.id, label: w.name })) as never },
 };
 function parseIds(value: string | undefined): string[] {
   try { const ids = JSON.parse(value || "[]"); return Array.isArray(ids) ? ids.filter((v): v is string => typeof v === "string") : []; } catch { return []; }
@@ -76,7 +86,7 @@ export function PlatformAccessReviewsPage({ session }: { session: Session }) {
   const start = () => ask({
     title: "Start an access review", description: "Takes a snapshot of the access below now. Reviewers decide each item; removals apply at once.",
     fields: [nameField,
-      { name: "subjects", label: "Review", type: "checkboxes", required: true, value: JSON.stringify(["workspace_memberships"]), options: Object.entries(subjectLabels).map(([value, label]) => ({ value, label })) },
+      { name: "subjects", label: "What to review", type: "checkboxes", required: true, value: JSON.stringify(["workspace_memberships"]), options: Object.entries(subjectLabels).map(([value, label]) => ({ value, label })) },
       workspaceField,
       { name: "due_in_days", label: "Due in (days)", type: "number", value: "14", required: true, min: 1, max: 90 }],
     submitLabel: "Start review", successNotice: "Access review started.",
@@ -110,8 +120,8 @@ export function AccessReviewDetail({ session, id }: { session: Session; id: stri
   const c = q.data, state = campaignState(c), open = state !== "closed", n = c.counts;
   const close = () => ask({ title: `Close ${c.name}?`, description: "Reviewers can no longer decide its items. Decisions already made stay.", submitLabel: "Close review", successNotice: "Access review closed.", run: (_, signal) => api(reviewClosePath(id), { method: "POST", signal }) });
   const assign = (i: ReviewItem) => ask({
-    title: `Choose who reviews ${personText(i)}`, description: i.subject_kind === "platform_role" ? "A Platform Admin, other than the person under review." : `An owner or admin of ${i.workspace_name ?? "the workspace"}, or a Platform Admin, other than the person under review.`,
-    fields: [{ name: "user_id", label: "Reviewer", type: "search", required: true, placeholder: "name@example.com", search: { path: `${platformPath}/users?status=active&role=any`, option: ((u: DirectoryUser) => u.email && u.id !== i.user_id ? { value: u.id, label: u.email } : undefined) as never } }],
+    title: `Choose who reviews ${personText(i)} (${accessText(i)})`, description: i.subject_kind === "platform_role" ? "A Platform Admin, other than the person under review." : `An owner or admin of ${i.workspace_name ?? "the workspace"}, or a Platform Admin, other than the person under review.`,
+    fields: [{ name: "user_id", label: "Reviewer", type: "search", required: true, placeholder: "name@example.com", search: { path: `${platformPath}/users?status=active&role=${i.subject_kind === "platform_role" ? "admin" : "any"}`, option: ((u: DirectoryUser) => u.platform_role && u.email && u.id !== i.user_id ? { value: u.id, label: u.email } : undefined) as never } }],
     submitLabel: "Assign", successNotice: "Reviewer assigned.",
     run: (v, signal) => api<ReviewItem>(reviewerPath(id, i.id), { method: "POST", body: { user_id: v.user_id }, signal }),
   });
@@ -120,14 +130,14 @@ export function AccessReviewDetail({ session, id }: { session: Session; id: stri
     personColumn<ReviewItem>(),
     accessColumn<ReviewItem>(),
     { id: "decision", header: "Decision", accessor: i => i.decision ?? "", cell: i => <DecisionCell item={i} /> },
-    { id: "reviewer", header: "Reviewer", accessor: i => i.reviewer_user_id ?? "", cell: i => i.reviewer_user_id ? <span>Assigned</span> : <span className={s.muted}>Automatic</span> },
+    { id: "reviewer", header: "Reviewer", accessor: i => i.reviewer_user_id ?? "", cell: i => i.reviewer_user_id ? <span title="An assignee who can no longer review it is ignored: the automatic reviewers decide again.">Assigned</span> : <span className={s.muted}>Automatic</span> },
   ];
-  const summary = `${n.by_decision.pending} to decide · ${n.by_decision.keep} kept · ${n.by_decision.remove} removed · ${n.by_decision.flag_idp} flagged${n.without_reviewer ? ` · ${n.without_reviewer} without a reviewer` : ""}${n.inactive ? ` · ${n.inactive} no longer in effect` : ""}`;
+  const summary = `${n.by_decision.pending} undecided · ${n.by_decision.keep} kept · ${n.by_decision.remove} removed · ${n.by_decision.flag_idp} flagged${n.without_reviewer ? ` · ${n.without_reviewer} without a reviewer` : ""}${n.inactive ? ` · ${n.inactive} no longer in effect` : ""}`;
   return <Stack gap={6} className={s.page}>
     <Heading title={c.name} description={`${c.subjects.map(x => subjectLabels[x]).join(" and ")} · ${c.item_count} items · due ${new Date(c.due_at).toLocaleDateString()} · ${summary}`}
       actions={<Inline gap={2}><StatusBadge tone={campaignStateTone[state]}>{campaignStateLabels[state]}</StatusBadge>{writable && open && <Button variant="secondary" onClick={close}>Close review</Button>}</Inline>} />
-    <DirectoryTable<ReviewItem> path={reviewItemsPath(id)} label="Items" storageKey="access-review-items" columns={columns} rowKey={i => i.id} rowLabel={personText}
-      rowActions={i => !writable || !open ? [] : [
+    <DirectoryTable<ReviewItem> path={reviewItemsPath(id)} label="Items" storageKey="access-review-items" columns={columns} rowKey={i => i.id} rowLabel={itemLabel}
+      rowActions={i => !writable || !open || i.user_id === session.user.id ? [] : [
         { label: "Assign reviewer…", hidden: !i.active, onSelect: () => assign(i) },
         { label: "Back to automatic reviewers…", hidden: !i.reviewer_user_id, onSelect: () => unassign(i) },
       ]}

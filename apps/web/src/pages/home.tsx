@@ -112,7 +112,7 @@ export function DashboardContent({ session, search, workspace, navigate, workspa
     case "access-requests": return <AccessRequestsPage tab={search.tab} onTabChange={changeTab} />;
     case "platform-access-requests": return <PlatformAccessRequestsPage session={session} />;
     case "workspace-templates": return <WorkspaceTemplatesPage session={session} />;
-    case "access-reviews": return <AccessReviewInbox />;
+    case "access-reviews": return <AccessReviewInbox session={session} />;
     case "platform-access-reviews": return <PlatformAccessReviewsPage session={session} />;
     case "access-review-detail": return search.record ? <AccessReviewDetail session={session} id={search.record} /> : <PermissionNotice title="Missing access review identifier" />;
     case "workspace-template-detail": return search.record ? <WorkspaceTemplateDetail session={session} id={search.record} /> : <PermissionNotice title="Missing template identifier" />;

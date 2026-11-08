@@ -49,6 +49,10 @@ export function accessText(i: ReviewItem): string {
   return i.subject_kind === "platform_role" ? `Platform ${roleLabels[i.role]}` : `${roleLabels[i.role]} of ${i.workspace_name ?? "a workspace"}`;
 }
 export const personText = (i: ReviewItem) => i.display_name || i.email || "Removed person";
+/** A row's accessible name: the person and the access, unique per row. */
+export const itemLabel = (i: ReviewItem) => `${personText(i)}, ${accessText(i)}`;
+/** "Blair from Product" or "Aud's Platform Auditor role". */
+export const removalTarget = (i: ReviewItem) => i.subject_kind === "platform_role" ? `${personText(i)}'s ${accessText(i)} role` : `${personText(i)} from ${i.workspace_name ?? "this workspace"}`;
 export type CampaignState = "open" | "overdue" | "closed";
 export function campaignState(c: ReviewCampaign, now = Date.now()): CampaignState {
   return c.closed_at ? "closed" : Date.parse(c.due_at) <= now ? "overdue" : "open";
@@ -62,6 +66,6 @@ export const campaignStateTone: Record<CampaignState, "info" | "danger" | "neutr
  */
 export function removalConsequence(i: ReviewItem): string {
   return i.subject_kind === "platform_role"
-    ? `Removes this ${roleLabels[i.role]} role now. If it is their only platform role, they lose access to the gateway: they are suspended and their sessions and keys are revoked.`
+    ? `Removes this ${roleLabels[i.role]} grant (manual or bootstrap) now. The same role from an identity provider group, if they have one, stays. If they then hold no other platform role, they lose access to the gateway: they are suspended and their sessions and keys are revoked.`
     : `Removes their membership in ${i.workspace_name ?? "this workspace"} now. Their keys there are revoked if they no longer belong to it through an identity provider group.`;
 }

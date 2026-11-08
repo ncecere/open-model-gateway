@@ -3,8 +3,8 @@ import { api, expectAccessible, expectNoCspViolations, expectNoHorizontalScroll,
 
 /*
  * Access reviews (#90): a Platform Admin starts a review in Admin › Access reviews; the Team's
- * owner gets a reminder, opens Review access and keeps one person's access and removes another's
- * (a manual membership created for this spec), confirming what the removal does; the Auditor
+ * owner gets a reminder, opens Review access and removes a manual membership created for this
+ * spec, confirming what the removal does; the Auditor
  * reads the review without actions. Everything this spec creates is its own.
  */
 test.afterEach(expectNoCspViolations);
@@ -59,7 +59,7 @@ test("a review is started, decided by the workspace owner and read by the audito
     const auditor = await signIn(browser, "auditor");
     try {
       await auditor.page.goto(new URL(page.url()).pathname);
-      await expect(auditor.page.getByText("Removed")).toBeVisible();
+      await expect(auditor.page.getByRole("row").filter({ hasText: "blair@demo.invalid" }).getByText("Removed", { exact: true })).toBeVisible();
       await expect(auditor.page.getByRole("button", { name: /^Close review$|^Actions for/ })).toHaveCount(0);
     } finally { await auditor.context.close(); }
     // Closed by the admin: nothing left to decide.
