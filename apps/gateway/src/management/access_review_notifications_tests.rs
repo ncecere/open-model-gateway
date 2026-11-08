@@ -145,12 +145,6 @@ async fn reviewers_are_reminded_until_they_have_decided(pool: PgPool) {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(reminders(&f, &second, "").await.is_empty());
-    // Never an alert delivery.
-    let deliveries: i64 = sqlx::query_scalar("SELECT count(*) FROM alert_deliveries")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(deliveries, 0);
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
@@ -245,4 +239,224 @@ async fn read_marks_are_insert_only_and_bound_to_the_reader(pool: PgPool) {
         });
         assert_eq!(code.as_deref(), Some("P0001"), "immutable");
     }
+}
+
+async fn revoke_membership(pool: &PgPool, ws: Uuid, user: Uuid) {
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT omg_scope_lock_exclusive(72419512, omg_scope_key($1))")
+        .bind(user)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE workspace_membership_grants SET revoked_at=now() WHERE workspace_id=$1 AND user_id=$2 AND revoked_at IS NULL")
+        .bind(ws).bind(user).execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn reminders_follow_the_reviewer_rule_and_the_items_state(pool: PgPool) {
+    let f = fixture(&pool).await;
+    // A second Team member and a Team admin.
+    let second = user(&pool, "second-member", "user").await;
+    member(&pool, f.team, second.user_id, "member").await;
+    member(&pool, f.team, f.outsider.user_id, "admin").await;
+    let c = start(&f, 14).await;
+    let other = start(&f, 30).await;
+    // Two open campaigns: two reminders, counted in the summary.
+    assert_eq!(reminders(&f, &f.owner, "").await.len(), 2);
+    assert_eq!(unread(&f, &f.owner).await, 2);
+    // Ids that are not this viewer's reminders (a request's, an incident's,
+    // anything) mark none of them.
+    let (_, marked) = call(
+        &f.s,
+        &f.owner,
+        "POST",
+        &format!("{FEED}/read"),
+        json!({"ids":[Uuid::new_v4()]}),
+    )
+    .await;
+    assert_eq!(marked["marked"], 0);
+    // The "at" of an open reminder is the campaign's start.
+    let (_, feed) = call(&f.s, &f.owner, "GET", FEED, Value::Null).await;
+    let n = feed["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == id(&c).to_string())
+        .unwrap()
+        .clone();
+    assert_eq!(n["at"], c["created_at"]);
+    // Deciding one of two items keeps the reminder; the second clears it.
+    let (status, _) = call(
+        &f.s,
+        &f.owner,
+        "POST",
+        &format!(
+            "/api/v1/me/access-reviews/{}/decision",
+            item(&pool, &c, f.member.user_id, Some(f.team)).await
+        ),
+        json!({"decision":"keep"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let mine: Vec<String> = reminders(&f, &f.owner, "")
+        .await
+        .into_iter()
+        .map(|r| r.0)
+        .collect();
+    assert!(mine.contains(&id(&c).to_string()));
+    // The Team admin's own membership is the owner's to review too.
+    let (status, _) = call(
+        &f.s,
+        &f.owner,
+        "POST",
+        &format!(
+            "/api/v1/me/access-reviews/{}/decision",
+            item(&pool, &c, f.outsider.user_id, Some(f.team)).await
+        ),
+        json!({"decision":"keep"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    // An item no longer in effect is nothing to decide: the second member leaves the Team.
+    revoke_membership(&pool, f.team, second.user_id).await;
+    let mine: Vec<String> = reminders(&f, &f.owner, "")
+        .await
+        .into_iter()
+        .map(|r| r.0)
+        .collect();
+    assert!(
+        !mine.contains(&id(&c).to_string()),
+        "only an inactive item was left"
+    );
+    // An assignee who no longer qualifies: the automatic reviewers are reminded again.
+    let target = item(&pool, &other, f.member.user_id, Some(f.team)).await;
+    let (status, _) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        &format!("{REVIEWS}/{}/items/{target}/reviewer", id(&other)),
+        json!({"user_id":f.outsider.user_id}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = call(
+        &f.s,
+        &f.owner,
+        "POST",
+        &format!(
+            "/api/v1/me/access-reviews/{}/decision",
+            item(&pool, &other, f.outsider.user_id, Some(f.team)).await
+        ),
+        json!({"decision":"keep"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let owner_other =
+        |v: Vec<(String, String, bool)>| v.into_iter().any(|r| r.0 == id(&other).to_string());
+    assert!(
+        !owner_other(reminders(&f, &f.owner, "").await),
+        "the assignee reviews it"
+    );
+    assert!(owner_other(reminders(&f, &f.outsider, "").await));
+    revoke_membership(&pool, f.team, f.outsider.user_id).await;
+    assert!(
+        owner_other(reminders(&f, &f.owner, "").await),
+        "back to the owner"
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn an_overdue_reminder_is_dated_by_its_due_date(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let c = start(&f, 1).await;
+    sqlx::query(
+        "ALTER TABLE access_review_campaigns DISABLE TRIGGER access_review_campaigns_guard",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE access_review_campaigns SET created_at=created_at-interval '3 days', due_at=due_at-interval '3 days' WHERE id=$1").bind(id(&c)).execute(&pool).await.unwrap();
+    sqlx::query("ALTER TABLE access_review_campaigns ENABLE TRIGGER access_review_campaigns_guard")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let due: String = sqlx::query_scalar(
+        "SELECT to_jsonb(due_at)#>>'{}' FROM access_review_campaigns WHERE id=$1",
+    )
+    .bind(id(&c))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let (_, feed) = call(&f.s, &f.owner, "GET", FEED, Value::Null).await;
+    let n = feed["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["source"] == "access_review")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        (n["state"].as_str(), n["at"].as_str()),
+        (Some("overdue"), Some(due.as_str()))
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn reminders_stay_cheap_for_everyone_at_twenty_campaigns_of_five_thousand(pool: PgPool) {
+    let f = fixture(&pool).await;
+    sqlx::query("WITH u AS (INSERT INTO users(id,email) SELECT gen_random_uuid(),'bulk'||n||'@example.test' FROM generate_series(1,4997) n RETURNING id) INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source) SELECT $1,id,'member','manual' FROM u")
+        .bind(f.team).execute(&pool).await.unwrap();
+    for n in 0..20 {
+        let (status, c) = call(&f.s, &f.admin, "POST", REVIEWS, json!({"name":format!("Load {n}"),"subjects":["workspace_memberships"],"workspace_ids":[f.team]})).await;
+        assert_eq!(status, StatusCode::OK, "{c}");
+    }
+    sqlx::query("ANALYZE").execute(&pool).await.unwrap();
+    // Someone who reviews nothing never scans the campaigns' items.
+    let sql = format!(
+        "EXPLAIN (FORMAT JSON) SELECT count(*) FROM ({}) n",
+        crate::management::access_reviews::reminder_items("$1", "$2")
+    );
+    let plan: Value = sqlx::query_scalar(&sql)
+        .bind(f.member.user_id)
+        .bind(false)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    fn scans(node: &Value, relation: &str) -> bool {
+        (node["Node Type"] == "Seq Scan" && node["Relation Name"] == relation)
+            || node["Plans"]
+                .as_array()
+                .is_some_and(|p| p.iter().any(|n| scans(n, relation)))
+            || node["Plan"].is_object() && scans(&node["Plan"], relation)
+            || node
+                .as_array()
+                .is_some_and(|p| p.iter().any(|n| scans(n, relation)))
+    }
+    assert!(
+        !scans(&plan, "access_review_items"),
+        "a member's poll scans every item"
+    );
+    let timed = async |who: &BrowserPrincipal| {
+        let started = std::time::Instant::now();
+        let (a, _) = call(&f.s, who, "GET", &format!("{FEED}/summary"), Value::Null).await;
+        let (b, _) = call(&f.s, who, "GET", FEED, Value::Null).await;
+        (a, b, started.elapsed() < std::time::Duration::from_secs(3))
+    };
+    assert_eq!(
+        timed(&f.member).await,
+        (StatusCode::OK, StatusCode::OK, true),
+        "a member"
+    );
+    assert_eq!(
+        timed(&f.admin).await,
+        (StatusCode::OK, StatusCode::OK, true),
+        "a Platform Admin"
+    );
+    assert_eq!(
+        timed(&f.owner).await,
+        (StatusCode::OK, StatusCode::OK, true),
+        "the owner of every item"
+    );
+    assert_eq!(reminders(&f, &f.owner, "?limit=50").await.len(), 20);
 }

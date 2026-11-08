@@ -261,6 +261,6 @@ export function NotificationsPage({ session }: { session: Session }) {
         { label: "Open holds", hidden: !holds, render: holds ? <ResourceLink search={holds} /> : undefined },
         { label: "Open requests", hidden: !request, render: request ? <ResourceLink search={request} /> : undefined },
       ]; }}
-      empty={{ icon: <BellRing />, title: "No notifications.", description: "Alerts for your budgets and workspaces show up here." }} />
+      empty={{ icon: <BellRing />, title: "No notifications.", description: "Alerts, access requests and access review reminders for what you look after show up here." }} />
   </Stack>;
 }

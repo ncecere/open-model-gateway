@@ -13,5 +13,6 @@ CREATE TABLE access_review_notification_reads (
 );
 CREATE TRIGGER access_review_notification_reads_immutable BEFORE UPDATE OR DELETE ON access_review_notification_reads FOR EACH ROW EXECUTE FUNCTION immutable_history();
 CREATE TRIGGER access_review_notification_reads_no_truncate BEFORE TRUNCATE ON access_review_notification_reads FOR EACH STATEMENT EXECUTE FUNCTION immutable_history();
--- Undecided items (no decision row) are found per campaign through the items
--- index and the decisions' (item_id, seq) unique index.
+-- The reminder query probes each open campaign only through the viewer's
+-- candidate items (the items' workspace and campaign indexes, the
+-- assignments' reviewer index) and the decisions' (item_id, seq) index.

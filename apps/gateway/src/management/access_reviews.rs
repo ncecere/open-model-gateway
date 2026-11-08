@@ -294,7 +294,8 @@ async fn one_item(tx: &mut Transaction<'_, Postgres>, item: Uuid) -> ApiResult {
 }
 
 /// The reviewer rule for item `i` (with `u` its person, `w` its workspace and
-/// `a` its latest assignment joined), the same as `access_review_may_decide`
+/// `a` its latest assignment joined; the fragment adds the grant joins and a
+/// `WHERE`, so a caller appends further conditions with `AND`), the same as `access_review_may_decide`
 /// for an open campaign and a still-in-effect item: joins the item's grant
 /// and filters on it being in effect, then the viewer `user` (not the person
 /// under review) is the assignee who still qualifies, or without one an
@@ -312,17 +313,31 @@ fn reviewer_rule(user: &str, admin_ws: &str, admin: &str) -> String {
 /// they may decide that nobody has decided yet, derived live. The state is
 /// `open`, `due_soon` (within 24 hours of the due date) or `overdue`; a read
 /// mark is per campaign and state. Name and due date only, never items.
+///
+/// Every signed-in person's notification poll runs this, so the viewer's
+/// authority is computed once and each campaign is probed only through the
+/// viewer's candidate items, from indexes (items of the workspaces they own
+/// or administer, platform items for a Platform Admin, items assigned to
+/// them), stopping at the first undecided one; the reviewer rule decides.
+/// Someone who reviews nothing costs a few index probes, however large the
+/// open campaigns are.
 pub(super) fn reminder_items(user: &str, admin: &str) -> String {
-    let admin_ws = format!(
-        "(SELECT e.workspace_id FROM effective_workspace_memberships e WHERE e.user_id={user} AND e.role IN ('owner','admin'))"
-    );
-    let rule = reviewer_rule(user, &admin_ws, admin);
+    let rule = reviewer_rule(user, "(SELECT workspace_id FROM rws)", admin);
     format!(
-        "SELECT n.at,c.id,jsonb_build_object('source','access_review','id',c.id,'state',n.state,'campaign_name',c.name,'due_at',c.due_at,'at',n.at,'read',x.campaign_id IS NOT NULL) AS item,x.campaign_id IS NOT NULL AS is_read,n.state \
+        "WITH rws AS MATERIALIZED (SELECT e.workspace_id FROM effective_workspace_memberships e WHERE e.user_id={user} AND e.role IN ('owner','admin')), \
+         rasg AS MATERIALIZED (SELECT DISTINCT y.item_id FROM access_review_assignments y WHERE y.reviewer_user_id={user}) \
+         SELECT n.at,c.id,jsonb_build_object('source','access_review','id',c.id,'state',n.state,'campaign_name',c.name,'due_at',c.due_at,'at',n.at,'read',x.campaign_id IS NOT NULL) AS item,x.campaign_id IS NOT NULL AS is_read,n.state \
          FROM access_review_campaigns c \
-         CROSS JOIN LATERAL (SELECT CASE WHEN c.due_at<=clock_timestamp() THEN 'overdue' WHEN c.due_at<=clock_timestamp()+interval '24 hours' THEN 'due_soon' ELSE 'open' END AS state, CASE WHEN c.due_at<=clock_timestamp() THEN c.due_at WHEN c.due_at<=clock_timestamp()+interval '24 hours' THEN greatest(c.created_at,c.due_at-interval '24 hours') ELSE c.created_at END AS at) n \
+         CROSS JOIN LATERAL (SELECT CASE WHEN c.due_at<=statement_timestamp() THEN 'overdue' WHEN c.due_at<=statement_timestamp()+interval '24 hours' THEN 'due_soon' ELSE 'open' END AS state, CASE WHEN c.due_at<=statement_timestamp() THEN c.due_at WHEN c.due_at<=statement_timestamp()+interval '24 hours' THEN greatest(c.created_at,c.due_at-interval '24 hours') ELSE c.created_at END AS at) n \
          LEFT JOIN access_review_notification_reads x ON x.campaign_id=c.id AND x.user_id={user} AND x.state=n.state \
-         WHERE c.closed_at IS NULL AND EXISTS (SELECT 1 FROM {ITEM_FROM} LEFT JOIN LATERAL (SELECT y.reviewer_user_id FROM access_review_assignments y WHERE y.item_id=i.id ORDER BY y.seq DESC LIMIT 1) a ON true {rule} AND i.campaign_id=c.id AND (i.workspace_id IN {admin_ws} OR (i.subject_kind='platform_role' AND {admin}) OR a.reviewer_user_id={user}) AND NOT EXISTS (SELECT 1 FROM access_review_decisions d WHERE d.item_id=i.id))"
+         WHERE c.closed_at IS NULL AND ({admin} OR EXISTS (SELECT 1 FROM rws) OR EXISTS (SELECT 1 FROM rasg)) \
+         AND EXISTS (SELECT 1 FROM (\
+           SELECT ci.id FROM access_review_items ci WHERE ci.campaign_id=c.id AND ci.workspace_id IN (SELECT workspace_id FROM rws) \
+           UNION ALL SELECT ci.id FROM access_review_items ci WHERE ci.campaign_id=c.id AND ci.subject_kind='platform_role' AND {admin} \
+           UNION ALL SELECT ci.id FROM access_review_items ci WHERE ci.campaign_id=c.id AND ci.id IN (SELECT item_id FROM rasg)) cand \
+         JOIN {ITEM_FROM} ON i.id=cand.id \
+         LEFT JOIN LATERAL (SELECT y.reviewer_user_id FROM access_review_assignments y WHERE y.item_id=i.id ORDER BY y.seq DESC LIMIT 1) a ON true \
+         {rule} AND NOT EXISTS (SELECT 1 FROM access_review_decisions d WHERE d.item_id=i.id))"
     )
 }
 
