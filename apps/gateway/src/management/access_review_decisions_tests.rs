@@ -170,11 +170,15 @@ async fn reviewers_see_and_decide_only_their_items(pool: PgPool) {
         (status, d["decision"].as_str()),
         (StatusCode::OK, Some("keep"))
     );
-    let (status, _) = decide(&f, &f.owner, group_item, "remove").await;
+    // Group-provided access is never removed here (slice 3).
+    let (status, body) = decide(&f, &f.owner, group_item, "remove").await;
     assert_eq!(
-        status,
-        StatusCode::BAD_REQUEST,
-        "remove arrives in a later slice"
+        (status, reason(&body)),
+        (
+            StatusCode::CONFLICT,
+            Some("access_review_remove_requires_manual")
+        ),
+        "group access is flagged, not removed"
     );
     // The inbox shows each item's latest decision.
     let mine = inbox(&f, &f.owner).await;
@@ -213,7 +217,7 @@ async fn reviewers_see_and_decide_only_their_items(pool: PgPool) {
     let total = detail["item_count"].as_i64().unwrap();
     assert_eq!(
         detail["counts"]["by_decision"],
-        json!({"pending": total - 2, "keep": 2, "flag_idp": 0})
+        json!({"pending": total - 2, "keep": 2, "flag_idp": 0, "remove": 0})
     );
     // Audited per decision, in the workspace's audit.
     let audited: Vec<(Option<Uuid>, Value)> = sqlx::query_as("SELECT workspace_id,metadata FROM audit_events WHERE action='access_review.decided' AND resource_id=$1 ORDER BY created_at")
@@ -414,7 +418,7 @@ async fn the_database_binds_decisions_and_assignments(pool: PgPool) {
             .await
             .as_deref(),
         Some("23514"),
-        "remove not yet"
+        "remove without the removal (refused at commit)"
     );
     assert_eq!(
         insert(member_item, "keep", f.owner.user_id).await,

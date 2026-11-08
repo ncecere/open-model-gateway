@@ -39,7 +39,7 @@ const ITEM_FROM: &str = "access_review_items i JOIN users u ON u.id=i.user_id LE
 /// One campaign with its item counts (by kind, by source, and how many items'
 /// grants are no longer active).
 async fn one(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> ApiResult {
-    let v: Value = sqlx::query_scalar(&format!("SELECT {CAMPAIGN_JSON} || jsonb_build_object('counts',(SELECT jsonb_build_object('by_kind',jsonb_build_object('workspace_membership',count(*) FILTER (WHERE i.subject_kind='workspace_membership'),'platform_role',count(*) FILTER (WHERE i.subject_kind='platform_role')),'by_source',jsonb_build_object('manual',count(*) FILTER (WHERE i.source='manual'),'group',count(*) FILTER (WHERE i.source='group'),'bootstrap',count(*) FILTER (WHERE i.source='bootstrap')),'inactive',count(*) FILTER (WHERE NOT access_review_item_active(i.id)),'by_decision',jsonb_build_object('pending',count(*) FILTER (WHERE d.decision IS NULL),'keep',count(*) FILTER (WHERE d.decision='keep'),'flag_idp',count(*) FILTER (WHERE d.decision='flag_idp')),'without_reviewer',count(*) FILTER (WHERE access_review_item_active(i.id) AND NOT (a.reviewer_user_id IS NOT NULL AND access_review_candidate(i.id,a.reviewer_user_id)) AND NOT EXISTS (SELECT FROM effective_platform_roles r LEFT JOIN effective_workspace_memberships e ON e.user_id=r.user_id AND e.workspace_id=i.workspace_id AND e.role IN ('owner','admin') WHERE r.user_id<>i.user_id AND CASE WHEN i.subject_kind='workspace_membership' THEN e.user_id IS NOT NULL ELSE r.role='admin' END))) FROM access_review_items i {LATEST_DECISION} WHERE i.campaign_id=c.id)) FROM access_review_campaigns c WHERE c.id=$1"))
+    let v: Value = sqlx::query_scalar(&format!("SELECT {CAMPAIGN_JSON} || jsonb_build_object('counts',(SELECT jsonb_build_object('by_kind',jsonb_build_object('workspace_membership',count(*) FILTER (WHERE i.subject_kind='workspace_membership'),'platform_role',count(*) FILTER (WHERE i.subject_kind='platform_role')),'by_source',jsonb_build_object('manual',count(*) FILTER (WHERE i.source='manual'),'group',count(*) FILTER (WHERE i.source='group'),'bootstrap',count(*) FILTER (WHERE i.source='bootstrap')),'inactive',count(*) FILTER (WHERE NOT access_review_item_active(i.id)),'by_decision',jsonb_build_object('pending',count(*) FILTER (WHERE d.decision IS NULL),'keep',count(*) FILTER (WHERE d.decision='keep'),'flag_idp',count(*) FILTER (WHERE d.decision='flag_idp'),'remove',count(*) FILTER (WHERE d.decision='remove')),'without_reviewer',count(*) FILTER (WHERE access_review_item_active(i.id) AND NOT (a.reviewer_user_id IS NOT NULL AND access_review_candidate(i.id,a.reviewer_user_id)) AND NOT EXISTS (SELECT FROM effective_platform_roles r LEFT JOIN effective_workspace_memberships e ON e.user_id=r.user_id AND e.workspace_id=i.workspace_id AND e.role IN ('owner','admin') WHERE r.user_id<>i.user_id AND CASE WHEN i.subject_kind='workspace_membership' THEN e.user_id IS NOT NULL ELSE r.role='admin' END))) FROM access_review_items i {LATEST_DECISION} WHERE i.campaign_id=c.id)) FROM access_review_campaigns c WHERE c.id=$1"))
         .bind(id)
         .fetch_optional(&mut **tx)
         .await?
@@ -327,8 +327,11 @@ pub(super) async fn decide(
     Path(item): Path<Uuid>,
     Json(b): Json<Decision>,
 ) -> Result<Json<Value>, ManagementError> {
-    if !matches!(b.decision.as_str(), "keep" | "flag_idp") {
+    if !matches!(b.decision.as_str(), "keep" | "flag_idp" | "remove") {
         return Err(invalid().into());
+    }
+    if b.decision == "remove" {
+        return remove(&s, &u, item).await;
     }
     let mut tx = crate::db::begin(&s.pool).await?;
     // The reviewer's own scope (shared), so a concurrent demotion of the
@@ -396,6 +399,124 @@ pub(super) async fn decide(
         json!({"kind":b.decision}),
     )
     .await?;
+    let result = one_item(&mut tx, item).await?;
+    tx.commit().await?;
+    Ok(result)
+}
+
+/// A "remove" decision (#90 slice 3): the access is removed at once, in the
+/// same transaction, through the path the direct routes use (memberships:
+/// the members path, owner-only for owners, the last owner protected, keys
+/// revoked once no membership remains; platform roles: the role path, under
+/// the exclusive catalog lock, entitlement loss as when revoking directly).
+/// A refused removal records nothing. Locks before any check or write; the
+/// same 404 as any decision for an item the viewer may not decide.
+async fn remove(
+    s: &Store,
+    u: &BrowserPrincipal,
+    item: Uuid,
+) -> Result<Json<Value>, ManagementError> {
+    let found: Option<(String, Option<Uuid>, Uuid, String)> = sqlx::query_as(
+        "SELECT subject_kind, workspace_id, user_id, role FROM access_review_items WHERE id=$1",
+    )
+    .bind(item)
+    .fetch_optional(&s.pool)
+    .await?;
+    let Some((kind, ws, subject, role)) = found else {
+        return Err(missing().into());
+    };
+    let mut tx = if kind == "workspace_membership" {
+        let ws = ws.ok_or_else(missing)?;
+        let mut tx = resources::installation_tx(s).await?;
+        members::lock_member_removal(&mut tx, u, ws, subject, vec![locks::Scope::User(u.user_id)])
+            .await?;
+        tx
+    } else {
+        // The role path needs the exclusive catalog lock, which requires a
+        // Platform Admin: anyone else may not decide a platform item (404).
+        match resources::catalog_tx(s, u, true).await {
+            Ok(tx) => tx,
+            Err(e) if e.0 == StatusCode::FORBIDDEN => return Err(missing().into()),
+            Err(e) => return Err(e.into()),
+        }
+    };
+    resources::platform_role(&mut tx, u.user_id).await?;
+    sqlx::query("SELECT 1 FROM access_review_campaigns c JOIN access_review_items i ON i.campaign_id=c.id WHERE i.id=$1 FOR SHARE OF c")
+        .bind(item)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let (may, active, source): (bool, bool, String) = sqlx::query_as(
+        "SELECT access_review_may_decide(i.id,$2), access_review_item_active(i.id), i.source FROM access_review_items i WHERE i.id=$1",
+    )
+    .bind(item)
+    .bind(u.user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !may {
+        return Err(missing().into());
+    }
+    if !active {
+        return Err(ManagementError::detailed(
+            StatusCode::CONFLICT,
+            "access_review_item_inactive",
+            "This access is no longer in effect; there is nothing to decide".into(),
+            json!({}),
+        ));
+    }
+    if source == "group" {
+        return Err(ManagementError::detailed(
+            StatusCode::CONFLICT,
+            "access_review_remove_requires_manual",
+            "Access provided by an identity provider group is removed at the identity provider: flag it instead".into(),
+            json!({}),
+        ));
+    }
+    if kind == "workspace_membership" && role == "owner" {
+        let allowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM effective_workspace_memberships WHERE workspace_id=$1 AND user_id=$2 AND role='owner') OR EXISTS(SELECT 1 FROM effective_platform_roles WHERE user_id=$2 AND role='admin')")
+            .bind(ws)
+            .bind(u.user_id)
+            .fetch_one(&mut *tx)
+            .await?;
+        if !allowed {
+            return Err(ManagementError::detailed(
+                StatusCode::CONFLICT,
+                "access_review_owner_removal",
+                "Only an owner of the workspace or a Platform Admin removes an owner".into(),
+                json!({}),
+            ));
+        }
+    }
+    sqlx::query("INSERT INTO access_review_decisions(id,item_id,decision,decided_by) VALUES($1,$2,'remove',$3)")
+        .bind(Uuid::now_v7())
+        .bind(item)
+        .bind(u.user_id)
+        .execute(&mut *tx)
+        .await?;
+    audit(
+        &mut tx,
+        u,
+        ws,
+        "access_review.decided",
+        "access_review_item",
+        Some(item),
+        json!({"kind":"remove"}),
+    )
+    .await?;
+    let removed = match ws {
+        Some(ws) => members::revoke_member_locked(&mut tx, u, ws, subject).await,
+        None => directory::revoke_role_locked(&mut tx, u, subject, &role).await,
+    };
+    if let Err(e) = removed {
+        if e.0 == StatusCode::CONFLICT {
+            return Err(ManagementError::detailed(
+                StatusCode::CONFLICT,
+                "access_review_removal_refused",
+                e.1.to_string(),
+                json!({}),
+            ));
+        }
+        return Err(e.into());
+    }
     let result = one_item(&mut tx, item).await?;
     tx.commit().await?;
     Ok(result)

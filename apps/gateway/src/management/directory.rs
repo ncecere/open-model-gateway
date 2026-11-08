@@ -839,30 +839,43 @@ async fn revoke_role(
     if !platform_role_valid(&role) {
         return Err(invalid());
     }
+    revoke_role_locked(&mut tx, &u, id, &role).await?;
+    tx.commit().await?;
+    Ok(ok())
+}
+/// Revokes a person's manual and bootstrap grants of `role` under the
+/// exclusive catalog lock (`catalog_tx(write)`): the last Platform Admin and
+/// any workspace's last owner protected, the person deactivated if no
+/// platform role remains (entitlement loss); audited. Shared by the role
+/// route and #90 access review removals.
+pub(super) async fn revoke_role_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    u: &impl Actor,
+    id: Uuid,
+    role: &str,
+) -> Result<(), ApiError> {
     if role == "admin" {
-        let retained:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM platform_role_grants WHERE user_id=$1 AND role='admin' AND source='group' AND revoked_at IS NULL)").bind(id).fetch_one(&mut *tx).await?;
+        let retained:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM platform_role_grants WHERE user_id=$1 AND role='admin' AND source='group' AND revoked_at IS NULL)").bind(id).fetch_one(&mut **tx).await?;
         if !retained {
-            protect_admin(&mut tx, id).await?;
+            protect_admin(tx, id).await?;
         }
     }
-    let remaining:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM platform_role_grants WHERE user_id=$1 AND revoked_at IS NULL AND NOT(role=$2 AND source IN ('manual','bootstrap')))").bind(id).bind(&role).fetch_one(&mut *tx).await?;
+    let remaining:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM platform_role_grants WHERE user_id=$1 AND revoked_at IS NULL AND NOT(role=$2 AND source IN ('manual','bootstrap')))").bind(id).bind(role).fetch_one(&mut **tx).await?;
     if !remaining {
-        protect_owners(&mut tx, id).await?;
+        protect_owners(tx, id).await?;
     }
-    sqlx::query("UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND role=$2 AND source IN ('manual','bootstrap') AND revoked_at IS NULL").bind(id).bind(&role).execute(&mut *tx).await?;
-    deactivate_unentitled(&mut tx, &[id]).await?;
+    sqlx::query("UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND role=$2 AND source IN ('manual','bootstrap') AND revoked_at IS NULL").bind(id).bind(role).execute(&mut **tx).await?;
+    deactivate_unentitled(tx, &[id]).await?;
     audit(
-        &mut tx,
-        &u,
+        tx,
+        u,
         None,
         "role.revoked",
         "user",
         Some(id),
         json!({"role":role}),
     )
-    .await?;
-    tx.commit().await?;
-    Ok(ok())
+    .await
 }
 async fn deactivate_unentitled(
     tx: &mut Transaction<'_, Postgres>,

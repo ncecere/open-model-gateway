@@ -1292,6 +1292,9 @@ BEGIN
     BEGIN INSERT INTO access_review_decisions(id,item_id,decision,decided_by,decided_at) VALUES(gen_random_uuid(),it,'keep',t_reviewer,now()-interval '1 day'); RAISE EXCEPTION 'decision time forgeable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
     BEGIN INSERT INTO access_review_decisions(id,item_id,decision,decided_by) VALUES(gen_random_uuid(),it,'flag_idp',t_reviewer); RAISE EXCEPTION 'manual access flagged for the IdP'; EXCEPTION WHEN check_violation THEN NULL; END;
     INSERT INTO access_review_decisions(id,item_id,decision,decided_by) VALUES(gen_random_uuid(),it,'keep',t_reviewer);
+    -- 0078: a remove decision is recorded only with the removal of the access.
+    BEGIN SET CONSTRAINTS access_review_removal_applied IMMEDIATE; INSERT INTO access_review_decisions(id,item_id,decision,decided_by) VALUES(gen_random_uuid(),it,'remove',t_reviewer); RAISE EXCEPTION 'remove recorded without the removal'; EXCEPTION WHEN check_violation THEN NULL; END;
+    SET CONSTRAINTS access_review_removal_applied DEFERRED;
     BEGIN UPDATE access_review_decisions SET decision='flag_idp' WHERE item_id=it; RAISE EXCEPTION 'decision mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
     BEGIN DELETE FROM access_review_decisions WHERE item_id=it; RAISE EXCEPTION 'decision removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
     BEGIN DELETE FROM access_review_assignments WHERE item_id=it; RAISE EXCEPTION 'assignment removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;

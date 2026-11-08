@@ -6711,7 +6711,8 @@
               "required": [
                 "pending",
                 "keep",
-                "flag_idp"
+                "flag_idp",
+                "remove"
               ],
               "properties": {
                 "pending": {
@@ -6725,6 +6726,11 @@
                   "maximum": 5000
                 },
                 "flag_idp": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5000
+                },
+                "remove": {
                   "type": "integer",
                   "minimum": 0,
                   "maximum": 5000
@@ -6825,6 +6831,7 @@
           "enum": [
             "keep",
             "flag_idp",
+            "remove",
             null
           ],
           "description": "The latest decision, or null while pending."
@@ -7011,7 +7018,8 @@
               "required": [
                 "pending",
                 "keep",
-                "flag_idp"
+                "flag_idp",
+                "remove"
               ],
               "properties": {
                 "pending": {
@@ -7025,6 +7033,11 @@
                   "maximum": 5000
                 },
                 "flag_idp": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5000
+                },
+                "remove": {
                   "type": "integer",
                   "minimum": 0,
                   "maximum": 5000
@@ -7175,7 +7188,8 @@
               "required": [
                 "pending",
                 "keep",
-                "flag_idp"
+                "flag_idp",
+                "remove"
               ],
               "properties": {
                 "pending": {
@@ -7189,6 +7203,11 @@
                   "maximum": 5000
                 },
                 "flag_idp": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5000
+                },
+                "remove": {
                   "type": "integer",
                   "minimum": 0,
                   "maximum": 5000
@@ -7225,7 +7244,8 @@
               "type": "string",
               "enum": [
                 "keep",
-                "flag_idp"
+                "flag_idp",
+                "remove"
               ]
             }
           }
@@ -7237,7 +7257,8 @@
               "type": "string",
               "enum": [
                 "keep",
-                "flag_idp"
+                "flag_idp",
+                "remove"
               ]
             }
           ],
@@ -7353,7 +7374,8 @@
           "type": "string",
           "enum": [
             "keep",
-            "flag_idp"
+            "flag_idp",
+            "remove"
           ]
         },
         "decided_by": {
@@ -7452,6 +7474,7 @@
           "enum": [
             "keep",
             "flag_idp",
+            "remove",
             null
           ],
           "description": "The latest decision, or null while pending."
