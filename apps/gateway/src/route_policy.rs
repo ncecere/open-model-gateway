@@ -407,6 +407,21 @@ pub(crate) const ROUTES: &[Route] = &[
         PlatformWrite,
         DENIED
     ),
+    route!(
+        "POST",
+        "/api/v1/platform/access-reviews/{id}/items/{item}/reviewer",
+        PlatformWrite,
+        DENIED
+    ),
+    // #90 slice 2: each reviewer's inbox and decisions (who may decide is
+    // derived live per item; anything else is 404).
+    route!("GET", "/api/v1/me/access-reviews", Browser, DENIED),
+    route!(
+        "POST",
+        "/api/v1/me/access-reviews/{item}/decision",
+        Browser,
+        DENIED
+    ),
     route!("GET", "/api/v1/me", Browser, DENIED),
     route!("GET", "/api/v1/me/summary", Browser, DENIED),
     route!("GET", "/api/v1/me/keys", Browser, DENIED),

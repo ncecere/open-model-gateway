@@ -3727,6 +3727,66 @@ async fn access_review_fixtures(c: &Client, admin: &Browser, f: &Fixture, pool: 
         None,
     )
     .await;
+    // #90 slice 2: decisions and assignments before the reads, so items are
+    // seen pending and decided, assigned and automatic, membership and
+    // platform, with and without a person's data.
+    const INBOX: &str = "/api/v1/me/access-reviews";
+    let owner = browser(pool, &f.owner).await;
+    let member_item = review_item(pool, &both, f.member.user_id, true).await;
+    let removed_item = review_item(pool, &both, removed, true).await;
+    let auditor_item = review_item(pool, &both, f.auditor.user_id, false).await;
+    let assign_path = |item: Uuid| format!("{REVIEWS}/{}/items/{item}/reviewer", id(&both));
+    let decide_path = |item: Uuid| format!("{INBOX}/{item}/decision");
+    c.ok(&owner, "GET", &target(INBOX, "limit=50&offset=0"), None)
+        .await;
+    c.ok(
+        &owner,
+        "POST",
+        &decide_path(member_item),
+        Some(json!({"decision":"keep"})),
+    )
+    .await;
+    c.ok(
+        admin,
+        "POST",
+        &assign_path(member_item),
+        Some(json!({"user_id":f.admin.user_id})),
+    )
+    .await;
+    c.ok(
+        admin,
+        "POST",
+        &assign_path(member_item),
+        Some(json!([null])),
+    )
+    .await;
+    c.ok(
+        admin,
+        "POST",
+        &assign_path(removed_item),
+        Some(json!({"user_id":f.admin.user_id})),
+    )
+    .await;
+    c.ok(admin, "POST", &assign_path(auditor_item), Some(json!({})))
+        .await;
+    c.ok(&owner, "GET", &target(INBOX, "limit=50&offset=0"), None)
+        .await;
+    c.ok(admin, "GET", &target(INBOX, "limit=50&offset=0"), None)
+        .await;
+    c.ok(
+        admin,
+        "POST",
+        &decide_path(removed_item),
+        Some(json!(["keep"])),
+    )
+    .await;
+    c.ok(
+        admin,
+        "POST",
+        &decide_path(auditor_item),
+        Some(json!({"decision":"keep"})),
+    )
+    .await;
     c.ok(&auditor, "GET", &target(REVIEWS, "limit=50&offset=0"), None)
         .await;
     for campaign in [&both, &roles] {
@@ -3749,6 +3809,26 @@ async fn access_review_fixtures(c: &Client, admin: &Browser, f: &Fixture, pool: 
         None,
     )
     .await;
+    // Decision and assignment vectors on an open campaign with a
+    // group-provided item (so keep and flag_idp both apply).
+    let grouped = plain_user(pool, "review-group").await;
+    sqlx::query("INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source,mapping_id) VALUES($1,$2,'member','group',$3)")
+        .bind(f.team)
+        .bind(grouped)
+        .bind(Uuid::new_v4())
+        .execute(pool)
+        .await
+        .unwrap();
+    let open = c
+        .ok(
+            admin,
+            "POST",
+            REVIEWS,
+            Some(json!({"name":"Contract decisions","subjects":["workspace_memberships"],"workspace_ids":[f.team]})),
+        )
+        .await;
+    let group_item = review_item(pool, &open, grouped, true).await;
+    let open_assign = format!("{REVIEWS}/{}/items/{group_item}/reviewer", id(&open));
     // Vectors. Accepted bodies start campaigns: close every open one first
     // so the 20-open limit never decides a vector.
     let close_open = || async {
@@ -3759,6 +3839,73 @@ async fn access_review_fixtures(c: &Client, admin: &Browser, f: &Fixture, pool: 
             .unwrap();
     };
     let mut o = c.observed.lock().await;
+    c.guarded(
+        "GET /me/access-reviews",
+        query_vectors_fixed(
+            &mut o,
+            "GET",
+            INBOX,
+            &[("limit", "50"), ("offset", "0")],
+            async |q| c.raw(&owner, "GET", &target(INBOX, &q), None, &[]).await,
+        ),
+    )
+    .await;
+    for valid in [json!({"decision":"flag_idp"}), json!(["keep"])] {
+        c.guarded(
+            "POST /me/access-reviews/{item}/decision",
+            body_vectors_http(
+                &mut o,
+                "POST",
+                "/api/v1/me/access-reviews/{item}/decision",
+                valid,
+                async |body| {
+                    Probe::from(
+                        c.raw(&owner, "POST", &decide_path(group_item), Some(body), &[])
+                            .await,
+                    )
+                },
+            ),
+        )
+        .await;
+    }
+    for valid in [json!({"user_id":f.admin.user_id}), json!([null])] {
+        c.guarded(
+            "POST /platform/access-reviews/{id}/items/{item}/reviewer",
+            body_vectors_http(
+                &mut o,
+                "POST",
+                "/api/v1/platform/access-reviews/{id}/items/{item}/reviewer",
+                valid,
+                async |body| {
+                    // Described, not expressed: the reviewer must be able to
+                    // review the item. The real handler decides any other id.
+                    let reviewer = if body.is_array() {
+                        body[0].clone()
+                    } else {
+                        body["user_id"].clone()
+                    };
+                    let ineligible = match reviewer.as_str().and_then(|s| Uuid::parse_str(s).ok()) {
+                        Some(r) => {
+                            !sqlx::query_scalar::<_, bool>("SELECT access_review_candidate($1,$2)")
+                                .bind(group_item)
+                                .bind(r)
+                                .fetch_one(pool)
+                                .await
+                                .unwrap()
+                        }
+                        None => false,
+                    };
+                    let captured = c.raw(admin, "POST", &open_assign, Some(body), &[]).await;
+                    if ineligible && captured.status == StatusCode::CONFLICT {
+                        Probe::decided(captured, true)
+                    } else {
+                        Probe::from(captured)
+                    }
+                },
+            ),
+        )
+        .await;
+    }
     c.guarded(
         "GET /platform/access-reviews",
         query_vectors_fixed(
@@ -3840,4 +3987,15 @@ async fn access_review_fixtures(c: &Client, admin: &Browser, f: &Fixture, pool: 
         )
         .await;
     }
+}
+
+/// The campaign's item for this person: a membership item or a platform role item.
+async fn review_item(pool: &PgPool, campaign: &Value, user: Uuid, membership: bool) -> Uuid {
+    sqlx::query_scalar("SELECT id FROM access_review_items WHERE campaign_id=$1 AND user_id=$2 AND (workspace_id IS NOT NULL)=$3")
+        .bind(id(campaign))
+        .bind(user)
+        .bind(membership)
+        .fetch_one(pool)
+        .await
+        .unwrap()
 }

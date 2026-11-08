@@ -1622,6 +1622,168 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
         r.status == StatusCode::PAYLOAD_TOO_LARGE,
         "unexpected value: r.status"
     );
+    // #90: the reviewer inbox and decisions (under /me).
+    Box::pin(access_review_inbox_fixtures(
+        &client,
+        base,
+        &owner,
+        &admin,
+        &f,
+        &pool,
+        &mut observed,
+    ))
+    .await;
     drop(servers);
     observed.finish(openapi::responses::IDENTITY_SELF_SERVICE_AREAS);
+}
+
+/// #90 slice 2: the inbox seen pending and decided, assigned and automatic,
+/// membership and platform, with and without a person's data; decisions on
+/// each kind; query and body vectors (a group-provided item, so keep and
+/// flag_idp both apply).
+async fn access_review_inbox_fixtures(
+    client: &reqwest::Client,
+    base: &str,
+    owner: &Browser,
+    admin: &Browser,
+    f: &Fixture,
+    pool: &PgPool,
+    observed: &mut PositiveFixtures,
+) {
+    const REVIEWS: &str = "/api/v1/platform/access-reviews";
+    const INBOX: &str = "/api/v1/me/access-reviews";
+    sqlx::query("UPDATE users SET display_name='Contract Member' WHERE id=$1")
+        .bind(f.member.user_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    let (removed, grouped) = (Uuid::new_v4(), Uuid::new_v4());
+    for (id, email) in [
+        (removed, "review-removed@example.test"),
+        (grouped, "review-group@example.test"),
+    ] {
+        sqlx::query("INSERT INTO users(id,email) VALUES($1,$2)")
+            .bind(id)
+            .bind(email)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    member(pool, f.team, removed, "member").await;
+    sqlx::query("INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source,mapping_id) VALUES($1,$2,'member','group',$3)")
+        .bind(f.team)
+        .bind(grouped)
+        .bind(Uuid::new_v4())
+        .execute(pool)
+        .await
+        .unwrap();
+    let (status, campaign) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        REVIEWS,
+        json!({"name":"Contract inbox","subjects":["workspace_memberships","platform_roles"],"workspace_ids":[f.team]}),
+    )
+    .await;
+    assert!(status == StatusCode::OK, "unexpected value: status");
+    sqlx::query("UPDATE users SET email=NULL WHERE id=$1")
+        .bind(removed)
+        .execute(pool)
+        .await
+        .unwrap();
+    let item_of = async |user: Uuid| -> Uuid {
+        sqlx::query_scalar("SELECT id FROM access_review_items WHERE campaign_id=$1 AND user_id=$2")
+            .bind(id(&campaign))
+            .bind(user)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    };
+    let member_item = item_of(f.member.user_id).await;
+    let removed_item = item_of(removed).await;
+    let auditor_item = item_of(f.auditor.user_id).await;
+    let group_item = item_of(grouped).await;
+    let decide = |item: Uuid| format!("{INBOX}/{item}/decision");
+    let inbox = target(INBOX, "limit=50&offset=0");
+    let r = send(client, base, Some(owner), "GET", &inbox, None).await;
+    assert!(!body(&r)["data"].as_array().unwrap().is_empty());
+    observed.observe(&r);
+    let r = send(
+        client,
+        base,
+        Some(owner),
+        "POST",
+        &decide(member_item),
+        Some(json!({"decision":"keep"})),
+    )
+    .await;
+    assert!(r.status == StatusCode::OK, "unexpected value: r.status");
+    observed.observe(&r);
+    let (status, _) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        &format!("{REVIEWS}/{}/items/{removed_item}/reviewer", id(&campaign)),
+        json!({"user_id":f.admin.user_id}),
+    )
+    .await;
+    assert!(status == StatusCode::OK, "unexpected value: status");
+    for who in [owner, admin] {
+        let r = send(client, base, Some(who), "GET", &inbox, None).await;
+        assert!(!body(&r)["data"].as_array().unwrap().is_empty());
+        observed.observe(&r);
+    }
+    for item in [removed_item, auditor_item] {
+        let r = send(
+            client,
+            base,
+            Some(admin),
+            "POST",
+            &decide(item),
+            Some(json!(["keep"])),
+        )
+        .await;
+        assert!(r.status == StatusCode::OK, "unexpected value: r.status");
+        observed.observe(&r);
+    }
+    query_vectors_fixed(
+        observed,
+        "GET",
+        INBOX,
+        &[("limit", "50"), ("offset", "0")],
+        async |query| {
+            send(
+                client,
+                base,
+                Some(owner),
+                "GET",
+                &target(INBOX, &query),
+                None,
+            )
+            .await
+        },
+    )
+    .await;
+    for valid in [json!({"decision":"flag_idp"}), json!(["keep"])] {
+        body_vectors_http(
+            observed,
+            "POST",
+            "/api/v1/me/access-reviews/{item}/decision",
+            valid,
+            async |request| {
+                Probe::from(
+                    send(
+                        client,
+                        base,
+                        Some(owner),
+                        "POST",
+                        &decide(group_item),
+                        Some(request),
+                    )
+                    .await,
+                )
+            },
+        )
+        .await;
+    }
 }

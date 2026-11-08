@@ -3202,6 +3202,33 @@
             "additionalProperties": false,
             "description": "Items by kind and by source, and how many are no longer in effect.",
             "properties": {
+              "by_decision": {
+                "additionalProperties": false,
+                "description": "Items by their latest decision.",
+                "properties": {
+                  "flag_idp": {
+                    "maximum": 5000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "keep": {
+                    "maximum": 5000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "pending": {
+                    "maximum": 5000,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "pending",
+                  "keep",
+                  "flag_idp"
+                ],
+                "type": "object"
+              },
               "by_kind": {
                 "additionalProperties": false,
                 "properties": {
@@ -3253,12 +3280,20 @@
                 "maximum": 5000,
                 "minimum": 0,
                 "type": "integer"
+              },
+              "without_reviewer": {
+                "description": "Items still in effect that nobody may decide now (for example a sole owner's own access): a Platform Admin can assign them.",
+                "maximum": 5000,
+                "minimum": 0,
+                "type": "integer"
               }
             },
             "required": [
               "by_kind",
               "by_source",
-              "inactive"
+              "inactive",
+              "by_decision",
+              "without_reviewer"
             ],
             "type": "object"
           },
@@ -3329,6 +3364,33 @@
             "additionalProperties": false,
             "description": "Items by kind and by source, and how many are no longer in effect.",
             "properties": {
+              "by_decision": {
+                "additionalProperties": false,
+                "description": "Items by their latest decision.",
+                "properties": {
+                  "flag_idp": {
+                    "maximum": 5000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "keep": {
+                    "maximum": 5000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "pending": {
+                    "maximum": 5000,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "pending",
+                  "keep",
+                  "flag_idp"
+                ],
+                "type": "object"
+              },
               "by_kind": {
                 "additionalProperties": false,
                 "properties": {
@@ -3380,12 +3442,20 @@
                 "maximum": 5000,
                 "minimum": 0,
                 "type": "integer"
+              },
+              "without_reviewer": {
+                "description": "Items still in effect that nobody may decide now (for example a sole owner's own access): a Platform Admin can assign them.",
+                "maximum": 5000,
+                "minimum": 0,
+                "type": "integer"
               }
             },
             "required": [
               "by_kind",
               "by_source",
-              "inactive"
+              "inactive",
+              "by_decision",
+              "without_reviewer"
             ],
             "type": "object"
           },
@@ -3458,6 +3528,33 @@
             "additionalProperties": false,
             "description": "Items by kind and by source, and how many are no longer in effect.",
             "properties": {
+              "by_decision": {
+                "additionalProperties": false,
+                "description": "Items by their latest decision.",
+                "properties": {
+                  "flag_idp": {
+                    "maximum": 5000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "keep": {
+                    "maximum": 5000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "pending": {
+                    "maximum": 5000,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "pending",
+                  "keep",
+                  "flag_idp"
+                ],
+                "type": "object"
+              },
               "by_kind": {
                 "additionalProperties": false,
                 "properties": {
@@ -3509,12 +3606,20 @@
                 "maximum": 5000,
                 "minimum": 0,
                 "type": "integer"
+              },
+              "without_reviewer": {
+                "description": "Items still in effect that nobody may decide now (for example a sole owner's own access): a Platform Admin can assign them.",
+                "maximum": 5000,
+                "minimum": 0,
+                "type": "integer"
               }
             },
             "required": [
               "by_kind",
               "by_source",
-              "inactive"
+              "inactive",
+              "by_decision",
+              "without_reviewer"
             ],
             "type": "object"
           },
@@ -3575,16 +3680,43 @@
         ],
         "type": "object"
       },
-      "AccessReviewItem": {
+      "AccessReviewInboxItem": {
         "additionalProperties": false,
-        "description": "One grant as it was when the campaign started (role, source, grant time); the workspace name and the person are shown as they are now. workspace_id and workspace_name are null for platform roles; email is null once the person's data has been removed.",
+        "description": "An item the viewer may decide, with its campaign's name and due date.",
         "properties": {
           "active": {
             "description": "Whether the grant is still in effect: not revoked, the person neither disabled nor cleaned up, the workspace (if any) not disabled.",
             "type": "boolean"
           },
+          "campaign_id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "campaign_name": {
+            "type": "string"
+          },
+          "decided_at": {
+            "$ref": "#/components/schemas/IdentityNullableTime"
+          },
+          "decided_by": {
+            "$ref": "#/components/schemas/IdentityNullableUuid"
+          },
+          "decision": {
+            "description": "The latest decision, or null while pending.",
+            "enum": [
+              "keep",
+              "flag_idp",
+              null
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "display_name": {
             "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "due_at": {
+            "$ref": "#/components/schemas/IdentityTime"
           },
           "email": {
             "$ref": "#/components/schemas/IdentityNullableString"
@@ -3594,6 +3726,9 @@
           },
           "id": {
             "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "reviewer_user_id": {
+            "$ref": "#/components/schemas/IdentityNullableUuid"
           },
           "role": {
             "enum": [
@@ -3640,7 +3775,205 @@
           "role",
           "source",
           "granted_at",
-          "active"
+          "active",
+          "campaign_id",
+          "decision",
+          "decided_by",
+          "decided_at",
+          "reviewer_user_id",
+          "campaign_name",
+          "due_at"
+        ],
+        "type": "object"
+      },
+      "AccessReviewItem": {
+        "additionalProperties": false,
+        "description": "One grant as it was when the campaign started (role, source, grant time); the workspace name and the person are shown as they are now. workspace_id and workspace_name are null for platform roles; email is null once the person's data has been removed.",
+        "properties": {
+          "active": {
+            "description": "Whether the grant is still in effect: not revoked, the person neither disabled nor cleaned up, the workspace (if any) not disabled.",
+            "type": "boolean"
+          },
+          "campaign_id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "decided_at": {
+            "$ref": "#/components/schemas/IdentityNullableTime"
+          },
+          "decided_by": {
+            "$ref": "#/components/schemas/IdentityNullableUuid"
+          },
+          "decision": {
+            "description": "The latest decision, or null while pending.",
+            "enum": [
+              "keep",
+              "flag_idp",
+              null
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "email": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "granted_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "reviewer_user_id": {
+            "$ref": "#/components/schemas/IdentityNullableUuid"
+          },
+          "role": {
+            "enum": [
+              "owner",
+              "admin",
+              "member",
+              "auditor"
+            ],
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "manual",
+              "group",
+              "bootstrap"
+            ],
+            "type": "string"
+          },
+          "subject_kind": {
+            "enum": [
+              "workspace_membership",
+              "platform_role"
+            ],
+            "type": "string"
+          },
+          "user_id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "workspace_id": {
+            "$ref": "#/components/schemas/IdentityNullableUuid"
+          },
+          "workspace_name": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          }
+        },
+        "required": [
+          "id",
+          "subject_kind",
+          "workspace_id",
+          "workspace_name",
+          "user_id",
+          "email",
+          "display_name",
+          "role",
+          "source",
+          "granted_at",
+          "active",
+          "campaign_id",
+          "decision",
+          "decided_by",
+          "decided_at",
+          "reviewer_user_id"
+        ],
+        "type": "object"
+      },
+      "AccessReviewItemDecided": {
+        "additionalProperties": false,
+        "description": "An item with the decision just recorded.",
+        "properties": {
+          "active": {
+            "description": "Whether the grant is still in effect: not revoked, the person neither disabled nor cleaned up, the workspace (if any) not disabled.",
+            "type": "boolean"
+          },
+          "campaign_id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "decided_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "decided_by": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "decision": {
+            "enum": [
+              "keep",
+              "flag_idp"
+            ],
+            "type": "string"
+          },
+          "display_name": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "email": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          },
+          "granted_at": {
+            "$ref": "#/components/schemas/IdentityTime"
+          },
+          "id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "reviewer_user_id": {
+            "$ref": "#/components/schemas/IdentityNullableUuid"
+          },
+          "role": {
+            "enum": [
+              "owner",
+              "admin",
+              "member",
+              "auditor"
+            ],
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "manual",
+              "group",
+              "bootstrap"
+            ],
+            "type": "string"
+          },
+          "subject_kind": {
+            "enum": [
+              "workspace_membership",
+              "platform_role"
+            ],
+            "type": "string"
+          },
+          "user_id": {
+            "$ref": "#/components/schemas/IdentityUuid"
+          },
+          "workspace_id": {
+            "$ref": "#/components/schemas/IdentityNullableUuid"
+          },
+          "workspace_name": {
+            "$ref": "#/components/schemas/IdentityNullableString"
+          }
+        },
+        "required": [
+          "id",
+          "subject_kind",
+          "workspace_id",
+          "workspace_name",
+          "user_id",
+          "email",
+          "display_name",
+          "role",
+          "source",
+          "granted_at",
+          "active",
+          "campaign_id",
+          "decision",
+          "decided_by",
+          "decided_at",
+          "reviewer_user_id"
         ],
         "type": "object"
       },
@@ -5408,7 +5741,11 @@
                   "access_review_changed",
                   "access_review_closed",
                   "access_review_empty",
+                  "access_review_flag_requires_group",
+                  "access_review_item_inactive",
                   "access_review_limit",
+                  "access_review_own_access",
+                  "access_review_reviewer_ineligible",
                   "access_review_too_large",
                   "alert_rule_kind_fixed",
                   "alert_rule_limit",
@@ -43809,6 +44146,22 @@
       "get_api_v1_me_access_requests_by_idResponse": {
         "$ref": "#/components/schemas/IdentityOwnAccessRequest"
       },
+      "get_api_v1_me_access_reviewsRequest": false,
+      "get_api_v1_me_access_reviewsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/AccessReviewInboxItem"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "type": "object"
+      },
       "get_api_v1_me_exportRequest": false,
       "get_api_v1_me_exportResponse": {
         "additionalProperties": false,
@@ -47268,6 +47621,45 @@
       "post_api_v1_me_access_requests_by_id_withdrawResponse": {
         "$ref": "#/components/schemas/IdentityWithdrawnAccessRequest"
       },
+      "post_api_v1_me_access_reviews_by_item_decisionRequest": {
+        "description": "Serde accepts the closed object or the positional array [decision].",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "decision": {
+                "enum": [
+                  "keep",
+                  "flag_idp"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "decision"
+            ],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "enum": [
+                  "keep",
+                  "flag_idp"
+                ],
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          }
+        ]
+      },
+      "post_api_v1_me_access_reviews_by_item_decisionResponse": {
+        "$ref": "#/components/schemas/AccessReviewItemDecided"
+      },
       "post_api_v1_me_notifications_readRequest": {
         "description": "Serde accepts the closed object or the positional array [ids, all], where only trailing all may be omitted. The handler refuses (400) unless EXACTLY ONE of all=true or a non-empty ids array of at most 200 is given; the schema carries that rule in both forms.",
         "oneOf": [
@@ -47503,6 +47895,36 @@
       "post_api_v1_platform_access_reviews_by_id_closeRequest": false,
       "post_api_v1_platform_access_reviews_by_id_closeResponse": {
         "$ref": "#/components/schemas/AccessReviewCampaignClosed"
+      },
+      "post_api_v1_platform_access_reviews_by_id_items_by_item_reviewerRequest": {
+        "description": "Serde accepts the closed object or the positional array [user_id].",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "user_id omitted or null: back to the automatic reviewers.",
+            "properties": {
+              "user_id": {
+                "$ref": "#/components/schemas/IdentityNullableUuid"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          {
+            "items": false,
+            "maxItems": 1,
+            "minItems": 1,
+            "prefixItems": [
+              {
+                "$ref": "#/components/schemas/IdentityNullableUuid"
+              }
+            ],
+            "type": "array"
+          }
+        ]
+      },
+      "post_api_v1_platform_access_reviews_by_id_items_by_item_reviewerResponse": {
+        "$ref": "#/components/schemas/AccessReviewItem"
       },
       "post_api_v1_platform_admin_tokensRequest": {
         "oneOf": [
@@ -52575,6 +52997,218 @@
         "x-omg-token-policy": "Denied"
       }
     },
+    "/api/v1/me/access-reviews": {
+      "get": {
+        "description": "#90: the access review items the signed-in person may decide now (open campaigns, access still in effect): items assigned to them, or else items of workspaces they own or administer (membership items) and, for Platform Admins, elevated platform role items; never their own access. Each with its campaign and latest decision.",
+        "operationId": "get_api_v1_me_access_reviews",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 100,
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "schema": {
+              "default": 0,
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/get_api_v1_me_access_reviewsResponse"
+                }
+              }
+            },
+            "description": "Successful handler representation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Invalid input or malformed extraction"
+          },
+          "401": {
+            "$ref": "#/components/responses/ManagementMiddleware401Variant2"
+          },
+          "403": {
+            "$ref": "#/components/responses/ManagementMiddleware403Variant3"
+          },
+          "413": {
+            "$ref": "#/components/responses/ManagementMiddleware413Variant1"
+          },
+          "429": {
+            "$ref": "#/components/responses/ManagementMiddleware429Variant1"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+          }
+        },
+        "security": [
+          {
+            "browserSession": []
+          }
+        ],
+        "x-omg-access": "Browser",
+        "x-omg-middleware-responses": {
+          "$ref": "#/x-omg-middleware-contracts/management"
+        },
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_api_v1_me_access_reviewsRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_api_v1_me_access_reviewsResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/api/v1/me/access-reviews/{item}/decision": {
+      "post": {
+        "description": "#90: records the signed-in reviewer's decision on an item (append-only; the latest counts; repeating one's own latest decision changes nothing). keep, or flag_idp for access provided by an identity provider group. An item the viewer may not decide (not theirs, unknown, or its campaign closed) is 404. 409: access_review_item_inactive (the access is no longer in effect), access_review_flag_requires_group.",
+        "operationId": "post_api_v1_me_access_reviews_by_item_decision",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "item",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_me_access_reviews_by_item_decisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_me_access_reviews_by_item_decisionResponse"
+                }
+              }
+            },
+            "description": "Successful handler representation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Invalid input or malformed extraction"
+          },
+          "401": {
+            "$ref": "#/components/responses/ManagementMiddleware401Variant2"
+          },
+          "403": {
+            "$ref": "#/components/responses/ManagementMiddleware403Variant3"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not an item the viewer may decide"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "access_review_item_inactive or access_review_flag_requires_group"
+          },
+          "413": {
+            "$ref": "#/components/responses/ManagementMiddleware413Variant1"
+          },
+          "415": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "JSON content type required"
+          },
+          "422": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Axum JSON extraction refusal"
+          },
+          "429": {
+            "$ref": "#/components/responses/ManagementMiddleware429Variant1"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+          }
+        },
+        "security": [
+          {
+            "browserSession": [],
+            "csrfToken": [],
+            "origin": []
+          }
+        ],
+        "x-omg-access": "Browser",
+        "x-omg-middleware-responses": {
+          "$ref": "#/x-omg-middleware-contracts/management"
+        },
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_api_v1_me_access_reviews_by_item_decisionRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_api_v1_me_access_reviews_by_item_decisionResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
     "/api/v1/me/export": {
       "get": {
         "description": "Own subject export; no other user's private data or credentials. Inclusive UTC range at most 93 days, default last 30. Lists are capped and explicitly truncated.",
@@ -54025,6 +54659,140 @@
         },
         "x-omg-response-schema": {
           "$ref": "#/components/schemas/get_api_v1_platform_access_reviews_by_id_itemsResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/api/v1/platform/access-reviews/{id}/items/{item}/reviewer": {
+      "post": {
+        "description": "#90: Platform Admin, browser only. Assigns the item to one reviewer (an owner or admin of the item's workspace, or a Platform Admin; for platform role items a Platform Admin; never the person under review), or with null back to the automatic reviewers. Append-only, audited. 404 unless the item belongs to that campaign; 409 access_review_closed, access_review_reviewer_ineligible, access_review_own_access (nobody chooses the reviewer of their own access). An assignee who no longer qualifies is ignored: the automatic reviewers decide again.",
+        "operationId": "post_api_v1_platform_access_reviews_by_id_items_by_item_reviewer",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/IdentityUuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/post_api_v1_platform_access_reviews_by_id_items_by_item_reviewerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/post_api_v1_platform_access_reviews_by_id_items_by_item_reviewerResponse"
+                }
+              }
+            },
+            "description": "Successful handler representation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Invalid input or malformed extraction"
+          },
+          "401": {
+            "$ref": "#/components/responses/ManagementMiddleware401Variant2"
+          },
+          "403": {
+            "$ref": "#/components/responses/ManagementMiddleware403Variant3"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown campaign item"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "access_review_closed, access_review_reviewer_ineligible or access_review_own_access"
+          },
+          "413": {
+            "$ref": "#/components/responses/ManagementMiddleware413Variant1"
+          },
+          "415": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "JSON content type required"
+          },
+          "422": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Axum JSON extraction refusal"
+          },
+          "429": {
+            "$ref": "#/components/responses/ManagementMiddleware429Variant1"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagementMiddleware503Variant3"
+          }
+        },
+        "security": [
+          {
+            "browserSession": [],
+            "csrfToken": [],
+            "origin": []
+          }
+        ],
+        "x-omg-access": "PlatformWrite",
+        "x-omg-middleware-responses": {
+          "$ref": "#/x-omg-middleware-contracts/management"
+        },
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_access_reviews_by_id_items_by_item_reviewerRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_access_reviews_by_id_items_by_item_reviewerResponse"
         },
         "x-omg-token-policy": "Denied"
       }
