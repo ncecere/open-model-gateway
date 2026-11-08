@@ -173,7 +173,7 @@ describe("Access-request notifications (#83)", () => {
 describe("Access review reminders (#90)", () => {
   const due: Notification = { source: "access_review", id: "camp-1", state: "due_soon", campaign_name: "Q4 review", due_at: "2026-11-20T12:00:00Z", at: "2026-11-19T12:00:00Z", read: false };
   const overdue: Notification = { source: "access_review", id: "camp-2", state: "overdue", campaign_name: "Q3 review", due_at: "2026-10-01T12:00:00Z", at: "2026-10-01T12:00:00Z", read: true };
-  it("names the campaign and its state, never what is under review, and offers no alert actions", async () => {
+  it("names the campaign and its state, never what is under review, and opens the reviewer list, not alert actions", async () => {
     const user = userEvent.setup();
     serve(session, path => path.startsWith("/api/v1/me/notifications?") ? { data: [due, overdue], has_more: false } : undefined);
     const { client } = await mount("/notifications");
@@ -186,6 +186,7 @@ describe("Access review reminders (#90)", () => {
     await user.click(within(row).getByRole("button", { name: /actions/i }));
     expect(await screen.findByRole("menuitem", { name: "Mark as read" })).toBeTruthy();
     for (const action of ["Open rule", "Open keys", "Open holds", "Open requests"]) expect(screen.queryByRole("menuitem", { name: action })).toBeNull();
+    expect((await screen.findByRole("menuitem", { name: "Open review" })).getAttribute("href")).toBe("/access-reviews");
     client.clear();
   });
 });

@@ -243,6 +243,8 @@ export function NotificationsPage({ session }: { session: Session }) {
   const holdsLink = (n: Notification): DashboardSearch | undefined => isAlertNotification(n) ? agedHoldLink(session, n) : undefined;
   // A reminder names its campaign and due date only.
   const whereOf = (n: Notification) => isRequestNotification(n) ? n.workspace_name_at_request : isReviewNotification(n) ? `Due ${new Date(n.due_at).toLocaleDateString()}` : whereText(n);
+  // #90: a reminder opens the reviewer's list.
+  const reviewLink = (n: Notification): DashboardSearch | undefined => isReviewNotification(n) ? { page: "access-reviews" } : undefined;
   const title = (n: Notification) => isRequestNotification(n) ? requestNotificationText(n) : isReviewNotification(n) ? reviewNotificationText(n) : n.summary;
   const columns: DataTableColumn<Notification>[] = [
     { id: "alert", header: "Alert", accessor: title, rowHeader: true, hideable: false, cell: n => <CellText primary={n.read ? title(n) : <strong>{title(n)}</strong>} secondary={isRequestNotification(n) ? "Access request" : isReviewNotification(n) ? "Access review" : eventSecondary(n)} title={isAlertNotification(n) ? unknownCostNote(n) : undefined} /> },
@@ -254,12 +256,13 @@ export function NotificationsPage({ session }: { session: Session }) {
     <Heading title="Notifications" description="Alerts, access requests and access reviews for what you look after." actions={<Button variant="secondary" loading={busy} onClick={() => void markRead({ all: true })}><CheckCheck aria-hidden /> Mark all read</Button>} />
     <DirectoryTable<Notification> path={notificationsPath} label="Notifications" storageKey="notifications" columns={columns} rowKey={n => n.id} rowLabel={title}
       facets={[{ id: "status", label: "Show", allLabel: "All", options: [{ value: "unread", label: "Unread" }] }]}
-      rowActions={n => { const link = ruleLink(n), keys = keysLink(n), holds = holdsLink(n), request = requestLink(n); return [
+      rowActions={n => { const link = ruleLink(n), keys = keysLink(n), holds = holdsLink(n), request = requestLink(n), review = reviewLink(n); return [
         { label: "Mark as read", hidden: n.read, onSelect: () => void markRead({ ids: [n.id] }) },
         { label: "Open rule", hidden: !link, render: link ? <ResourceLink search={link} /> : undefined },
         { label: "Open keys", hidden: !keys, render: keys ? <ResourceLink search={keys} /> : undefined },
         { label: "Open holds", hidden: !holds, render: holds ? <ResourceLink search={holds} /> : undefined },
         { label: "Open requests", hidden: !request, render: request ? <ResourceLink search={request} /> : undefined },
+        { label: "Open review", hidden: !review, render: review ? <ResourceLink search={review} /> : undefined },
       ]; }}
       empty={{ icon: <BellRing />, title: "No notifications.", description: "Alerts, access requests and access review reminders for what you look after show up here." }} />
   </Stack>;

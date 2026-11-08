@@ -40,6 +40,7 @@ export default defineConfig({
     { name: "access-refresh", testMatch: /access-refresh\.spec\.ts/ },
     { name: "access-requests", testMatch: /access-requests\.spec\.ts/, dependencies: ["journey"] },
     { name: "workspace-templates", testMatch: /workspace-templates\.spec\.ts/, dependencies: ["journey"] },
+    { name: "access-reviews", testMatch: /access-reviews\.spec\.ts/, dependencies: ["journey"] },
     { name: "accessibility", testMatch: /accessibility\.spec\.ts/, dependencies: ["journey"] },
   ],
 });
