@@ -252,60 +252,161 @@ async fn live_keys_of_shared_workspaces_are_snapshotted_by_lineage(pool: PgPool)
     assert_eq!(all["counts"]["by_kind"]["workspace_key"], 2, "{all}");
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
-async fn the_database_snapshots_only_live_shared_keys(pool: PgPool) {
-    let f = fixture(&pool).await;
-    let personal = named_key(
-        &f,
-        &f.owner,
-        f.personal,
-        json!({"name":"personal","expires_in_days":30}),
-    )
-    .await;
-    // A campaign without the keys subject, then one with it: the guard
-    // refuses a personal key, and a key named by a membership campaign.
+/// The SQLSTATE of inserting one item into a new campaign (in its own
+/// transaction, rolled back): `None` when accepted.
+async fn guard_code(
+    pool: &PgPool,
+    admin: Uuid,
+    subjects: &str,
+    filter: &[Uuid],
+    kind: &str,
+    key: Option<Uuid>,
+) -> Option<String> {
     let mut tx = pool.begin().await.unwrap();
     let c = Uuid::now_v7();
-    sqlx::query("INSERT INTO access_review_campaigns(id,name,subjects,created_by,due_at) VALUES($1,'Keys','{workspace_keys}',$2,now()+interval '2 days')")
+    sqlx::query("INSERT INTO access_review_campaigns(id,name,subjects,workspace_ids,created_by,due_at) VALUES($1,'Keys',$2::text[],$3,$4,now()+interval '2 days')")
         .bind(c)
-        .bind(f.admin.user_id)
+        .bind(subjects)
+        .bind(filter)
+        .bind(admin)
         .execute(&mut *tx)
         .await
         .unwrap();
-    let refused = sqlx::query("INSERT INTO access_review_items(id,campaign_id,subject_kind,api_key_id) VALUES(gen_random_uuid(),$1,'workspace_key',$2)")
+    sqlx::query("INSERT INTO access_review_items(id,campaign_id,subject_kind,api_key_id) VALUES(gen_random_uuid(),$1,$2,$3)")
         .bind(c)
-        .bind(personal)
+        .bind(kind)
+        .bind(key)
         .execute(&mut *tx)
-        .await;
-    assert!(refused.is_err(), "a personal key is never a review subject");
-    drop(tx);
-    let (human, _) = team_keys(&f).await;
-    for (subjects, kind, key) in [
-        ("{workspace_memberships}", "workspace_key", Some(human)),
-        ("{workspace_keys}", "workspace_key", None),
-        ("{workspace_keys}", "workspace_membership", Some(human)),
+        .await
+        .err()
+        .and_then(|e| e.as_database_error().and_then(|d| d.code()).map(|c| c.into_owned()))
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn the_database_snapshots_only_live_shared_keys(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let admin = f.admin.user_id;
+    let (human, service) = team_keys(&f).await;
+    // Positive controls: a live human key and a service key are accepted.
+    for key in [human, service] {
+        assert_eq!(
+            guard_code(
+                &pool,
+                admin,
+                "{workspace_keys}",
+                &[],
+                "workspace_key",
+                Some(key)
+            )
+            .await,
+            None
+        );
+    }
+    let new_key = async |who: &BrowserPrincipal, ws: Uuid| {
+        named_key(&f, who, ws, json!({"name":"probe","expires_in_days":30})).await
+    };
+    let personal = new_key(&f.owner, f.personal).await;
+    let revoked_key = new_key(&f.owner, f.team).await;
+    sqlx::query("UPDATE api_keys SET revoked_at=now() WHERE id=$1")
+        .bind(revoked_key)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let expired = new_key(&f.owner, f.team).await;
+    sqlx::query("UPDATE api_keys SET expires_at=now()-interval '1 minute' WHERE id=$1")
+        .bind(expired)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let project_key = new_key(&f.owner, f.project).await;
+    let suspended = user(&pool, "suspended", "user").await;
+    member(&pool, f.team, suspended.user_id, "member").await;
+    let suspended_key = new_key(&suspended, f.team).await;
+    sqlx::query("UPDATE users SET disabled_at=now() WHERE id=$1")
+        .bind(suspended.user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let closed_team = workspace(&pool, "Closed team", "team", f.owner.user_id).await;
+    let closed_key = new_key(&f.owner, closed_team).await;
+    sqlx::query("UPDATE workspaces SET disabled_at=now() WHERE id=$1")
+        .bind(closed_team)
+        .execute(&pool)
+        .await
+        .unwrap();
+    // Each refused by the guard (23514), whatever the runtime sends.
+    for (subjects, filter, kind, key, what) in [
+        (
+            "{workspace_keys}",
+            vec![],
+            "workspace_key",
+            Some(personal),
+            "a personal key",
+        ),
+        (
+            "{workspace_keys}",
+            vec![],
+            "workspace_key",
+            Some(revoked_key),
+            "a revoked key",
+        ),
+        (
+            "{workspace_keys}",
+            vec![],
+            "workspace_key",
+            Some(expired),
+            "an expired key",
+        ),
+        (
+            "{workspace_keys}",
+            vec![],
+            "workspace_key",
+            Some(suspended_key),
+            "a suspended holder's key",
+        ),
+        (
+            "{workspace_keys}",
+            vec![],
+            "workspace_key",
+            Some(closed_key),
+            "a disabled workspace's key",
+        ),
+        (
+            "{workspace_keys}",
+            vec![f.team],
+            "workspace_key",
+            Some(project_key),
+            "a key outside the filter",
+        ),
+        (
+            "{workspace_memberships}",
+            vec![],
+            "workspace_key",
+            Some(human),
+            "a key in a memberships review",
+        ),
+        (
+            "{workspace_keys}",
+            vec![],
+            "workspace_key",
+            None,
+            "a key item without a key",
+        ),
+        (
+            "{workspace_keys}",
+            vec![],
+            "workspace_membership",
+            Some(human),
+            "a key named as a membership",
+        ),
     ] {
-        let mut tx = pool.begin().await.unwrap();
-        let c = Uuid::now_v7();
-        sqlx::query("INSERT INTO access_review_campaigns(id,name,subjects,created_by,due_at) VALUES($1,'Keys',$2::text[],$3,now()+interval '2 days')")
-            .bind(c)
-            .bind(subjects)
-            .bind(f.admin.user_id)
-            .execute(&mut *tx)
-            .await
-            .unwrap();
-        let refused = sqlx::query("INSERT INTO access_review_items(id,campaign_id,subject_kind,api_key_id) VALUES(gen_random_uuid(),$1,$2,$3)")
-            .bind(c)
-            .bind(kind)
-            .bind(key)
-            .execute(&mut *tx)
-            .await;
-        let code = refused.err().and_then(|e| {
-            e.as_database_error()
-                .and_then(|d| d.code())
-                .map(|c| c.into_owned())
-        });
-        assert_eq!(code.as_deref(), Some("23514"), "refused by the guard");
+        assert_eq!(
+            guard_code(&pool, admin, subjects, &filter, kind, key)
+                .await
+                .as_deref(),
+            Some("23514"),
+            "{what}"
+        );
     }
 }
 
@@ -313,6 +414,19 @@ async fn the_database_snapshots_only_live_shared_keys(pool: PgPool) {
 async fn platform_views_never_name_keys_or_holders(pool: PgPool) {
     let f = fixture(&pool).await;
     let (human, service) = team_keys(&f).await;
+    // Five more holders, so an order by holder could not pass as item order
+    // by chance.
+    for n in 0..5 {
+        let holder = user(&pool, &format!("holder-{n}"), "user").await;
+        member(&pool, f.team, holder.user_id, "member").await;
+        named_key(
+            &f,
+            &holder,
+            f.team,
+            json!({"name":format!("zebra-extra-{n}"),"expires_in_days":30}),
+        )
+        .await;
+    }
     let c = key_campaign(&f).await;
     for who in [&f.admin, &f.auditor] {
         let (status, items) = call(
@@ -325,7 +439,7 @@ async fn platform_views_never_name_keys_or_holders(pool: PgPool) {
         .await;
         assert_eq!(status, StatusCode::OK, "{items}");
         let rows = items["data"].as_array().unwrap();
-        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.len(), 7);
         for row in rows {
             assert_eq!(row["subject_kind"], "workspace_key");
             for field in [
@@ -369,7 +483,7 @@ async fn platform_views_never_name_keys_or_holders(pool: PgPool) {
         assert!(csv.contains(&human.to_string()) && csv.contains(&service.to_string()));
         assert!(!csv.contains("zebra"), "the export names no key or account");
         assert!(
-            !csv.contains("member@example.test"),
+            !csv.contains("member@example.test") && !csv.contains("holder-"),
             "the export names no holder"
         );
     }
@@ -469,6 +583,62 @@ async fn platform_views_never_name_keys_or_holders(pool: PgPool) {
     )
     .await;
     assert_eq!(detail["counts"]["without_reviewer"], 0, "{detail}");
+    let reviewable = async || -> Value {
+        let (_, items) = call(
+            &f.s,
+            &f.auditor,
+            "GET",
+            &format!("{REVIEWS}/{}/items", id(&c)),
+            Value::Null,
+        )
+        .await;
+        items["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == item.to_string())
+            .unwrap()["reviewable"]
+            .clone()
+    };
+    assert_eq!(reviewable().await, true, "a workspace admin exists");
+    // No owner or admin at all: nobody may review the Team's keys.
+    sqlx::query("UPDATE workspace_membership_grants SET revoked_at=now() WHERE workspace_id=$1 AND revoked_at IS NULL")
+        .bind(f.team)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (_, detail) = call(
+        &f.s,
+        &f.auditor,
+        "GET",
+        &format!("{REVIEWS}/{}", id(&c)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(detail["counts"]["without_reviewer"], 7, "{detail}");
+    assert_eq!(reviewable().await, false);
+    // A closed review answers closed before anything about keys.
+    let (status, _) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        &format!("{REVIEWS}/{}/close", id(&c)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        &format!("{REVIEWS}/{}/items/{item}/reviewer", id(&c)),
+        json!({"user_id":f.outsider.user_id}),
+    )
+    .await;
+    assert_eq!(
+        (status, body["error"]["reason"].as_str()),
+        (StatusCode::CONFLICT, Some("access_review_closed"))
+    );
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
