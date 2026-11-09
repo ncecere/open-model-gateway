@@ -34,9 +34,9 @@ const CAMPAIGN_JSON: &str = "jsonb_build_object('id',c.id,'name',c.name,'subject
 const LATEST_DECISION: &str = "LEFT JOIN LATERAL (SELECT x.decision,x.decided_by,x.decided_at FROM access_review_decisions x WHERE x.item_id=i.id ORDER BY x.seq DESC LIMIT 1) d ON true LEFT JOIN LATERAL (SELECT y.reviewer_user_id FROM access_review_assignments y WHERE y.item_id=i.id ORDER BY y.seq DESC LIMIT 1) a ON true";
 /// Whether item `i` is a key lineage (slice 6).
 const KEY_ITEM: &str = "i.subject_kind='workspace_key'";
-/// A key item's live expiry (its unrevoked key's, else the snapshot key's)
+/// A key item's live expiry (its newest unrevoked key's, else the snapshot key's)
 /// and the lineage's latest admitted attempt; NULL for other items.
-const KEY_TIMES: &str = "'expires_at',CASE WHEN i.subject_kind='workspace_key' THEN coalesce((SELECT max(k2.expires_at) FROM api_keys k2 WHERE k2.workspace_id=i.workspace_id AND k2.governance_key_id=i.key_lineage_id AND k2.revoked_at IS NULL),kk.expires_at) END,'last_used_at',CASE WHEN i.subject_kind='workspace_key' THEN (SELECT max(e.started_at) FROM api_keys k3 JOIN inference_executions e ON e.api_key_id=k3.id WHERE k3.workspace_id=i.workspace_id AND k3.governance_key_id=i.key_lineage_id) END";
+const KEY_TIMES: &str = "'expires_at',CASE WHEN i.subject_kind='workspace_key' THEN coalesce((SELECT k2.expires_at FROM api_keys k2 WHERE k2.workspace_id=i.workspace_id AND k2.governance_key_id=i.key_lineage_id AND k2.revoked_at IS NULL ORDER BY k2.created_at DESC, k2.id DESC LIMIT 1),kk.expires_at) END,'last_used_at',CASE WHEN i.subject_kind='workspace_key' THEN (SELECT max(e.started_at) FROM api_keys k3 JOIN inference_executions e ON e.api_key_id=k3.id WHERE k3.workspace_id=i.workspace_id AND k3.governance_key_id=i.key_lineage_id) END";
 /// An item as reviewers and platform readers see it: the snapshot's role,
 /// source and grant time (a key's creation); the workspace name and person
 /// as they are now; whether it is still in effect; the latest decision and
@@ -75,9 +75,13 @@ fn inbox_item_json() -> String {
 }
 /// Whether anyone may decide item `i` now (#469): its review is open, it is
 /// in effect, and it has a reviewer who still qualifies (an assignee, or else another owner/admin of
-/// its workspace, or another Platform Admin for platform roles). Needs the
-/// [`reviewer_sets`] CTEs and the latest assignment `a`.
-const REVIEWABLE: &str = "(access_review_item_active(i.id) AND EXISTS (SELECT 1 FROM access_review_campaigns k WHERE k.id=i.campaign_id AND k.closed_at IS NULL) AND ((a.reviewer_user_id IS NOT NULL AND access_review_candidate(i.id,a.reviewer_user_id)) OR CASE WHEN i.subject_kind<>'platform_role' THEN EXISTS (SELECT 1 FROM rv_ws x WHERE x.workspace_id=i.workspace_id AND cardinality(array_remove(x.ids,i.user_id))>0) ELSE EXISTS (SELECT 1 FROM rv_admins y WHERE y.user_id<>i.user_id) END))";
+/// its workspace, or another Platform Admin for platform roles). For a key
+/// (slice 6), whether its workspace has any owner or admin: platform readers
+/// must not learn a key's holder, which excluding the holder would reveal
+/// when the holder is the only one (such a key stays pending; closing the
+/// review is the remedy). Needs the [`reviewer_sets`] CTEs and the latest
+/// assignment `a`.
+const REVIEWABLE: &str = "(access_review_item_active(i.id) AND EXISTS (SELECT 1 FROM access_review_campaigns k WHERE k.id=i.campaign_id AND k.closed_at IS NULL) AND ((a.reviewer_user_id IS NOT NULL AND access_review_candidate(i.id,a.reviewer_user_id)) OR CASE WHEN i.subject_kind='workspace_key' THEN EXISTS (SELECT 1 FROM rv_ws x WHERE x.workspace_id=i.workspace_id) WHEN i.subject_kind<>'platform_role' THEN EXISTS (SELECT 1 FROM rv_ws x WHERE x.workspace_id=i.workspace_id AND cardinality(array_remove(x.ids,i.user_id))>0) ELSE EXISTS (SELECT 1 FROM rv_admins y WHERE y.user_id<>i.user_id) END))";
 /// CTEs for [`REVIEWABLE`], computed once per query: the Platform Admins, and
 /// the owners and admins of each workspace with items in `campaigns`.
 fn reviewer_sets(campaigns: &str) -> String {
@@ -85,6 +89,10 @@ fn reviewer_sets(campaigns: &str) -> String {
         "rv_admins AS MATERIALIZED (SELECT r.user_id FROM effective_platform_roles r WHERE r.role='admin'), rv_ws AS MATERIALIZED (SELECT e.workspace_id, array_agg(e.user_id) AS ids FROM effective_workspace_memberships e WHERE e.role IN ('owner','admin') AND e.workspace_id IN (SELECT ri.workspace_id FROM access_review_items ri WHERE ri.campaign_id IN ({campaigns})) GROUP BY e.workspace_id)"
     )
 }
+/// The platform views' item order: memberships, keys, platform roles; by
+/// workspace, then person, but keys never by holder (that would group a
+/// holder's keys for platform readers).
+const PLATFORM_ORDER: &str = "i.subject_kind DESC, i.workspace_id, CASE WHEN i.subject_kind='workspace_key' THEN NULL ELSE i.user_id END, i.id";
 /// An item with its person (none for a service key), workspace, snapshot key
 /// and service account.
 const ITEM_FROM: &str = "access_review_items i LEFT JOIN users u ON u.id=i.user_id LEFT JOIN workspaces w ON w.id=i.workspace_id LEFT JOIN api_keys kk ON kk.id=i.api_key_id LEFT JOIN service_accounts sa ON sa.id=i.service_account_id";
@@ -153,7 +161,7 @@ pub(super) async fn items(
     }
     let sets = reviewer_sets("$1");
     let item = platform_item_json();
-    let data: Vec<Value> = sqlx::query_scalar(&format!("WITH {sets} SELECT {item} FROM {ITEM_FROM} {LATEST_DECISION} WHERE i.campaign_id=$1 ORDER BY i.subject_kind DESC, i.workspace_id, i.user_id, i.id LIMIT $2 OFFSET $3"))
+    let data: Vec<Value> = sqlx::query_scalar(&format!("WITH {sets} SELECT {item} FROM {ITEM_FROM} {LATEST_DECISION} WHERE i.campaign_id=$1 ORDER BY {PLATFORM_ORDER} LIMIT $2 OFFSET $3"))
         .bind(id)
         .bind(l)
         .bind(o)
@@ -743,12 +751,12 @@ pub(super) async fn assign(
 ) -> Result<Json<Value>, ManagementError> {
     let mut tx = resources::installation_tx(&s).await?;
     resources::platform_write(&mut tx, &u).await?;
-    let state: Option<(bool, Option<Uuid>, Option<Uuid>)> = sqlx::query_as("SELECT c.closed_at IS NOT NULL, i.workspace_id, i.user_id FROM access_review_items i JOIN access_review_campaigns c ON c.id=i.campaign_id WHERE i.id=$1 AND c.id=$2 FOR SHARE OF c")
+    let state: Option<(bool, Option<Uuid>, Option<Uuid>, bool)> = sqlx::query_as("SELECT c.closed_at IS NOT NULL, i.workspace_id, i.user_id, i.subject_kind='workspace_key' FROM access_review_items i JOIN access_review_campaigns c ON c.id=i.campaign_id WHERE i.id=$1 AND c.id=$2 FOR SHARE OF c")
         .bind(item)
         .bind(id)
         .fetch_optional(&mut *tx)
         .await?;
-    let Some((closed, ws, subject)) = state else {
+    let Some((closed, ws, subject, key)) = state else {
         return Err(missing().into());
     };
     if subject == Some(u.user_id) {
@@ -764,6 +772,17 @@ pub(super) async fn assign(
             StatusCode::CONFLICT,
             "access_review_closed",
             "This access review is already closed".into(),
+            json!({}),
+        ));
+    }
+    // Keys are reviewed by their workspace's owners and admins, and never
+    // assigned: refusing every reviewer alike tells a platform reader
+    // nothing about the key's holder.
+    if key && b.user_id.is_some() {
+        return Err(ManagementError::detailed(
+            StatusCode::CONFLICT,
+            "access_review_reviewer_ineligible",
+            "Keys are reviewed by the workspace's owners and admins and cannot be assigned".into(),
             json!({}),
         ));
     }
@@ -858,7 +877,7 @@ pub(super) async fn export(
     }
     let sets = reviewer_sets("$1");
     let item = platform_item_json();
-    let rows: Vec<Value> = sqlx::query_scalar(&format!("WITH {sets}, x AS (SELECT {item} AS j, d.decided_by, i.subject_kind AS ok, i.workspace_id AS ow, i.user_id AS ou, i.id AS oi FROM {ITEM_FROM} {LATEST_DECISION} WHERE i.campaign_id=$1) SELECT jsonb_build_array(j->'id',j->'subject_kind',j->'workspace_id',j->'workspace_name',j->'user_id',j->'email',j->'display_name',j->'role',j->'source',j->'granted_at',j->'active',j->'reviewable',j->'decision',j->'decided_by',(SELECT x2.email FROM users x2 WHERE x2.id=x.decided_by),j->'decided_at',j->'reviewer_user_id',(SELECT y.email FROM users y WHERE y.id=(j->>'reviewer_user_id')::uuid),j->'api_key_id',j->'holder_kind',j->'expires_at',j->'last_used_at') FROM x ORDER BY x.ok DESC, x.ow, x.ou, x.oi"))
+    let rows: Vec<Value> = sqlx::query_scalar(&format!("WITH {sets}, x AS (SELECT {item} AS j, d.decided_by, i.subject_kind AS ok, i.workspace_id AS ow, CASE WHEN i.subject_kind='workspace_key' THEN NULL ELSE i.user_id END AS ou, i.id AS oi FROM {ITEM_FROM} {LATEST_DECISION} WHERE i.campaign_id=$1) SELECT jsonb_build_array(j->'id',j->'subject_kind',j->'workspace_id',j->'workspace_name',j->'user_id',j->'email',j->'display_name',j->'role',j->'source',j->'granted_at',j->'active',j->'reviewable',j->'decision',j->'decided_by',(SELECT x2.email FROM users x2 WHERE x2.id=x.decided_by),j->'decided_at',j->'reviewer_user_id',(SELECT y.email FROM users y WHERE y.id=(j->>'reviewer_user_id')::uuid),j->'api_key_id',j->'holder_kind',j->'expires_at',j->'last_used_at') FROM x ORDER BY x.ok DESC, x.ow, x.ou, x.oi"))
         .bind(id)
         .fetch_all(&mut *tx)
         .await?;

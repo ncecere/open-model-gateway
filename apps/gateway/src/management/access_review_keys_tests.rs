@@ -156,6 +156,44 @@ async fn live_keys_of_shared_workspaces_are_snapshotted_by_lineage(pool: PgPool)
         .execute(&pool)
         .await
         .unwrap();
+    // A disabled key can be enabled again: it is reviewed.
+    let (status, _) = call(
+        &f.s,
+        &f.member,
+        "PATCH",
+        &format!("/api/v1/workspaces/{}/keys/{human}", f.team),
+        json!({"disabled":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    // Not reviewed: a suspended holder's key, a disabled workspace's key.
+    let suspended = user(&pool, "suspended", "user").await;
+    member(&pool, f.team, suspended.user_id, "member").await;
+    let suspended_key = named_key(
+        &f,
+        &suspended,
+        f.team,
+        json!({"name":"suspended","expires_in_days":30}),
+    )
+    .await;
+    sqlx::query("UPDATE users SET disabled_at=now() WHERE id=$1")
+        .bind(suspended.user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let closed_team = workspace(&pool, "Closed team", "team", f.owner.user_id).await;
+    let closed_key = named_key(
+        &f,
+        &f.owner,
+        closed_team,
+        json!({"name":"closed","expires_in_days":30}),
+    )
+    .await;
+    sqlx::query("UPDATE workspaces SET disabled_at=now() WHERE id=$1")
+        .bind(closed_team)
+        .execute(&pool)
+        .await
+        .unwrap();
     let c = key_campaign(&f).await;
     let keys: std::collections::BTreeSet<Uuid> =
         sqlx::query_scalar("SELECT api_key_id FROM access_review_items WHERE campaign_id=$1")
@@ -166,7 +204,7 @@ async fn live_keys_of_shared_workspaces_are_snapshotted_by_lineage(pool: PgPool)
             .into_iter()
             .collect();
     assert_eq!(keys, [human, service].into_iter().collect());
-    for k in [personal, gone, expired] {
+    for k in [personal, gone, expired, suspended_key, closed_key] {
         assert!(!keys.contains(&k), "not a review subject");
     }
     assert_eq!(c["counts"]["by_kind"]["workspace_key"], 2, "{c}");
@@ -186,7 +224,15 @@ async fn live_keys_of_shared_workspaces_are_snapshotted_by_lineage(pool: PgPool)
         .unwrap();
     assert!(holder.is_none() && account.is_some() && role.is_none() && source.is_none());
     assert_eq!(lineage, service);
-    // The workspace filter narrows keys too; a Project without keys is empty.
+    // The workspace filter narrows keys too: the Team's keys only; a Project
+    // without keys is empty.
+    let (status, team) = start(
+        &f,
+        json!({"name":"Team keys","subjects":["workspace_keys"],"workspace_ids":[f.team]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{team}");
+    assert_eq!(team["counts"]["by_kind"]["workspace_key"], 2, "{team}");
     let (status, body) = start(
         &f,
         json!({"name":"Project keys","subjects":["workspace_keys"],"workspace_ids":[f.project]}),
@@ -232,6 +278,35 @@ async fn the_database_snapshots_only_live_shared_keys(pool: PgPool) {
         .execute(&mut *tx)
         .await;
     assert!(refused.is_err(), "a personal key is never a review subject");
+    drop(tx);
+    let (human, _) = team_keys(&f).await;
+    for (subjects, kind, key) in [
+        ("{workspace_memberships}", "workspace_key", Some(human)),
+        ("{workspace_keys}", "workspace_key", None),
+        ("{workspace_keys}", "workspace_membership", Some(human)),
+    ] {
+        let mut tx = pool.begin().await.unwrap();
+        let c = Uuid::now_v7();
+        sqlx::query("INSERT INTO access_review_campaigns(id,name,subjects,created_by,due_at) VALUES($1,'Keys',$2::text[],$3,now()+interval '2 days')")
+            .bind(c)
+            .bind(subjects)
+            .bind(f.admin.user_id)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let refused = sqlx::query("INSERT INTO access_review_items(id,campaign_id,subject_kind,api_key_id) VALUES(gen_random_uuid(),$1,$2,$3)")
+            .bind(c)
+            .bind(kind)
+            .bind(key)
+            .execute(&mut *tx)
+            .await;
+        let code = refused.err().and_then(|e| {
+            e.as_database_error()
+                .and_then(|d| d.code())
+                .map(|c| c.into_owned())
+        });
+        assert_eq!(code.as_deref(), Some("23514"), "refused by the guard");
+    }
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
@@ -292,19 +367,102 @@ async fn platform_views_never_name_keys_or_holders(pool: PgPool) {
             "the export names no holder"
         );
     }
-    // Assigning (a platform response) is masked the same way.
-    let item = key_item(&pool, &c, service).await;
+    // Keys are never assigned: every reviewer is refused alike (an eligible
+    // Team admin, the holder), so the answer names no holder; clearing
+    // returns the item, masked the same way.
+    let item = key_item(&pool, &c, human).await;
     member(&pool, f.team, f.outsider.user_id, "admin").await;
+    for reviewer in [f.outsider.user_id, f.member.user_id] {
+        let (status, body) = call(
+            &f.s,
+            &f.admin,
+            "POST",
+            &format!("{REVIEWS}/{}/items/{item}/reviewer", id(&c)),
+            json!({"user_id":reviewer}),
+        )
+        .await;
+        assert_eq!(
+            (status, body["error"]["reason"].as_str()),
+            (
+                StatusCode::CONFLICT,
+                Some("access_review_reviewer_ineligible")
+            )
+        );
+    }
     let (status, row) = call(
         &f.s,
         &f.admin,
         "POST",
         &format!("{REVIEWS}/{}/items/{item}/reviewer", id(&c)),
-        json!({"user_id":f.outsider.user_id}),
+        json!({"user_id":null}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{row}");
-    assert!(row["key_name"].is_null() && row["service_account_name"].is_null());
+    assert!(row["key_name"].is_null() && row["user_id"].is_null() && row["email"].is_null());
+    // The export's key cells: id, holder kind, expiry, last use (none yet).
+    let (_, csv) = export(&f, &f.auditor, id(&c)).await;
+    let line = csv
+        .split("\r\n")
+        .find(|l| l.starts_with(&format!("\"{item}\"")))
+        .unwrap();
+    let expires: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT expires_at FROM api_keys WHERE id=$1")
+            .bind(human)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let (_, items) = call(
+        &f.s,
+        &f.auditor,
+        "GET",
+        &format!("{REVIEWS}/{}/items", id(&c)),
+        Value::Null,
+    )
+    .await;
+    let row = items["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == item.to_string())
+        .unwrap();
+    assert_eq!(
+        row["expires_at"]
+            .as_str()
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+            .map(|t| t.timestamp_micros()),
+        Some(expires.timestamp_micros())
+    );
+    assert!(
+        line.ends_with(&format!(
+            "\"{human}\",\"member\",\"{}\",\"\"",
+            row["expires_at"].as_str().unwrap()
+        )),
+        "key cells"
+    );
+    // The holder as the Team's only admin: still reviewable to platform
+    // readers (whether a key has a reviewer never depends on its holder).
+    sqlx::query("UPDATE workspace_membership_grants SET revoked_at=now() WHERE workspace_id=$1 AND user_id<>$2")
+        .bind(f.team)
+        .bind(f.member.user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE workspace_membership_grants SET revoked_at=now() WHERE workspace_id=$1 AND user_id=$2")
+        .bind(f.team)
+        .bind(f.member.user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    member(&pool, f.team, f.member.user_id, "admin").await;
+    let (_, detail) = call(
+        &f.s,
+        &f.auditor,
+        "GET",
+        &format!("{REVIEWS}/{}", id(&c)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(detail["counts"]["without_reviewer"], 0, "{detail}");
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
@@ -345,6 +503,13 @@ async fn owners_and_admins_review_keys_but_never_their_own(pool: PgPool) {
     member(&pool, f.team, f.member.user_id, "admin").await;
     let (status, _) = decide(&f, &f.member, human_item, "keep").await;
     assert_eq!(status, StatusCode::NOT_FOUND, "own key");
+    // Nobody who may not decide a key removes it: the holder, a Platform
+    // Admin outside the Team, an outsider. 404, and the key stays.
+    for who in [&f.member, &f.admin, &f.outsider] {
+        let (status, _) = decide(&f, who, human_item, "remove").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+    assert!(!revoked(&pool, human).await, "nothing revoked");
     let (status, d) = decide(&f, &f.member, service_item, "keep").await;
     assert_eq!(status, StatusCode::OK, "{d}");
     // A Platform Admin who does not administer the Team is not a key reviewer,
@@ -442,6 +607,46 @@ async fn remove_revokes_the_whole_lineage_and_it_never_returns(pool: PgPool) {
         .await
         .unwrap();
     assert!(active, "rotating does not escape the review");
+    // The item reports the lineage's latest use and its live key's expiry.
+    key_used(&pool, f.team, rotated).await;
+    let row = inbox(&f, &f.owner)
+        .await
+        .into_iter()
+        .find(|r| r["id"] == item.to_string())
+        .unwrap();
+    assert!(row["last_used_at"].is_string(), "{row}");
+    let expires: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT expires_at FROM api_keys WHERE id=$1")
+            .bind(rotated)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        row["expires_at"]
+            .as_str()
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+            .map(|t| t.timestamp_micros()),
+        Some(expires.timestamp_micros())
+    );
+    // A holder who left the workspace (their key lives on): reviewers see
+    // the key, not the person's name or email, as the key list shows it.
+    sqlx::query("UPDATE workspace_membership_grants SET revoked_at=now() WHERE workspace_id=$1 AND user_id=$2")
+        .bind(f.team)
+        .bind(f.member.user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let row = inbox(&f, &f.owner)
+        .await
+        .into_iter()
+        .find(|r| r["id"] == item.to_string())
+        .unwrap();
+    assert!(
+        row["email"].is_null() && row["display_name"].is_null(),
+        "{row}"
+    );
+    assert_eq!(row["user_id"], f.member.user_id.to_string());
+    assert_eq!(row["key_name"], "zebra-human-key");
     let (status, d) = decide(&f, &f.owner, item, "remove").await;
     assert_eq!(status, StatusCode::OK, "{d}");
     assert_eq!(
