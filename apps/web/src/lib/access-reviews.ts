@@ -69,6 +69,6 @@ export const campaignStateTone: Record<CampaignState, "info" | "danger" | "neutr
  */
 export function removalConsequence(i: ReviewItem): string {
   return i.subject_kind === "platform_role"
-    ? `Removes this ${roleLabels[i.role]} grant (manual or bootstrap) now. The same role from an identity provider group, if they have one, stays. If they then hold no other platform role, they lose access to the gateway: they are suspended and their sessions and keys are revoked.`
-    : `Removes their membership in ${i.workspace_name ?? "this workspace"} now. Their keys there are revoked if they no longer belong to it through an identity provider group.`;
+    ? `Removes this ${roleLabels[i.role]} grant (manual or bootstrap) now. The same role from an identity provider group, if they have one, stays. If they then hold no other platform role, they lose access to the gateway at once: they are suspended, their sessions and keys are revoked (revoked keys never return), and their personal data is removed after 30 days unless they are reinstated first.`
+    : `Removes their membership in ${i.workspace_name ?? "this workspace"} now. Their keys there are revoked, permanently, if they no longer belong to it through an identity provider group.`;
 }

@@ -61,7 +61,8 @@ describe("Review access (#90)", () => {
     await user.click(await screen.findByRole("menuitem", { name: "Remove…" }));
     const platform = await screen.findByRole("dialog", { name: "Remove Aud's Platform Auditor role?" });
     expect(platform.textContent).toContain("The same role from an identity provider group, if they have one, stays");
-    expect(platform.textContent).toContain("If they then hold no other platform role, they lose access to the gateway");
+    expect(platform.textContent).toContain("If they then hold no other platform role, they lose access to the gateway at once");
+    expect(platform.textContent).toContain("their personal data is removed after 30 days unless they are reinstated first");
   });
   it("offers Remove on an owner's membership only to an owner of that workspace or a Platform Admin", async () => {
     const owner = inbox({ id: "i-o", user_id: "u-o", email: "own@example.invalid", display_name: "Owen", role: "owner" });
