@@ -3264,6 +3264,7 @@
               },
               "by_source": {
                 "additionalProperties": false,
+                "description": "Grants by source; keys have no source, so these count memberships and platform roles only.",
                 "properties": {
                   "bootstrap": {
                     "maximum": 5000,
@@ -3439,6 +3440,7 @@
               },
               "by_source": {
                 "additionalProperties": false,
+                "description": "Grants by source; keys have no source, so these count memberships and platform roles only.",
                 "properties": {
                   "bootstrap": {
                     "maximum": 5000,
@@ -3616,6 +3618,7 @@
               },
               "by_source": {
                 "additionalProperties": false,
+                "description": "Grants by source; keys have no source, so these count memberships and platform roles only.",
                 "properties": {
                   "bootstrap": {
                     "maximum": 5000,
@@ -3793,7 +3796,7 @@
             "$ref": "#/components/schemas/IdentityNullableTime"
           },
           "reviewable": {
-            "description": "Whether anyone may decide it now: its review is open, it is in effect, and a reviewer still qualifies (an assignee, or else another owner/admin of its workspace for memberships and keys, or another Platform Admin for platform roles). Always true in the inbox.",
+            "description": "Whether anyone may decide it now: its review is open, it is in effect, and a reviewer still qualifies (an assignee, or else another owner/admin of its workspace for memberships, or another Platform Admin for platform roles). For keys, whether the workspace has any owner or admin (never depending on the key's holder; a key held by the workspace's only owner/admin stays pending). Always true in the inbox.",
             "type": "boolean"
           },
           "reviewer_user_id": {
@@ -3948,7 +3951,7 @@
             "$ref": "#/components/schemas/IdentityNullableTime"
           },
           "reviewable": {
-            "description": "Whether anyone may decide it now: its review is open, it is in effect, and a reviewer still qualifies (an assignee, or else another owner/admin of its workspace for memberships and keys, or another Platform Admin for platform roles). Always true in the inbox.",
+            "description": "Whether anyone may decide it now: its review is open, it is in effect, and a reviewer still qualifies (an assignee, or else another owner/admin of its workspace for memberships, or another Platform Admin for platform roles). For keys, whether the workspace has any owner or admin (never depending on the key's holder; a key held by the workspace's only owner/admin stays pending). Always true in the inbox.",
             "type": "boolean"
           },
           "reviewer_user_id": {
@@ -4097,7 +4100,7 @@
             "$ref": "#/components/schemas/IdentityNullableTime"
           },
           "reviewable": {
-            "description": "Whether anyone may decide it now: its review is open, it is in effect, and a reviewer still qualifies (an assignee, or else another owner/admin of its workspace for memberships and keys, or another Platform Admin for platform roles). Always true in the inbox.",
+            "description": "Whether anyone may decide it now: its review is open, it is in effect, and a reviewer still qualifies (an assignee, or else another owner/admin of its workspace for memberships, or another Platform Admin for platform roles). For keys, whether the workspace has any owner or admin (never depending on the key's holder; a key held by the workspace's only owner/admin stays pending). Always true in the inbox.",
             "type": "boolean"
           },
           "reviewer_user_id": {
