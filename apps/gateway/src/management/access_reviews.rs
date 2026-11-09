@@ -35,8 +35,10 @@ const LATEST_DECISION: &str = "LEFT JOIN LATERAL (SELECT x.decision,x.decided_by
 /// Whether item `i` is a key lineage (slice 6).
 const KEY_ITEM: &str = "i.subject_kind='workspace_key'";
 /// A key item's live expiry (its newest unrevoked key's, else the snapshot key's)
-/// and the lineage's latest admitted attempt; NULL for other items.
-const KEY_TIMES: &str = "'expires_at',CASE WHEN i.subject_kind='workspace_key' THEN coalesce((SELECT k2.expires_at FROM api_keys k2 WHERE k2.workspace_id=i.workspace_id AND k2.governance_key_id=i.key_lineage_id AND k2.revoked_at IS NULL ORDER BY k2.created_at DESC, k2.id DESC LIMIT 1),kk.expires_at) END,'last_used_at',CASE WHEN i.subject_kind='workspace_key' THEN (SELECT max(e.started_at) FROM api_keys k3 JOIN inference_executions e ON e.api_key_id=k3.id WHERE k3.workspace_id=i.workspace_id AND k3.governance_key_id=i.key_lineage_id) END";
+/// and the lineage's latest admitted attempt (per key, one index probe of
+/// `executions_key_time` as `keys::LAST_USED`, never a scan of the key's
+/// executions); NULL for other items.
+const KEY_TIMES: &str = "'expires_at',CASE WHEN i.subject_kind='workspace_key' THEN coalesce((SELECT k2.expires_at FROM api_keys k2 WHERE k2.workspace_id=i.workspace_id AND k2.governance_key_id=i.key_lineage_id AND k2.revoked_at IS NULL ORDER BY k2.created_at DESC, k2.id DESC LIMIT 1),kk.expires_at) END,'last_used_at',CASE WHEN i.subject_kind='workspace_key' THEN (SELECT max((SELECT max(e.started_at) FROM inference_executions e WHERE e.api_key_id=k3.id)) FROM api_keys k3 WHERE k3.workspace_id=i.workspace_id AND k3.governance_key_id=i.key_lineage_id) END";
 /// An item as reviewers and platform readers see it: the snapshot's role,
 /// source and grant time (a key's creation); the workspace name and person
 /// as they are now; whether it is still in effect; the latest decision and

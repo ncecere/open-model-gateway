@@ -341,6 +341,12 @@ async fn platform_views_never_name_keys_or_holders(pool: PgPool) {
             assert!(row["api_key_id"].is_string() && row["expires_at"].is_string());
             assert!(row.as_object().unwrap().contains_key("last_used_at"));
         }
+        // Key items are ordered by item id within a workspace, never by
+        // holder.
+        let ids: Vec<&str> = rows.iter().map(|r| r["id"].as_str().unwrap()).collect();
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        assert_eq!(ids, sorted, "key items in item order");
         let holders: std::collections::BTreeSet<&str> = rows
             .iter()
             .map(|r| r["holder_kind"].as_str().unwrap())
