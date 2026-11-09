@@ -1641,6 +1641,79 @@ async fn management_openapi_completed_area_fixtures(pool: PgPool) {
 /// membership and platform, with and without a person's data; decisions on
 /// each kind; query and body vectors (a group-provided item, so keep and
 /// flag_idp both apply).
+/// #90 slice 6: a used human key (the member's, with one admitted request)
+/// and a service account's key in the Team, for key review items.
+async fn review_keys(f: &Fixture, pool: &PgPool) -> (Uuid, Uuid) {
+    let (status, human) = call(
+        &f.s,
+        &f.member,
+        "POST",
+        &format!("/api/v1/workspaces/{}/keys", f.team),
+        json!({"name":"Contract review key","expires_in_days":30}),
+    )
+    .await;
+    assert!(status == StatusCode::OK, "unexpected value: status");
+    let human = id(&human);
+    // Any route for the attempt; a disabled one of its own if none exists yet
+    // (it serves nothing).
+    let existing: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM deployments ORDER BY created_at, id LIMIT 1")
+            .fetch_optional(pool)
+            .await
+            .unwrap();
+    let deployment = match existing {
+        Some(d) => d,
+        None => {
+            let (model, connection, deployment) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+            sqlx::query("INSERT INTO models(id,public_name,enabled) VALUES($1,'contract-review-model',false)")
+                .bind(model)
+                .execute(pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO provider_connections(id,name,provider,credential_ref) VALUES($1,'Contract review mock','openai','env:UNUSED')")
+                .bind(connection)
+                .execute(pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model) VALUES($1,$2,$3,'mock')")
+                .bind(deployment)
+                .bind(model)
+                .bind(connection)
+                .execute(pool)
+                .await
+                .unwrap();
+            deployment
+        }
+    };
+    let execution = Uuid::new_v4();
+    sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,input_tokens,output_tokens) VALUES($1,$2,$3,$4,'contract-review','openai',false,'succeeded',$1,1,1)")
+        .bind(execution)
+        .bind(f.team)
+        .bind(human)
+        .bind(deployment)
+        .execute(pool)
+        .await
+        .unwrap();
+    let (status, account) = call(
+        &f.s,
+        &f.owner,
+        "POST",
+        &format!("/api/v1/workspaces/{}/service-accounts", f.team),
+        json!({"name":"Contract review robot"}),
+    )
+    .await;
+    assert!(status == StatusCode::OK, "unexpected value: status");
+    let (status, service) = call(
+        &f.s,
+        &f.owner,
+        "POST",
+        &format!("/api/v1/workspaces/{}/keys", f.team),
+        json!({"name":"Contract robot key","expires_in_days":30,"service_account_id":id(&account)}),
+    )
+    .await;
+    assert!(status == StatusCode::OK, "unexpected value: status");
+    (human, id(&service))
+}
 async fn access_review_inbox_fixtures(
     client: &reqwest::Client,
     base: &str,
@@ -1677,12 +1750,13 @@ async fn access_review_inbox_fixtures(
         .execute(pool)
         .await
         .unwrap();
+    let (human_key, service_key) = review_keys(f, pool).await;
     let (status, campaign) = call(
         &f.s,
         &f.admin,
         "POST",
         REVIEWS,
-        json!({"name":"Contract inbox","subjects":["workspace_memberships","platform_roles"],"workspace_ids":[f.team]}),
+        json!({"name":"Contract inbox","subjects":["workspace_memberships","platform_roles","workspace_keys"],"workspace_ids":[f.team]}),
     )
     .await;
     assert!(status == StatusCode::OK, "unexpected value: status");
@@ -1692,9 +1766,11 @@ async fn access_review_inbox_fixtures(
         .await
         .unwrap();
     let item_of = async |user: Uuid| -> Uuid {
-        sqlx::query_scalar("SELECT id FROM access_review_items WHERE campaign_id=$1 AND user_id=$2")
-            .bind(id(&campaign))
-            .bind(user)
+        sqlx::query_scalar(
+            "SELECT id FROM access_review_items WHERE campaign_id=$1 AND user_id=$2 AND api_key_id IS NULL",
+        )
+        .bind(id(&campaign))
+        .bind(user)
             .fetch_one(pool)
             .await
             .unwrap()
@@ -1703,6 +1779,18 @@ async fn access_review_inbox_fixtures(
     let removed_item = item_of(removed).await;
     let auditor_item = item_of(f.auditor.user_id).await;
     let group_item = item_of(grouped).await;
+    let key_item = async |key: Uuid| -> Uuid {
+        sqlx::query_scalar(
+            "SELECT id FROM access_review_items WHERE campaign_id=$1 AND api_key_id=$2",
+        )
+        .bind(id(&campaign))
+        .bind(key)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    };
+    let human_item = key_item(human_key).await;
+    let service_item = key_item(service_key).await;
     let decide = |item: Uuid| format!("{INBOX}/{item}/decision");
     let inbox = target(INBOX, "limit=50&offset=0");
     // #90 slice 4: the owner's feed now carries an access review reminder.
@@ -1749,6 +1837,21 @@ async fn access_review_inbox_fixtures(
     for who in [owner, admin] {
         let r = send(client, base, Some(who), "GET", &inbox, None).await;
         assert!(!body(&r)["data"].as_array().unwrap().is_empty());
+        observed.observe(&r);
+    }
+    // #90 slice 6: the owner decides a member's used key and a service
+    // account's key, named as the workspace key list names them.
+    for item in [human_item, service_item] {
+        let r = send(
+            client,
+            base,
+            Some(owner),
+            "POST",
+            &decide(item),
+            Some(json!({"decision":"keep"})),
+        )
+        .await;
+        assert!(r.status == StatusCode::OK, "unexpected value: r.status");
         observed.observe(&r);
     }
     for item in [removed_item, auditor_item] {

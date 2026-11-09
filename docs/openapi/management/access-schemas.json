@@ -6445,12 +6445,13 @@
                 "type": "string",
                 "enum": [
                   "workspace_memberships",
-                  "platform_roles"
+                  "platform_roles",
+                  "workspace_keys"
                 ]
               },
               "minItems": 1,
               "uniqueItems": true,
-              "description": "Each kind at most once (the enum and uniqueItems bound it to two)."
+              "description": "Each kind at most once (the enum and uniqueItems bound it to three)."
             },
             "workspace_ids": {
               "type": "array",
@@ -6458,7 +6459,7 @@
                 "$ref": "#/components/schemas/IdentityUuid"
               },
               "uniqueItems": true,
-              "description": "Narrows workspace memberships to these existing Teams/Projects (empty: all), at most 50. Only with workspace_memberships; the handler refuses others with 400."
+              "description": "Narrows workspace memberships and keys to these existing Teams/Projects (empty: all), at most 50. Only with workspace_memberships or workspace_keys; the handler refuses others with 400."
             },
             "due_in_days": {
               "type": [
@@ -6487,12 +6488,13 @@
                 "type": "string",
                 "enum": [
                   "workspace_memberships",
-                  "platform_roles"
+                  "platform_roles",
+                  "workspace_keys"
                 ]
               },
               "minItems": 1,
               "uniqueItems": true,
-              "description": "Each kind at most once (the enum and uniqueItems bound it to two)."
+              "description": "Each kind at most once (the enum and uniqueItems bound it to three)."
             },
             {
               "type": "array",
@@ -6500,7 +6502,7 @@
                 "$ref": "#/components/schemas/IdentityUuid"
               },
               "uniqueItems": true,
-              "description": "Narrows workspace memberships to these existing Teams/Projects (empty: all), at most 50. Only with workspace_memberships; the handler refuses others with 400."
+              "description": "Narrows workspace memberships and keys to these existing Teams/Projects (empty: all), at most 50. Only with workspace_memberships or workspace_keys; the handler refuses others with 400."
             },
             {
               "type": [
@@ -6546,13 +6548,14 @@
             "type": "string",
             "enum": [
               "workspace_memberships",
-              "platform_roles"
+              "platform_roles",
+              "workspace_keys"
             ]
           },
           "minItems": 1,
-          "maxItems": 2,
+          "maxItems": 3,
           "uniqueItems": true,
-          "description": "Sorted; platform_roles covers Admin and Auditor grants."
+          "description": "Sorted; platform_roles covers Admin and Auditor grants; workspace_keys the live key lineages of Teams and Projects."
         },
         "workspace_ids": {
           "type": "array",
@@ -6609,13 +6612,14 @@
             "type": "string",
             "enum": [
               "workspace_memberships",
-              "platform_roles"
+              "platform_roles",
+              "workspace_keys"
             ]
           },
           "minItems": 1,
-          "maxItems": 2,
+          "maxItems": 3,
           "uniqueItems": true,
-          "description": "Sorted; platform_roles covers Admin and Auditor grants."
+          "description": "Sorted; platform_roles covers Admin and Auditor grants; workspace_keys the live key lineages of Teams and Projects."
         },
         "workspace_ids": {
           "type": "array",
@@ -6658,7 +6662,8 @@
               "additionalProperties": false,
               "required": [
                 "workspace_membership",
-                "platform_role"
+                "platform_role",
+                "workspace_key"
               ],
               "properties": {
                 "workspace_membership": {
@@ -6667,6 +6672,11 @@
                   "maximum": 5000
                 },
                 "platform_role": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5000
+                },
+                "workspace_key": {
                   "type": "integer",
                   "minimum": 0,
                   "maximum": 5000
@@ -6769,7 +6779,14 @@
         "decided_by",
         "decided_at",
         "reviewer_user_id",
-        "reviewable"
+        "reviewable",
+        "api_key_id",
+        "key_name",
+        "holder_kind",
+        "service_account_id",
+        "service_account_name",
+        "expires_at",
+        "last_used_at"
       ],
       "properties": {
         "id": {
@@ -6779,7 +6796,8 @@
           "type": "string",
           "enum": [
             "workspace_membership",
-            "platform_role"
+            "platform_role",
+            "workspace_key"
           ]
         },
         "workspace_id": {
@@ -6789,7 +6807,7 @@
           "$ref": "#/components/schemas/IdentityNullableString"
         },
         "user_id": {
-          "$ref": "#/components/schemas/IdentityUuid"
+          "$ref": "#/components/schemas/IdentityNullableUuid"
         },
         "email": {
           "$ref": "#/components/schemas/IdentityNullableString"
@@ -6798,28 +6816,38 @@
           "$ref": "#/components/schemas/IdentityNullableString"
         },
         "role": {
-          "type": "string",
+          "type": [
+            "string",
+            "null"
+          ],
           "enum": [
             "owner",
             "admin",
             "member",
-            "auditor"
-          ]
+            "auditor",
+            null
+          ],
+          "description": "The granted role; null for keys."
         },
         "source": {
-          "type": "string",
+          "type": [
+            "string",
+            "null"
+          ],
           "enum": [
             "manual",
             "group",
-            "bootstrap"
-          ]
+            "bootstrap",
+            null
+          ],
+          "description": "How the access was granted; null for keys."
         },
         "granted_at": {
           "$ref": "#/components/schemas/IdentityTime"
         },
         "active": {
           "type": "boolean",
-          "description": "Whether the grant is still in effect: not revoked, the person neither disabled nor cleaned up, the workspace (if any) not disabled."
+          "description": "Whether the access is still in effect: the grant not revoked (keys: a key of the lineage neither revoked nor expired), the person (if any) neither disabled nor cleaned up, the workspace (if any) not disabled."
         },
         "campaign_id": {
           "$ref": "#/components/schemas/IdentityUuid"
@@ -6848,10 +6876,43 @@
         },
         "reviewable": {
           "type": "boolean",
-          "description": "Whether anyone may decide it now: its review is open, it is in effect, and a reviewer still qualifies (an assignee, or else another owner/admin of its workspace, or another Platform Admin for platform roles). Always true in the inbox."
+          "description": "Whether anyone may decide it now: its review is open, it is in effect, and a reviewer still qualifies (an assignee, or else another owner/admin of its workspace for memberships and keys, or another Platform Admin for platform roles). Always true in the inbox."
+        },
+        "api_key_id": {
+          "$ref": "#/components/schemas/IdentityNullableUuid"
+        },
+        "key_name": {
+          "type": "null",
+          "description": "Never named in the platform views (as key safety's platform scope); reviewers see it in their inbox."
+        },
+        "holder_kind": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "member",
+            "service_account",
+            null
+          ],
+          "description": "Keys: whether a person (member) or a service account holds the key. Null otherwise."
+        },
+        "service_account_id": {
+          "type": "null",
+          "description": "Never shown in the platform views; reviewers see it in their inbox."
+        },
+        "service_account_name": {
+          "type": "null",
+          "description": "Never shown in the platform views; reviewers see it in their inbox."
+        },
+        "expires_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "last_used_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
         }
       },
-      "description": "One grant as it was when the campaign started (role, source, grant time); the workspace name and the person are shown as they are now. workspace_id and workspace_name are null for platform roles; email is null once the person's data has been removed."
+      "description": "One grant as it was when the campaign started (role, source, grant time); the workspace name and the person are shown as they are now. workspace_id and workspace_name are null for platform roles; email is null once the person's data has been removed. Keys (subject_kind workspace_key): one item per key lineage of a Team or Project; role and source are null; user_id is the human holder (null for a service account's key). In the platform views a key item never names the key or its holder: user_id, email, display_name, key_name, service_account_id and service_account_name are null; reviewers see them as the workspace key list shows them (the holder's email and name only while the holder belongs to the workspace)."
     },
     "get_api_v1_platform_access_reviewsResponse": {
       "type": "object",
@@ -6920,13 +6981,14 @@
             "type": "string",
             "enum": [
               "workspace_memberships",
-              "platform_roles"
+              "platform_roles",
+              "workspace_keys"
             ]
           },
           "minItems": 1,
-          "maxItems": 2,
+          "maxItems": 3,
           "uniqueItems": true,
-          "description": "Sorted; platform_roles covers Admin and Auditor grants."
+          "description": "Sorted; platform_roles covers Admin and Auditor grants; workspace_keys the live key lineages of Teams and Projects."
         },
         "workspace_ids": {
           "type": "array",
@@ -6970,7 +7032,8 @@
               "additionalProperties": false,
               "required": [
                 "workspace_membership",
-                "platform_role"
+                "platform_role",
+                "workspace_key"
               ],
               "properties": {
                 "workspace_membership": {
@@ -6979,6 +7042,11 @@
                   "maximum": 5000
                 },
                 "platform_role": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5000
+                },
+                "workspace_key": {
                   "type": "integer",
                   "minimum": 0,
                   "maximum": 5000
@@ -7091,13 +7159,14 @@
             "type": "string",
             "enum": [
               "workspace_memberships",
-              "platform_roles"
+              "platform_roles",
+              "workspace_keys"
             ]
           },
           "minItems": 1,
-          "maxItems": 2,
+          "maxItems": 3,
           "uniqueItems": true,
-          "description": "Sorted; platform_roles covers Admin and Auditor grants."
+          "description": "Sorted; platform_roles covers Admin and Auditor grants; workspace_keys the live key lineages of Teams and Projects."
         },
         "workspace_ids": {
           "type": "array",
@@ -7140,7 +7209,8 @@
               "additionalProperties": false,
               "required": [
                 "workspace_membership",
-                "platform_role"
+                "platform_role",
+                "workspace_key"
               ],
               "properties": {
                 "workspace_membership": {
@@ -7149,6 +7219,11 @@
                   "maximum": 5000
                 },
                 "platform_role": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5000
+                },
+                "workspace_key": {
                   "type": "integer",
                   "minimum": 0,
                   "maximum": 5000
@@ -7321,7 +7396,14 @@
         "decided_by",
         "decided_at",
         "reviewer_user_id",
-        "reviewable"
+        "reviewable",
+        "api_key_id",
+        "key_name",
+        "holder_kind",
+        "service_account_id",
+        "service_account_name",
+        "expires_at",
+        "last_used_at"
       ],
       "properties": {
         "id": {
@@ -7331,7 +7413,8 @@
           "type": "string",
           "enum": [
             "workspace_membership",
-            "platform_role"
+            "platform_role",
+            "workspace_key"
           ]
         },
         "workspace_id": {
@@ -7341,7 +7424,7 @@
           "$ref": "#/components/schemas/IdentityNullableString"
         },
         "user_id": {
-          "$ref": "#/components/schemas/IdentityUuid"
+          "$ref": "#/components/schemas/IdentityNullableUuid"
         },
         "email": {
           "$ref": "#/components/schemas/IdentityNullableString"
@@ -7350,28 +7433,38 @@
           "$ref": "#/components/schemas/IdentityNullableString"
         },
         "role": {
-          "type": "string",
+          "type": [
+            "string",
+            "null"
+          ],
           "enum": [
             "owner",
             "admin",
             "member",
-            "auditor"
-          ]
+            "auditor",
+            null
+          ],
+          "description": "The granted role; null for keys."
         },
         "source": {
-          "type": "string",
+          "type": [
+            "string",
+            "null"
+          ],
           "enum": [
             "manual",
             "group",
-            "bootstrap"
-          ]
+            "bootstrap",
+            null
+          ],
+          "description": "How the access was granted; null for keys."
         },
         "granted_at": {
           "$ref": "#/components/schemas/IdentityTime"
         },
         "active": {
           "type": "boolean",
-          "description": "Whether the grant is still in effect: not revoked, the person neither disabled nor cleaned up, the workspace (if any) not disabled."
+          "description": "Whether the access is still in effect: the grant not revoked (keys: a key of the lineage neither revoked nor expired), the person (if any) neither disabled nor cleaned up, the workspace (if any) not disabled."
         },
         "campaign_id": {
           "$ref": "#/components/schemas/IdentityUuid"
@@ -7395,10 +7488,40 @@
         },
         "reviewable": {
           "type": "boolean",
-          "description": "Whether anyone may decide it now: its review is open, it is in effect, and a reviewer still qualifies (an assignee, or else another owner/admin of its workspace, or another Platform Admin for platform roles). Always true in the inbox."
+          "description": "Whether anyone may decide it now: its review is open, it is in effect, and a reviewer still qualifies (an assignee, or else another owner/admin of its workspace for memberships and keys, or another Platform Admin for platform roles). Always true in the inbox."
+        },
+        "api_key_id": {
+          "$ref": "#/components/schemas/IdentityNullableUuid"
+        },
+        "key_name": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "holder_kind": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "member",
+            "service_account",
+            null
+          ],
+          "description": "Keys: whether a person (member) or a service account holds the key. Null otherwise."
+        },
+        "service_account_id": {
+          "$ref": "#/components/schemas/IdentityNullableUuid"
+        },
+        "service_account_name": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "expires_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "last_used_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
         }
       },
-      "description": "An item with the decision just recorded."
+      "description": "An item with the decision just recorded. Keys (subject_kind workspace_key): one item per key lineage of a Team or Project; role and source are null; user_id is the human holder (null for a service account's key). In the platform views a key item never names the key or its holder: user_id, email, display_name, key_name, service_account_id and service_account_name are null; reviewers see them as the workspace key list shows them (the holder's email and name only while the holder belongs to the workspace)."
     },
     "AccessReviewInboxItem": {
       "type": "object",
@@ -7422,7 +7545,14 @@
         "reviewer_user_id",
         "campaign_name",
         "due_at",
-        "reviewable"
+        "reviewable",
+        "api_key_id",
+        "key_name",
+        "holder_kind",
+        "service_account_id",
+        "service_account_name",
+        "expires_at",
+        "last_used_at"
       ],
       "properties": {
         "id": {
@@ -7432,7 +7562,8 @@
           "type": "string",
           "enum": [
             "workspace_membership",
-            "platform_role"
+            "platform_role",
+            "workspace_key"
           ]
         },
         "workspace_id": {
@@ -7442,7 +7573,7 @@
           "$ref": "#/components/schemas/IdentityNullableString"
         },
         "user_id": {
-          "$ref": "#/components/schemas/IdentityUuid"
+          "$ref": "#/components/schemas/IdentityNullableUuid"
         },
         "email": {
           "$ref": "#/components/schemas/IdentityNullableString"
@@ -7451,28 +7582,38 @@
           "$ref": "#/components/schemas/IdentityNullableString"
         },
         "role": {
-          "type": "string",
+          "type": [
+            "string",
+            "null"
+          ],
           "enum": [
             "owner",
             "admin",
             "member",
-            "auditor"
-          ]
+            "auditor",
+            null
+          ],
+          "description": "The granted role; null for keys."
         },
         "source": {
-          "type": "string",
+          "type": [
+            "string",
+            "null"
+          ],
           "enum": [
             "manual",
             "group",
-            "bootstrap"
-          ]
+            "bootstrap",
+            null
+          ],
+          "description": "How the access was granted; null for keys."
         },
         "granted_at": {
           "$ref": "#/components/schemas/IdentityTime"
         },
         "active": {
           "type": "boolean",
-          "description": "Whether the grant is still in effect: not revoked, the person neither disabled nor cleaned up, the workspace (if any) not disabled."
+          "description": "Whether the access is still in effect: the grant not revoked (keys: a key of the lineage neither revoked nor expired), the person (if any) neither disabled nor cleaned up, the workspace (if any) not disabled."
         },
         "campaign_id": {
           "$ref": "#/components/schemas/IdentityUuid"
@@ -7507,10 +7648,40 @@
         },
         "reviewable": {
           "type": "boolean",
-          "description": "Whether anyone may decide it now: its review is open, it is in effect, and a reviewer still qualifies (an assignee, or else another owner/admin of its workspace, or another Platform Admin for platform roles). Always true in the inbox."
+          "description": "Whether anyone may decide it now: its review is open, it is in effect, and a reviewer still qualifies (an assignee, or else another owner/admin of its workspace for memberships and keys, or another Platform Admin for platform roles). Always true in the inbox."
+        },
+        "api_key_id": {
+          "$ref": "#/components/schemas/IdentityNullableUuid"
+        },
+        "key_name": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "holder_kind": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "member",
+            "service_account",
+            null
+          ],
+          "description": "Keys: whether a person (member) or a service account holds the key. Null otherwise."
+        },
+        "service_account_id": {
+          "$ref": "#/components/schemas/IdentityNullableUuid"
+        },
+        "service_account_name": {
+          "$ref": "#/components/schemas/IdentityNullableString"
+        },
+        "expires_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
+        },
+        "last_used_at": {
+          "$ref": "#/components/schemas/IdentityNullableTime"
         }
       },
-      "description": "An item the viewer may decide, with its campaign's name and due date."
+      "description": "An item the viewer may decide, with its campaign's name and due date. Keys (subject_kind workspace_key): one item per key lineage of a Team or Project; role and source are null; user_id is the human holder (null for a service account's key). In the platform views a key item never names the key or its holder: user_id, email, display_name, key_name, service_account_id and service_account_name are null; reviewers see them as the workspace key list shows them (the holder's email and name only while the holder belongs to the workspace)."
     },
     "get_api_v1_me_access_reviewsResponse": {
       "type": "object",

@@ -3699,12 +3699,13 @@ async fn access_review_fixtures(c: &Client, admin: &Browser, f: &Fixture, pool: 
         .unwrap();
     let removed = plain_user(pool, "review-removed").await;
     member(pool, f.team, removed, "member").await;
+    let (human_key, _) = review_keys(f, pool).await;
     let both = c
         .ok(
             admin,
             "POST",
             REVIEWS,
-            Some(json!({"name":"Contract review","subjects":["workspace_memberships","platform_roles"],"workspace_ids":[f.team],"due_in_days":30})),
+            Some(json!({"name":"Contract review","subjects":["workspace_memberships","platform_roles","workspace_keys"],"workspace_ids":[f.team],"due_in_days":30})),
         )
         .await;
     let roles = c
@@ -3769,6 +3770,23 @@ async fn access_review_fixtures(c: &Client, admin: &Browser, f: &Fixture, pool: 
     .await;
     c.ok(admin, "POST", &assign_path(auditor_item), Some(json!({})))
         .await;
+    // #90 slice 6: a key item (as platform readers see it: no key name or
+    // holder) assigned to the Team's owner.
+    let human_item: Uuid = sqlx::query_scalar(
+        "SELECT id FROM access_review_items WHERE campaign_id=$1 AND api_key_id=$2",
+    )
+    .bind(id(&both))
+    .bind(human_key)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    c.ok(
+        admin,
+        "POST",
+        &assign_path(human_item),
+        Some(json!({"user_id":f.owner.user_id})),
+    )
+    .await;
     c.ok(&owner, "GET", &target(INBOX, "limit=50&offset=0"), None)
         .await;
     c.ok(admin, "GET", &target(INBOX, "limit=50&offset=0"), None)
@@ -3953,8 +3971,8 @@ async fn access_review_fixtures(c: &Client, admin: &Browser, f: &Fixture, pool: 
             body_vectors_http(&mut o, "POST", REVIEWS, valid, async |body| {
                 close_open().await;
                 // Described, not expressed: a workspace filter needs the
-                // memberships subject and existing Teams/Projects. The real
-                // handler decides a body that breaks it.
+                // memberships or keys subject and existing Teams/Projects.
+                // The real handler decides a body that breaks it.
                 let (subjects, filter) = if body.is_array() {
                     (body[1].clone(), body[2].clone())
                 } else {
@@ -3983,7 +4001,10 @@ async fn access_review_fixtures(c: &Client, admin: &Browser, f: &Fixture, pool: 
                     && !filter.is_empty()
                     && (!subjects
                         .as_array()
-                        .is_some_and(|s| s.iter().any(|v| v == "workspace_memberships"))
+                        .is_some_and(|s| {
+                            s.iter()
+                                .any(|v| v == "workspace_memberships" || v == "workspace_keys")
+                        })
                         || shared as usize != filter.len());
                 let captured = c.raw(admin, "POST", REVIEWS, Some(body), &[]).await;
                 if filter_rule && captured.status == StatusCode::BAD_REQUEST {
@@ -3997,9 +4018,82 @@ async fn access_review_fixtures(c: &Client, admin: &Browser, f: &Fixture, pool: 
     }
 }
 
+/// #90 slice 6: a used human key (the member's, with one admitted request)
+/// and a service account's key in the Team, for key review items.
+async fn review_keys(f: &Fixture, pool: &PgPool) -> (Uuid, Uuid) {
+    let (status, human) = call(
+        &f.s,
+        &f.member,
+        "POST",
+        &format!("/api/v1/workspaces/{}/keys", f.team),
+        json!({"name":"Contract review key","expires_in_days":30}),
+    )
+    .await;
+    assert!(status == StatusCode::OK, "unexpected value: status");
+    let human = id(&human);
+    // Any route for the attempt; a disabled one of its own if none exists yet
+    // (it serves nothing).
+    let existing: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM deployments ORDER BY created_at, id LIMIT 1")
+            .fetch_optional(pool)
+            .await
+            .unwrap();
+    let deployment = match existing {
+        Some(d) => d,
+        None => {
+            let (model, connection, deployment) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+            sqlx::query("INSERT INTO models(id,public_name,enabled) VALUES($1,'contract-review-model',false)")
+                .bind(model)
+                .execute(pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO provider_connections(id,name,provider,credential_ref) VALUES($1,'Contract review mock','openai','env:UNUSED')")
+                .bind(connection)
+                .execute(pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model) VALUES($1,$2,$3,'mock')")
+                .bind(deployment)
+                .bind(model)
+                .bind(connection)
+                .execute(pool)
+                .await
+                .unwrap();
+            deployment
+        }
+    };
+    let execution = Uuid::new_v4();
+    sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,input_tokens,output_tokens) VALUES($1,$2,$3,$4,'contract-review','openai',false,'succeeded',$1,1,1)")
+        .bind(execution)
+        .bind(f.team)
+        .bind(human)
+        .bind(deployment)
+        .execute(pool)
+        .await
+        .unwrap();
+    let (status, account) = call(
+        &f.s,
+        &f.owner,
+        "POST",
+        &format!("/api/v1/workspaces/{}/service-accounts", f.team),
+        json!({"name":"Contract review robot"}),
+    )
+    .await;
+    assert!(status == StatusCode::OK, "unexpected value: status");
+    let (status, service) = call(
+        &f.s,
+        &f.owner,
+        "POST",
+        &format!("/api/v1/workspaces/{}/keys", f.team),
+        json!({"name":"Contract robot key","expires_in_days":30,"service_account_id":id(&account)}),
+    )
+    .await;
+    assert!(status == StatusCode::OK, "unexpected value: status");
+    (human, id(&service))
+}
 /// The campaign's item for this person: a membership item or a platform role item.
 async fn review_item(pool: &PgPool, campaign: &Value, user: Uuid, membership: bool) -> Uuid {
-    sqlx::query_scalar("SELECT id FROM access_review_items WHERE campaign_id=$1 AND user_id=$2 AND (workspace_id IS NOT NULL)=$3")
+    sqlx::query_scalar("SELECT id FROM access_review_items WHERE campaign_id=$1 AND user_id=$2 AND (workspace_id IS NOT NULL)=$3 AND api_key_id IS NULL")
         .bind(id(campaign))
         .bind(user)
         .bind(membership)

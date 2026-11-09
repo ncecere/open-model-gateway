@@ -1,6 +1,8 @@
 //! #90 slice 1: access review campaigns. A Platform Admin starts a one-shot
-//! campaign that snapshots the live shared (Team/Project) memberships and/or
-//! elevated platform role grants (Admin, Auditor) it covers, and closes it. Each item records one grant; the database
+//! campaign that snapshots the live shared (Team/Project) memberships,
+//! elevated platform role grants (Admin, Auditor) and/or shared-workspace key
+//! lineages (slice 6) it covers, and closes it. Each item records one grant
+//! or key lineage; the database
 //! derives the item from the grant and accepts items only in the
 //! transaction that creates the campaign. Reviewer decisions follow in later
 //! slices. Browser-only: Platform Admins start campaigns; Platform Admins and
@@ -30,18 +32,52 @@ const CAMPAIGN_JSON: &str = "jsonb_build_object('id',c.id,'name',c.name,'subject
 
 /// The latest decision and assignment of item `i` (as `d` and `a`).
 const LATEST_DECISION: &str = "LEFT JOIN LATERAL (SELECT x.decision,x.decided_by,x.decided_at FROM access_review_decisions x WHERE x.item_id=i.id ORDER BY x.seq DESC LIMIT 1) d ON true LEFT JOIN LATERAL (SELECT y.reviewer_user_id FROM access_review_assignments y WHERE y.item_id=i.id ORDER BY y.seq DESC LIMIT 1) a ON true";
+/// Whether item `i` is a key lineage (slice 6).
+const KEY_ITEM: &str = "i.subject_kind='workspace_key'";
+/// A key item's live expiry (its unrevoked key's, else the snapshot key's)
+/// and the lineage's latest admitted attempt; NULL for other items.
+const KEY_TIMES: &str = "'expires_at',CASE WHEN i.subject_kind='workspace_key' THEN coalesce((SELECT max(k2.expires_at) FROM api_keys k2 WHERE k2.workspace_id=i.workspace_id AND k2.governance_key_id=i.key_lineage_id AND k2.revoked_at IS NULL),kk.expires_at) END,'last_used_at',CASE WHEN i.subject_kind='workspace_key' THEN (SELECT max(e.started_at) FROM api_keys k3 JOIN inference_executions e ON e.api_key_id=k3.id WHERE k3.workspace_id=i.workspace_id AND k3.governance_key_id=i.key_lineage_id) END";
 /// An item as reviewers and platform readers see it: the snapshot's role,
-/// source and grant time; the workspace name and person as they are now;
-/// whether it is still in effect; the latest decision and assignment.
-const ITEM_JSON: &str = "jsonb_build_object('id',i.id,'campaign_id',i.campaign_id,'subject_kind',i.subject_kind,'workspace_id',i.workspace_id,'workspace_name',w.name,'user_id',i.user_id,'email',u.email,'display_name',u.display_name,'role',i.role,'source',i.source,'granted_at',i.granted_at,'active',access_review_item_active(i.id),'decision',d.decision,'decided_by',d.decided_by,'decided_at',d.decided_at,'reviewer_user_id',a.reviewer_user_id,'reviewable',(access_review_item_active(i.id) AND EXISTS (SELECT 1 FROM access_review_campaigns k WHERE k.id=i.campaign_id AND k.closed_at IS NULL) AND ((a.reviewer_user_id IS NOT NULL AND access_review_candidate(i.id,a.reviewer_user_id)) OR CASE WHEN i.subject_kind='workspace_membership' THEN EXISTS (SELECT 1 FROM rv_ws x WHERE x.workspace_id=i.workspace_id AND cardinality(array_remove(x.ids,i.user_id))>0) ELSE EXISTS (SELECT 1 FROM rv_admins y WHERE y.user_id<>i.user_id) END)))";
-/// [`ITEM_JSON`] for inbox rows, which the reviewer rule already limits to
+/// source and grant time (a key's creation); the workspace name and person
+/// as they are now; whether it is still in effect; the latest decision and
+/// assignment; for keys the key id, holder kind, expiry and last use.
+///
+/// `platform`: the platform views (items, assignment, export) show key items
+/// as key safety's platform scope does, without the key's name or its
+/// holder (person or service account). Reviewers (owners and admins of the
+/// workspace) see them as the workspace key list does: the holder's name
+/// and email only while the holder belongs to the workspace.
+fn item_json(platform: bool, reviewable: &str) -> String {
+    let identity = if platform {
+        format!(
+            "'user_id',CASE WHEN {KEY_ITEM} THEN NULL ELSE i.user_id END,'email',CASE WHEN {KEY_ITEM} THEN NULL ELSE u.email END,'display_name',CASE WHEN {KEY_ITEM} THEN NULL ELSE u.display_name END,'key_name',NULL,'service_account_id',NULL,'service_account_name',NULL"
+        )
+    } else {
+        let shown = format!(
+            "(NOT {KEY_ITEM} OR EXISTS (SELECT 1 FROM effective_workspace_memberships hm WHERE hm.workspace_id=i.workspace_id AND hm.user_id=i.user_id))"
+        );
+        format!(
+            "'user_id',i.user_id,'email',CASE WHEN {shown} THEN u.email END,'display_name',CASE WHEN {shown} THEN u.display_name END,'key_name',kk.name,'service_account_id',i.service_account_id,'service_account_name',sa.name"
+        )
+    };
+    format!(
+        "jsonb_build_object('id',i.id,'campaign_id',i.campaign_id,'subject_kind',i.subject_kind,'workspace_id',i.workspace_id,'workspace_name',w.name,{identity},'role',i.role,'source',i.source,'granted_at',i.granted_at,'api_key_id',i.api_key_id,'holder_kind',CASE WHEN {KEY_ITEM} THEN CASE WHEN i.service_account_id IS NULL THEN 'member' ELSE 'service_account' END END,{KEY_TIMES},'active',access_review_item_active(i.id),'decision',d.decision,'decided_by',d.decided_by,'decided_at',d.decided_at,'reviewer_user_id',a.reviewer_user_id,'reviewable',{reviewable})"
+    )
+}
+/// [`item_json`] for platform readers, with `reviewable` computed.
+fn platform_item_json() -> String {
+    item_json(true, REVIEWABLE)
+}
+/// [`item_json`] for inbox rows, which the reviewer rule already limits to
 /// items the viewer may decide: reviewable without computing it.
-const INBOX_ITEM_JSON: &str = "jsonb_build_object('id',i.id,'campaign_id',i.campaign_id,'subject_kind',i.subject_kind,'workspace_id',i.workspace_id,'workspace_name',w.name,'user_id',i.user_id,'email',u.email,'display_name',u.display_name,'role',i.role,'source',i.source,'granted_at',i.granted_at,'active',access_review_item_active(i.id),'decision',d.decision,'decided_by',d.decided_by,'decided_at',d.decided_at,'reviewer_user_id',a.reviewer_user_id,'reviewable',true)";
+fn inbox_item_json() -> String {
+    item_json(false, "true")
+}
 /// Whether anyone may decide item `i` now (#469): its review is open, it is
 /// in effect, and it has a reviewer who still qualifies (an assignee, or else another owner/admin of
 /// its workspace, or another Platform Admin for platform roles). Needs the
 /// [`reviewer_sets`] CTEs and the latest assignment `a`.
-const REVIEWABLE: &str = "(access_review_item_active(i.id) AND EXISTS (SELECT 1 FROM access_review_campaigns k WHERE k.id=i.campaign_id AND k.closed_at IS NULL) AND ((a.reviewer_user_id IS NOT NULL AND access_review_candidate(i.id,a.reviewer_user_id)) OR CASE WHEN i.subject_kind='workspace_membership' THEN EXISTS (SELECT 1 FROM rv_ws x WHERE x.workspace_id=i.workspace_id AND cardinality(array_remove(x.ids,i.user_id))>0) ELSE EXISTS (SELECT 1 FROM rv_admins y WHERE y.user_id<>i.user_id) END))";
+const REVIEWABLE: &str = "(access_review_item_active(i.id) AND EXISTS (SELECT 1 FROM access_review_campaigns k WHERE k.id=i.campaign_id AND k.closed_at IS NULL) AND ((a.reviewer_user_id IS NOT NULL AND access_review_candidate(i.id,a.reviewer_user_id)) OR CASE WHEN i.subject_kind<>'platform_role' THEN EXISTS (SELECT 1 FROM rv_ws x WHERE x.workspace_id=i.workspace_id AND cardinality(array_remove(x.ids,i.user_id))>0) ELSE EXISTS (SELECT 1 FROM rv_admins y WHERE y.user_id<>i.user_id) END))";
 /// CTEs for [`REVIEWABLE`], computed once per query: the Platform Admins, and
 /// the owners and admins of each workspace with items in `campaigns`.
 fn reviewer_sets(campaigns: &str) -> String {
@@ -49,13 +85,15 @@ fn reviewer_sets(campaigns: &str) -> String {
         "rv_admins AS MATERIALIZED (SELECT r.user_id FROM effective_platform_roles r WHERE r.role='admin'), rv_ws AS MATERIALIZED (SELECT e.workspace_id, array_agg(e.user_id) AS ids FROM effective_workspace_memberships e WHERE e.role IN ('owner','admin') AND e.workspace_id IN (SELECT ri.workspace_id FROM access_review_items ri WHERE ri.campaign_id IN ({campaigns})) GROUP BY e.workspace_id)"
     )
 }
-const ITEM_FROM: &str = "access_review_items i JOIN users u ON u.id=i.user_id LEFT JOIN workspaces w ON w.id=i.workspace_id";
+/// An item with its person (none for a service key), workspace, snapshot key
+/// and service account.
+const ITEM_FROM: &str = "access_review_items i LEFT JOIN users u ON u.id=i.user_id LEFT JOIN workspaces w ON w.id=i.workspace_id LEFT JOIN api_keys kk ON kk.id=i.api_key_id LEFT JOIN service_accounts sa ON sa.id=i.service_account_id";
 
 /// One campaign with its item counts (by kind, by source, and how many items'
 /// grants are no longer active).
 async fn one(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> ApiResult {
     let sets = reviewer_sets("$1");
-    let v: Value = sqlx::query_scalar(&format!("WITH {sets} SELECT {CAMPAIGN_JSON} || jsonb_build_object('counts',(SELECT jsonb_build_object('by_kind',jsonb_build_object('workspace_membership',count(*) FILTER (WHERE i.subject_kind='workspace_membership'),'platform_role',count(*) FILTER (WHERE i.subject_kind='platform_role')),'by_source',jsonb_build_object('manual',count(*) FILTER (WHERE i.source='manual'),'group',count(*) FILTER (WHERE i.source='group'),'bootstrap',count(*) FILTER (WHERE i.source='bootstrap')),'inactive',count(*) FILTER (WHERE NOT access_review_item_active(i.id)),'by_decision',jsonb_build_object('pending',count(*) FILTER (WHERE d.decision IS NULL),'keep',count(*) FILTER (WHERE d.decision='keep'),'flag_idp',count(*) FILTER (WHERE d.decision='flag_idp'),'remove',count(*) FILTER (WHERE d.decision='remove')),'without_reviewer',count(*) FILTER (WHERE access_review_item_active(i.id) AND NOT {REVIEWABLE})) FROM access_review_items i {LATEST_DECISION} WHERE i.campaign_id=c.id)) FROM access_review_campaigns c WHERE c.id=$1"))
+    let v: Value = sqlx::query_scalar(&format!("WITH {sets} SELECT {CAMPAIGN_JSON} || jsonb_build_object('counts',(SELECT jsonb_build_object('by_kind',jsonb_build_object('workspace_membership',count(*) FILTER (WHERE i.subject_kind='workspace_membership'),'platform_role',count(*) FILTER (WHERE i.subject_kind='platform_role'),'workspace_key',count(*) FILTER (WHERE i.subject_kind='workspace_key')),'by_source',jsonb_build_object('manual',count(*) FILTER (WHERE i.source='manual'),'group',count(*) FILTER (WHERE i.source='group'),'bootstrap',count(*) FILTER (WHERE i.source='bootstrap')),'inactive',count(*) FILTER (WHERE NOT access_review_item_active(i.id)),'by_decision',jsonb_build_object('pending',count(*) FILTER (WHERE d.decision IS NULL),'keep',count(*) FILTER (WHERE d.decision='keep'),'flag_idp',count(*) FILTER (WHERE d.decision='flag_idp'),'remove',count(*) FILTER (WHERE d.decision='remove')),'without_reviewer',count(*) FILTER (WHERE access_review_item_active(i.id) AND NOT {REVIEWABLE})) FROM access_review_items i {LATEST_DECISION} WHERE i.campaign_id=c.id)) FROM access_review_campaigns c WHERE c.id=$1"))
         .bind(id)
         .fetch_optional(&mut **tx)
         .await?
@@ -93,9 +131,10 @@ pub(super) async fn detail(
     Ok(result)
 }
 /// `GET /api/v1/platform/access-reviews/{id}/items`: memberships (by
-/// workspace id), then platform roles, in a stable snapshot order; each with
-/// the workspace name and person as they are now (as the platform user
-/// directory shows them) and whether the grant is still in effect.
+/// workspace id), then keys, then platform roles, in a stable snapshot order;
+/// each with the workspace name and person as they are now (as the platform
+/// user directory shows them; keys as key safety's platform scope, without
+/// names or holders) and whether the access is still in effect.
 pub(super) async fn items(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
@@ -113,7 +152,8 @@ pub(super) async fn items(
         return Err(missing());
     }
     let sets = reviewer_sets("$1");
-    let data: Vec<Value> = sqlx::query_scalar(&format!("WITH {sets} SELECT {ITEM_JSON} FROM {ITEM_FROM} {LATEST_DECISION} WHERE i.campaign_id=$1 ORDER BY i.subject_kind DESC, i.workspace_id, i.user_id, i.id LIMIT $2 OFFSET $3"))
+    let item = platform_item_json();
+    let data: Vec<Value> = sqlx::query_scalar(&format!("WITH {sets} SELECT {item} FROM {ITEM_FROM} {LATEST_DECISION} WHERE i.campaign_id=$1 ORDER BY i.subject_kind DESC, i.workspace_id, i.user_id, i.id LIMIT $2 OFFSET $3"))
         .bind(id)
         .bind(l)
         .bind(o)
@@ -137,13 +177,18 @@ pub(super) async fn create(
     if !valid_name(&b.name)
         || subjects.is_empty()
         || subjects.len() != b.subjects.len()
-        || !subjects
-            .iter()
-            .all(|s| matches!(*s, "workspace_memberships" | "platform_roles"))
+        || !subjects.iter().all(|s| {
+            matches!(
+                *s,
+                "workspace_memberships" | "platform_roles" | "workspace_keys"
+            )
+        })
         || !(1..=90).contains(&due)
         || filter.len() != b.workspace_ids.len()
         || b.workspace_ids.len() > MAX_WORKSPACES
-        || (!filter.is_empty() && !subjects.contains("workspace_memberships"))
+        || (!filter.is_empty()
+            && !subjects.contains("workspace_memberships")
+            && !subjects.contains("workspace_keys"))
     {
         return Err(invalid().into());
     }
@@ -185,12 +230,14 @@ pub(super) async fn create(
         .await?;
     // One statement, so one snapshot of the grants. The guard copies each
     // item's fields from its grant and rechecks the same rules.
-    let inserted = sqlx::query("WITH m AS (SELECT 'workspace_membership' AS kind, g.id AS membership_grant_id, NULL::uuid AS platform_grant_id FROM workspace_membership_grants g JOIN workspaces w ON w.id=g.workspace_id JOIN users u ON u.id=g.user_id WHERE $2 AND g.revoked_at IS NULL AND w.kind IN ('team','project') AND w.disabled_at IS NULL AND (cardinality($4::uuid[])=0 OR w.id=ANY($4)) AND u.disabled_at IS NULL AND u.cleaned_at IS NULL), p AS (SELECT 'platform_role', NULL::uuid, g.id FROM platform_role_grants g JOIN users u ON u.id=g.user_id WHERE $3 AND g.revoked_at IS NULL AND g.role IN ('admin','auditor') AND u.disabled_at IS NULL AND u.cleaned_at IS NULL), s AS (SELECT * FROM m UNION ALL SELECT * FROM p LIMIT $5) INSERT INTO access_review_items(id,campaign_id,subject_kind,membership_grant_id,platform_grant_id) SELECT gen_random_uuid(),$1,kind,membership_grant_id,platform_grant_id FROM s")
+    // Keys: one live key per lineage (a rotation revokes the key it replaces).
+    let inserted = sqlx::query("WITH m AS (SELECT 'workspace_membership' AS kind, g.id AS membership_grant_id, NULL::uuid AS platform_grant_id, NULL::uuid AS api_key_id FROM workspace_membership_grants g JOIN workspaces w ON w.id=g.workspace_id JOIN users u ON u.id=g.user_id WHERE $2 AND g.revoked_at IS NULL AND w.kind IN ('team','project') AND w.disabled_at IS NULL AND (cardinality($4::uuid[])=0 OR w.id=ANY($4)) AND u.disabled_at IS NULL AND u.cleaned_at IS NULL), p AS (SELECT 'platform_role', NULL::uuid, g.id, NULL::uuid FROM platform_role_grants g JOIN users u ON u.id=g.user_id WHERE $3 AND g.revoked_at IS NULL AND g.role IN ('admin','auditor') AND u.disabled_at IS NULL AND u.cleaned_at IS NULL), k AS (SELECT DISTINCT ON (k.workspace_id,k.governance_key_id) 'workspace_key', NULL::uuid, NULL::uuid, k.id FROM api_keys k JOIN workspaces w ON w.id=k.workspace_id LEFT JOIN users u ON u.id=k.issued_to_user_id WHERE $6 AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now()) AND w.kind IN ('team','project') AND w.disabled_at IS NULL AND (cardinality($4::uuid[])=0 OR w.id=ANY($4)) AND (k.issued_to_user_id IS NULL OR (u.disabled_at IS NULL AND u.cleaned_at IS NULL)) ORDER BY k.workspace_id,k.governance_key_id,k.created_at DESC,k.id), s AS (SELECT * FROM m UNION ALL SELECT * FROM p UNION ALL SELECT * FROM k LIMIT $5) INSERT INTO access_review_items(id,campaign_id,subject_kind,membership_grant_id,platform_grant_id,api_key_id) SELECT gen_random_uuid(),$1,kind,membership_grant_id,platform_grant_id,api_key_id FROM s")
         .bind(id)
         .bind(subjects.contains("workspace_memberships"))
         .bind(subjects.contains("platform_roles"))
         .bind(&b.workspace_ids)
         .bind(MAX_ITEMS + 1)
+        .bind(subjects.contains("workspace_keys"))
         .execute(&mut *tx)
         .await
         .map_err(|e| {
@@ -213,7 +260,7 @@ pub(super) async fn create(
         return Err(ManagementError::detailed(
             StatusCode::CONFLICT,
             "access_review_too_large",
-            "This review would have more than 5,000 items; narrow it to fewer workspaces, or review memberships and platform roles separately".into(),
+            "This review would have more than 5,000 items; narrow it to fewer workspaces, or review fewer kinds of access at once".into(),
             json!({}),
         ));
     }
@@ -298,11 +345,13 @@ pub(super) struct Assignment {
     user_id: Option<Uuid>,
 }
 
-/// One item as the API shows it.
-async fn one_item(tx: &mut Transaction<'_, Postgres>, item: Uuid) -> ApiResult {
+/// One item as the API shows it: to a platform reader (`platform`, see
+/// [`item_json`]) or to its reviewer.
+async fn one_item(tx: &mut Transaction<'_, Postgres>, item: Uuid, platform: bool) -> ApiResult {
     let sets = reviewer_sets("SELECT campaign_id FROM access_review_items WHERE id=$1");
+    let json = item_json(platform, REVIEWABLE);
     let v: Value = sqlx::query_scalar(&format!(
-        "WITH {sets} SELECT {ITEM_JSON} FROM {ITEM_FROM} {LATEST_DECISION} WHERE i.id=$1"
+        "WITH {sets} SELECT {json} FROM {ITEM_FROM} {LATEST_DECISION} WHERE i.id=$1"
     ))
     .bind(item)
     .fetch_optional(&mut **tx)
@@ -311,7 +360,8 @@ async fn one_item(tx: &mut Transaction<'_, Postgres>, item: Uuid) -> ApiResult {
     Ok(Json(v))
 }
 
-/// The reviewer rule for item `i` (with `u` its person, `w` its workspace and
+/// The reviewer rule for item `i` (with `u` its person (none for a service
+/// key), `w` its workspace and
 /// `a` its latest assignment joined; the fragment adds the grant joins and a
 /// `WHERE`, so a caller appends further conditions with `AND`), the same as `access_review_may_decide`
 /// for an open campaign and a still-in-effect item: joins the item's grant
@@ -321,7 +371,7 @@ async fn one_item(tx: &mut Transaction<'_, Postgres>, item: Uuid) -> ApiResult {
 /// workspace ids) or, for platform items, a Platform Admin (`admin`).
 fn reviewer_rule(user: &str, admin_ws: &str, admin: &str) -> String {
     format!(
-        "LEFT JOIN workspace_membership_grants m ON m.id=i.membership_grant_id LEFT JOIN platform_role_grants pg ON pg.id=i.platform_grant_id WHERE i.user_id<>{user} AND coalesce(m.revoked_at,pg.revoked_at) IS NULL AND u.disabled_at IS NULL AND u.cleaned_at IS NULL AND (w.id IS NULL OR w.disabled_at IS NULL) AND CASE WHEN a.reviewer_user_id IS NOT NULL AND access_review_candidate(i.id,a.reviewer_user_id) THEN a.reviewer_user_id={user} WHEN i.subject_kind='workspace_membership' THEN i.workspace_id IN {admin_ws} ELSE {admin} END"
+        "LEFT JOIN workspace_membership_grants m ON m.id=i.membership_grant_id LEFT JOIN platform_role_grants pg ON pg.id=i.platform_grant_id WHERE i.user_id IS DISTINCT FROM {user} AND CASE WHEN i.subject_kind='workspace_key' THEN EXISTS (SELECT 1 FROM api_keys lk WHERE lk.workspace_id=i.workspace_id AND lk.governance_key_id=i.key_lineage_id AND lk.revoked_at IS NULL AND (lk.expires_at IS NULL OR lk.expires_at>now())) ELSE coalesce(m.revoked_at,pg.revoked_at) IS NULL END AND (i.user_id IS NULL OR (u.disabled_at IS NULL AND u.cleaned_at IS NULL)) AND (w.id IS NULL OR w.disabled_at IS NULL) AND CASE WHEN a.reviewer_user_id IS NOT NULL AND access_review_candidate(i.id,a.reviewer_user_id) THEN a.reviewer_user_id={user} WHEN i.subject_kind<>'platform_role' THEN i.workspace_id IN {admin_ws} ELSE {admin} END"
     )
 }
 
@@ -390,7 +440,8 @@ pub(super) async fn inbox(
         "(SELECT workspace_id FROM ws)",
         "(SELECT yes FROM adm)",
     );
-    let data: Vec<Value> = sqlx::query_scalar(&format!("WITH ws AS MATERIALIZED (SELECT e.workspace_id FROM effective_workspace_memberships e WHERE e.user_id=$1 AND e.role IN ('owner','admin')), adm AS MATERIALIZED (SELECT EXISTS (SELECT FROM effective_platform_roles r WHERE r.user_id=$1 AND r.role='admin') AS yes), cand AS MATERIALIZED (SELECT i.id FROM access_review_items i JOIN access_review_campaigns c ON c.id=i.campaign_id AND c.closed_at IS NULL WHERE i.workspace_id IN (SELECT workspace_id FROM ws) UNION SELECT i.id FROM access_review_items i JOIN access_review_campaigns c ON c.id=i.campaign_id AND c.closed_at IS NULL WHERE i.subject_kind='platform_role' AND (SELECT yes FROM adm) UNION SELECT y.item_id FROM access_review_assignments y WHERE y.reviewer_user_id=$1) SELECT {INBOX_ITEM_JSON} || jsonb_build_object('campaign_name',c.name,'due_at',c.due_at) FROM cand JOIN {ITEM_FROM} ON i.id=cand.id JOIN access_review_campaigns c ON c.id=i.campaign_id AND c.closed_at IS NULL {LATEST_DECISION} {reviews} ORDER BY c.due_at, c.id, i.subject_kind DESC, i.workspace_id, i.user_id, i.id LIMIT $2 OFFSET $3"))
+    let item = inbox_item_json();
+    let data: Vec<Value> = sqlx::query_scalar(&format!("WITH ws AS MATERIALIZED (SELECT e.workspace_id FROM effective_workspace_memberships e WHERE e.user_id=$1 AND e.role IN ('owner','admin')), adm AS MATERIALIZED (SELECT EXISTS (SELECT FROM effective_platform_roles r WHERE r.user_id=$1 AND r.role='admin') AS yes), cand AS MATERIALIZED (SELECT i.id FROM access_review_items i JOIN access_review_campaigns c ON c.id=i.campaign_id AND c.closed_at IS NULL WHERE i.workspace_id IN (SELECT workspace_id FROM ws) UNION SELECT i.id FROM access_review_items i JOIN access_review_campaigns c ON c.id=i.campaign_id AND c.closed_at IS NULL WHERE i.subject_kind='platform_role' AND (SELECT yes FROM adm) UNION SELECT y.item_id FROM access_review_assignments y WHERE y.reviewer_user_id=$1) SELECT {item} || jsonb_build_object('campaign_name',c.name,'due_at',c.due_at) FROM cand JOIN {ITEM_FROM} ON i.id=cand.id JOIN access_review_campaigns c ON c.id=i.campaign_id AND c.closed_at IS NULL {LATEST_DECISION} {reviews} ORDER BY c.due_at, c.id, i.subject_kind DESC, i.workspace_id, i.user_id, i.id LIMIT $2 OFFSET $3"))
         .bind(u.user_id)
         .bind(l)
         .bind(o)
@@ -425,7 +476,7 @@ pub(super) async fn decide(
         .bind(item)
         .fetch_optional(&mut *tx)
         .await?;
-    let (may, active, group, ws): (bool, bool, bool, Option<Uuid>) = sqlx::query_as("SELECT access_review_may_decide(i.id,$2), access_review_item_active(i.id), i.source='group', i.workspace_id FROM access_review_items i WHERE i.id=$1")
+    let (may, active, group, ws): (bool, bool, bool, Option<Uuid>) = sqlx::query_as("SELECT access_review_may_decide(i.id,$2), access_review_item_active(i.id), i.source IS NOT DISTINCT FROM 'group', i.workspace_id FROM access_review_items i WHERE i.id=$1")
         .bind(item)
         .bind(u.user_id)
         .fetch_optional(&mut *tx)
@@ -458,7 +509,7 @@ pub(super) async fn decide(
         .fetch_one(&mut *tx)
         .await?;
     if unchanged {
-        let result = one_item(&mut tx, item).await?;
+        let result = one_item(&mut tx, item, false).await?;
         tx.commit().await?;
         return Ok(result);
     }
@@ -481,20 +532,30 @@ pub(super) async fn decide(
         json!({"kind":b.decision}),
     )
     .await?;
-    let result = one_item(&mut tx, item).await?;
+    let result = one_item(&mut tx, item, false).await?;
     tx.commit().await?;
     Ok(result)
 }
 
-/// An item as a removal needs it: kind, workspace, person, role, platform
-/// grant, and whether the viewer may decide it.
-type RemovalTarget = (String, Option<Uuid>, Uuid, String, Option<Uuid>, bool);
+/// An item as a removal needs it: kind, workspace, person (none for a
+/// service key), role (none for a key), platform grant, key lineage, and
+/// whether the viewer may decide it.
+type RemovalTarget = (
+    String,
+    Option<Uuid>,
+    Option<Uuid>,
+    Option<String>,
+    Option<Uuid>,
+    Option<Uuid>,
+    bool,
+);
 
 /// A "remove" decision (#90 slice 3): the access is removed at once, in the
 /// same transaction, through the path the direct routes use (memberships:
 /// the members path, owner-only for owners, the last owner protected, keys
 /// revoked once no membership remains; platform roles: the role path, under
-/// the exclusive catalog lock, entitlement loss as when revoking directly).
+/// the exclusive catalog lock, entitlement loss as when revoking directly;
+/// keys (slice 6): the revoke path, every key of the lineage revoked).
 /// A refused removal records nothing. Locks before any check or write; the
 /// same 404 as any decision for an item the viewer may not decide.
 async fn remove(
@@ -506,17 +567,36 @@ async fn remove(
     // item never takes a removal's locks (the exclusive catalog lock, or the
     // person's scope). Everything is checked again under the locks.
     let found: Option<RemovalTarget> = sqlx::query_as(
-        "SELECT subject_kind, workspace_id, user_id, role, platform_grant_id, access_review_may_decide(id,$2) FROM access_review_items WHERE id=$1",
+        "SELECT subject_kind, workspace_id, user_id, role, platform_grant_id, key_lineage_id, access_review_may_decide(id,$2) FROM access_review_items WHERE id=$1",
     )
     .bind(item)
     .bind(u.user_id)
     .fetch_optional(&s.pool)
     .await?;
-    let Some((kind, ws, subject, role, platform_grant, true)) = found else {
+    let Some((kind, ws, subject, role, platform_grant, lineage, true)) = found else {
         return Err(missing().into());
     };
-    let mut tx = if kind == "workspace_membership" {
-        let ws = ws.ok_or_else(missing)?;
+    let mut tx = if kind == "workspace_key" {
+        let (ws, lineage) = ws.zip(lineage).ok_or_else(missing)?;
+        let mut tx = resources::installation_tx(s).await?;
+        // As the revoke route: the workspace row, then the key lineage
+        // exclusively (in-flight admissions of the key finish first), here
+        // with the reviewer's own scope in the same canonical call.
+        sqlx::query("SELECT 1 FROM workspaces WHERE id=$1 FOR NO KEY UPDATE")
+            .bind(ws)
+            .execute(&mut *tx)
+            .await?;
+        locks::exclusive(
+            &mut tx,
+            [
+                locks::Scope::Lineage(lineage),
+                locks::Scope::User(u.user_id),
+            ],
+        )
+        .await?;
+        tx
+    } else if kind == "workspace_membership" {
+        let (ws, subject) = ws.zip(subject).ok_or_else(missing)?;
         let mut tx = resources::installation_tx(s).await?;
         // The workspace row, as the members routes lock it, then the
         // member's and their key lineages' scopes with the reviewer's own in
@@ -545,7 +625,7 @@ async fn remove(
         .bind(item)
         .fetch_optional(&mut *tx)
         .await?;
-    let (may, active, source): (bool, bool, String) = sqlx::query_as(
+    let (may, active, source): (bool, bool, Option<String>) = sqlx::query_as(
         "SELECT access_review_may_decide(i.id,$2), access_review_item_active(i.id), i.source FROM access_review_items i WHERE i.id=$1",
     )
     .bind(item)
@@ -563,7 +643,7 @@ async fn remove(
             json!({}),
         ));
     }
-    if source == "group" {
+    if source.as_deref() == Some("group") {
         return Err(ManagementError::detailed(
             StatusCode::CONFLICT,
             "access_review_remove_requires_manual",
@@ -571,7 +651,7 @@ async fn remove(
             json!({}),
         ));
     }
-    if kind == "workspace_membership" && role == "owner" {
+    if kind == "workspace_membership" && role.as_deref() == Some("owner") {
         let allowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM effective_workspace_memberships WHERE workspace_id=$1 AND user_id=$2 AND role='owner') OR EXISTS(SELECT 1 FROM effective_platform_roles WHERE user_id=$2 AND role='admin')")
             .bind(ws)
             .bind(u.user_id)
@@ -603,10 +683,19 @@ async fn remove(
     )
     .await?;
     // Only the item's own grant: another grant of the same role (manual,
-    // bootstrap or group) is a separate item, and stays.
-    let removed = match ws {
-        Some(ws) => members::revoke_member_locked(&mut tx, u, ws, subject).await,
-        None => directory::revoke_role_locked(&mut tx, u, subject, &role, platform_grant).await,
+    // bootstrap or group) is a separate item, and stays. A key item: every
+    // key of its lineage, as revoking each directly (never re-enabled).
+    let removed = match (kind.as_str(), ws, subject, role.as_deref(), lineage) {
+        ("workspace_key", Some(ws), _, _, Some(lineage)) => {
+            revoke_lineage(&mut tx, u, ws, lineage).await
+        }
+        ("workspace_membership", Some(ws), Some(subject), _, _) => {
+            members::revoke_member_locked(&mut tx, u, ws, subject).await
+        }
+        ("platform_role", None, Some(subject), Some(role), _) => {
+            directory::revoke_role_locked(&mut tx, u, subject, role, platform_grant).await
+        }
+        _ => Err(missing()),
     };
     if let Err(e) = removed {
         if e.0 == StatusCode::CONFLICT {
@@ -619,9 +708,28 @@ async fn remove(
         }
         return Err(e.into());
     }
-    let result = one_item(&mut tx, item).await?;
+    let result = one_item(&mut tx, item, false).await?;
     tx.commit().await?;
     Ok(result)
+}
+
+/// Revokes every unrevoked key of a lineage once the removal holds its locks,
+/// each audited `key.revoked` as on the revoke route.
+async fn revoke_lineage(
+    tx: &mut Transaction<'_, Postgres>,
+    u: &BrowserPrincipal,
+    ws: Uuid,
+    lineage: Uuid,
+) -> Result<(), ApiError> {
+    let keys: Vec<Uuid> = sqlx::query_scalar("UPDATE api_keys SET revoked_at=coalesce(revoked_at,now()) WHERE workspace_id=$1 AND governance_key_id=$2 AND revoked_at IS NULL RETURNING id")
+        .bind(ws)
+        .bind(lineage)
+        .fetch_all(&mut **tx)
+        .await?;
+    for key in keys {
+        audit(tx, u, Some(ws), "key.revoked", "key", Some(key), json!({})).await?;
+    }
+    Ok(())
 }
 
 /// `POST /api/v1/platform/access-reviews/{id}/items/{item}/reviewer`: a
@@ -635,7 +743,7 @@ pub(super) async fn assign(
 ) -> Result<Json<Value>, ManagementError> {
     let mut tx = resources::installation_tx(&s).await?;
     resources::platform_write(&mut tx, &u).await?;
-    let state: Option<(bool, Option<Uuid>, Uuid)> = sqlx::query_as("SELECT c.closed_at IS NOT NULL, i.workspace_id, i.user_id FROM access_review_items i JOIN access_review_campaigns c ON c.id=i.campaign_id WHERE i.id=$1 AND c.id=$2 FOR SHARE OF c")
+    let state: Option<(bool, Option<Uuid>, Option<Uuid>)> = sqlx::query_as("SELECT c.closed_at IS NOT NULL, i.workspace_id, i.user_id FROM access_review_items i JOIN access_review_campaigns c ON c.id=i.campaign_id WHERE i.id=$1 AND c.id=$2 FOR SHARE OF c")
         .bind(item)
         .bind(id)
         .fetch_optional(&mut *tx)
@@ -643,7 +751,7 @@ pub(super) async fn assign(
     let Some((closed, ws, subject)) = state else {
         return Err(missing().into());
     };
-    if subject == u.user_id {
+    if subject == Some(u.user_id) {
         return Err(ManagementError::detailed(
             StatusCode::CONFLICT,
             "access_review_own_access",
@@ -669,7 +777,7 @@ pub(super) async fn assign(
             return Err(ManagementError::detailed(
                 StatusCode::CONFLICT,
                 "access_review_reviewer_ineligible",
-                "That person cannot review this access: choose an owner or admin of the workspace, or a Platform Admin".into(),
+                "That person cannot review this access: choose an owner or admin of the workspace (keys), or a Platform Admin (memberships and platform roles)".into(),
                 json!({}),
             ));
         }
@@ -691,13 +799,13 @@ pub(super) async fn assign(
         json!({"kind": if b.user_id.is_some() { "assigned" } else { "cleared" }}),
     )
     .await?;
-    let result = one_item(&mut tx, item).await?;
+    let result = one_item(&mut tx, item, true).await?;
     tx.commit().await?;
     Ok(result)
 }
 
 /// Columns of [`export`], in order.
-const EXPORT_COLUMNS: [&str; 18] = [
+const EXPORT_COLUMNS: [&str; 22] = [
     "item_id",
     "subject_kind",
     "workspace_id",
@@ -716,10 +824,15 @@ const EXPORT_COLUMNS: [&str; 18] = [
     "decided_at",
     "reviewer_user_id",
     "reviewer_email",
+    "api_key_id",
+    "holder_kind",
+    "expires_at",
+    "last_used_at",
 ];
 
 /// `GET /api/v1/platform/access-reviews/{id}/export`: every item of a
-/// campaign with its latest decision, decider and reviewer, as CSV (cells a
+/// campaign with its latest decision, decider and reviewer (key items as the
+/// platform item list shows them: no key name or holder), as CSV (cells a
 /// spreadsheet would run as a formula are neutralized). Platform Admins and
 /// Auditors; audited with the item count. At most 5,000 rows (a campaign's
 /// cap).
@@ -744,7 +857,8 @@ pub(super) async fn export(
         return Err(missing().into());
     }
     let sets = reviewer_sets("$1");
-    let rows: Vec<Value> = sqlx::query_scalar(&format!("WITH {sets} SELECT jsonb_build_array(i.id,i.subject_kind,i.workspace_id,w.name,i.user_id,u.email,u.display_name,i.role,i.source,i.granted_at,access_review_item_active(i.id),{REVIEWABLE},d.decision,d.decided_by,(SELECT x.email FROM users x WHERE x.id=d.decided_by),d.decided_at,a.reviewer_user_id,(SELECT y.email FROM users y WHERE y.id=a.reviewer_user_id)) FROM {ITEM_FROM} {LATEST_DECISION} WHERE i.campaign_id=$1 ORDER BY i.subject_kind DESC, i.workspace_id, i.user_id, i.id"))
+    let item = platform_item_json();
+    let rows: Vec<Value> = sqlx::query_scalar(&format!("WITH {sets}, x AS (SELECT {item} AS j, d.decided_by, i.subject_kind AS ok, i.workspace_id AS ow, i.user_id AS ou, i.id AS oi FROM {ITEM_FROM} {LATEST_DECISION} WHERE i.campaign_id=$1) SELECT jsonb_build_array(j->'id',j->'subject_kind',j->'workspace_id',j->'workspace_name',j->'user_id',j->'email',j->'display_name',j->'role',j->'source',j->'granted_at',j->'active',j->'reviewable',j->'decision',j->'decided_by',(SELECT x2.email FROM users x2 WHERE x2.id=x.decided_by),j->'decided_at',j->'reviewer_user_id',(SELECT y.email FROM users y WHERE y.id=(j->>'reviewer_user_id')::uuid),j->'api_key_id',j->'holder_kind',j->'expires_at',j->'last_used_at') FROM x ORDER BY x.ok DESC, x.ow, x.ou, x.oi"))
         .bind(id)
         .fetch_all(&mut *tx)
         .await?;

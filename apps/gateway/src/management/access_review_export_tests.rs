@@ -76,7 +76,7 @@ async fn platform_readers_export_every_item_with_its_decision(pool: PgPool) {
         let lines: Vec<&str> = body.split("\r\n").filter(|l| !l.is_empty()).collect();
         assert_eq!(
             lines[0],
-            "item_id,subject_kind,workspace_id,workspace_name,user_id,email,display_name,role,source,granted_at,active,reviewable,decision,decided_by,decided_by_email,decided_at,reviewer_user_id,reviewer_email"
+            "item_id,subject_kind,workspace_id,workspace_name,user_id,email,display_name,role,source,granted_at,active,reviewable,decision,decided_by,decided_by_email,decided_at,reviewer_user_id,reviewer_email,api_key_id,holder_kind,expires_at,last_used_at"
         );
         assert_eq!(lines.len() - 1, c["item_count"].as_u64().unwrap() as usize);
         let member = lines
@@ -341,10 +341,10 @@ async fn export_cells_are_safe_and_complete(pool: PgPool) {
         .unwrap();
     assert!(
         assigned.ends_with(&format!(
-            "\"{}\",\"second-admin@example.test\"",
+            "\"{}\",\"second-admin@example.test\",\"\",\"\",\"\",\"\"",
             second.user_id
         )),
-        "the assigned reviewer"
+        "the assigned reviewer, then empty key columns"
     );
     // A closed review exports too; HEAD exports and records nothing.
     let (status, _) = call(
