@@ -354,7 +354,7 @@ test("every Dockerfile base image is pinned by digest", () => {
 });
 
 const RUNTIME_DOCKERFILES = ["Dockerfile", "deploy/loadtest/Dockerfile"];
-const APPROVED_RUNTIME = "gcr.io/distroless/cc-debian13:nonroot@sha256:3ee00291cf386ec52a552e6a858d555debd74776eb4bfa53fa3df2cd6677515e";
+const APPROVED_RUNTIME = "gcr.io/distroless/cc-debian13:nonroot@sha256:cc66d222f0a7ec996b78a99fe76a969bc80b539a5016ad866c14d1949bc6d0ab";
 
 export function runtimeBaseViolations(sources) {
   const out = [];

@@ -6,11 +6,15 @@ The project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). 
 
 ## [Unreleased]
 
-Changes after v0.14.0: [unreleased notes](docs/releases/unreleased.md).
+Changes after v0.14.1: [unreleased notes](docs/releases/unreleased.md).
+
+## [0.14.1]
+
+The first published 0.14 release: v0.14.0 (below) with the runtime base image re-pinned to a distroless digest whose zlib fixes CVE-2026-85091 and CVE-2026-76844 (HIGH), which stopped the v0.14.0 image at its scan; v0.14.0 was tagged but not published (#474). No code, schema or contract change. [Notes](docs/releases/v0.14.1.md).
 
 ## [0.14.0]
 
-Access review campaigns (#90): a Platform Admin starts a one-shot review of Team and Project memberships and Admin and Auditor roles; each workspace's owners and admins (Platform Admins for platform roles, or an assigned reviewer) keep, remove or flag each item, and a removal applies at once through the same paths and protections as removing the access directly (removing someone's last platform role suspends them and, unless reinstated within 30 days, removes their personal data). Reminders in Notifications, Admin › Access reviews and Review access in the dashboard, a CSV export. **Migrations `0076`–`0079`** (schema now 0079) and **runtime-grant changes**; nine new management operations (272), a new notification item and new `409` reasons. See [release and upgrade notes](docs/releases/v0.14.0.md).
+Tagged, not published (see 0.14.1). Access review campaigns (#90): a Platform Admin starts a one-shot review of Team and Project memberships and Admin and Auditor roles; each workspace's owners and admins (Platform Admins for platform roles, or an assigned reviewer) keep, remove or flag each item, and a removal applies at once through the same paths and protections as removing the access directly (removing someone's last platform role suspends them and, unless reinstated within 30 days, removes their personal data). Reminders in Notifications, Admin › Access reviews and Review access in the dashboard, a CSV export. **Migrations `0076`–`0079`** (schema now 0079) and **runtime-grant changes**; nine new management operations (272), a new notification item and new `409` reasons. See [release and upgrade notes](docs/releases/v0.14.0.md).
 
 ## [0.13.0]
 
@@ -102,7 +106,8 @@ Alerts, key safety, model compare, SCIM, JWKS refresh, metrics and backup toolin
 
 The single-enterprise rebuild: Team, Project and personal workspaces, OIDC platform roles, catalogs, multimodal workloads across five provider families, immutable micro-USD accounting, logs and Admin settings. Migrations `0001` to `0010`. Notes: [`docs/releases/v0.1.0.md`](docs/releases/v0.1.0.md).
 
-[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.14.1...HEAD
+[0.14.1]: https://github.com/ncecere/open-model-gateway/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/ncecere/open-model-gateway/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/ncecere/open-model-gateway/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/ncecere/open-model-gateway/compare/v0.11.0...v0.12.0

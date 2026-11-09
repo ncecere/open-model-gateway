@@ -34,7 +34,7 @@ RUN cargo build --locked --release --jobs "$CARGO_BUILD_JOBS" -p open-model-gate
 #   docker buildx imagetools inspect gcr.io/distroless/cc-debian13:nonroot
 # The binary itself does what the former shell entrypoint did: umask 077,
 # `*_FILE` secret import, and never migrating or bootstrapping implicitly.
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:3ee00291cf386ec52a552e6a858d555debd74776eb4bfa53fa3df2cd6677515e AS runtime
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:cc66d222f0a7ec996b78a99fe76a969bc80b539a5016ad866c14d1949bc6d0ab AS runtime
 WORKDIR /app
 COPY --from=build --chmod=0555 /build/target/release/open-model-gateway /usr/local/bin/open-model-gateway
 COPY --from=web /build/apps/web/dist/ /app/web/
