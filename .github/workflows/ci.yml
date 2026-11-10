@@ -312,6 +312,8 @@ jobs:
       STAGING_CADDY_IMAGE: mirror.gcr.io/library/caddy@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           # BuildKit from mirror.gcr.io instead of Docker Hub.
@@ -323,6 +325,34 @@ jobs:
           tags: open-model-gateway:staging
           cache-from: type=gha,scope=staging
           cache-to: type=gha,mode=max,scope=staging
+      # The tag run's scan, before any tag exists (#475): v0.14.0 was tagged and
+      # then refused for fixable HIGH findings in the runtime base. Same pinned,
+      # checksum-verified Trivy 0.70.0 and the same policy as image.yml's verify
+      # job; tests/supply-chain.test.mjs holds both steps to this exact text.
+      # It runs straight after the build, before any script from the pull
+      # request runs on this runner. This job's token is read-only.
+      - name: Install Trivy (pinned release, SHA-256 verified)
+        run: |
+          set -euo pipefail
+          bash .github/scripts/fetch-verified.sh https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz 8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9 "${RUNNER_TEMP}/trivy.tar.gz"
+          mkdir -p "${RUNNER_TEMP}/trivy-bin"
+          tar -xzf "${RUNNER_TEMP}/trivy.tar.gz" -C "${RUNNER_TEMP}/trivy-bin" trivy
+          "${RUNNER_TEMP}/trivy-bin/trivy" --version
+      # Fixable HIGH and CRITICAL findings fail the pull request (see
+      # docs/verification.md for what to do when a new one appears). The image
+      # built here is amd64; the tag run also publishes arm64, whose
+      # operating-system packages come from the arm64 child of the same runtime
+      # base, so that child is scanned from the registry too (v0.14.0 failed on
+      # arm64 first). Run from an empty directory so no Trivy configuration or
+      # ignore file in the checkout applies, and by full path.
+      - name: Scan the candidate image and the arm64 runtime base
+        env:
+          APPROVED_RUNTIME: gcr.io/distroless/cc-debian13:nonroot@sha256:cc66d222f0a7ec996b78a99fe76a969bc80b539a5016ad866c14d1949bc6d0ab
+        run: |
+          set -euo pipefail
+          cd "$(mktemp -d)"
+          "${RUNNER_TEMP}/trivy-bin/trivy" image --image-src docker --severity CRITICAL,HIGH --exit-code 1 --ignore-unfixed open-model-gateway:staging
+          "${RUNNER_TEMP}/trivy-bin/trivy" image --image-src remote --platform linux/arm64 --severity CRITICAL,HIGH --exit-code 1 --ignore-unfixed "${APPROVED_RUNTIME}"
       - name: Migrate and verify isolated runtime authority over HTTPS
         run: |
           python3 scripts/staging.py init
