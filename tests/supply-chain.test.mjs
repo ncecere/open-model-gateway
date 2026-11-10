@@ -2551,34 +2551,114 @@ test("fixtures: downloads that skip the checksum script are caught", () => {
 // #475: v0.14.0 was tagged before anyone had scanned its image, and the tag run then
 // refused it for two fixable HIGH findings in the runtime base. Pull requests now run
 // the same scan with the same pinned Trivy, in the read-only staging-image job: the
-// image built from the pull request, and the arm64 child of the Dockerfile's runtime
-// base (the pull request builds amd64 only; a base-image finding is per platform).
-test("pull requests scan the candidate image with the tag run's Trivy and policy (#475)", () => {
-  const load = name => toData(parseStrict(readFileSync(join(workflowsDir, `${name}.yml`), "utf8"), `${name}.yml`));
-  const ci = load("ci"), image = load("image");
-  const job = ci.jobs["staging-image"];
+// image built from the pull request, and the arm64 child of the approved runtime base
+// (the pull request builds amd64 only; a base-image finding is per platform).
+//
+// The two steps are held to their exact text, as the version check above is: a scan
+// that is echoed, negated, skipped, redirected to another image or given other flags
+// or TRIVY_* settings is a different text. The job's own switches are fixed too.
+const PR_TRIVY_INSTALL = {
+  name: "Install Trivy (pinned release, SHA-256 verified)",
+  run: [
+    "set -euo pipefail",
+    'bash .github/scripts/fetch-verified.sh https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz 8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9 "${RUNNER_TEMP}/trivy.tar.gz"',
+    'mkdir -p "${RUNNER_TEMP}/trivy-bin"',
+    'tar -xzf "${RUNNER_TEMP}/trivy.tar.gz" -C "${RUNNER_TEMP}/trivy-bin" trivy',
+    '"${RUNNER_TEMP}/trivy-bin/trivy" --version',
+    "",
+  ].join("\n"),
+};
+const PR_TRIVY_SCAN = {
+  name: "Scan the candidate image and the arm64 runtime base",
+  env: { APPROVED_RUNTIME },
+  run: [
+    "set -euo pipefail",
+    'cd "$(mktemp -d)"',
+    '"${RUNNER_TEMP}/trivy-bin/trivy" image --image-src docker --severity CRITICAL,HIGH --exit-code 1 --ignore-unfixed open-model-gateway:staging',
+    '"${RUNNER_TEMP}/trivy-bin/trivy" image --image-src remote --platform linux/arm64 --severity CRITICAL,HIGH --exit-code 1 --ignore-unfixed "${APPROVED_RUNTIME}"',
+    "",
+  ].join("\n"),
+};
+const PR_SCAN_JOB_IF = "github.event_name != 'push' || (github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v'))";
+
+function assertPullRequestScan(ci, image) {
   assert.deepEqual(ci.permissions, { contents: "read" });
-  assert.equal(job.permissions, undefined, "the scanning job keeps the workflow's read-only token");
-  const text = executable(job), tagRun = executable(image.jobs.verify);
+  const job = ci.jobs["staging-image"];
+  // Nothing on the job can skip it, forgive it, give it a write token or set TRIVY_*.
+  assert.deepEqual(Object.keys(job).sort(), ["env", "if", "runs-on", "steps", "timeout-minutes"]);
+  assert.equal(job.if, PR_SCAN_JOB_IF);
+  assert.equal(job["runs-on"], "ubuntu-latest", "the pinned Trivy binary is the amd64 one");
+  assert.deepEqual(Object.keys(job.env).sort(), ["STAGING_CADDY_IMAGE", "STAGING_POSTGRES_IMAGE"]);
+  const steps = stepsOf(job);
+  // Checkout (no persisted token), BuildKit, build, then the scan: before any script
+  // from the pull request runs on the runner.
+  assert.deepEqual(steps.slice(0, 3).map(s => actionName(s.uses)), ["actions/checkout", "docker/setup-buildx-action", "docker/build-push-action"]);
+  assert.equal(steps[0].with?.["persist-credentials"], false);
+  assert.equal(steps[2].with.tags, "open-model-gateway:staging");
+  assert.equal(steps[2].with.load, true);
+  for (const s of steps.slice(0, 3)) assert.deepEqual(Object.keys(s).filter(k => k !== "uses" && k !== "with"), [], "no conditions on the steps before the scan");
+  assert.deepEqual(steps[3], PR_TRIVY_INSTALL);
+  assert.deepEqual(steps[4], PR_TRIVY_SCAN);
+  // The same Trivy release and checksum, and the same policy, as the tag run.
+  const tagRun = executable(image.jobs.verify);
   const pins = t => [...t.matchAll(/fetch-verified\.sh (https:\/\/github\.com\/aquasecurity\/trivy\/releases\/download\/\S+) ([0-9a-f]{64}) /g)].map(m => `${m[1]} ${m[2]}`);
   assert.equal(pins(tagRun).length, 2, "the tag run pins Trivy for amd64 and arm64");
-  assert.deepEqual(pins(text), pins(tagRun).filter(p => p.includes("Linux-64bit")), "the same Trivy release and checksum as the tag run, for this job's amd64 runner");
-  const policy = t => [...t.replace(/\\\n\s*/g, " ").matchAll(/trivy image\b[^\n]*/g)].map(m => m[0].trim().split(/\s+/));
-  const flags = scan => ["--severity", "CRITICAL,HIGH", "--exit-code", "1", "--ignore-unfixed"].every(f => scan.includes(f));
-  const scans = policy(text);
-  assert.equal(policy(tagRun).length, 1);
-  assert.ok(flags(policy(tagRun)[0]), "the tag run's policy is the one this test compares against");
-  assert.equal(scans.length, 2, "two scans: the built image and the arm64 runtime base");
-  for (const scan of scans) assert.ok(flags(scan), `same severity policy as the tag run: ${scan.join(" ")}`);
-  assert.ok(scans.some(s => s.at(-1) === "open-model-gateway:staging" && !s.includes("--platform")), "the image built from the pull request");
-  assert.ok(scans.some(s => s.at(-1) === '"${RUNTIME_BASE}"' && s[s.indexOf("--platform") + 1] === "linux/arm64"), "the arm64 runtime base");
-  // The base reference is read from the Dockerfile's final stage, digest included.
-  assert.match(text, /RUNTIME_BASE=\$\(sed -n 's\/\^FROM \\\(gcr\\\.io\\\/distroless\\\/\[\^ \]\*@sha256:\[0-9a-f\]\\\{64\\\}\\\) AS runtime\$\/\\1\/p' Dockerfile\)/);
-  assert.match(text, /\[\[ "\$\{RUNTIME_BASE\}" == "\$\{APPROVED_RUNTIME\}" \]\]/, "refuses to scan anything but the approved runtime base");
-  const step = stepsOf(job).find(s => /trivy image/.test(s.run ?? ""));
-  assert.equal(step.env.APPROVED_RUNTIME, APPROVED_RUNTIME);
-  for (const s of stepsOf(job).filter(s => /trivy/i.test(`${s.name} ${s.run ?? ""}`))) {
-    assert.equal(s["continue-on-error"], undefined);
-    assert.equal(s.if, undefined);
+  assert.deepEqual(pins(PR_TRIVY_INSTALL.run), pins(tagRun).filter(p => p.includes("Linux-64bit")));
+  const scans = t => [...t.replace(/\\\n\s*/g, " ").matchAll(/trivy"? image\b[^\n]*/g)].map(m => m[0].trim().split(/\s+/));
+  const policy = scan => ["--severity", "--exit-code", "--ignore-unfixed"].map(f => [f, f === "--ignore-unfixed" ? "" : scan[scan.indexOf(f) + 1]].join(" ")).join(" ");
+  assert.equal(scans(tagRun).length, 1);
+  assert.equal(policy(scans(tagRun)[0]), "--severity CRITICAL,HIGH --exit-code 1 --ignore-unfixed ");
+  for (const scan of scans(PR_TRIVY_SCAN.run)) assert.equal(policy(scan), policy(scans(tagRun)[0]));
+  assert.equal(scans(PR_TRIVY_SCAN.run).length, 2);
+}
+
+const pullRequestScanData = () => {
+  const load = name => toData(parseStrict(readFileSync(join(workflowsDir, `${name}.yml`), "utf8"), `${name}.yml`));
+  return { ci: load("ci"), image: load("image") };
+};
+
+test("pull requests scan the candidate image with the tag run's Trivy and policy (#475)", () => {
+  const { ci, image } = pullRequestScanData();
+  assertPullRequestScan(ci, image);
+  // Trivy reads these from its working directory. None may exist: the tag run scans
+  // from the checkout, and nothing here reviews their contents.
+  for (const file of [".trivyignore", ".trivyignore.yaml", "trivy.yaml", "trivy.yml"]) assert.equal(existsSync(join(root, file)), false, `${file} would change what the scans report`);
+});
+
+test("fixtures: a pull-request scan that is skipped, forgiven, redirected or reconfigured is refused (#475)", () => {
+  const { ci: original, image } = pullRequestScanData();
+  const job = f => f.jobs["staging-image"], scan = f => job(f).steps[4];
+  const mutations = [
+    ["echoed scans", f => { scan(f).run = scan(f).run.replaceAll('"${RUNNER_TEMP}/trivy-bin/trivy" image', "echo trivy image"); }],
+    ["negated scan", f => { scan(f).run = scan(f).run.replace('"${RUNNER_TEMP}/trivy-bin/trivy" image --image-src docker', '! "${RUNNER_TEMP}/trivy-bin/trivy" image --image-src docker'); }],
+    ["forgiven scan", f => { scan(f).run = scan(f).run.replace("open-model-gateway:staging\n", "open-model-gateway:staging || true\n"); }],
+    ["no errexit", f => { scan(f).run = scan(f).run.replace("set -euo pipefail", "set +e"); }],
+    ["early exit", f => { scan(f).run = scan(f).run.replace('cd "$(mktemp -d)"', "exit 0"); }],
+    ["scan from the checkout", f => { scan(f).run = scan(f).run.replace('cd "$(mktemp -d)"\n', ""); }],
+    ["other scanners", f => { scan(f).run = scan(f).run.replaceAll("--ignore-unfixed", "--ignore-unfixed --scanners secret"); }],
+    ["lower severity", f => { scan(f).run = scan(f).run.replaceAll("CRITICAL,HIGH", "CRITICAL"); }],
+    ["daemon copy of the base", f => { scan(f).run = scan(f).run.replace("--image-src remote ", ""); }],
+    ["amd64 base only", f => { scan(f).run = scan(f).run.replace("--platform linux/arm64 ", ""); }],
+    ["another base", f => { scan(f).env.APPROVED_RUNTIME = `gcr.io/distroless/cc-debian13:nonroot@sha256:${"a".repeat(64)}`; }],
+    ["TRIVY settings on the step", f => { scan(f).env.TRIVY_SCANNERS = "secret"; }],
+    ["TRIVY settings on the job", f => { job(f).env.TRIVY_IGNOREFILE = "x"; }],
+    ["step condition", f => { scan(f).if = "false"; }],
+    ["forgiven step", f => { scan(f)["continue-on-error"] = true; }],
+    ["another shell", f => { scan(f).shell = "bash {0}"; }],
+    ["forgiven job", f => { job(f)["continue-on-error"] = true; }],
+    ["job defaults", f => { job(f).defaults = { run: { shell: "bash {0}" } }; }],
+    ["skipped job", f => { job(f).if = "false"; }],
+    ["write token", f => { job(f).permissions = { packages: "write" }; }],
+    ["a step before the scan", f => { job(f).steps.splice(3, 0, { run: "docker tag busybox open-model-gateway:staging" }); }],
+    ["scan after the rehearsal", f => { const [install, run] = job(f).steps.splice(3, 2); job(f).steps.push(install, run); }],
+    ["another Trivy", f => { job(f).steps[3].run = job(f).steps[3].run.replace("v0.70.0", "v0.69.0"); }],
+    ["persisted checkout token", f => { delete job(f).steps[0].with; }],
+    ["another image built", f => { job(f).steps[2].with.tags = "other:staging"; }],
+  ];
+  assertPullRequestScan(original, image);
+  for (const [name, mutate] of mutations) {
+    const fixture = structuredClone(original);
+    mutate(fixture);
+    assert.throws(() => assertPullRequestScan(fixture, image), { name: "AssertionError" }, name);
   }
 });
