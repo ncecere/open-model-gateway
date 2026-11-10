@@ -278,6 +278,22 @@ impl Gateway {
             .unwrap_or(0.0)
     }
 
+    /// The sum of every OpenMetrics line of `name`, across all its labels.
+    async fn metric_sum(&self, name: &str) -> f64 {
+        reqwest::Client::new()
+            .get(format!("http://{}/metrics", self.metrics_addr))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap()
+            .lines()
+            .filter(|line| line.starts_with(name))
+            .filter_map(|line| line.rsplit(' ').next()?.parse::<f64>().ok())
+            .sum()
+    }
+
     async fn shutdown(mut self) {
         if let Some(runtime) = self.runtime.take() {
             runtime.shutdown().await;
@@ -344,11 +360,11 @@ fn assert_no_request_slowed(fault: &str, timings: &[Duration], baseline: Duratio
 const OVERLAP_ATTEMPTS: usize = 8;
 
 /// The request path never awaits export, shown by ordering instead of by a
-/// wall-clock bound (#290). The timed requests above finish before the
-/// worker's first 1 s batch tick, so none of them runs while an exchange is in
-/// flight. Here a request starts only once the hanging collector holds an
+/// wall-clock bound (#290). The timed requests above normally finish before
+/// the worker's first 1 s batch tick, so none of them runs while an exchange is
+/// in flight. Here a request starts only once the hanging collector holds an
 /// exchange, and must have returned while that same exchange is still
-/// unresolved (no timeout counted for it yet). The worker sends one batch at
+/// unresolved (no delivery outcome counted for it yet). The worker sends one batch at
 /// a time, so this request's own spans cannot have been delivered either: it
 /// returned without waiting for any export. Host load can only make an attempt
 /// miss the window (the exchange times out after 2 s), never make a request
@@ -357,14 +373,12 @@ async fn assert_a_request_returns_while_an_export_is_outstanding(
     gateway: &Gateway,
     collector: &Collector,
     key: &str,
-    timeouts_before: f64,
+    deliveries_before: f64,
 ) {
-    let resolved = || async {
-        gateway
-            .metric_value("gateway_trace_deliveries_total", "outcome=\"timeout\"")
-            .await
-            - timeouts_before
-    };
+    // Every outcome counts as resolved, so an exchange that ended any other
+    // way than the expected timeout can never look outstanding.
+    let resolved =
+        || async { gateway.metric_sum("gateway_trace_deliveries_total").await - deliveries_before };
     let mut misses = Vec::new();
     for _ in 0..OVERLAP_ATTEMPTS {
         // Wait for an exchange the collector has received and the exporter has
@@ -381,14 +395,18 @@ async fn assert_a_request_returns_while_an_export_is_outstanding(
         }
         let (status, body, _) = gateway.chat(key).await;
         assert_eq!(status, StatusCode::OK, "{body}");
-        if !in_flight {
-            misses.push("no exchange in flight");
-            continue;
-        }
-        if resolved().await < started {
+        let resolved_after = resolved().await;
+        if in_flight && resolved_after < started {
             return;
         }
-        misses.push("the exchange resolved before the request returned");
+        misses.push(format!(
+            "{}: collector received {started}, resolved after the request {resolved_after}",
+            if in_flight {
+                "the exchange resolved before the request returned"
+            } else {
+                "no exchange in flight"
+            }
+        ));
     }
     panic!(
         "no inference request returned while an export exchange was outstanding in {OVERLAP_ATTEMPTS} attempts ({misses:?}): the request path must never wait for export"
@@ -576,13 +594,14 @@ async fn a_collector_outage_never_fails_or_slows_inference_and_drops_are_counted
     let timeout_deliveries_before = gateway
         .metric_value("gateway_trace_deliveries_total", "outcome=\"timeout\"")
         .await;
+    let deliveries_before = gateway.metric_sum("gateway_trace_deliveries_total").await;
     let timings = timed_chats(&gateway, &keys.team_key.token).await;
     assert_no_request_slowed("a hanging collector", &timings, baseline);
     assert_a_request_returns_while_an_export_is_outstanding(
         &gateway,
         &hanging,
         &keys.team_key.token,
-        timeout_deliveries_before,
+        deliveries_before,
     )
     .await;
 
