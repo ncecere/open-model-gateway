@@ -126,7 +126,7 @@ test("a member's key is reviewed and revoked by the workspace owner, unnamed to 
     await expect(row).toContainText("Held by");
     await row.getByRole("button", { name: /^Actions for/ }).click();
     await expect(alex.page.getByRole("menuitem", { name: /^Flag/ })).toHaveCount(0);
-    await alex.page.getByRole("menuitem", { name: "Remove…" }).click();
+    await alex.page.getByRole("menuitem", { name: "Revoke…" }).click();
     const confirm = alex.page.getByRole("dialog", { name: `Revoke ${keyName} in ${teamName}?` });
     await expect(confirm).toContainText("A revoked key never returns");
     await confirm.getByRole("button", { name: "Revoke key" }).click();
@@ -137,6 +137,9 @@ test("a member's key is reviewed and revoked by the workspace owner, unnamed to 
 
     await page.reload();
     await expect(page.getByRole("row").filter({ hasText: `Member's key ${key.id.slice(0, 8)}` }).getByText("Revoked", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Close review" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Close review" }).click();
+    await expect(page.getByText("Closed", { exact: true })).toBeVisible();
   } finally {
     await alex.context.close();
     await operator.context.close();

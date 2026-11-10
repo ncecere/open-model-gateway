@@ -14,7 +14,7 @@
  */
 import { ClipboardCheck, Plus } from "lucide-react";
 import { api, platformPath, type Session } from "../lib/api";
-import { accessText, decisionText, isKey, keyHolderText, keyText, keyUseText, subjectsText, itemLabel, removalTarget, campaignState, campaignStateLabels, campaignStateTone, decisionPath, decisionTone, inboxPath, personText, removalConsequence, reviewClosePath, reviewExportPath, reviewerPath, reviewItemsPath, reviewPath, reviewsPath, sourceLabels, subjectLabels, type ReviewSubject, type InboxItem, type ReviewCampaign, type ReviewCampaignDetail, type ReviewItem } from "../lib/access-reviews";
+import { accessText, decisionText, isKey, keyIdentity, keyHolderText, keyText, keyUseText, subjectsText, itemLabel, removalTarget, campaignState, campaignStateLabels, campaignStateTone, decisionPath, decisionTone, inboxPath, personText, removalConsequence, reviewClosePath, reviewExportPath, reviewerPath, reviewItemsPath, reviewPath, reviewsPath, sourceLabels, subjectLabels, type ReviewSubject, type InboxItem, type ReviewCampaign, type ReviewCampaignDetail, type ReviewItem } from "../lib/access-reviews";
 import { nameField, type Field } from "../lib/forms";
 import type { DirectoryUser, DirectoryWorkspace } from "../lib/people";
 import { Button, ErrorNotice, Heading, Inline, Stack, useAction, useApi } from "../components/ui";
@@ -50,7 +50,7 @@ export function AccessReviewInbox({ session }: { session: Session }) {
   const decide = (i: InboxItem, decision: "keep" | "flag_idp" | "remove") => ask({
     title: decision === "remove" ? `${isKey(i) ? "Revoke" : "Remove"} ${removalTarget(i)}?` : decision === "flag_idp" ? `Flag ${personText(i)}'s access for the identity provider?` : isKey(i) ? `Keep ${removalTarget(i)}?` : `Keep ${personText(i)} as ${accessText(i)}?`,
     danger: decision === "remove",
-    description: decision === "remove" ? removalConsequence(i) : decision === "flag_idp" ? "This access comes from an identity provider group: it is fixed there, not here. The flag records your decision for the review." : isKey(i) ? "This key stays as it is." : `${personText(i)} keeps this access.`,
+    description: decision === "remove" ? removalConsequence(i) : decision === "flag_idp" ? "This access comes from an identity provider group: it is fixed there, not here. The flag records your decision for the review." : isKey(i) ? `${keyIdentity(i)} This key stays as it is.` : `${personText(i)} keeps this access.`,
     submitLabel: decision === "remove" ? isKey(i) ? "Revoke key" : "Remove access" : decision === "flag_idp" ? "Flag" : "Keep",
     successNotice: decision === "remove" ? isKey(i) ? "Key revoked." : "Access removed." : decision === "flag_idp" ? "Flagged." : "Kept.",
     run: (_, signal) => api<ReviewItem>(decisionPath(i.id), { method: "POST", body: { decision }, signal }),
@@ -67,7 +67,7 @@ export function AccessReviewInbox({ session }: { session: Session }) {
       rowActions={i => [
         { label: "Keep…", onSelect: () => decide(i, "keep") },
         { label: "Flag for identity provider…", hidden: i.source !== "group", onSelect: () => decide(i, "flag_idp") },
-        { label: "Remove…", danger: true, hidden: !mayRemove(session, i), onSelect: () => decide(i, "remove") },
+        { label: isKey(i) ? "Revoke…" : "Remove…", danger: true, hidden: !mayRemove(session, i), onSelect: () => decide(i, "remove") },
       ]}
       empty={{ icon: <ClipboardCheck />, title: "Nothing to review.", description: "Access reviews you take part in appear here." }} />
   </Stack>;
@@ -107,7 +107,7 @@ export function PlatformAccessReviewsPage({ session }: { session: Session }) {
     { id: "state", header: "Status", accessor: c => campaignState(c), cell: c => <StatusBadge tone={campaignStateTone[campaignState(c)]}>{campaignStateLabels[campaignState(c)]}</StatusBadge> },
   ];
   return <Stack gap={6} className={s.page}>
-    <Heading title="Access reviews" description="One-off reviews of who has access to Teams and Projects, of their keys, and of Admin and Auditor roles. Workspace owners and admins review their workspaces and its keys; Platform Admins review platform roles." actions={writable && <Button onClick={start}><Plus aria-hidden />Start review</Button>} />
+    <Heading title="Access reviews" description="One-off reviews of who has access to Teams and Projects, of their keys, and of Admin and Auditor roles. Workspace owners and admins review their workspaces and their keys; Platform Admins review platform roles." actions={writable && <Button onClick={start}><Plus aria-hidden />Start review</Button>} />
     <DirectoryTable<ReviewCampaign> path={reviewsPath} label="Access reviews" storageKey="access-reviews" columns={columns} rowKey={c => c.id} rowLabel={c => c.name}
       empty={{ icon: <ClipboardCheck />, title: "No access reviews yet.", description: writable ? "Start one to have owners and admins confirm who should keep access." : "Platform Admins start access reviews." }} />
   </Stack>;
@@ -134,9 +134,9 @@ export function AccessReviewDetail({ session, id }: { session: Session; id: stri
     personColumn<ReviewItem>(),
     accessColumn<ReviewItem>(),
     { id: "decision", header: "Decision", accessor: i => i.decision ?? "", cell: i => <DecisionCell item={i} /> },
-    { id: "reviewer", header: "Reviewer", accessor: i => i.active && !i.reviewable ? "none" : i.reviewer_user_id ?? "", cell: i => i.active && !i.reviewable ? <StatusBadge tone="warning">No reviewer</StatusBadge> : i.reviewer_user_id ? <span title="An assignee who can no longer review it is ignored: the automatic reviewers decide again.">Assigned</span> : <span className={s.muted}>Automatic</span> },
+    { id: "reviewer", header: "Reviewer", accessor: i => i.active && !i.reviewable ? "none" : i.reviewer_user_id ?? "", cell: i => i.active && !i.reviewable ? <StatusBadge tone="warning">No reviewer</StatusBadge> : i.reviewer_user_id ? <span title="An assignee who can no longer review it is ignored: the automatic reviewers decide again.">Assigned</span> : isKey(i) ? <span className={s.muted} title="The workspace's owners and admins review its keys, never their own. A key held by the only owner or admin stays undecided until the review is closed.">Owners and admins</span> : <span className={s.muted}>Automatic</span> },
   ];
-  const summary = `${n.by_decision.pending} undecided · ${n.by_decision.keep} kept · ${n.by_decision.remove} removed · ${n.by_decision.flag_idp} flagged${n.without_reviewer ? ` · ${n.without_reviewer} without a reviewer` : ""}${n.inactive ? ` · ${n.inactive} no longer in effect` : ""}`;
+  const summary = `${n.by_decision.pending} undecided · ${n.by_decision.keep} kept · ${n.by_decision.remove} removed${n.by_kind.workspace_key ? " or revoked" : ""} · ${n.by_decision.flag_idp} flagged${n.without_reviewer ? ` · ${n.without_reviewer} without a reviewer` : ""}${n.inactive ? ` · ${n.inactive} no longer in effect` : ""}`;
   return <Stack gap={6} className={s.page}>
     <Heading title={c.name} description={`${subjectsText(c.subjects)} · ${c.item_count} items · due ${new Date(c.due_at).toLocaleDateString()} · ${summary}`}
       actions={<Inline gap={2}><StatusBadge tone={campaignStateTone[state]}>{campaignStateLabels[state]}</StatusBadge><TextLink href={reviewExportPath(id)} download>Export CSV</TextLink>{writable && open && <Button variant="secondary" onClick={close}>Close review</Button>}</Inline>} />
