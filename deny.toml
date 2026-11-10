@@ -39,18 +39,6 @@ ignore = [
     # crypto-bigint 0.7.6, which needs the elliptic-curve 0.14 generation that
     # openidconnect has not adopted; remove this when it does.
     { id = "RUSTSEC-2026-0387", reason = "EC curves are used for public-key ID-token verification only; fix needs openidconnect on elliptic-curve 0.14" },
-    # lru 0.16 (via aws-sdk-s3, pinned =1.122.0 with the Bedrock SDK
-    # generation): LruCache::pop is not panic-safe when a key's Drop panics
-    # under catch_unwind. The SDK's keys are plain strings/identities with
-    # non-panicking Drop. Fixed in lru 0.18.2, which needs aws-sdk-s3
-    # >=1.150 and the aws-smithy 0.61 generation; remove this when the
-    # AWS SDK crates are bumped together.
-    { id = "RUSTSEC-2026-0253", reason = "unsound only with panicking key Drop; fix needs the next AWS SDK generation" },
-    # pin-utils 0.1.0 (via aws-smithy-http 0.63, the pinned AWS SDK
-    # generation): unmaintained (repository archived 2026-10-01), no known
-    # vulnerability; its pin_mut! macros are superseded by core::pin::pin!.
-    # Removed with the AWS SDK generation bump (#456).
-    { id = "RUSTSEC-2026-0441", reason = "unmaintained notice only; arrives with the pinned AWS SDK generation, removed by its bump" },
 ]
 
 [licenses]
