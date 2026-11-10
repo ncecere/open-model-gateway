@@ -300,6 +300,31 @@ struct OidcHttp {
     allow_loopback_http: bool,
 }
 impl OidcHttp {
+    fn new(allow_loopback_http: bool) -> anyhow::Result<Self> {
+        Ok(Self {
+            // No ambient HTTP(S)_PROXY/ALL_PROXY and no implicit retries,
+            // like every provider client (#144): identity traffic goes
+            // straight to the issuer, once.
+            client: reqwest::Client::builder()
+                .no_proxy()
+                // Discovery, token and JWKS addresses pass the egress policy
+                // (#33). `allow_loopback_http` is GATEWAY_ENV=development, as
+                // in the global policy; passing it keeps tests (strict global
+                // default) and production identical.
+                .dns_resolver(crate::egress::resolver_with(
+                    crate::egress::Purpose::Oidc,
+                    crate::egress::policy().permit_loopback(allow_loopback_http),
+                ))
+                .retry(reqwest::retry::never())
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(Duration::from_secs(15))
+                .connect_timeout(Duration::from_secs(5))
+                .build()
+                .map_err(|_| anyhow::anyhow!("Cannot initialize OIDC HTTP client"))?,
+            allow_loopback_http,
+        })
+    }
+
     async fn send(self, request: HttpRequest) -> Result<HttpResponse, std::io::Error> {
         // Apply the transport policy BEFORE every request, including the discovered JWKS URL.
         let fail = || std::io::Error::other("OIDC HTTP request failed");
@@ -481,28 +506,7 @@ impl IdentityState {
         clock: jwks::Clock,
     ) -> anyhow::Result<Self> {
         let provider = if let Some(config) = config {
-            let http = OidcHttp {
-                // No ambient HTTP(S)_PROXY/ALL_PROXY and no implicit retries,
-                // like every provider client (#144): identity traffic goes
-                // straight to the issuer, once.
-                client: reqwest::Client::builder()
-                    .no_proxy()
-                    // Discovery, token and JWKS addresses pass the egress policy
-                    // (#33). `allow_loopback_http` is GATEWAY_ENV=development, as
-                    // in the global policy; passing it keeps tests (strict global
-                    // default) and production identical.
-                    .dns_resolver(crate::egress::resolver_with(
-                        crate::egress::Purpose::Oidc,
-                        crate::egress::policy().permit_loopback(config.allow_loopback_http),
-                    ))
-                    .retry(reqwest::retry::never())
-                    .redirect(reqwest::redirect::Policy::none())
-                    .timeout(Duration::from_secs(15))
-                    .connect_timeout(Duration::from_secs(5))
-                    .build()
-                    .map_err(|_| anyhow::anyhow!("Cannot initialize OIDC HTTP client"))?,
-                allow_loopback_http: config.allow_loopback_http,
-            };
+            let http = OidcHttp::new(config.allow_loopback_http)?;
             // The issuer must pass the egress policy (#33); say which setting
             // to change instead of a bare discovery failure.
             let egress = crate::egress::policy().permit_loopback(config.allow_loopback_http);
