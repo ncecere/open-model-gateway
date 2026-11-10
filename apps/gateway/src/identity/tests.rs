@@ -729,6 +729,63 @@ async fn identity_requests_never_reuse_a_provider_connection() {
     assert_eq!(connections.load(Ordering::SeqCst), 3);
 }
 
+/// ES256, ES384 and EdDSA ID-token signatures are verified by the curve
+/// crates openidconnect depends on, and every other test here signs its own
+/// EdDSA tokens with the same library. These vectors were signed outside Rust
+/// (Node's `crypto`; JWS `r || s` encoding for the two ECDSA curves) with
+/// throwaway keys, so a change of curve library is checked against an
+/// independent implementation: the signature verifies, and neither a changed
+/// message, a changed signature nor another algorithm does.
+#[test]
+fn es256_es384_and_eddsa_signatures_verify_against_independent_vectors() {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    use openidconnect::JsonWebKey;
+    let vectors = [
+        (
+            CoreJwsSigningAlgorithm::EcdsaP256Sha256,
+            r#"{"kty":"EC","x":"V4ws0TlqwR3MrFg34ZLVZqDwsNzhk9LohxWwI3MQMTY","y":"SY6ZbSAREszkUupbPdqTZHEqUjJNYoxv2LURydagWuM","crv":"P-256","kid":"kat-ES256","use":"sig","alg":"ES256"}"#,
+            "known-answer message for ES256",
+            "7xhe65OPWInp9B2JqjiJaEbMEpx6HPJSDpTNMtYqXAaqxCVsZL6afzde_jyDNsyupH5z2U2G8ry5Y4F8RFg_PQ",
+        ),
+        (
+            CoreJwsSigningAlgorithm::EcdsaP384Sha384,
+            r#"{"kty":"EC","x":"YmbvONFx6Dq_7BmQpkPYEiLSS9Gsyq-7V4i9baFELgkYplRvySxtDJUXRq3neil_","y":"Wb4OZ3xPxHqYcCnN2fsTLIzcaDl9_MGamwiedmK_wkcXJEJBkcm4ZORmLvjLfgS4","crv":"P-384","kid":"kat-ES384","use":"sig","alg":"ES384"}"#,
+            "known-answer message for ES384",
+            "723x2nqzQKWw9Ws-quCR_7GiiNfQ5cF2Bba9B6n69kKli--S8g3lEukrmzRz29FpW4KkupdlBggkqriEIZMfbQsLd3jKaxQdgdpGWLOy1LU0IRXpbIZkeVMexK0OaD-4",
+        ),
+        (
+            CoreJwsSigningAlgorithm::EdDsa,
+            r#"{"crv":"Ed25519","x":"pWcPJq5aLKmBoHVNg6I9iE-nS1Uo792v5lGUQf7CnwY","kty":"OKP","kid":"kat-EdDSA","use":"sig","alg":"EdDSA"}"#,
+            "known-answer message for EdDSA",
+            "_Sv2Mat8Thn_-0NU8yVT2nqju75WoutLgJlXqwcJWeIn_xC2hv4UFrfni4ToejdSglJYnKZ3XYOcogmvDdCSCA",
+        ),
+    ];
+    for (index, (alg, jwk, message, signature)) in vectors.iter().enumerate() {
+        let key: CoreJsonWebKey = serde_json::from_str(jwk).unwrap();
+        let signature = URL_SAFE_NO_PAD.decode(signature).unwrap();
+        key.verify_signature(alg, message.as_bytes(), &signature)
+            .unwrap_or_else(|_| panic!("vector {index} must verify"));
+        assert!(
+            key.verify_signature(alg, b"another message", &signature)
+                .is_err(),
+            "vector {index}: a different message must not verify"
+        );
+        let mut tampered = signature.clone();
+        tampered[7] ^= 1;
+        assert!(
+            key.verify_signature(alg, message.as_bytes(), &tampered)
+                .is_err(),
+            "vector {index}: a changed signature must not verify"
+        );
+        let other = &vectors[(index + 1) % vectors.len()].0;
+        assert!(
+            key.verify_signature(other, message.as_bytes(), &signature)
+                .is_err(),
+            "vector {index}: another algorithm must not verify"
+        );
+    }
+}
+
 #[tokio::test]
 async fn discovery_and_csrf_origin_validation() {
     let mock = MockProvider::start(None).await;

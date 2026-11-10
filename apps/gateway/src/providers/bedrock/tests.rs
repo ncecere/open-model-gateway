@@ -84,7 +84,7 @@ impl Mock {
         // no endpoint argument and never inherits shared endpoint configuration.
         let mut adapter = BedrockAdapter::new().unwrap();
         let config = aws_sdk_bedrockruntime::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
+            .behavior_version(BehaviorVersion::v2026_01_12())
             .region(Region::new("us-east-1"))
             .credentials_provider(aws_sdk_bedrockruntime::config::Credentials::new(
                 "AKIDLOCALTEST",
@@ -846,4 +846,98 @@ async fn wire_missing_usage_never_becomes_sdk_zero_and_ttl_is_preserved() {
     assert_eq!(b.cache_write_1h_input_tokens, Some(12));
     assert_eq!(b.cache_write_5m_input_tokens, Some(8));
     assert_eq!(b.cache_write_default_input_tokens, Some(0));
+}
+
+/// Requests are signed with this host's clock, whatever a response's `Date`
+/// header says (#456): the SDK's clock-skew correction, on by default since
+/// the generation after 1.124, is turned off in the production configuration.
+#[tokio::test]
+async fn a_response_date_never_moves_the_signing_time() {
+    let dates = Arc::new(StdMutex::new(Vec::<String>::new()));
+    let seen = dates.clone();
+    let app = Router::new().fallback(move |headers: HeaderMap| {
+        let seen = seen.clone();
+        async move {
+            seen.lock()
+                .unwrap()
+                .push(headers["x-amz-date"].to_str().unwrap().to_owned());
+            Response::builder()
+                .status(200)
+                .header("content-type", "application/json")
+                // A server (or anyone on the path) whose clock reads an hour behind.
+                .header(
+                    "date",
+                    (chrono::Utc::now() - chrono::Duration::hours(1))
+                        .format("%a, %d %b %Y %H:%M:%S GMT")
+                        .to_string(),
+                )
+                .body(Body::from(serde_json::to_vec(&complete(false)).unwrap()))
+                .unwrap()
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let mut adapter = BedrockAdapter::new().unwrap();
+    let plan = auth::Plan {
+        region: "us-east-1".into(),
+        auth: auth::AwsAuth::parse("aws:default").unwrap(),
+        endpoint: Some(base),
+    };
+    // The production configuration; only the endpoint and credentials are the test's.
+    adapter.test_client = Some(Client::from_conf(adapter.service_config(
+        &plan,
+        aws_sdk_bedrockruntime::config::SharedCredentialsProvider::new(
+            aws_sdk_bedrockruntime::config::Credentials::new(
+                "AKIDLOCALTEST",
+                "local-not-a-secret",
+                None,
+                None,
+                "local-test",
+            ),
+        ),
+    )));
+    for _ in 0..3 {
+        let output = adapter.execute(&target(), request()).await.unwrap();
+        assert!(matches!(output, ProviderOutput::Complete(_)));
+    }
+    server.abort();
+    let dates = dates.lock().unwrap().clone();
+    assert_eq!(dates.len(), 3);
+    for (index, signed) in dates.iter().enumerate() {
+        let signed = chrono::NaiveDateTime::parse_from_str(signed, "%Y%m%dT%H%M%SZ")
+            .unwrap()
+            .and_utc();
+        let off = (chrono::Utc::now() - signed).num_seconds().abs();
+        assert!(
+            off < 300,
+            "request {index} was signed {off} s away from this host's clock"
+        );
+    }
+}
+
+/// What a stream broken at its first frame looks like with the current SDK
+/// generation (#456, #486): the SDK returns once the response headers arrive,
+/// so the adapter hands back a stream, and that stream then fails without a
+/// `Done`. Before the 1.15x generation the SDK read the first raw frame while
+/// establishing the response, and a corrupt one failed the request instead.
+/// The release notes describe this shape; a change of it should be noticed.
+#[tokio::test]
+async fn a_stream_corrupt_at_its_first_frame_fails_in_the_stream_without_done() {
+    let mut corrupt_first = wire(events(false));
+    corrupt_first[9] ^= 1; // the first frame's prelude CRC
+    let mock = Mock::serve(complete(false), corrupt_first, 200).await;
+    let mut req = request();
+    req.stream = true;
+    let Ok(ProviderOutput::Stream(mut output)) = mock.adapter().execute(&target(), req).await
+    else {
+        panic!("the SDK no longer returns a stream before reading the first frame");
+    };
+    let mut events_seen = Vec::new();
+    while let Some(event) = output.next().await {
+        events_seen.push(event.is_ok());
+    }
+    assert_eq!(events_seen, [false], "one error, no content and no Done");
 }

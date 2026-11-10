@@ -352,3 +352,64 @@ async fn assumed_role_session_name_is_configurable() {
     assert!(!form.contains("ExternalId"));
     sts_task.abort();
 }
+
+/// The STS client signs with this host's clock too, whatever a response's
+/// `Date` header says (#456). AssumeRole is called three times through the
+/// production configuration against an STS whose clock reads an hour behind.
+#[tokio::test]
+async fn an_sts_response_date_never_moves_the_signing_time() {
+    let dates = Arc::new(StdMutex::new(Vec::<String>::new()));
+    let seen = dates.clone();
+    let app = Router::new().fallback(move |headers: HeaderMap| {
+        let seen = seen.clone();
+        async move {
+            seen.lock()
+                .unwrap()
+                .push(headers["x-amz-date"].to_str().unwrap().to_owned());
+            Response::builder()
+                .status(200)
+                .header("content-type", "text/xml")
+                .header(
+                    "date",
+                    (chrono::Utc::now() - chrono::Duration::hours(1))
+                        .format("%a, %d %b %Y %H:%M:%S GMT")
+                        .to_string(),
+                )
+                .body(Body::from(
+                    r#"<AssumeRoleResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><AssumeRoleResult><AssumedRoleUser><AssumedRoleId>AROATEST:gw</AssumedRoleId><Arn>arn:aws:sts::123456789012:assumed-role/bedrock-invoke/gw</Arn></AssumedRoleUser><Credentials><AccessKeyId>ASIAASSUMEDTEST</AccessKeyId><SecretAccessKey>assumed-not-a-secret</SecretAccessKey><SessionToken>assumed-session-token</SessionToken><Expiration>2099-01-01T00:00:00Z</Expiration></Credentials></AssumeRoleResult><ResponseMetadata><RequestId>req-1</RequestId></ResponseMetadata></AssumeRoleResponse>"#,
+                ))
+                .unwrap()
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let server_identity = SharedCredentialsProvider::new(Credentials::new(
+        "AKIDSERVER",
+        "server-not-a-secret",
+        None,
+        None,
+        "server-identity",
+    ));
+    let sts = auth::sts_config("us-east-1", server_identity)
+        .into_builder()
+        .endpoint_url(&base)
+        .build();
+    let role = auth::assume_role_provider(ROLE, None, None, &sts).await;
+    for _ in 0..3 {
+        role.provide_credentials().await.unwrap();
+    }
+    server.abort();
+    let dates = dates.lock().unwrap().clone();
+    assert_eq!(dates.len(), 3);
+    for (index, signed) in dates.iter().enumerate() {
+        let signed = chrono::NaiveDateTime::parse_from_str(signed, "%Y%m%dT%H%M%SZ")
+            .unwrap()
+            .and_utc();
+        let off = (chrono::Utc::now() - signed).num_seconds().abs();
+        assert!(
+            off < 300,
+            "request {index} was signed {off} s away from this host's clock"
+        );
+    }
+}

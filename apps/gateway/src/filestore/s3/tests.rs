@@ -240,6 +240,18 @@ async fn mock(mode: &'static str) -> (String, Arc<Mutex<Vec<Seen>>>) {
                     .header("location", "http://127.0.0.1:9/elsewhere")
                     .body(Body::empty())
                     .unwrap(),
+                // A server (or anyone on an http:// path) whose clock reads an hour behind.
+                "an hour behind" => Response::builder()
+                    .status(StatusCode::OK)
+                    .header("etag", "\"etag\"")
+                    .header(
+                        "date",
+                        (chrono::Utc::now() - chrono::Duration::hours(1))
+                            .format("%a, %d %b %Y %H:%M:%S GMT")
+                            .to_string(),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
                 "denied" => (StatusCode::FORBIDDEN, "<Error><Code>AccessDenied</Code><Message>no</Message></Error>").into_response(),
                 _ if parts.method == "POST" && parts.uri.query() == Some("uploads") => (
                     StatusCode::OK,
@@ -308,6 +320,42 @@ fn body_of(len: usize) -> crate::filestore::ByteStream {
             .map(move |at| Ok(bytes::Bytes::from(vec![7u8; (len - at).min(65_536)]))),
     )
     .boxed()
+}
+
+/// Requests are signed with this host's clock, whatever a response's `Date`
+/// header says (#456). The SDK generation after 1.122 corrects for "clock
+/// skew" by default: it takes the difference between a response's `Date` and
+/// its own clock and signs every later request that far off. That lets a
+/// response choose the gateway's signing time, so it is turned off.
+#[tokio::test]
+async fn a_response_date_never_moves_the_signing_time() {
+    let (origin, seen) = mock("an hour behind").await;
+    let s = store_for(&origin).await;
+    for _ in 0..3 {
+        let key =
+            ObjectKey::new(Purpose::BatchInput, Scope::Workspace(uuid::Uuid::new_v4())).unwrap();
+        s.put(&key, body_of(1000), PutMeta::default())
+            .await
+            .unwrap();
+    }
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 3);
+    for (index, request) in seen.iter().enumerate() {
+        let signed = &request
+            .headers
+            .iter()
+            .find(|(k, _)| k == "x-amz-date")
+            .unwrap()
+            .1;
+        let signed = chrono::NaiveDateTime::parse_from_str(signed, "%Y%m%dT%H%M%SZ")
+            .unwrap()
+            .and_utc();
+        let off = (chrono::Utc::now() - signed).num_seconds().abs();
+        assert!(
+            off < 300,
+            "request {index} was signed {off} s away from this host's clock"
+        );
+    }
 }
 
 #[tokio::test]

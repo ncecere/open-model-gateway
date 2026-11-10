@@ -65,7 +65,7 @@ impl BedrockAdapter {
     pub(crate) fn for_test(base: &str) -> Self {
         let adapter = Self::new().unwrap();
         let config = aws_sdk_bedrockruntime::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
+            .behavior_version(BehaviorVersion::v2026_01_12())
             .region(Region::new("us-east-1"))
             .credentials_provider(aws_sdk_bedrockruntime::config::Credentials::new(
                 "AKIDLOCALTEST",
@@ -116,11 +116,23 @@ impl BedrockAdapter {
         let mut builder = aws_sdk_bedrockruntime::Config::builder();
         builder.set_endpoint_url(plan.endpoint.clone());
         builder
-            .behavior_version(BehaviorVersion::latest())
+            .behavior_version(BehaviorVersion::v2026_01_12())
             .region(Region::new(plan.region.clone()))
             .credentials_provider(credentials)
             .http_client(self.http.clone())
             .retry_config(RetryConfig::standard().with_max_attempts(1))
+            // Sign with this host's clock only: a response's Date header must
+            // not move the signing time (the SDK's skew correction is on by
+            // default since the 1.15x generation, #456).
+            .disable_clock_skew_correction(true)
+            // A stuck credential source fails the request after 5 s, as before
+            // that generation; the SDK now derives a longer wait from the
+            // operation timeouts.
+            .identity_cache(
+                aws_sdk_bedrockruntime::config::IdentityCache::lazy()
+                    .load_timeout(Duration::from_secs(5))
+                    .build(),
+            )
             .timeout_config(
                 TimeoutConfig::builder()
                     .connect_timeout(Duration::from_secs(10))
