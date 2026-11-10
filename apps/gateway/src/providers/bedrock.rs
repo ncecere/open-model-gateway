@@ -13,6 +13,7 @@ use aws_sdk_bedrockruntime::{
     types as aws,
 };
 use aws_smithy_types::{Document, Number};
+use futures_util::StreamExt as _;
 use serde_json::Value;
 use tokio::sync::Mutex;
 
@@ -184,10 +185,19 @@ impl ProviderAdapter for BedrockAdapter {
                 .send()
                 .await
                 .map_err(|e| sdk_messages_error(e, request.messages_options.is_some()))?;
-            Ok(ProviderOutput::Stream(stream::decode(
-                output.stream,
-                request.response_limit(),
-            )))
+            // The first event is read here, before a stream is handed back: a
+            // response that is already broken (empty, corrupt, or an exception
+            // as its first frame) is a failed request, not a started stream.
+            // The SDK did this itself until the 1.15x generation (#456).
+            // Dropping this future drops the receiver and cancels upstream.
+            let mut events = stream::decode(output.stream, request.response_limit());
+            match events.next().await {
+                Some(Ok(first)) => Ok(ProviderOutput::Stream(Box::pin(
+                    futures_util::stream::once(async move { Ok(first) }).chain(events),
+                ))),
+                Some(Err(error)) => Err(error),
+                None => Err(InferenceError::InvalidUpstream),
+            }
         } else {
             let output = client
                 .converse()
