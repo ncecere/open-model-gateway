@@ -2563,7 +2563,7 @@ test("pull requests scan the candidate image with the tag run's Trivy and policy
   const pins = t => [...t.matchAll(/fetch-verified\.sh (https:\/\/github\.com\/aquasecurity\/trivy\/releases\/download\/\S+) ([0-9a-f]{64}) /g)].map(m => `${m[1]} ${m[2]}`);
   assert.equal(pins(tagRun).length, 2, "the tag run pins Trivy for amd64 and arm64");
   assert.deepEqual(pins(text), pins(tagRun).filter(p => p.includes("Linux-64bit")), "the same Trivy release and checksum as the tag run, for this job's amd64 runner");
-  const policy = t => [...t.matchAll(/trivy image\b[^\n]*(?:\\\n[^\n]*)*/g)].map(m => m[0].replace(/\\\n\s*/g, " ").trim().split(/\s+/));
+  const policy = t => [...t.replace(/\\\n\s*/g, " ").matchAll(/trivy image\b[^\n]*/g)].map(m => m[0].trim().split(/\s+/));
   const flags = scan => ["--severity", "CRITICAL,HIGH", "--exit-code", "1", "--ignore-unfixed"].every(f => scan.includes(f));
   const scans = policy(text);
   assert.equal(policy(tagRun).length, 1);
