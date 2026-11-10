@@ -316,15 +316,15 @@ impl OidcHttp {
                     crate::egress::policy().permit_loopback(allow_loopback_http),
                 ))
                 .retry(reqwest::retry::never())
-                // No idle connections either (#417): a provider closes them on
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(Duration::from_secs(15))
+                .connect_timeout(Duration::from_secs(5))
+                // No idle connections (#417): a provider closes them on
                 // its own schedule, and a request written to one it is closing
                 // is lost. With no retry that fails the sign-in after its
                 // one-time attempt is consumed. Sign-in is rare; each request
                 // pays for its own connection.
                 .pool_max_idle_per_host(0)
-                .redirect(reqwest::redirect::Policy::none())
-                .timeout(Duration::from_secs(15))
-                .connect_timeout(Duration::from_secs(5))
                 .build()
                 .map_err(|_| anyhow::anyhow!("Cannot initialize OIDC HTTP client"))?,
             allow_loopback_http,
