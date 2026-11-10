@@ -798,7 +798,7 @@ pub(super) async fn assign(
             return Err(ManagementError::detailed(
                 StatusCode::CONFLICT,
                 "access_review_reviewer_ineligible",
-                "That person cannot review this access: choose an owner or admin of the workspace (keys), or a Platform Admin (memberships and platform roles)".into(),
+                "That person cannot review this access: choose an owner or admin of the workspace, or a Platform Admin".into(),
                 json!({}),
             ));
         }

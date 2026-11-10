@@ -73,7 +73,7 @@ export function keyHolderText(i: ReviewItem): string | undefined {
 /** A key's expiry and last use: what a reviewer weighs. */
 export function keyUseText(i: ReviewItem): string {
   const day = (v: string) => new Date(v).toLocaleDateString();
-  return `${i.expires_at ? `Expires ${day(i.expires_at)}` : "No expiry"} · ${i.last_used_at ? `Last used ${day(i.last_used_at)}` : "Never used"}`;
+  return `${i.expires_at ? `Expires ${day(i.expires_at)}` : "No expiry"} · ${i.last_used_at ? `Last used ${day(i.last_used_at)}` : "No recorded use"}`;
 }
 export function accessText(i: ReviewItem): string {
   if (isKey(i)) return `Key in ${i.workspace_name ?? "a workspace"}`;
@@ -85,7 +85,7 @@ export const personText = (i: ReviewItem) => isKey(i) ? keyText(i) : i.display_n
 export const decisionText = (i: ReviewItem, d: ReviewDecision) => isKey(i) && d === "remove" ? "Revoked" : decisionLabels[d];
 /** A row's accessible name: the person and the access; a key adds its holder, since key names repeat. */
 export const itemLabel = (i: ReviewItem) => [personText(i), isKey(i) ? keyHolderText(i) : undefined, accessText(i)].filter(Boolean).join(", ");
-/** Which key a confirmation is about: key names are not unique, so its holder and the start of its id. */
+/** Which key a confirmation is about: key names are not unique, so its holder and the start of its id (the key as it was when the review started: a rotation gives its replacement a new id). */
 export const keyIdentity = (i: ReviewItem) => `${keyHolderText(i) ?? "Key"}, ID ${(i.api_key_id ?? "").slice(0, 8)}.`;
 /** "Blair from Product" or "Aud's Platform Auditor role". */
 export const removalTarget = (i: ReviewItem) => isKey(i) ? `${keyText(i)} in ${i.workspace_name ?? "this workspace"}` : i.subject_kind === "platform_role" ? `${personText(i)}'s ${accessText(i)} role` : `${personText(i)} from ${i.workspace_name ?? "this workspace"}`;
@@ -101,7 +101,7 @@ export const campaignStateTone: Record<CampaignState, "info" | "danger" | "neutr
  * access at once through the same path as removing it directly.
  */
 export function removalConsequence(i: ReviewItem): string {
-  if (isKey(i)) return keyIdentity(i) + " Revokes this key now, with any earlier version of it that a rotation left working. New requests that use it are refused at once. A revoked key never returns: whoever needs access creates a new key.";
+  if (isKey(i)) return keyIdentity(i) + " Revokes this key now; if it was rotated after the review started, the key that replaced it is revoked. New requests that use it are refused at once. A revoked key never returns: whoever needs access creates a new key.";
   return i.subject_kind === "platform_role"
     ? `Removes this ${roleText(i)} grant (manual or bootstrap) now. The same role from an identity provider group, if they have one, stays. If they then hold no other platform role, they lose access to the gateway at once: they are suspended, their sessions and keys are revoked (revoked keys never return), and their personal data is removed after 30 days unless they are reinstated first.`
     : `Removes their membership in ${i.workspace_name ?? "this workspace"} now. Their keys there are revoked, permanently, if they no longer belong to it through an identity provider group.`;
