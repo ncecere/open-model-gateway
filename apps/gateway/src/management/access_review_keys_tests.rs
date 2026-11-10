@@ -47,7 +47,7 @@ async fn team_keys(f: &Fixture) -> (Uuid, Uuid) {
         json!({"name":"zebra-robot"}),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{account}");
+    assert_eq!(status, StatusCode::OK, "service account creation");
     let service = named_key(
         f,
         &f.owner,
