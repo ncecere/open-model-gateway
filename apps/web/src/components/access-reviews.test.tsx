@@ -31,11 +31,15 @@ function mount(node: React.ReactElement) {
   render(<QueryClientProvider client={testClient()}><DashboardNavigationProvider search={{ page: "access-reviews" }} navigate={vi.fn()}><ActionProvider>{node}</ActionProvider></DashboardNavigationProvider></QueryClientProvider>);
   return userEvent.setup();
 }
-const base: ReviewItem = { id: "i-1", campaign_id: "c-1", subject_kind: "workspace_membership", workspace_id: "team", workspace_name: "Product", user_id: "u-1", email: "blair@example.invalid", display_name: "Blair", role: "member", source: "manual", granted_at: "2026-10-01T00:00:00Z", active: true, decision: null, decided_by: null, decided_at: null, reviewer_user_id: null, reviewable: true };
+const base: ReviewItem = { id: "i-1", campaign_id: "c-1", subject_kind: "workspace_membership", workspace_id: "team", workspace_name: "Product", user_id: "u-1", email: "blair@example.invalid", display_name: "Blair", role: "member", source: "manual", granted_at: "2026-10-01T00:00:00Z", active: true, decision: null, decided_by: null, decided_at: null, reviewer_user_id: null, reviewable: true, api_key_id: null, key_name: null, holder_kind: null, service_account_id: null, service_account_name: null, expires_at: null, last_used_at: null };
+/** A member's key as a reviewer sees it, and a service key as the platform views show it (never a name or holder). */
+const humanKey: ReviewItem = { ...base, id: "k-1", subject_kind: "workspace_key", role: null, source: null, api_key_id: "0a1b2c3d-0000-4000-8000-000000000001", key_name: "zebra-human-key", holder_kind: "member", expires_at: "2099-01-01T00:00:00Z", last_used_at: null };
+const serviceKey: ReviewItem = { ...humanKey, id: "k-2", api_key_id: "9f8e7d6c-0000-4000-8000-000000000002", key_name: "zebra-service-key", holder_kind: "service_account", user_id: null, email: null, display_name: null, service_account_id: "sa-1", service_account_name: "zebra-robot", last_used_at: "2026-11-01T00:00:00Z" };
+const masked = (k: ReviewItem): ReviewItem => ({ ...k, user_id: null, email: null, display_name: null, key_name: null, service_account_id: null, service_account_name: null });
 const asAdminOf = (ws: string) => ({ ...session, workspaces: [...session.workspaces.filter(w => w.id !== ws), { ...team, id: ws, role: "admin" as const }] });
 const inbox = (patch: Partial<InboxItem>): InboxItem => ({ ...base, campaign_name: "Q4 review", due_at: "2026-11-20T00:00:00Z", ...patch });
 const campaign: ReviewCampaignDetail = { id: "c-1", name: "Q4 review", subjects: ["workspace_memberships", "platform_roles"], workspace_ids: [], created_by: "admin", created_at: "2026-11-06T00:00:00Z", due_at: "2099-11-20T00:00:00Z", closed_at: null, item_count: 3,
-  counts: { by_kind: { workspace_membership: 2, platform_role: 1 }, by_source: { manual: 2, group: 1, bootstrap: 0 }, by_decision: { pending: 2, keep: 1, flag_idp: 0, remove: 0 }, inactive: 0, without_reviewer: 1 } };
+  counts: { by_kind: { workspace_membership: 2, platform_role: 1, workspace_key: 0 }, by_source: { manual: 2, group: 1, bootstrap: 0 }, by_decision: { pending: 2, keep: 1, flag_idp: 0, remove: 0 }, inactive: 0, without_reviewer: 1 } };
 
 describe("Review access (#90)", () => {
   it("offers keep and remove for manual access, keep and flag for group access, and says what a removal does", async () => {
@@ -189,5 +193,57 @@ describe("An access review (#90)", () => {
     expect(screen.getByText("Closed")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Close review" })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Actions for/ })).toBeNull();
+  });
+});
+
+describe("Keys in access reviews (#90 slice 6)", () => {
+  it("shows a reviewer each key with its holder and offers only keep and revoke, saying what revoking does", async () => {
+    const fetch = serve({ [inboxPath]: () => ({ data: [inbox(humanKey), inbox(serviceKey)] }), [decisionPath("k-1")]: () => ({ ...humanKey, decision: "remove", active: false }), [decisionPath("k-2")]: () => ({ ...serviceKey, decision: "keep" }) });
+    const user = mount(<AccessReviewInbox session={asAdminOf("team")} />);
+    expect(await screen.findByText("zebra-human-key")).toBeTruthy();
+    expect(screen.getByText("Held by Blair")).toBeTruthy();
+    expect(screen.getByText("Service account zebra-robot")).toBeTruthy();
+    expect(screen.getAllByText("Key in Product").length).toBe(2);
+    expect(screen.getByText(/Never used/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Actions for zebra-human-key, Key in Product" }));
+    const remove = await screen.findByRole("menuitem", { name: "Remove…" });
+    expect(screen.getByRole("menuitem", { name: "Keep…" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: /^Flag/ })).toBeNull();
+    await user.click(remove);
+    const dialog = await screen.findByRole("dialog", { name: "Revoke zebra-human-key in Product?" });
+    expect(dialog.textContent).toContain("Requests that use it are refused at once");
+    expect(dialog.textContent).toContain("A revoked key never returns");
+    await user.click(within(dialog).getByRole("button", { name: "Revoke key" }));
+    await waitFor(() => expect(writes(fetch)).toEqual([[decisionPath("k-1"), { decision: "remove" }]]));
+    await user.click(screen.getByRole("button", { name: "Actions for zebra-service-key, Key in Product" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Keep…" }));
+    await user.click(within(await screen.findByRole("dialog", { name: "Keep zebra-service-key in Product?" })).getByRole("button", { name: "Keep" }));
+    await waitFor(() => expect(writes(fetch)[1]).toEqual([decisionPath("k-2"), { decision: "keep" }]));
+  });
+  it("shows the platform views' keys without a name or holder, tells them apart, and never offers a reviewer change", async () => {
+    const keys = { ...campaign, subjects: ["workspace_memberships", "platform_roles", "workspace_keys"] as ReviewCampaignDetail["subjects"], counts: { ...campaign.counts, by_kind: { ...campaign.counts.by_kind, workspace_key: 2 } } };
+    serve({ [reviewPath("c-1")]: () => keys, [reviewItemsPath("c-1")]: () => ({ data: [masked(humanKey), { ...masked(serviceKey), decision: "remove" as const, active: false }, { ...masked(humanKey), id: "k-3", api_key_id: "11112222-0000-4000-8000-000000000003", reviewable: false }] }) });
+    const user = mount(<AccessReviewDetail session={admin} id="c-1" />);
+    expect(await screen.findByText("Member's key 0a1b2c3d")).toBeTruthy();
+    expect(screen.getByText("Service account key 9f8e7d6c")).toBeTruthy();
+    expect(screen.getByText("Revoked")).toBeTruthy();
+    expect(screen.getByText("No reviewer")).toBeTruthy();
+    expect(screen.getByText(/Team and Project memberships, Admin and Auditor roles and Team and Project keys/)).toBeTruthy();
+    expect(screen.queryByText(/zebra/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Actions for/ })).toBeNull();
+    void user;
+  });
+  it("starts a review of keys alone, narrowed to chosen workspaces", async () => {
+    const fetch = serve({ [reviewsPath]: init => init?.method === "POST" ? campaign : { data: [] }, ["/api/v1/platform/workspaces?status=active"]: () => ({ data: [{ id: "team", name: "Product", kind: "team" }] }) });
+    const user = mount(<PlatformAccessReviewsPage session={admin} />);
+    await user.click(await screen.findByRole("button", { name: /Start review/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Start an access review" });
+    await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Keys");
+    await user.click(within(dialog).getByRole("checkbox", { name: "Team and Project keys" }));
+    await user.click(within(dialog).getByRole("checkbox", { name: "Team and Project memberships" }));
+    await user.type(within(dialog).getByRole("combobox", { name: /^Only these Teams and Projects/ }), "Prod");
+    await user.click(await screen.findByRole("option", { name: "Product" }));
+    await user.click(within(dialog).getByRole("button", { name: "Start review" }));
+    await waitFor(() => expect(writes(fetch)).toEqual([[reviewsPath, { name: "Keys", subjects: ["workspace_keys"], workspace_ids: ["team"], due_in_days: 14 }]]));
   });
 });
