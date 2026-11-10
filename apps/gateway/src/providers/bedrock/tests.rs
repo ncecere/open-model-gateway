@@ -84,7 +84,7 @@ impl Mock {
         // no endpoint argument and never inherits shared endpoint configuration.
         let mut adapter = BedrockAdapter::new().unwrap();
         let config = aws_sdk_bedrockruntime::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
+            .behavior_version(BehaviorVersion::v2026_01_12())
             .region(Region::new("us-east-1"))
             .credentials_provider(aws_sdk_bedrockruntime::config::Credentials::new(
                 "AKIDLOCALTEST",
@@ -916,4 +916,54 @@ async fn a_response_date_never_moves_the_signing_time() {
             "request {index} was signed {off} s away from this host's clock"
         );
     }
+}
+
+/// A stream that is already broken at its first frame is refused before a
+/// stream is handed back, so the request can still be answered with an HTTP
+/// error (and routed elsewhere where policy allows). The SDK generation before
+/// 1.15x read the first frame while establishing the response; the current one
+/// returns once the headers arrive, so the adapter reads it itself (#456).
+#[tokio::test]
+async fn a_stream_broken_at_its_first_frame_is_refused_before_it_is_returned() {
+    let mut corrupt_first = wire(events(false));
+    corrupt_first[15] ^= 1; // inside the first frame's prelude CRC
+    let exception_first = frame(
+        "throttlingException",
+        "exception",
+        json!({"message":"slow down"}),
+    );
+    for (name, frames) in [
+        ("empty body", Vec::new()),
+        ("corrupt first frame", corrupt_first),
+        ("exception as the first frame", exception_first),
+    ] {
+        let mock = Mock::serve(complete(false), frames, 200).await;
+        let mut req = request();
+        req.stream = true;
+        assert!(
+            mock.adapter().execute(&target(), req).await.is_err(),
+            "{name}: a stream was returned"
+        );
+    }
+    // A good stream still starts with its first event and ends once.
+    let mock = Mock::serve(complete(false), wire(events(false)), 200).await;
+    let mut req = request();
+    req.stream = true;
+    let Ok(ProviderOutput::Stream(mut output)) = mock.adapter().execute(&target(), req).await
+    else {
+        panic!("a valid stream was refused");
+    };
+    let mut done = 0;
+    let mut text = String::new();
+    while let Some(event) = output.next().await {
+        match event.unwrap() {
+            ChatEvent::Done => done += 1,
+            ChatEvent::Delta {
+                text: Some(delta), ..
+            } => text.push_str(&delta),
+            _ => {}
+        }
+    }
+    assert_eq!(done, 1);
+    assert!(!text.is_empty());
 }

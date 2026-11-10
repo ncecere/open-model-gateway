@@ -372,11 +372,24 @@ impl S3Backend {
         let mut builder = aws_sdk_s3::Config::builder();
         builder.set_endpoint_url(settings.endpoint.clone());
         let config = builder
-            .behavior_version(BehaviorVersion::latest())
+            .behavior_version(BehaviorVersion::v2026_01_12())
             .region(Region::new(settings.region.clone()))
             .credentials_provider(credentials)
             .http_client(http)
             .retry_config(RetryConfig::standard().with_max_attempts(1))
+            // Sign with this host's clock only: a response's Date header must
+            // not move the signing time (the SDK's skew correction is on by
+            // default since the 1.15x generation, #456). An http:// endpoint
+            // would let anyone on the path choose it.
+            .disable_clock_skew_correction(true)
+            // A stuck credential source fails the request after 5 s, as before
+            // that generation; the SDK now derives a longer wait (here 300 s)
+            // from the operation timeouts.
+            .identity_cache(
+                aws_sdk_s3::config::IdentityCache::lazy()
+                    .load_timeout(Duration::from_secs(5))
+                    .build(),
+            )
             .timeout_config(
                 TimeoutConfig::builder()
                     .connect_timeout(Duration::from_secs(10))
