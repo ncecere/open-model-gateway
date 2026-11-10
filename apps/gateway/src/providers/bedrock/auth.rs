@@ -260,14 +260,10 @@ pub(super) fn sts_config(region: &str, base: SharedCredentialsProvider) -> SdkCo
         .credentials_provider(base)
         .time_source(aws_smithy_async::time::SystemTimeSource::new())
         .retry_config(RetryConfig::standard().with_max_attempts(1))
-        // As for Bedrock and S3 (#456): this host's clock signs, and a stuck
-        // credential source fails after 5 s.
+        // As for Bedrock and S3 (#456): only this host's clock signs. (No
+        // identity cache here: the AssumeRole provider replaces it, and the
+        // calling client's 5 s credential wait covers the whole AssumeRole.)
         .disable_clock_skew_correction(true)
-        .identity_cache(
-            aws_sdk_bedrockruntime::config::IdentityCache::lazy()
-                .load_timeout(Duration::from_secs(5))
-                .build(),
-        )
         .timeout_config(
             TimeoutConfig::builder()
                 .connect_timeout(Duration::from_secs(10))

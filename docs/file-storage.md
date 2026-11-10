@@ -205,11 +205,11 @@ The backend uses **`aws-sdk-s3` (pinned `=1.156.0`)**, not `object_store`:
 - **Compatibility switches:** it exposes the compatibility switches directly (`request_checksum_calculation`, `response_checksum_validation`, `force_path_style`, S3 Express and MRAP toggles).
 - **Transport:** it accepts the same bounded reqwest transport pattern as Bedrock (no redirects, proxy or retries).
 
-The S3 and Bedrock crates are bumped together, as one SDK generation (#456 moved both from 1.122/1.124 to 1.156/1.152). Three SDK defaults are set explicitly on every AWS client the gateway builds (S3, Bedrock, STS), so a later bump cannot change them silently:
+The S3 and Bedrock crates are bumped together, as one SDK generation (#456 moved both from 1.122/1.124 to 1.156/1.152). Three SDK defaults are set explicitly on the S3 and Bedrock clients (and the first two on the gateway's own STS client for `aws:role:`), so a later bump cannot change them silently. Clients that `aws-config` builds internally for a profile's own role chain keep the SDK defaults:
 
 - **Behaviour version** is pinned (`v2026_01_12`), not `latest()`.
 - **Clock-skew correction is off.** The SDK otherwise takes the difference between a response's `Date` header and its own clock and signs later requests that far off. Requests are signed with the host's clock only; keep it synchronised.
-- **Credential loading waits 5 seconds at most**, not a time derived from the operation timeouts.
+- **Credential loading waits 5 seconds at most** (including an AssumeRole call), not a time derived from the operation timeouts.
 
 ## Admin › Settings › Data & privacy › Storage
 
