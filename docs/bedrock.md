@@ -191,8 +191,8 @@ Source reference: official `awslabs/aws-sdk-rust`, commit
 `event_stream_serde.rs`, Converse types, and `aws-config`'s default credential
 provider. Initial isolated adapter checks also covered newer SDK releases. The
 integrated gateway suite passes with the committed lockfile:
-`aws-sdk-bedrockruntime 1.124.0`, `aws-config 1.8.13`, and
-`aws-smithy-types 1.4.3`. Use `--locked` for reproducible deployment builds.
+`aws-sdk-bedrockruntime 1.152.0`, `aws-config 1.13.0`, and
+`aws-smithy-types 1.9.1`. Use `--locked` for reproducible deployment builds.
 AWS dependency updates can raise compiler requirements (for example, Bedrock
 1.147.0 declares Rust 1.94.1); review the toolchain and rerun the full suite when
 updating the lockfile. The current verification uses stable Rust, not an MSRV CI matrix.

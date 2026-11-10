@@ -255,11 +255,15 @@ pub(super) fn profile_provider(
 /// endpoint overrides) is not loaded. One attempt and bounded timeouts.
 pub(super) fn sts_config(region: &str, base: SharedCredentialsProvider) -> SdkConfig {
     let mut builder = SdkConfig::builder()
-        .behavior_version(BehaviorVersion::latest())
+        .behavior_version(BehaviorVersion::v2026_01_12())
         .region(Region::new(region.to_owned()))
         .credentials_provider(base)
         .time_source(aws_smithy_async::time::SystemTimeSource::new())
         .retry_config(RetryConfig::standard().with_max_attempts(1))
+        // As for Bedrock and S3 (#456): only this host's clock signs. (No
+        // identity cache here: the AssumeRole provider replaces it, and the
+        // calling client's 5 s credential wait covers the whole AssumeRole.)
+        .disable_clock_skew_correction(true)
         .timeout_config(
             TimeoutConfig::builder()
                 .connect_timeout(Duration::from_secs(10))
