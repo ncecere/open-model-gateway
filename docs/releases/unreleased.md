@@ -5,7 +5,7 @@ Notes for changes on `main` after [v0.14.1](v0.14.1.md). They become the next re
 ## New features
 
 - **Keys in access reviews** (#90, completes R18 / #42). A review can cover the keys of Teams and Projects (`workspace_keys`): one item per live key lineage, human and service-account keys, never personal workspaces' keys. A rotation keeps the lineage, so rotating does not escape a review. The workspace's owners and admins review them (never their own key; Platform Admins are not key reviewers). **Remove revokes every key of the lineage at once** through the revoke path; revoked keys never return. Keep is the only other decision; key items are never assigned.
-  - **Dashboard:** key items are shown in the review pages in a following change, before the release; until then a review covering keys can be started only through the API.
+  - **Dashboard:** Admin › Access reviews offers **Team and Project keys** when starting a review (the workspace filter narrows keys too). In **Review access** a key shows its name, holder, expiry and last use, and is kept or revoked; the confirmation says a revoked key stops working at once and never returns. A review's page under Admin shows keys without a name or holder and offers no reviewer assignment for them.
   - **Privacy:** platform readers (Platform Admins, Auditors) see key items as key safety's platform scope does: key id, workspace, holder kind, expiry and last use, never the key's name or holder, in the item list, the assignment response and the CSV export; whether a key has a reviewer, and the item order, never depend on its holder. Reviewers see the key name and holder as the workspace key list shows them.
 
 ## Behaviour changes
