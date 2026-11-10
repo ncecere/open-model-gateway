@@ -278,6 +278,22 @@ impl Gateway {
             .unwrap_or(0.0)
     }
 
+    /// The sum of every OpenMetrics line of `name`, across all its labels.
+    async fn metric_sum(&self, name: &str) -> f64 {
+        reqwest::Client::new()
+            .get(format!("http://{}/metrics", self.metrics_addr))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap()
+            .lines()
+            .filter(|line| line.starts_with(name))
+            .filter_map(|line| line.rsplit(' ').next()?.parse::<f64>().ok())
+            .sum()
+    }
+
     async fn shutdown(mut self) {
         if let Some(runtime) = self.runtime.take() {
             runtime.shutdown().await;
@@ -294,8 +310,9 @@ const SAMPLES: usize = 5;
 /// The suspected cause of one 2.8 s first fault request (against a 1.58 s
 /// bound, under a loaded full-suite run; 20/20 isolated runs passed) is that
 /// contention, which the bound cannot tell apart from a request held up by an
-/// export. This removes it without changing the bound; #290 stays open for a
-/// structural assertion that the request path never awaits export. It also
+/// export. This removes it without changing the bound; the structural
+/// assertion that the request path never awaits export is
+/// [`assert_a_request_returns_while_an_export_is_outstanding`]. It also
 /// makes the process-wide metric deltas of `metric_value` safe by
 /// construction. (sqlx creates and drops each test's database outside it.)
 static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -336,6 +353,64 @@ fn assert_no_request_slowed(fault: &str, timings: &[Duration], baseline: Duratio
             timings.len(),
         );
     }
+}
+
+/// How often [`assert_a_request_returns_while_an_export_is_outstanding`] may
+/// miss its window (a host stall longer than the 2 s exchange) before failing.
+const OVERLAP_ATTEMPTS: usize = 8;
+
+/// The request path never awaits export, shown by ordering instead of by a
+/// wall-clock bound (#290). The timed requests above normally finish before
+/// the worker's first 1 s batch tick, so none of them runs while an exchange is
+/// in flight. Here a request starts only once the hanging collector holds an
+/// exchange, and must have returned while that same exchange is still
+/// unresolved (no delivery outcome counted for it yet). The worker sends one batch at
+/// a time, so this request's own spans cannot have been delivered either: it
+/// returned without waiting for any export. Host load can only make an attempt
+/// miss the window (the exchange times out after 2 s), never make a request
+/// that waits for export pass, so a missed attempt is repeated.
+async fn assert_a_request_returns_while_an_export_is_outstanding(
+    gateway: &Gateway,
+    collector: &Collector,
+    key: &str,
+    deliveries_before: f64,
+) {
+    // Every outcome counts as resolved, so an exchange that ended any other
+    // way than the expected timeout can never look outstanding.
+    let resolved =
+        || async { gateway.metric_sum("gateway_trace_deliveries_total").await - deliveries_before };
+    let mut misses = Vec::new();
+    for _ in 0..OVERLAP_ATTEMPTS {
+        // Wait for an exchange the collector has received and the exporter has
+        // not yet given up on. Every request below queues spans for the next.
+        let mut started = 0.0;
+        let mut in_flight = false;
+        for _ in 0..60 {
+            started = collector.batches().len() as f64;
+            if started > resolved().await {
+                in_flight = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let (status, body, _) = gateway.chat(key).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let resolved_after = resolved().await;
+        if in_flight && resolved_after < started {
+            return;
+        }
+        misses.push(format!(
+            "{}: collector received {started}, resolved after the request {resolved_after}",
+            if in_flight {
+                "the exchange resolved before the request returned"
+            } else {
+                "no exchange in flight"
+            }
+        ));
+    }
+    panic!(
+        "no inference request returned while an export exchange was outstanding in {OVERLAP_ATTEMPTS} attempts ({misses:?}): the request path must never wait for export"
+    );
 }
 
 /// The same-run reference for the outage timings below: the fastest of
@@ -519,8 +594,16 @@ async fn a_collector_outage_never_fails_or_slows_inference_and_drops_are_counted
     let timeout_deliveries_before = gateway
         .metric_value("gateway_trace_deliveries_total", "outcome=\"timeout\"")
         .await;
+    let deliveries_before = gateway.metric_sum("gateway_trace_deliveries_total").await;
     let timings = timed_chats(&gateway, &keys.team_key.token).await;
     assert_no_request_slowed("a hanging collector", &timings, baseline);
+    assert_a_request_returns_while_an_export_is_outstanding(
+        &gateway,
+        &hanging,
+        &keys.team_key.token,
+        deliveries_before,
+    )
+    .await;
 
     let mut timeout_deliveries_after = timeout_deliveries_before;
     // The exporter's own 2 s whole-exchange timeout plus one 1 s batch
