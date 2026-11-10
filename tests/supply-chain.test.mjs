@@ -2547,3 +2547,38 @@ test("fixtures: downloads that skip the checksum script are caught", () => {
   assert.ok(downloadViolations(prune, "gh api repos/evil/repo/contents/payload --jq .content > p.sh").length);
   assert.ok(downloadViolations("w.yml", `gh api -X DELETE "/users/$OWNER/packages/container/$package/versions/$id"`).length, "gh api outside its file");
 });
+
+// #475: v0.14.0 was tagged before anyone had scanned its image, and the tag run then
+// refused it for two fixable HIGH findings in the runtime base. Pull requests now run
+// the same scan with the same pinned Trivy, in the read-only staging-image job: the
+// image built from the pull request, and the arm64 child of the Dockerfile's runtime
+// base (the pull request builds amd64 only; a base-image finding is per platform).
+test("pull requests scan the candidate image with the tag run's Trivy and policy (#475)", () => {
+  const load = name => toData(parseStrict(readFileSync(join(workflowsDir, `${name}.yml`), "utf8"), `${name}.yml`));
+  const ci = load("ci"), image = load("image");
+  const job = ci.jobs["staging-image"];
+  assert.deepEqual(ci.permissions, { contents: "read" });
+  assert.equal(job.permissions, undefined, "the scanning job keeps the workflow's read-only token");
+  const text = executable(job), tagRun = executable(image.jobs.verify);
+  const pins = t => [...t.matchAll(/fetch-verified\.sh (https:\/\/github\.com\/aquasecurity\/trivy\/releases\/download\/\S+) ([0-9a-f]{64}) /g)].map(m => `${m[1]} ${m[2]}`);
+  assert.equal(pins(tagRun).length, 2, "the tag run pins Trivy for amd64 and arm64");
+  assert.deepEqual(pins(text), pins(tagRun).filter(p => p.includes("Linux-64bit")), "the same Trivy release and checksum as the tag run, for this job's amd64 runner");
+  const policy = t => [...t.matchAll(/trivy image\b[^\n]*(?:\\\n[^\n]*)*/g)].map(m => m[0].replace(/\\\n\s*/g, " ").trim().split(/\s+/));
+  const flags = scan => ["--severity", "CRITICAL,HIGH", "--exit-code", "1", "--ignore-unfixed"].every(f => scan.includes(f));
+  const scans = policy(text);
+  assert.equal(policy(tagRun).length, 1);
+  assert.ok(flags(policy(tagRun)[0]), "the tag run's policy is the one this test compares against");
+  assert.equal(scans.length, 2, "two scans: the built image and the arm64 runtime base");
+  for (const scan of scans) assert.ok(flags(scan), `same severity policy as the tag run: ${scan.join(" ")}`);
+  assert.ok(scans.some(s => s.at(-1) === "open-model-gateway:staging" && !s.includes("--platform")), "the image built from the pull request");
+  assert.ok(scans.some(s => s.at(-1) === '"${RUNTIME_BASE}"' && s[s.indexOf("--platform") + 1] === "linux/arm64"), "the arm64 runtime base");
+  // The base reference is read from the Dockerfile's final stage, digest included.
+  assert.match(text, /RUNTIME_BASE=\$\(sed -n 's\/\^FROM \\\(gcr\\\.io\\\/distroless\\\/\[\^ \]\*@sha256:\[0-9a-f\]\\\{64\\\}\\\) AS runtime\$\/\\1\/p' Dockerfile\)/);
+  assert.match(text, /\[\[ "\$\{RUNTIME_BASE\}" == "\$\{APPROVED_RUNTIME\}" \]\]/, "refuses to scan anything but the approved runtime base");
+  const step = stepsOf(job).find(s => /trivy image/.test(s.run ?? ""));
+  assert.equal(step.env.APPROVED_RUNTIME, APPROVED_RUNTIME);
+  for (const s of stepsOf(job).filter(s => /trivy/i.test(`${s.name} ${s.run ?? ""}`))) {
+    assert.equal(s["continue-on-error"], undefined);
+    assert.equal(s.if, undefined);
+  }
+});
