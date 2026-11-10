@@ -3699,12 +3699,13 @@ async fn access_review_fixtures(c: &Client, admin: &Browser, f: &Fixture, pool: 
         .unwrap();
     let removed = plain_user(pool, "review-removed").await;
     member(pool, f.team, removed, "member").await;
+    let (human_key, _) = review_keys(f, pool).await;
     let both = c
         .ok(
             admin,
             "POST",
             REVIEWS,
-            Some(json!({"name":"Contract review","subjects":["workspace_memberships","platform_roles"],"workspace_ids":[f.team],"due_in_days":30})),
+            Some(json!({"name":"Contract review","subjects":["workspace_memberships","platform_roles","workspace_keys"],"workspace_ids":[f.team],"due_in_days":30})),
         )
         .await;
     let roles = c
@@ -3769,6 +3770,23 @@ async fn access_review_fixtures(c: &Client, admin: &Browser, f: &Fixture, pool: 
     .await;
     c.ok(admin, "POST", &assign_path(auditor_item), Some(json!({})))
         .await;
+    // #90 slice 6: a key item as platform readers see it (no key name or
+    // holder), returned by clearing its assignment (keys are never assigned).
+    let human_item: Uuid = sqlx::query_scalar(
+        "SELECT id FROM access_review_items WHERE campaign_id=$1 AND api_key_id=$2",
+    )
+    .bind(id(&both))
+    .bind(human_key)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    c.ok(
+        admin,
+        "POST",
+        &assign_path(human_item),
+        Some(json!({"user_id":null})),
+    )
+    .await;
     c.ok(&owner, "GET", &target(INBOX, "limit=50&offset=0"), None)
         .await;
     c.ok(admin, "GET", &target(INBOX, "limit=50&offset=0"), None)
@@ -3953,8 +3971,8 @@ async fn access_review_fixtures(c: &Client, admin: &Browser, f: &Fixture, pool: 
             body_vectors_http(&mut o, "POST", REVIEWS, valid, async |body| {
                 close_open().await;
                 // Described, not expressed: a workspace filter needs the
-                // memberships subject and existing Teams/Projects. The real
-                // handler decides a body that breaks it.
+                // memberships or keys subject and existing Teams/Projects.
+                // The real handler decides a body that breaks it.
                 let (subjects, filter) = if body.is_array() {
                     (body[1].clone(), body[2].clone())
                 } else {
@@ -3983,7 +4001,10 @@ async fn access_review_fixtures(c: &Client, admin: &Browser, f: &Fixture, pool: 
                     && !filter.is_empty()
                     && (!subjects
                         .as_array()
-                        .is_some_and(|s| s.iter().any(|v| v == "workspace_memberships"))
+                        .is_some_and(|s| {
+                            s.iter()
+                                .any(|v| v == "workspace_memberships" || v == "workspace_keys")
+                        })
                         || shared as usize != filter.len());
                 let captured = c.raw(admin, "POST", REVIEWS, Some(body), &[]).await;
                 if filter_rule && captured.status == StatusCode::BAD_REQUEST {
@@ -3999,7 +4020,7 @@ async fn access_review_fixtures(c: &Client, admin: &Browser, f: &Fixture, pool: 
 
 /// The campaign's item for this person: a membership item or a platform role item.
 async fn review_item(pool: &PgPool, campaign: &Value, user: Uuid, membership: bool) -> Uuid {
-    sqlx::query_scalar("SELECT id FROM access_review_items WHERE campaign_id=$1 AND user_id=$2 AND (workspace_id IS NOT NULL)=$3")
+    sqlx::query_scalar("SELECT id FROM access_review_items WHERE campaign_id=$1 AND user_id=$2 AND (workspace_id IS NOT NULL)=$3 AND api_key_id IS NULL")
         .bind(id(campaign))
         .bind(user)
         .bind(membership)

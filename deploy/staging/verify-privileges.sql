@@ -1324,6 +1324,30 @@ BEGIN
     END;
    END;
   END;
+ -- Key items (0080): the runtime names a key only; the database derives its
+ -- lineage, workspace and holder. The holder never decides their own key,
+ -- keys are never flagged, and a remove decision needs the lineage revoked.
+ DECLARE kws uuid:=gen_random_uuid(); k uuid:=gen_random_uuid(); kc uuid:=gen_random_uuid(); ki uuid:=gen_random_uuid(); BEGIN
+  INSERT INTO workspaces(id,name,kind) VALUES(kws,'Key review probe '||kws,'team');
+  INSERT INTO workspace_membership_grants(id,workspace_id,user_id,role,source) VALUES(gen_random_uuid(),kws,t_reviewer,'admin','manual'),(gen_random_uuid(),kws,t_author,'member','manual');
+  INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash,expires_at,governance_key_id) VALUES(k,kws,t_author,'probe',sha256(k::text::bytea),now()+interval '7 days',k);
+  INSERT INTO access_review_campaigns(id,name,subjects,workspace_ids,created_by,due_at) VALUES(kc,'Key probe','{workspace_keys}',ARRAY[kws],t_reviewer,now()+interval '7 days');
+  BEGIN INSERT INTO access_review_items(id,campaign_id,subject_kind,api_key_id,user_id) VALUES(gen_random_uuid(),kc,'workspace_key',k,t_reviewer); RAISE EXCEPTION 'key item holder forgeable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  INSERT INTO access_review_items(id,campaign_id,subject_kind,api_key_id) VALUES(ki,kc,'workspace_key',k);
+  IF NOT EXISTS (SELECT FROM access_review_items WHERE id=ki AND workspace_id=kws AND user_id=t_author AND key_lineage_id=k AND service_account_id IS NULL AND role IS NULL AND source IS NULL) THEN RAISE EXCEPTION 'key item not derived from the key'; END IF;
+  BEGIN INSERT INTO access_review_decisions(id,item_id,decision,decided_by) VALUES(gen_random_uuid(),ki,'keep',t_author); RAISE EXCEPTION 'key holder decided their own key'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN INSERT INTO access_review_decisions(id,item_id,decision,decided_by) VALUES(gen_random_uuid(),ki,'flag_idp',t_reviewer); RAISE EXCEPTION 'key flagged for the IdP'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN SET CONSTRAINTS access_review_removal_applied IMMEDIATE; INSERT INTO access_review_decisions(id,item_id,decision,decided_by) VALUES(gen_random_uuid(),ki,'remove',t_reviewer); RAISE EXCEPTION 'key remove recorded without the revocation'; EXCEPTION WHEN check_violation THEN NULL; END;
+  SET CONSTRAINTS access_review_removal_applied DEFERRED;
+  BEGIN
+   INSERT INTO access_review_decisions(id,item_id,decision,decided_by) VALUES(gen_random_uuid(),ki,'remove',t_reviewer);
+   PERFORM omg_scope_lock_exclusive(72419513, omg_scope_key(k));
+   UPDATE api_keys SET revoked_at=now() WHERE id=k;
+   SET CONSTRAINTS access_review_removal_applied IMMEDIATE;
+   RAISE EXCEPTION 'probe rollback' USING ERRCODE='P0001';
+  EXCEPTION WHEN raise_exception THEN NULL; END;
+  SET CONSTRAINTS access_review_removal_applied DEFERRED;
+ END;
  END;
  -- Work leases (0029): election, renewal, fencing, release and takeover as runtime.
  DECLARE me uuid:=gen_random_uuid(); other uuid:=gen_random_uuid(); term bigint; BEGIN

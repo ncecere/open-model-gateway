@@ -1677,12 +1677,13 @@ async fn access_review_inbox_fixtures(
         .execute(pool)
         .await
         .unwrap();
+    let (human_key, service_key) = review_keys(f, pool).await;
     let (status, campaign) = call(
         &f.s,
         &f.admin,
         "POST",
         REVIEWS,
-        json!({"name":"Contract inbox","subjects":["workspace_memberships","platform_roles"],"workspace_ids":[f.team]}),
+        json!({"name":"Contract inbox","subjects":["workspace_memberships","platform_roles","workspace_keys"],"workspace_ids":[f.team]}),
     )
     .await;
     assert!(status == StatusCode::OK, "unexpected value: status");
@@ -1692,9 +1693,11 @@ async fn access_review_inbox_fixtures(
         .await
         .unwrap();
     let item_of = async |user: Uuid| -> Uuid {
-        sqlx::query_scalar("SELECT id FROM access_review_items WHERE campaign_id=$1 AND user_id=$2")
-            .bind(id(&campaign))
-            .bind(user)
+        sqlx::query_scalar(
+            "SELECT id FROM access_review_items WHERE campaign_id=$1 AND user_id=$2 AND api_key_id IS NULL",
+        )
+        .bind(id(&campaign))
+        .bind(user)
             .fetch_one(pool)
             .await
             .unwrap()
@@ -1703,6 +1706,18 @@ async fn access_review_inbox_fixtures(
     let removed_item = item_of(removed).await;
     let auditor_item = item_of(f.auditor.user_id).await;
     let group_item = item_of(grouped).await;
+    let key_item = async |key: Uuid| -> Uuid {
+        sqlx::query_scalar(
+            "SELECT id FROM access_review_items WHERE campaign_id=$1 AND api_key_id=$2",
+        )
+        .bind(id(&campaign))
+        .bind(key)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    };
+    let human_item = key_item(human_key).await;
+    let service_item = key_item(service_key).await;
     let decide = |item: Uuid| format!("{INBOX}/{item}/decision");
     let inbox = target(INBOX, "limit=50&offset=0");
     // #90 slice 4: the owner's feed now carries an access review reminder.
@@ -1749,6 +1764,21 @@ async fn access_review_inbox_fixtures(
     for who in [owner, admin] {
         let r = send(client, base, Some(who), "GET", &inbox, None).await;
         assert!(!body(&r)["data"].as_array().unwrap().is_empty());
+        observed.observe(&r);
+    }
+    // #90 slice 6: the owner decides a member's used key and a service
+    // account's key, named as the workspace key list names them.
+    for item in [human_item, service_item] {
+        let r = send(
+            client,
+            base,
+            Some(owner),
+            "POST",
+            &decide(item),
+            Some(json!({"decision":"keep"})),
+        )
+        .await;
+        assert!(r.status == StatusCode::OK, "unexpected value: r.status");
         observed.observe(&r);
     }
     for item in [removed_item, auditor_item] {

@@ -198,7 +198,7 @@ GRANT INSERT(id,template_id,version,content_hash,workspace_id,applied_by,idempot
 -- an item names its grant and the trigger copies the rest from it.
 GRANT SELECT ON public.access_review_campaigns,public.access_review_items TO gateway_runtime;
 GRANT INSERT(id,name,subjects,workspace_ids,created_by,due_at) ON public.access_review_campaigns TO gateway_runtime;
-GRANT INSERT(id,campaign_id,subject_kind,membership_grant_id,platform_grant_id) ON public.access_review_items TO gateway_runtime;
+GRANT INSERT(id,campaign_id,subject_kind,membership_grant_id,platform_grant_id,api_key_id) ON public.access_review_items TO gateway_runtime;
 -- Closing a campaign (the guard allows it once, by a current Platform Admin).
 GRANT UPDATE(closed_by,closed_at) ON public.access_review_campaigns TO gateway_runtime;
 -- #90 slice 2: append-only reviewer assignments and decisions (the guards set
