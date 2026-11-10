@@ -6,7 +6,11 @@ The project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). 
 
 ## [Unreleased]
 
-Changes after v0.15.0: [unreleased notes](docs/releases/unreleased.md).
+Changes after v0.15.1: [unreleased notes](docs/releases/unreleased.md).
+
+## [0.15.1]
+
+A patch release: sign-in no longer fails when the identity provider closes an idle connection (#417); a dependency round (AWS SDK generation, `openidconnect` 4.1.0 and others) that removes three security-advisory exceptions, with AWS requests still signed by the host's clock only; pull requests now scan the candidate image (#475). No migration (schema stays **0080**), no API, contract or runtime-grant change. [Notes](docs/releases/v0.15.1.md).
 
 ## [0.15.0]
 
