@@ -6,7 +6,11 @@ The project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). 
 
 ## [Unreleased]
 
-Changes after v0.14.1: [unreleased notes](docs/releases/unreleased.md).
+Changes after v0.15.0: [unreleased notes](docs/releases/unreleased.md).
+
+## [0.15.0]
+
+Keys in access reviews (#90), completing access reviews and R18 (#42): a review can cover the keys of Teams and Projects (human and service-account keys, never personal workspaces' keys), one item per key lineage. The workspace's owners and admins keep or revoke each key, never their own; a removal revokes every live version of the key at once and a revoked key never returns. Platform Admins and Auditors never see a reviewed key's name or holder. The dashboard starts key reviews and shows keys in Review access and on a review's page. Migration **0080** (schema now **0080**) and a runtime-grant change. [Notes](docs/releases/v0.15.0.md).
 
 ## [0.14.1]
 
@@ -106,7 +110,8 @@ Alerts, key safety, model compare, SCIM, JWKS refresh, metrics and backup toolin
 
 The single-enterprise rebuild: Team, Project and personal workspaces, OIDC platform roles, catalogs, multimodal workloads across five provider families, immutable micro-USD accounting, logs and Admin settings. Migrations `0001` to `0010`. Notes: [`docs/releases/v0.1.0.md`](docs/releases/v0.1.0.md).
 
-[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.14.1...HEAD
+[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/ncecere/open-model-gateway/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/ncecere/open-model-gateway/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/ncecere/open-model-gateway/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/ncecere/open-model-gateway/compare/v0.12.0...v0.13.0
