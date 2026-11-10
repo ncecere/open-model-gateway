@@ -658,6 +658,77 @@ fn cookie_attributes_are_host_only_and_explicit() {
     }
 }
 
+/// An identity provider (or the load balancer in front of it) closes idle
+/// keep-alive connections on its own schedule. A request written to a pooled
+/// connection as the provider closes it is lost, and identity traffic is never
+/// retried, so the sign-in fails after its one-time attempt is already consumed
+/// (#417: the local issuer closes after about 6 s idle). This provider answers the
+/// first request on a connection and drops any later one unanswered, which is
+/// what that race looks like from the gateway: every identity request must
+/// arrive on a connection of its own.
+#[tokio::test]
+async fn identity_requests_never_reuse_a_provider_connection() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/jwks", listener.local_addr().unwrap());
+    let connections = Arc::new(AtomicUsize::new(0));
+    let reused = Arc::new(AtomicUsize::new(0));
+    let (seen, again) = (connections.clone(), reused.clone());
+    let provider = tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            seen.fetch_add(1, Ordering::SeqCst);
+            let again = again.clone();
+            tokio::spawn(async move {
+                let mut answered = false;
+                let mut pending = Vec::new();
+                let mut buffer = [0u8; 2048];
+                loop {
+                    let Ok(read) = socket.read(&mut buffer).await else {
+                        return;
+                    };
+                    if read == 0 {
+                        return;
+                    }
+                    pending.extend_from_slice(&buffer[..read]);
+                    if !pending.windows(4).any(|w| w == b"\r\n\r\n") {
+                        continue;
+                    }
+                    if answered {
+                        // A second request on this connection: lost, as when
+                        // the provider had already closed its side.
+                        again.fetch_add(1, Ordering::SeqCst);
+                        return;
+                    }
+                    answered = true;
+                    pending.clear();
+                    let reply = b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 2\r\n\r\n{}";
+                    if socket.write_all(reply).await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    let http = OidcHttp::new(true).unwrap();
+    for attempt in 1..=3 {
+        let request = axum::http::Request::builder()
+            .method(Method::GET)
+            .uri(&url)
+            .body(Vec::new())
+            .unwrap();
+        let response = http.clone().send(request).await;
+        assert!(
+            response.is_ok_and(|response| response.status() == StatusCode::OK),
+            "identity request {attempt} failed"
+        );
+    }
+    provider.abort();
+    let _ = provider.await;
+    assert_eq!(reused.load(Ordering::SeqCst), 0);
+    assert_eq!(connections.load(Ordering::SeqCst), 3);
+}
+
 #[tokio::test]
 async fn discovery_and_csrf_origin_validation() {
     let mock = MockProvider::start(None).await;
