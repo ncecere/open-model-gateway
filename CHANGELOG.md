@@ -10,7 +10,7 @@ Changes after v0.15.1: [unreleased notes](docs/releases/unreleased.md).
 
 ## [0.15.1]
 
-A patch release: sign-in no longer fails when the identity provider closes an idle connection (#417); a dependency round (AWS SDK generation, `openidconnect` 4.1.0 and others) that removes three security-advisory exceptions, with AWS requests still signed by the host's clock only; pull requests now scan the candidate image (#475). No migration (schema stays **0080**), no API, contract or runtime-grant change. [Notes](docs/releases/v0.15.1.md).
+A patch release: sign-in no longer fails when the identity provider closes an idle connection (#417); a dependency round (AWS SDK generation, `openidconnect` 4.1.0 and others) that removes three security-advisory exceptions, with AWS requests still signed by the host's clock only; pull requests now scan the candidate image (#475). One client-visible change: a Bedrock stream broken at its first frame now fails in the stream. No migration (schema stays **0080**), no OpenAPI or runtime-grant change. [Notes](docs/releases/v0.15.1.md).
 
 ## [0.15.0]
 
@@ -114,7 +114,8 @@ Alerts, key safety, model compare, SCIM, JWKS refresh, metrics and backup toolin
 
 The single-enterprise rebuild: Team, Project and personal workspaces, OIDC platform roles, catalogs, multimodal workloads across five provider families, immutable micro-USD accounting, logs and Admin settings. Migrations `0001` to `0010`. Notes: [`docs/releases/v0.1.0.md`](docs/releases/v0.1.0.md).
 
-[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.15.1...HEAD
+[0.15.1]: https://github.com/ncecere/open-model-gateway/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/ncecere/open-model-gateway/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/ncecere/open-model-gateway/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/ncecere/open-model-gateway/compare/v0.13.0...v0.14.0

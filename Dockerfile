@@ -10,7 +10,7 @@ RUN npm ci
 COPY apps/web/ apps/web/
 RUN npm run build:web
 
-# All locked dependency manifests currently require Rust <= 1.88. This pinned
+# The locked dependency manifests currently require Rust <= 1.94.1. This pinned
 # compiler also supports edition 2024; do not use the manifest MSRV blindly when
 # updating Cargo.lock. Bookworm sets the build's glibc baseline; compatibility
 # with the supported Debian 13 runtime must pass native build/runtime gates.

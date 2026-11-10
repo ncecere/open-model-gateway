@@ -917,3 +917,27 @@ async fn a_response_date_never_moves_the_signing_time() {
         );
     }
 }
+
+/// What a stream broken at its first frame looks like with the current SDK
+/// generation (#456, #486): the SDK returns once the response headers arrive,
+/// so the adapter hands back a stream, and that stream then fails without a
+/// `Done`. Before the 1.15x generation the SDK read the first raw frame while
+/// establishing the response, and a corrupt one failed the request instead.
+/// The release notes describe this shape; a change of it should be noticed.
+#[tokio::test]
+async fn a_stream_corrupt_at_its_first_frame_fails_in_the_stream_without_done() {
+    let mut corrupt_first = wire(events(false));
+    corrupt_first[9] ^= 1; // the first frame's prelude CRC
+    let mock = Mock::serve(complete(false), corrupt_first, 200).await;
+    let mut req = request();
+    req.stream = true;
+    let Ok(ProviderOutput::Stream(mut output)) = mock.adapter().execute(&target(), req).await
+    else {
+        panic!("the SDK no longer returns a stream before reading the first frame");
+    };
+    let mut events_seen = Vec::new();
+    while let Some(event) = output.next().await {
+        events_seen.push(event.is_ok());
+    }
+    assert_eq!(events_seen, [false], "one error, no content and no Done");
+}
