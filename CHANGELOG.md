@@ -10,7 +10,7 @@ Changes after v0.15.0: [unreleased notes](docs/releases/unreleased.md).
 
 ## [0.15.0]
 
-Keys in access reviews (#90), completing access reviews and R18 (#42): a review can cover the keys of Teams and Projects (human and service-account keys, never personal workspaces' keys), one item per key lineage. The workspace's owners and admins keep or revoke each key, never their own; a removal revokes every live version of the key at once and a revoked key never returns. Platform Admins and Auditors never see a reviewed key's name or holder. The dashboard starts key reviews and shows keys in Review access and on a review's page. Migration **0080** (schema now **0080**) and a runtime-grant change. [Notes](docs/releases/v0.15.0.md).
+Keys in access reviews (#90), completing access reviews and R18 (#42): a review can cover the keys of Teams and Projects (human and service-account keys, never personal workspaces' keys), one item per key lineage. The workspace's owners and admins keep or revoke each key, never their own; a removal revokes every live version of the key at once and a revoked key never returns. A review's platform views never show Platform Admins and Auditors a key's name or holder. The dashboard starts key reviews and shows keys in Review access and on a review's page. Migration **0080** (schema now **0080**) and a runtime-grant change. [Notes](docs/releases/v0.15.0.md).
 
 ## [0.14.1]
 

@@ -204,7 +204,7 @@ describe("Keys in access reviews (#90 slice 6)", () => {
     expect(screen.getByText("Held by Blair")).toBeTruthy();
     expect(screen.getByText("Service account zebra-robot")).toBeTruthy();
     expect(screen.getAllByText("Key in Product").length).toBe(2);
-    expect(screen.getByText(`Expires ${new Date("2099-01-01T00:00:00Z").toLocaleDateString()} · Never used`)).toBeTruthy();
+    expect(screen.getByText(`Expires ${new Date("2099-01-01T00:00:00Z").toLocaleDateString()} · No recorded use`)).toBeTruthy();
     expect(screen.getByText(`Expires ${new Date("2099-01-01T00:00:00Z").toLocaleDateString()} · Last used ${new Date("2026-11-01T00:00:00Z").toLocaleDateString()}`)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Actions for zebra-human-key, Held by Blair, Key in Product" }));
     const remove = await screen.findByRole("menuitem", { name: "Revoke…" });
@@ -214,6 +214,7 @@ describe("Keys in access reviews (#90 slice 6)", () => {
     await user.click(remove);
     const dialog = await screen.findByRole("dialog", { name: "Revoke zebra-human-key in Product?" });
     expect(dialog.textContent).toContain("Held by Blair, ID 0a1b2c3d.");
+    expect(dialog.textContent).toContain("if it was rotated after the review started, the key that replaced it is revoked");
     expect(dialog.textContent).toContain("New requests that use it are refused at once");
     expect(dialog.textContent).toContain("A revoked key never returns");
     await user.click(within(dialog).getByRole("button", { name: "Revoke key" }));
