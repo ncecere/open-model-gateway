@@ -662,7 +662,7 @@ fn cookie_attributes_are_host_only_and_explicit() {
 /// keep-alive connections on its own schedule. A request written to a pooled
 /// connection as the provider closes it is lost, and identity traffic is never
 /// retried, so the sign-in fails after its one-time attempt is already consumed
-/// (#417: the local issuer closes after 5 s idle). This provider answers the
+/// (#417: the local issuer closes after about 6 s idle). This provider answers the
 /// first request on a connection and drops any later one unanswered, which is
 /// what that race looks like from the gateway: every identity request must
 /// arrive on a connection of its own.
@@ -724,6 +724,7 @@ async fn identity_requests_never_reuse_a_provider_connection() {
         );
     }
     provider.abort();
+    let _ = provider.await;
     assert_eq!(reused.load(Ordering::SeqCst), 0);
     assert_eq!(connections.load(Ordering::SeqCst), 3);
 }
