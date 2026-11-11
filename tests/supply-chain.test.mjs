@@ -355,7 +355,7 @@ export function unpinnedDockerfileBases(file, text) {
 // The stages of a Dockerfile as BuildKit's built-in frontend reads them (#485): the one
 // reader behind every check of a Dockerfile in this file. It does not parse what the
 // repository's Dockerfiles do not use; it throws, naming the file and line, so that no
-// line can pose as a stage or hide one, and no image enters a stage unpinned:
+// line can pose as a stage or hide one, and no image enters a stage except as its FROM:
 // - any character other than printable ASCII, tab and LF (Go and JavaScript disagree on
 //   which others are white space or end a line);
 // - a `#!` line, or a comment shaped like a parser directive (`# escape=` moves the
@@ -368,9 +368,10 @@ export function unpinnedDockerfileBases(file, text) {
 //   parser; ADD fetches remote content; ONBUILD and MAINTAINER are not used);
 // - a FROM that spans lines, or is not `FROM [--platform=<p>] <image> [AS <name>]` with a
 //   literal image (BuildKit expands variables and removes quotes and escapes there);
-// - a COPY or RUN flag that is not plain `--name[=value]` (BuildKit removes quotes there
-//   too), and a `--from=` or `--mount=...,from=` that names neither an earlier stage nor
-//   an image pinned by digest.
+// - a COPY or RUN flag that is not plain `--name[=value]` (BuildKit removes quotes and
+//   escapes there too), and a `--from=` or `--mount=...,from=` that is not the name of an
+//   earlier stage: no stage index (BuildKit resolves one for COPY only; a mount's `from=0`
+//   is the image `0`) and no external image, which the checks of FROM lines never see.
 // The instructions the two Dockerfiles use, and LABEL, SHELL and VOLUME, which cannot
 // name an image, fetch anything or change how the file is read.
 const DOCKERFILE_INSTRUCTIONS = ["ARG", "CMD", "COPY", "ENTRYPOINT", "ENV", "EXPOSE", "FROM", "HEALTHCHECK", "LABEL", "RUN", "SHELL", "STOPSIGNAL", "USER", "VOLUME", "WORKDIR"];
@@ -387,8 +388,8 @@ export function dockerfileStages(file, text) {
       if (last !== line) refuse(line, "FROM must be on one line");
       stages.push({ line, ...fromArguments(words, why => refuse(line, why)) });
     } else if (instruction === "COPY" || instruction === "RUN") {
-      for (const ref of flagImages(words, why => refuse(line, why))) {
-        if (!isEarlierStage(ref, stages) && !DIGEST_PINNED.test(ref)) refuse(line, `'--from=' and a mount's 'from=' must name an earlier stage or an image pinned by digest (found '${ref}')`);
+      for (const ref of flagSources(words, why => refuse(line, why))) {
+        if (!isEarlierStage(ref, stages)) refuse(line, `'--from=' and a mount's 'from=' must name an earlier stage of this Dockerfile by name: no stage index and no external image, pinned by digest or not (found '${ref}')`);
       }
     }
   }
@@ -417,10 +418,15 @@ function dockerfileInstructions(text, refuse) {
     for (;; i++) {
       const line = lines[i];
       if (i + 1 > first && /^[ \t]*FROM(?![^ \t])/i.test(line)) refuse(i + 1, "a continued line must not start with FROM");
-      const continued = line.match(/^(.*?)(\\+)[ \t]*$/);
-      if (!continued) { joined += line; break; }
-      if (continued[2].length > 1) refuse(i + 1, "a line must not end in more than one backslash");
-      joined += continued[1];
+      // The backslashes that end the line, before any trailing blanks. Counted from the
+      // end: a pattern that may start anywhere is quadratic on a long run of backslashes.
+      let end = line.length;
+      while (line[end - 1] === " " || line[end - 1] === "\t") end--;
+      let start = end;
+      while (line[start - 1] === "\\") start--;
+      if (start === end) { joined += line; break; }
+      if (end - start > 1) refuse(i + 1, "a line must not end in more than one backslash");
+      joined += line.slice(0, start);
       if (i + 1 === lines.length) break;
       if (blank(lines[i + 1]) || comment(lines[i + 1])) refuse(i + 2, "a continued line must not be blank or a comment");
     }
@@ -440,24 +446,23 @@ function fromArguments(words, refuse) {
   return { platform, ref: words[0], name: words[2] };
 }
 
-// What the leading flags of a COPY or RUN take content from: the value of `--from=`, and
-// of each `from=` field (the key in any case, as BuildKit reads it) of a `--mount=`.
-function flagImages(words, refuse) {
+// What the leading flags of a COPY or RUN take content from: the value of `--from=`, and of
+// every `from=` field of every `--mount=` (the key in any case; BuildKit uses the last).
+function flagSources(words, refuse) {
   const refs = [];
   for (const flag of words) {
     if (!flag.startsWith("--")) break;
-    if (!/^--[a-z][a-z-]*(=[A-Za-z0-9._\/:@,=-]*)?$/.test(flag)) refuse(`a COPY or RUN flag must be written as '--name' or '--name=value' in plain characters (no variables, quotes or escapes; found '${flag}')`);
+    if (!/^--[a-z][a-z-]*(=[A-Za-z0-9._\/:@,=-]*)?$/.test(flag)) refuse(`a COPY or RUN flag must be written as '--name' or '--name=value' in plain characters: lower-case letters and '-' in the name; letters, digits and . _ / : @ , = - in the value (found '${flag}')`);
     if (flag.startsWith("--from=")) refs.push(flag.slice("--from=".length));
     if (flag.startsWith("--mount=")) refs.push(...flag.slice("--mount=".length).split(",").filter(field => /^from=/i.test(field)).map(field => field.slice("from=".length)));
   }
   return refs;
 }
 
-// Whether `ref` is a stage before the current one (the last in `stages`): its index, or
-// its name in any case (verified with a real build: `--from=BUILD` finds `AS Build`).
+// Whether `ref` is the name, in any case, of a stage before the current one (the last in
+// `stages`); in real builds `--from=BUILD` and a mount's `from=BUILD` find `AS Build`.
 function isEarlierStage(ref, stages) {
-  const earlier = stages.slice(0, -1);
-  return /^[0-9]+$/.test(ref) ? Number(ref) < earlier.length : earlier.some(stage => stage.name?.toLowerCase() === ref.toLowerCase());
+  return stages.slice(0, -1).some(stage => stage.name?.toLowerCase() === ref.toLowerCase());
 }
 
 const RUNTIME_DOCKERFILES = ["Dockerfile", "deploy/loadtest/Dockerfile"];
@@ -690,8 +695,9 @@ const REFUSED_DOCKERFILES = [
   // `<<` that is not a heredoc is refused too, and named for what it is.
   ["a shell here-string", `FROM ${APPROVED_RUNTIME} AS runtime\nRUN cat <<<"hello"\n`, /'<<' is not allowed in an instruction; heredocs cannot be told apart safely/],
   ["a shell left shift", `FROM ${APPROVED_RUNTIME} AS runtime\nRUN echo $((1<<4))\n`, /'<<' is not allowed in an instruction; heredocs cannot be told apart safely/],
-  // Anything that is not a known instruction: BuildKit also reads `//syntax=` (and a JSON
-  // first line) as the syntax directive, and skips a `#!` first line before looking for it.
+  // Anything that is not a known instruction: BuildKit also reads `//syntax=` as the syntax
+  // directive, and skips a `#!` first line before looking for it. (It reads JSON that way
+  // only when the whole file is JSON; a JSON first line is a parse error to it.)
   ["a //syntax= line", `//syntax=docker/dockerfile:1\nFROM ${APPROVED_RUNTIME} AS runtime\n`, /'\/\/syntax=docker\/dockerfile:1' is not an allowed instruction/],
   ["a // syntax = line with spaces", `// syntax = docker/dockerfile:1\nFROM ${APPROVED_RUNTIME} AS runtime\n`, /'\/\/' is not an allowed instruction/],
   ["a JSON syntax line", `{"syntax":"docker/dockerfile:1"}\nFROM ${APPROVED_RUNTIME} AS runtime\n`, /is not an allowed instruction/],
@@ -709,24 +715,24 @@ const REFUSED_DOCKERFILES = [
   ["a directive name with digits", `# syntax2=docker/dockerfile:1\nFROM ${APPROVED_RUNTIME} AS runtime\n`, /parser directive/],
   // Images that are not FROM lines: COPY --from and RUN --mount from= pull an image into a
   // stage (built: both resolve mirror.gcr.io/library/busybox:1.36.1 by tag), ADD fetches.
-  ["a COPY --from an image by tag", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --from=mirror.gcr.io/library/busybox:1.36.1 /bin/busybox /ext\n`, /Dockerfile:2: '--from=' and a mount's 'from=' must name an earlier stage or an image pinned by digest \(found 'mirror\.gcr\.io\/library\/busybox:1\.36\.1'\)/],
-  ["a COPY --from a bare image name", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --from=busybox /bin/busybox /ext\n`, /must name an earlier stage or an image pinned by digest/],
-  ["a lower-case copy --from an image after another flag", `FROM ${APPROVED_RUNTIME} AS runtime\ncopy\t--chmod=0555 --from=busybox /bin/busybox /ext\n`, /must name an earlier stage or an image pinned by digest/],
-  ["a COPY --from split across a continuation", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --fr\\\nom=busybox /bin/busybox /ext\n`, /must name an earlier stage or an image pinned by digest/],
-  ["a COPY --from a digest with one character too many", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --from=${OTHER_BASE}b / /\n`, /must name an earlier stage or an image pinned by digest/],
-  ["a COPY --from a digest with one character too few", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --from=${OTHER_BASE.slice(0, -1)} / /\n`, /must name an earlier stage or an image pinned by digest/],
-  ["a COPY --from a later stage", `FROM ${OTHER_BASE} AS first\nCOPY --from=runtime / /\nFROM ${APPROVED_RUNTIME} AS runtime\n`, /must name an earlier stage or an image pinned by digest/],
-  ["a COPY --from its own stage", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --from=runtime / /\n`, /must name an earlier stage or an image pinned by digest/],
-  ["a COPY --from its own stage index", `FROM ${OTHER_BASE} AS first\nFROM ${APPROVED_RUNTIME} AS runtime\nCOPY --from=1 / /\n`, /must name an earlier stage or an image pinned by digest/],
+  ["a COPY --from an image by tag", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --from=mirror.gcr.io/library/busybox:1.36.1 /bin/busybox /ext\n`, /Dockerfile:2: '--from=' and a mount's 'from=' must name an earlier stage of this Dockerfile by name: no stage index and no external image, pinned by digest or not \(found 'mirror\.gcr\.io\/library\/busybox:1\.36\.1'\)/],
+  ["a COPY --from a bare image name", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --from=busybox /bin/busybox /ext\n`, BY_NAME],
+  ["a lower-case copy --from an image after another flag", `FROM ${APPROVED_RUNTIME} AS runtime\ncopy\t--chmod=0555 --from=busybox /bin/busybox /ext\n`, BY_NAME],
+  ["a COPY --from split across a continuation", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --fr\\\nom=busybox /bin/busybox /ext\n`, BY_NAME],
+  ["a COPY --from a digest with one character too many", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --from=${OTHER_BASE}b / /\n`, BY_NAME],
+  ["a COPY --from a digest with one character too few", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --from=${OTHER_BASE.slice(0, -1)} / /\n`, BY_NAME],
+  ["a COPY --from a later stage", `FROM ${OTHER_BASE} AS first\nCOPY --from=runtime / /\nFROM ${APPROVED_RUNTIME} AS runtime\n`, BY_NAME],
+  ["a COPY --from its own stage", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --from=runtime / /\n`, BY_NAME],
+  ["a COPY --from its own stage index", `FROM ${OTHER_BASE} AS first\nFROM ${APPROVED_RUNTIME} AS runtime\nCOPY --from=1 / /\n`, BY_NAME],
   ["a COPY --from a signed stage index", `FROM ${OTHER_BASE} AS first\nFROM ${APPROVED_RUNTIME} AS runtime\nCOPY --from=+0 / /\n`, /flag must be written as/],
-  ["a COPY --from with an empty value", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --from= / /\n`, /must name an earlier stage or an image pinned by digest/],
-  ["a RUN bind mount from an image by tag", `FROM ${APPROVED_RUNTIME} AS runtime\nRUN --mount=type=bind,from=mirror.gcr.io/library/busybox:1.36.1,target=/m cp /m/bin/busybox /ext\n`, /must name an earlier stage or an image pinned by digest \(found 'mirror\.gcr\.io\/library\/busybox:1\.36\.1'\)/],
-  ["a RUN cache mount from an image", `FROM ${APPROVED_RUNTIME} AS runtime\nRUN --mount=type=cache,from=busybox,target=/m true\n`, /must name an earlier stage or an image pinned by digest/],
-  ["a RUN mount whose from= comes first", `FROM ${APPROVED_RUNTIME} AS runtime\nRUN --mount=from=busybox,type=bind,target=/m true\n`, /must name an earlier stage or an image pinned by digest/],
-  ["a RUN mount whose from= comes last", `FROM ${APPROVED_RUNTIME} AS runtime\nRUN --mount=target=/m,from=busybox true\n`, /must name an earlier stage or an image pinned by digest/],
-  ["a RUN mount with an upper-case FROM= key", `FROM ${APPROVED_RUNTIME} AS runtime\nRUN --mount=type=bind,FROM=busybox,target=/m true\n`, /must name an earlier stage or an image pinned by digest/],
-  ["a second RUN mount from an image", `FROM ${OTHER_BASE} AS first\nFROM ${APPROVED_RUNTIME} AS runtime\nRUN --mount=type=bind,from=first,target=/a \\\n    --mount=type=bind,from=busybox,target=/b true\n`, /must name an earlier stage or an image pinned by digest/],
-  ["a lower-case run mount on a continued line", `FROM ${APPROVED_RUNTIME} AS runtime\nrun \\\n  --mount=type=bind,from=busybox,target=/m true\n`, /must name an earlier stage or an image pinned by digest/],
+  ["a COPY --from with an empty value", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --from= / /\n`, BY_NAME],
+  ["a RUN bind mount from an image by tag", `FROM ${APPROVED_RUNTIME} AS runtime\nRUN --mount=type=bind,from=mirror.gcr.io/library/busybox:1.36.1,target=/m cp /m/bin/busybox /ext\n`, /must name an earlier stage of this Dockerfile by name: no stage index and no external image, pinned by digest or not \(found 'mirror\.gcr\.io\/library\/busybox:1\.36\.1'\)/],
+  ["a RUN cache mount from an image", `FROM ${APPROVED_RUNTIME} AS runtime\nRUN --mount=type=cache,from=busybox,target=/m true\n`, BY_NAME],
+  ["a RUN mount whose from= comes first", `FROM ${APPROVED_RUNTIME} AS runtime\nRUN --mount=from=busybox,type=bind,target=/m true\n`, BY_NAME],
+  ["a RUN mount whose from= comes last", `FROM ${APPROVED_RUNTIME} AS runtime\nRUN --mount=target=/m,from=busybox true\n`, BY_NAME],
+  ["a RUN mount with an upper-case FROM= key", `FROM ${APPROVED_RUNTIME} AS runtime\nRUN --mount=type=bind,FROM=busybox,target=/m true\n`, BY_NAME],
+  ["a second RUN mount from an image", `FROM ${OTHER_BASE} AS first\nFROM ${APPROVED_RUNTIME} AS runtime\nRUN --mount=type=bind,from=first,target=/a \\\n    --mount=type=bind,from=busybox,target=/b true\n`, BY_NAME],
+  ["a lower-case run mount on a continued line", `FROM ${APPROVED_RUNTIME} AS runtime\nrun \\\n  --mount=type=bind,from=busybox,target=/m true\n`, BY_NAME],
   // Flags BuildKit unquotes (built: `--from="img"`, `--fr"o"m=img` and `"from=img"` all
   // pull the image) or refuses to expand; none is read here.
   ["a COPY --from a variable", `ARG IMG=busybox\nFROM ${APPROVED_RUNTIME} AS runtime\nARG IMG\nCOPY --from=$IMG / /\n`, /Dockerfile:4: a COPY or RUN flag must be written as '--name' or '--name=value' in plain characters/],
@@ -916,23 +922,22 @@ test("a long run of backslashes inside a line is read in linear time (#485)", ()
   assert.throws(() => dockerfileStages("f/Dockerfile", `FROM ${OTHER_BASE}\nRUN true ${run} \t \n`), /f\/Dockerfile:2: a line must not end in more than one backslash/);
 });
 
-// `--from=` and a mount's `from=` may name an earlier stage (by name in any case, as
-// BuildKit matches it: `COPY --from=BUILD` copied from `AS Build` in a real build, or by
-// index) or an image pinned by digest; everything the Dockerfiles use is still read.
-test("fixtures: stage references and digest-pinned images in COPY --from and RUN --mount are accepted (#485)", () => {
+// `--from=` and a mount's `from=` may name an earlier stage, by name in any case, as
+// BuildKit matches it (`COPY --from=BUILD` and a mount's `FROM=BUILD` read `AS Build` in
+// real builds), and nothing else; everything the Dockerfiles use is still read.
+test("fixtures: earlier stage names in COPY --from and RUN --mount are accepted in any case (#485)", () => {
   const text = [
     `FROM ${WRONG_RUST} AS Build`,
     "RUN --mount=type=cache,id=registry,target=/usr/local/cargo/registry \\",
     "    --mount=type=cache,id=target,target=/build/target \\",
     "    cargo build --locked --release",
     `FROM ${OTHER_BASE}`,
-    "COPY --from=0 /a /a",
+    "COPY --from=Build /a /a",
     "COPY --from=BUILD /b /b",
     `FROM ${APPROVED_RUNTIME} AS runtime`,
     "COPY --from=build --chmod=0555 /out/ /usr/local/bin/",
-    "COPY --link --from=1 /a /a",
-    `COPY --from=${OTHER_BASE} /etc/ssl/certs/ /etc/ssl/certs/`,
-    `RUN --mount=type=bind,from=build,target=/m --mount=type=bind,FROM=${OTHER_BASE},target=/n --network=none ["/bin/true"]`,
+    "COPY --link --from=bUILD /a /a",
+    'RUN --mount=type=bind,from=build,target=/m --mount=type=bind,target=/n,ro,FROM=BUILD --mount=type=bind,from=Build,from=build,target=/o --network=none ["/bin/true"]',
     'COPY ["a file", "/dest/"]',
     "COPY --chown=10001:10001 a b /dest/",
     "LABEL org.opencontainers.image.title=fixture",
