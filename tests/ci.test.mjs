@@ -121,6 +121,18 @@ test("workflow validator refuses missing/extra/optional shards and weakened depe
   }
 });
 
+// `age` for the backup tests: a pinned release through fetch-verified.sh, never a package
+// installed at run time (#491). Both jobs that need it run exactly this.
+const AGE_INSTALL = [
+  "set -euo pipefail",
+  'bash .github/scripts/fetch-verified.sh https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10 "${RUNNER_TEMP}/age.tar.gz"',
+  'tar -xzf "${RUNNER_TEMP}/age.tar.gz" -C "${RUNNER_TEMP}" age/age age/age-keygen',
+  'echo "${RUNNER_TEMP}/age" >> "${GITHUB_PATH}"',
+  '"${RUNNER_TEMP}/age/age" --version',
+  '"${RUNNER_TEMP}/age/age-keygen" --version',
+  "",
+].join("\n");
+
 test("special probes retain sequential ACL, exact contention/terminal, Docker and backup coverage", () => {
   const job = loadWorkflow().jobs["gateway-special"];
   assert.ok(job, "missing special coverage job");
@@ -131,12 +143,17 @@ test("special probes retain sequential ACL, exact contention/terminal, Docker an
     "cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored --test-threads=1",
     "cargo test -p open-model-gateway --all-features --lib management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement -- --ignored --exact",
     "cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact",
-    "sudo apt-get update && sudo apt-get install -y age",
+    AGE_INSTALL,
     "cargo build -p open-model-gateway --all-features --bin open-model-gateway",
     "python3 tests/backup.test.py",
   ]);
   assert.equal(job.steps.find(s => s.run?.includes("--test filestore_s3")).env.FILESTORE_REQUIRE_DOCKER, "1");
   assert.ok(runs(loadWorkflow().jobs.web).includes("npm run test:ci"));
+  // The web job installs the same pinned age, once, before the staging tests that use it (#491).
+  const webRuns = runs(loadWorkflow().jobs.web);
+  assert.equal(webRuns.filter(run => run === AGE_INSTALL).length, 1);
+  assert.equal(webRuns.filter(run => /\bage\b/.test(run)).length, 1, "no other step touches age");
+  assert.ok(webRuns.indexOf(AGE_INSTALL) < webRuns.indexOf("npm run test:staging"));
 });
 
 test("aggregate executable accepts only the exact dependency set with every result successful", () => {
