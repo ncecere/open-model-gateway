@@ -618,7 +618,89 @@ const REFUSED_DOCKERFILES = [
   ["a FROM with an unknown flag", `FROM --pull=always ${APPROVED_RUNTIME}\n`, /FROM must be written as/],
   ["a FROM with two platform flags", `FROM --platform=linux/amd64 --platform=linux/arm64 ${APPROVED_RUNTIME}\n`, /FROM must be written as/],
   ["a FROM with an empty platform flag", `FROM --platform= ${APPROVED_RUNTIME}\n`, /FROM must be written as/],
+  // ---- Found by the adversarial review of the first fix (#485) ----
+  // A heredoc opened across a continuation: BuildKit joins continued lines first, then
+  // looks for `<<` (built with Docker 29.1.3 / BuildKit 0.26.2: only `real` is a target).
+  ["a COPY heredoc split across a continuation", decoy("COPY <\\\n<EOF /decoy.txt", "EOF\n"), /heredoc/],
+  ["a RUN heredoc split across a continuation", decoy("RUN cat <\\\n<EOF >/decoy.txt", "EOF\n"), /heredoc/],
+  ["an ADD heredoc with a quoted delimiter split across a continuation", decoy('ADD <\\\n<"EOF" /decoy.txt', "EOF\n"), /heredoc/],
+  ["a <<- heredoc split across a continuation", decoy("COPY <\\\n<-EOF /decoy.txt", "\tEOF\n"), /heredoc/],
+  ["a heredoc split across a continuation with trailing blanks", decoy("COPY <\\ \t\n<EOF /decoy.txt", "EOF\n"), /heredoc/],
+  ["a heredoc split across two continuations", decoy("COPY \\\n<\\\n<EOF /decoy.txt", "EOF\n"), /heredoc/],
+  // `<<` that is not a heredoc is refused too, and named for what it is.
+  ["a shell here-string", `FROM ${APPROVED_RUNTIME} AS runtime\nRUN cat <<<"hello"\n`, /'<<' is not allowed in an instruction; heredocs cannot be told apart safely/],
+  ["a shell left shift", `FROM ${APPROVED_RUNTIME} AS runtime\nRUN echo $((1<<4))\n`, /'<<' is not allowed in an instruction; heredocs cannot be told apart safely/],
+  // Anything that is not a known instruction: BuildKit also reads `//syntax=` (and a JSON
+  // first line) as the syntax directive, and skips a `#!` first line before looking for it.
+  ["a //syntax= line", `//syntax=docker/dockerfile:1\nFROM ${APPROVED_RUNTIME} AS runtime\n`, /'\/\/syntax=docker\/dockerfile:1' is not an allowed instruction/],
+  ["a // syntax = line with spaces", `// syntax = docker/dockerfile:1\nFROM ${APPROVED_RUNTIME} AS runtime\n`, /'\/\/' is not an allowed instruction/],
+  ["a JSON syntax line", `{"syntax":"docker/dockerfile:1"}\nFROM ${APPROVED_RUNTIME} AS runtime\n`, /is not an allowed instruction/],
+  ["a #! line before a //syntax= line", `#!/usr/bin/env docker\n//syntax=docker/dockerfile:1\nFROM ${APPROVED_RUNTIME} AS runtime\n`, /Dockerfile:1: a '#!' line is not allowed/],
+  ["a #! line before a # syntax= line", `#!/usr/bin/env docker\n# syntax=docker/dockerfile:1\nFROM ${APPROVED_RUNTIME} AS runtime\n`, /Dockerfile:1: a '#!' line is not allowed/],
+  ["a #! line on its own", `#!/usr/bin/env docker\nFROM ${APPROVED_RUNTIME} AS runtime\n`, /Dockerfile:1: a '#!' line is not allowed/],
+  ["an indented #! line below the first line", `FROM ${APPROVED_RUNTIME} AS runtime\n\t#!x\n`, /Dockerfile:2: a '#!' line is not allowed/],
+  ["an unknown instruction", `FROM ${APPROVED_RUNTIME} AS runtime\nFROMAGE ${OTHER_BASE}\n`, /'FROMAGE' is not an allowed instruction/],
+  ["an ONBUILD instruction", `FROM ${APPROVED_RUNTIME} AS runtime\nONBUILD COPY --from=debian:13 / /\n`, /'ONBUILD' is not an allowed instruction/],
+  ["a MAINTAINER instruction", `FROM ${APPROVED_RUNTIME} AS runtime\nMAINTAINER nobody\n`, /'MAINTAINER' is not an allowed instruction/],
+  ["an instruction keyword glued to its flag", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY--from=debian:13 / /\n`, /is not an allowed instruction/],
+  // A directive-shaped comment is refused wherever it is (a `#!` line moves the directive
+  // off line 1), and the message says what to do.
+  ["a directive-shaped comment below the first line", `# A comment.\nFROM ${APPROVED_RUNTIME} AS runtime\n# escape=\`\n`, /Dockerfile:3: a comment shaped like a parser directive \('# name=value'\) is not allowed; reword the comment/],
+  ["a directive name with digits", `# syntax2=docker/dockerfile:1\nFROM ${APPROVED_RUNTIME} AS runtime\n`, /parser directive/],
+  // Images that are not FROM lines: COPY --from and RUN --mount from= pull an image into a
+  // stage (built: both resolve mirror.gcr.io/library/busybox:1.36.1 by tag), ADD fetches.
+  ["a COPY --from an image by tag", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --from=mirror.gcr.io/library/busybox:1.36.1 /bin/busybox /ext\n`, /Dockerfile:2: '--from=' and a mount's 'from=' must name an earlier stage or an image pinned by digest \(found 'mirror\.gcr\.io\/library\/busybox:1\.36\.1'\)/],
+  ["a COPY --from a bare image name", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --from=busybox /bin/busybox /ext\n`, /must name an earlier stage or an image pinned by digest/],
+  ["a lower-case copy --from an image after another flag", `FROM ${APPROVED_RUNTIME} AS runtime\ncopy\t--chmod=0555 --from=busybox /bin/busybox /ext\n`, /must name an earlier stage or an image pinned by digest/],
+  ["a COPY --from split across a continuation", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --fr\\\nom=busybox /bin/busybox /ext\n`, /must name an earlier stage or an image pinned by digest/],
+  ["a COPY --from a digest with one character too many", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --from=${OTHER_BASE}b / /\n`, /must name an earlier stage or an image pinned by digest/],
+  ["a COPY --from a digest with one character too few", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --from=${OTHER_BASE.slice(0, -1)} / /\n`, /must name an earlier stage or an image pinned by digest/],
+  ["a COPY --from a later stage", `FROM ${OTHER_BASE} AS first\nCOPY --from=runtime / /\nFROM ${APPROVED_RUNTIME} AS runtime\n`, /must name an earlier stage or an image pinned by digest/],
+  ["a COPY --from its own stage", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --from=runtime / /\n`, /must name an earlier stage or an image pinned by digest/],
+  ["a COPY --from its own stage index", `FROM ${OTHER_BASE} AS first\nFROM ${APPROVED_RUNTIME} AS runtime\nCOPY --from=1 / /\n`, /must name an earlier stage or an image pinned by digest/],
+  ["a COPY --from a signed stage index", `FROM ${OTHER_BASE} AS first\nFROM ${APPROVED_RUNTIME} AS runtime\nCOPY --from=+0 / /\n`, /flag must be written as/],
+  ["a COPY --from with an empty value", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --from= / /\n`, /must name an earlier stage or an image pinned by digest/],
+  ["a RUN bind mount from an image by tag", `FROM ${APPROVED_RUNTIME} AS runtime\nRUN --mount=type=bind,from=mirror.gcr.io/library/busybox:1.36.1,target=/m cp /m/bin/busybox /ext\n`, /must name an earlier stage or an image pinned by digest \(found 'mirror\.gcr\.io\/library\/busybox:1\.36\.1'\)/],
+  ["a RUN cache mount from an image", `FROM ${APPROVED_RUNTIME} AS runtime\nRUN --mount=type=cache,from=busybox,target=/m true\n`, /must name an earlier stage or an image pinned by digest/],
+  ["a RUN mount whose from= comes first", `FROM ${APPROVED_RUNTIME} AS runtime\nRUN --mount=from=busybox,type=bind,target=/m true\n`, /must name an earlier stage or an image pinned by digest/],
+  ["a RUN mount whose from= comes last", `FROM ${APPROVED_RUNTIME} AS runtime\nRUN --mount=target=/m,from=busybox true\n`, /must name an earlier stage or an image pinned by digest/],
+  ["a RUN mount with an upper-case FROM= key", `FROM ${APPROVED_RUNTIME} AS runtime\nRUN --mount=type=bind,FROM=busybox,target=/m true\n`, /must name an earlier stage or an image pinned by digest/],
+  ["a second RUN mount from an image", `FROM ${OTHER_BASE} AS first\nFROM ${APPROVED_RUNTIME} AS runtime\nRUN --mount=type=bind,from=first,target=/a \\\n    --mount=type=bind,from=busybox,target=/b true\n`, /must name an earlier stage or an image pinned by digest/],
+  ["a lower-case run mount on a continued line", `FROM ${APPROVED_RUNTIME} AS runtime\nrun \\\n  --mount=type=bind,from=busybox,target=/m true\n`, /must name an earlier stage or an image pinned by digest/],
+  // Flags BuildKit unquotes (built: `--from="img"`, `--fr"o"m=img` and `"from=img"` all
+  // pull the image) or refuses to expand; none is read here.
+  ["a COPY --from a variable", `ARG IMG=busybox\nFROM ${APPROVED_RUNTIME} AS runtime\nARG IMG\nCOPY --from=$IMG / /\n`, /Dockerfile:4: a COPY or RUN flag must be written as '--name' or '--name=value' in plain characters/],
+  ["a COPY --from a braced variable inside a pinned reference", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --from=\${R}@sha256:${"b".repeat(64)} / /\n`, /flag must be written as/],
+  ["a RUN mount from a variable", `FROM ${APPROVED_RUNTIME} AS runtime\nRUN --mount=type=bind,from=$IMG,target=/m true\n`, /flag must be written as/],
+  ["a COPY --from in double quotes", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --from="busybox" / /\n`, /flag must be written as/],
+  ["a COPY --from in single quotes", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --from='busybox' / /\n`, /flag must be written as/],
+  ["quotes inside a COPY flag name", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --fr"o"m=busybox / /\n`, /flag must be written as/],
+  ["an escape inside a COPY flag name", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --fr\\om=busybox / /\n`, /flag must be written as/],
+  ["a quoted field in a RUN mount", `FROM ${APPROVED_RUNTIME} AS runtime\nRUN --mount=type=bind,"from=busybox",target=/m true\n`, /flag must be written as/],
+  ["an upper-case COPY flag name", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY --FROM=busybox / /\n`, /flag must be written as/],
+  ["a bare -- before a RUN command", `FROM ${APPROVED_RUNTIME} AS runtime\nRUN -- true\n`, /flag must be written as/],
+  // ADD can fetch remote content (built: `ADD https://example.com/ /ext` did); the
+  // Dockerfiles use COPY only, so ADD is not read at all.
+  ["an ADD of an https URL", `FROM ${APPROVED_RUNTIME} AS runtime\nADD https://example.com/tool.tar.gz /opt/\n`, /'ADD' is not an allowed instruction/],
+  ["an ADD of an http URL", `FROM ${APPROVED_RUNTIME} AS runtime\nADD http://example.com/tool.tar.gz /opt/\n`, /'ADD' is not an allowed instruction/],
+  ["an ADD of a git@ source", `FROM ${APPROVED_RUNTIME} AS runtime\nADD git@github.com:example/repo.git /src/\n`, /'ADD' is not an allowed instruction/],
+  ["an ADD of a git:// source", `FROM ${APPROVED_RUNTIME} AS runtime\nADD git://example.com/repo /src/\n`, /'ADD' is not an allowed instruction/],
+  ["an ADD of a .git URL", `FROM ${APPROVED_RUNTIME} AS runtime\nadd --keep-git-dir=true https://github.com/example/repo.git#v1 /src/\n`, /'add' is not an allowed instruction/],
+  ["an ADD of a local file", `FROM ${APPROVED_RUNTIME} AS runtime\nADD rootfs.tar /\n`, /'ADD' is not an allowed instruction/],
+  // Loosened forms that no fixture caught.
+  ["a FROM continued over a line of spaces", decoy("CMD true \\\n   "), /continued line/],
+  ["a FROM continued over a line of tabs", decoy("CMD true \\\n\t\t"), /continued line/],
+  ["a single-quoted FROM image", `FROM '${APPROVED_RUNTIME}' AS runtime\n`, /FROM must be written as/],
+  ["single quotes inside a FROM image", `FROM mirror.gcr.io/library/ru''st:1.98.0-bookworm@sha256:${"c".repeat(64)} AS build\nFROM ${APPROVED_RUNTIME}\n`, /FROM must be written as/],
+  ["a FROM after U+3000, an ideographic space", `FROM ${APPROVED_RUNTIME} AS runtime\n　FROM ${OTHER_BASE}\n`, /printable ASCII, tab and LF are allowed in a Dockerfile \(found U\+3000\)/],
+  ["a FROM after U+205F, a mathematical space", `FROM ${APPROVED_RUNTIME} AS runtime\n FROM ${OTHER_BASE}\n`, /printable ASCII, tab and LF are allowed in a Dockerfile \(found U\+205F\)/],
+  ["a DEL character", `FROM ${APPROVED_RUNTIME} AS runtime\n\x7fFROM ${OTHER_BASE}\n`, /printable ASCII, tab and LF are allowed in a Dockerfile \(found U\+007F\)/],
+  ["a 0x01 control character", `FROM ${APPROVED_RUNTIME} AS runtime\n\x01FROM ${OTHER_BASE}\n`, /printable ASCII, tab and LF are allowed in a Dockerfile \(found U\+0001\)/],
+  ["a three-word FROM whose middle word is not AS", `FROM ${APPROVED_RUNTIME} IS runtime\n`, /FROM must be written as/],
+  ["a three-word FROM whose middle word only starts with AS", `FROM ${APPROVED_RUNTIME} ASK runtime\n`, /FROM must be written as/],
 ];
+// Every refusal ends by pointing at the rules, so a contributor knows where to look.
+const REFUSAL_POINTER = ' (see "Dockerfile rules" in docs/verification.md)';
 for (const [label, text, reason] of REFUSED_DOCKERFILES) {
   test(`fixtures: every Dockerfile check refuses ${label} (#485)`, () => {
     const good = RUNTIME_DOCKERFILES.map(file => ({ file, text: `FROM ${APPROVED_RUNTIME}\n` }));
@@ -627,8 +709,9 @@ for (const [label, text, reason] of REFUSED_DOCKERFILES) {
       assert.equal(violations.length, 1, `runtime base check, ${file}: ${JSON.stringify(violations)}`);
       assert.ok(violations[0].startsWith(`${file}:`), `runtime base check must name ${file}: ${violations[0]}`);
       assert.match(violations[0], reason, "runtime base check");
+      assert.ok(violations[0].endsWith(REFUSAL_POINTER), `runtime base check must point at the rules: ${violations[0]}`);
     }
-    const thrown = message => message.startsWith("fixture/Dockerfile:") && reason.test(message);
+    const thrown = message => message.startsWith("fixture/Dockerfile:") && reason.test(message) && message.endsWith(REFUSAL_POINTER);
     assert.throws(() => parseDockerfileRustStages("fixture/Dockerfile", text), error => thrown(error.message), "Rust build-stage check");
     assert.throws(() => unpinnedDockerfileBases("fixture/Dockerfile", text), error => thrown(error.message), "digest pin check");
   });
@@ -679,6 +762,68 @@ test("fixtures: stages written in other accepted forms are still read as stages 
   ]);
   assert.deepEqual(dockerfileStages("f/Dockerfile", `from --platform=$BUILDPLATFORM ${OTHER_BASE} as B\nRUN true \\`), [{ line: 1, platform: "$BUILDPLATFORM", ref: OTHER_BASE, name: "B" }]);
   assert.deepEqual(dockerfileStages("f/Dockerfile", ""), []);
+});
+
+test("fixtures: tabs between the words of a FROM do not hide the stage (#485)", () => {
+  const good = RUNTIME_DOCKERFILES.map(file => ({ file, text: `FROM ${APPROVED_RUNTIME}\n` }));
+  const runtime = text => runtimeBaseViolations(good.map(source => source.file === "Dockerfile" ? { file: "Dockerfile", text } : source));
+  assert.equal(runtime(`FROM ${APPROVED_RUNTIME} AS runtime\nFROM\t${OTHER_BASE}\n`).length, 1, "a later final stage after a tab");
+  assert.equal(runtime(`FROM ${APPROVED_RUNTIME} AS runtime\nFROM \t ${OTHER_BASE}\tAS\tfinal\n`).length, 1, "a later final stage after mixed blanks");
+  assert.deepEqual(dockerfileStages("f/Dockerfile", `FROM\t${OTHER_BASE}\tAS\tbuild\nFROM\t--platform=linux/amd64\t${APPROVED_RUNTIME}\n`), [
+    { line: 1, platform: undefined, ref: OTHER_BASE, name: "build" },
+    { line: 2, platform: "linux/amd64", ref: APPROVED_RUNTIME, name: undefined },
+  ]);
+  assert.equal(parseDockerfileRustStages("f/Dockerfile", `FROM\t${WRONG_RUST}\tAS build\n`).length, 1, "a Rust stage after a tab");
+  assert.deepEqual(unpinnedDockerfileBases("f/Dockerfile", `FROM ${OTHER_BASE}\nFROM\tdebian:13\n`), ["f/Dockerfile:2 debian:13"], "an unpinned base after a tab");
+});
+
+test("fixtures: a digest pin is exactly sha256: and 64 lower-case hex characters (#485)", () => {
+  const hex = "b".repeat(64);
+  for (const [label, ref] of [
+    ["one character too many", `debian:13@sha256:${hex}b`],
+    ["a character after the digest", `debian:13@sha256:${hex}/x`],
+    ["one character too few", `debian:13@sha256:${hex.slice(1)}`],
+    ["a character before the algorithm", `debian:13@xsha256:${hex}`],
+    ["a character before the hex", `debian:13@sha256:.${hex.slice(1)}`],
+    ["a second colon", `debian:13@sha256::${hex}`],
+    ["upper-case hex", `debian:13@sha256:${hex.toUpperCase()}`],
+    ["another algorithm", `debian:13@sha512:${hex}`],
+    ["no at sign", `debian:13:sha256:${hex}`],
+    ["no digest", "debian:13"],
+  ]) {
+    assert.deepEqual(unpinnedDockerfileBases("f/Dockerfile", `FROM ${OTHER_BASE}\nFROM ${ref} AS x\n`), [`f/Dockerfile:2 ${ref}`], label);
+  }
+  assert.deepEqual(unpinnedDockerfileBases("f/Dockerfile", `FROM debian:13@sha256:${hex} AS x\n`), []);
+});
+
+// `--from=` and a mount's `from=` may name an earlier stage (by name in any case, as
+// BuildKit matches it: `COPY --from=BUILD` copied from `AS Build` in a real build, or by
+// index) or an image pinned by digest; everything the Dockerfiles use is still read.
+test("fixtures: stage references and digest-pinned images in COPY --from and RUN --mount are accepted (#485)", () => {
+  const text = [
+    `FROM ${WRONG_RUST} AS Build`,
+    "RUN --mount=type=cache,id=registry,target=/usr/local/cargo/registry \\",
+    "    --mount=type=cache,id=target,target=/build/target \\",
+    "    cargo build --locked --release",
+    `FROM ${OTHER_BASE}`,
+    "COPY --from=0 /a /a",
+    "COPY --from=BUILD /b /b",
+    `FROM ${APPROVED_RUNTIME} AS runtime`,
+    "COPY --from=build --chmod=0555 /out/ /usr/local/bin/",
+    "COPY --link --from=1 /a /a",
+    `COPY --from=${OTHER_BASE} /etc/ssl/certs/ /etc/ssl/certs/`,
+    `RUN --mount=type=bind,from=build,target=/m --mount=type=bind,FROM=${OTHER_BASE},target=/n --network=none ["/bin/true"]`,
+    'COPY ["a file", "/dest/"]',
+    "COPY --chown=10001:10001 a b /dest/",
+    "LABEL org.opencontainers.image.title=fixture",
+    "VOLUME /data",
+    'SHELL ["/bin/sh", "-c"]',
+    'CMD ["--from=busybox"]',
+    "",
+  ].join("\n");
+  assert.deepEqual(dockerfileStages("f/Dockerfile", text).map(stage => [stage.line, stage.name]), [[1, "Build"], [5, undefined], [8, "runtime"]]);
+  assert.deepEqual(unpinnedDockerfileBases("f/Dockerfile", text), []);
+  assert.deepEqual(runtimeBaseViolations(RUNTIME_DOCKERFILES.map(file => ({ file, text: file === "Dockerfile" ? text : `FROM ${APPROVED_RUNTIME}\n` }))), []);
 });
 
 // BuildKit's own list of the stages (`docker buildx build --call=targets`), recorded here
