@@ -2665,16 +2665,27 @@ test("fixtures: a pull-request scan that is skipped, forgiven, redirected or rec
 
 // ---- runner images (#491) ----
 
-// A floating label (`ubuntu-latest`) changes the operating system under every job without a
-// commit. Only these exact images are approved; moving to a newer one is a reviewed change here.
+// A floating label (`ubuntu-latest`) changes the operating system under a job without a commit.
+// Only these exact images are approved; moving to a newer one is a reviewed change here.
 const APPROVED_RUNNERS = new Set(["ubuntu-24.04", "ubuntu-24.04-arm"]);
+const WORKFLOW_FILE = /^[A-Za-z0-9._-]+\.ya?ml$/;
 
-export function runnerViolations(file, data) {
+// `files` are the workflow file names of the repository: a job may hand its work to one of
+// them (its jobs are checked there) and to no other reusable workflow, whose runner the caller
+// cannot see or constrain.
+export function runnerViolations(file, data, files) {
+  const jobs = data?.jobs;
+  if (!jobs || typeof jobs !== "object" || Array.isArray(jobs) || Object.keys(jobs).length === 0) return [`${file}: a workflow needs a non-empty jobs mapping`];
   const violations = [];
-  for (const [name, job] of Object.entries(data?.jobs ?? {})) {
+  for (const [name, job] of Object.entries(jobs)) {
     const where = `${file}: job ${name}`;
-    if (job?.uses !== undefined && job["runs-on"] === undefined) continue; // a reusable-workflow call has no runner
     const runsOn = job?.["runs-on"];
+    if (job?.uses !== undefined) {
+      const local = typeof job.uses === "string" && job.uses.startsWith("./.github/workflows/") ? job.uses.slice("./.github/workflows/".length) : "";
+      if (runsOn !== undefined) violations.push(`${where}: a reusable-workflow call must not name a runner`);
+      else if (!WORKFLOW_FILE.test(local) || !files.includes(local)) violations.push(`${where}: only a workflow file of this checkout (./.github/workflows/<file>) may be called; another repository or commit chooses its own runner`);
+      continue;
+    }
     if (typeof runsOn !== "string") { violations.push(`${where}: runs-on must be one runner label written as a string`); continue; }
     if (APPROVED_RUNNERS.has(runsOn)) continue;
     if (runsOn !== "${{ matrix.runner }}") { violations.push(`${where}: runs-on '${runsOn}' is not an approved runner image (${[...APPROVED_RUNNERS].join(", ")})`); continue; }
@@ -2683,43 +2694,67 @@ export function runnerViolations(file, data) {
     const include = matrix?.include;
     if (keys.length !== 1 || keys[0] !== "include" || !Array.isArray(include) || include.length === 0) { violations.push(`${where}: a matrix runner needs a literal strategy.matrix.include list and no other matrix key`); continue; }
     for (const leg of include) {
-      if (!APPROVED_RUNNERS.has(leg?.runner)) violations.push(`${where}: matrix runner '${leg?.runner}' is not an approved runner image`);
+      const legKeys = leg && typeof leg === "object" && !Array.isArray(leg) ? Object.keys(leg) : [];
+      if (legKeys.some(key => key.includes("${{")) || legKeys.filter(key => key.toLowerCase() === "runner").length !== 1) violations.push(`${where}: a matrix leg needs exactly one literal runner key`);
+      else if (!APPROVED_RUNNERS.has(leg.runner)) violations.push(`${where}: matrix runner '${leg.runner}' is not an approved runner image`);
     }
   }
   return violations;
 }
 
 test("every workflow job runs on an approved, exact runner image (#491)", () => {
-  const files = readdirSync(workflowsDir).filter(f => /\.ya?ml$/.test(f));
-  assert.ok(files.includes("ci.yml") && files.includes("image.yml"));
-  const violations = files.flatMap(f => runnerViolations(f, toData(parseStrict(readFileSync(join(workflowsDir, f), "utf8"), f))));
+  const entries = readdirSync(workflowsDir);
+  assert.deepEqual(entries.filter(f => !WORKFLOW_FILE.test(f)), [], "only .yml and .yaml files belong in .github/workflows");
+  for (const expected of ["branch-images.yml", "ci.yml", "codeql.yml", "image.yml", "loadtest-image.yml", "oci-import.yml", "prune-dev-images.yml"]) assert.ok(entries.includes(expected), expected);
+  const violations = entries.flatMap(f => runnerViolations(f, toData(parseStrict(readFileSync(join(workflowsDir, f), "utf8"), f)), entries));
   assert.deepEqual(violations, []);
 });
 
 test("the runner check refuses floating, self-hosted, computed and unlisted runners (#491)", () => {
-  const check = job => runnerViolations("fixture.yml", { jobs: { j: job } });
+  const files = ["image.yml"];
+  const check = (job, more = {}) => runnerViolations("fixture.yml", { jobs: { ...more, j: job } }, files);
   const steps = [{ run: "true" }];
-  assert.deepEqual(check({ "runs-on": "ubuntu-24.04", steps }), []);
-  assert.deepEqual(check({ "runs-on": "ubuntu-24.04-arm", steps }), []);
-  assert.deepEqual(check({ uses: "./.github/workflows/image.yml" }), []);
-  assert.deepEqual(check({ "runs-on": "${{ matrix.runner }}", strategy: { matrix: { include: [{ runner: "ubuntu-24.04" }, { runner: "ubuntu-24.04-arm" }] } }, steps }), []);
-  for (const [name, job] of [
-    ["the floating label", { "runs-on": "ubuntu-latest", steps }],
-    ["a newer image", { "runs-on": "ubuntu-26.04", steps }],
-    ["another floating label", { "runs-on": "ubuntu-24.04-latest", steps }],
-    ["trailing text", { "runs-on": "ubuntu-24.04 ", steps }],
-    ["self-hosted", { "runs-on": "self-hosted", steps }],
-    ["a label list", { "runs-on": ["ubuntu-24.04"], steps }],
-    ["a runner group", { "runs-on": { group: "g", labels: "ubuntu-24.04" }, steps }],
-    ["an input expression", { "runs-on": "${{ inputs.runner }}", steps }],
-    ["an expression with a fallback", { "runs-on": "${{ matrix.runner || 'ubuntu-latest' }}", steps }],
-    ["no runner", { steps }],
-    ["a reusable call that also names a runner", { uses: "./.github/workflows/image.yml", "runs-on": "ubuntu-latest" }],
-    ["a matrix runner without a matrix", { "runs-on": "${{ matrix.runner }}", steps }],
-    ["a floating matrix leg", { "runs-on": "${{ matrix.runner }}", strategy: { matrix: { include: [{ runner: "ubuntu-24.04" }, { runner: "ubuntu-latest" }] } }, steps }],
-    ["a matrix leg without a runner", { "runs-on": "${{ matrix.runner }}", strategy: { matrix: { include: [{ platform: "linux/amd64" }] } }, steps }],
-    ["a runner axis beside include", { "runs-on": "${{ matrix.runner }}", strategy: { matrix: { runner: ["ubuntu-latest"], include: [{ runner: "ubuntu-24.04" }] } }, steps }],
-    ["a computed matrix", { "runs-on": "${{ matrix.runner }}", strategy: { matrix: "${{ fromJSON(inputs.m) }}" }, steps }],
-    ["an empty include", { "runs-on": "${{ matrix.runner }}", strategy: { matrix: { include: [] } }, steps }],
-  ]) assert.equal(check(job).length >= 1, true, name);
+  const good = { "runs-on": "ubuntu-24.04", steps };
+  const legs = [{ runner: "ubuntu-24.04" }, { runner: "ubuntu-24.04-arm" }];
+  const matrix = include => ({ "runs-on": "${{ matrix.runner }}", strategy: { matrix: { include } }, steps });
+  for (const job of [good, { "runs-on": "ubuntu-24.04-arm", steps }, { uses: "./.github/workflows/image.yml" }, matrix(legs)]) assert.deepEqual(check(job), []);
+  for (const [name, job, reason] of [
+    ["the floating label", { "runs-on": "ubuntu-latest", steps }, /not an approved runner image/],
+    ["a newer image", { "runs-on": "ubuntu-26.04", steps }, /not an approved runner image/],
+    ["another floating label", { "runs-on": "ubuntu-24.04-latest", steps }, /not an approved runner image/],
+    ["trailing text", { "runs-on": "ubuntu-24.04 ", steps }, /not an approved runner image/],
+    ["another case", { "runs-on": "Ubuntu-24.04", steps }, /not an approved runner image/],
+    ["self-hosted", { "runs-on": "self-hosted", steps }, /not an approved runner image/],
+    ["a label list", { "runs-on": ["ubuntu-24.04"], steps }, /one runner label written as a string/],
+    ["a runner group", { "runs-on": { group: "g", labels: "ubuntu-24.04" }, steps }, /one runner label written as a string/],
+    ["no runner", { steps }, /one runner label written as a string/],
+    // Each expression sits beside a valid matrix, so only the expression itself can be refused.
+    ["an input expression", { ...matrix(legs), "runs-on": "${{ inputs.runner }}" }, /not an approved runner image/],
+    ["an expression with a fallback", { ...matrix(legs), "runs-on": "${{ matrix.runner || 'ubuntu-latest' }}" }, /not an approved runner image/],
+    ["another matrix value", { ...matrix(legs), "runs-on": "${{ matrix.os }}" }, /not an approved runner image/],
+    ["other spacing", { ...matrix(legs), "runs-on": "${{matrix.runner}}" }, /not an approved runner image/],
+    ["a matrix runner without a matrix", { "runs-on": "${{ matrix.runner }}", steps }, /literal strategy\.matrix\.include/],
+    ["a runner axis beside include", { "runs-on": "${{ matrix.runner }}", strategy: { matrix: { runner: ["ubuntu-latest"], include: legs } }, steps }, /literal strategy\.matrix\.include/],
+    ["a computed matrix", { "runs-on": "${{ matrix.runner }}", strategy: { matrix: "${{ fromJSON(inputs.m) }}" }, steps }, /literal strategy\.matrix\.include/],
+    ["an empty include", matrix([]), /literal strategy\.matrix\.include/],
+    ["a floating first leg", matrix([{ runner: "ubuntu-latest" }, { runner: "ubuntu-24.04" }]), /matrix runner 'ubuntu-latest'/],
+    ["a floating last leg", matrix([{ runner: "ubuntu-24.04" }, { runner: "ubuntu-latest" }]), /matrix runner 'ubuntu-latest'/],
+    ["a leg without a runner", matrix([{ platform: "linux/amd64" }]), /exactly one literal runner key/],
+    ["a leg with a list runner", matrix([{ runner: ["ubuntu-24.04"] }]), /matrix runner/],
+    ["a leg with a second runner key", matrix([{ runner: "ubuntu-24.04", Runner: "ubuntu-latest" }]), /exactly one literal runner key/],
+    ["a leg with an expression key", matrix([{ runner: "ubuntu-24.04", "${{ insert }}": "x" }]), /exactly one literal runner key/],
+    ["a reusable call that also names a runner", { uses: "./.github/workflows/image.yml", "runs-on": "ubuntu-24.04" }, /must not name a runner/],
+    ["a reusable workflow of another repository", { uses: `some-org/shared-ci/.github/workflows/lint.yml@${"0".repeat(40)}` }, /only a workflow file of this checkout/],
+    ["this repository at another commit", { uses: `ncecere/open-model-gateway/.github/workflows/image.yml@${"0".repeat(40)}` }, /only a workflow file of this checkout/],
+    ["a local workflow that does not exist", { uses: "./.github/workflows/missing.yml" }, /only a workflow file of this checkout/],
+    ["a local path outside the workflows", { uses: "./.github/workflows/../../other/image.yml" }, /only a workflow file of this checkout/],
+    ["a call without a target", { uses: null, steps }, /only a workflow file of this checkout/],
+  ]) {
+    assert.deepEqual(check(job).map(v => reason.test(v)), [true], name);
+    assert.deepEqual(check(good, { first: job }).map(v => reason.test(v)), [true], `${name}, before a good job`);
+    assert.deepEqual(runnerViolations("fixture.yml", { jobs: { j: good, last: job } }, files).map(v => reason.test(v)), [true], `${name}, after a good job`);
+  }
+  for (const [name, data] of [["no jobs", {}], ["jobs under another key", { Jobs: { j: good } }], ["an empty jobs mapping", { jobs: {} }], ["a jobs list", { jobs: [good] }]]) {
+    assert.match(runnerViolations("fixture.yml", data, files).join(), /non-empty jobs mapping/, name);
+  }
 });
