@@ -2,12 +2,15 @@
 // Only this helper is copied; fetch/git/tar/go are fake. PATH has no network tools
 // or host compiler. The SDK and output are DATA, never a real Go/ORAS executable.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { bashPath, runBash } from "./bash-preflight.mjs";
+
+// An unsupported shell fails this file here, before any test or fixture runs (#380).
+bashPath();
 
 const helper = fileURLToPath(new URL("../.github/scripts/build-oras.sh", import.meta.url));
 const pinFile = fileURLToPath(new URL("../.github/tools/oras.json", import.meta.url));
@@ -107,10 +110,12 @@ if (name === 'fetch-verified.sh') {
   const executable = (path, text) => { writeFileSync(path, text); chmodSync(path, 0o755); };
   executable(join(bin, "fetch-verified.sh"), fake);
   // Support the existing convention: bash "$script_dir/fetch-verified.sh" ...
-  executable(join(dir, "fetch-verified.sh"), `#!/bin/bash\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(join(bin, "fetch-verified.sh"))} "$@"\n`);
+  executable(join(dir, "fetch-verified.sh"), `#!/usr/bin/env bash\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(join(bin, "fetch-verified.sh"))} "$@"\n`);
   for (const name of ["git", "tar", "go", "rm", "DATA", "curl", "wget", "gh", "make", "gcc", "cc"]) executable(join(bin, name), fake);
   // Filesystem/shell primitives only: no inherited PATH or executable lookup fallback.
-  for (const name of ["bash", "env", "mkdir", "mktemp", "dirname", "basename", "chmod", "cp", "mv", "cat", "rmdir", "readlink", "pwd", "cut", "sed", "grep", "tr", "find"]) {
+  // The helper looks bash up on this PATH too and finds the preflighted one: runBash()
+  // puts a directory holding only that link first, so none is placed here.
+  for (const name of ["env", "mkdir", "mktemp", "dirname", "basename", "chmod", "cp", "mv", "cat", "rmdir", "readlink", "pwd", "cut", "sed", "grep", "tr", "find"]) {
     const native = ["/bin", "/usr/bin"].map(p => join(p, name)).find(existsSync);
     assert.ok(native, `missing filesystem primitive ${name}`);
     symlinkSync(native, join(bin, name));
@@ -128,7 +133,7 @@ if (name === 'fetch-verified.sh') {
   return { dir, output, scratch, poison, run(args = [output]) {
     const retained = () => readdirSync(dir).filter(n => !["events.jsonl", "oras output"].includes(n));
     const before = retained();
-    const result = spawnSync("/bin/bash", [join(dir, "build-oras.sh"), ...args], {
+    const result = runBash([join(dir, "build-oras.sh"), ...args], {
       cwd: dir, encoding: "utf8", timeout: 10_000,
       env: { ...poison, PATH: bin, TMPDIR: scratch, RUNNER_TEMP: scratch, LANG: "C" },
     });
