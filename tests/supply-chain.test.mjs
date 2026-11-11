@@ -2758,3 +2758,20 @@ test("the runner check refuses floating, self-hosted, computed and unlisted runn
     assert.match(runnerViolations("fixture.yml", data, files).join(), /non-empty jobs mapping/, name);
   }
 });
+
+// Operating-system packages installed at run time are neither pinned nor verified, and
+// the job fails whenever the runner cannot reach the mirrors (#491).
+export const packageInstallViolations = (file, text) => text.split("\n").flatMap((line, i) =>
+  !/^\s*#/.test(line) && /\b(apt-get|apt|aptitude|dpkg|snap|pip3?|pipx|brew)\s+(-\S+\s+)*(install|upgrade|update|-i)\b|--with-deps\b/.test(line) ? [`${file}:${i + 1}: installs packages at run time`] : []);
+
+test("no workflow or composite action installs operating-system packages at run time (#491)", () => {
+  const files = [...readdirSync(workflowsDir).map(f => join(workflowsDir, f)), ...walk(join(root, ".github/actions")).filter(f => /\.ya?ml$/.test(f))];
+  assert.ok(files.length >= 8);
+  assert.deepEqual(files.flatMap(f => packageInstallViolations(f.slice(root.length + 1), readFileSync(f, "utf8"))), []);
+  for (const line of ["run: sudo apt-get update && sudo apt-get install -y age", "  - run: sudo apt-get -y install age", "run: apt install age", "run: sudo dpkg -i x.deb", "run: pip install x", "run: sudo snap install x", "- run: npx playwright install --with-deps --only-shell chromium", "run: sudo apt-get update"]) {
+    assert.equal(packageInstallViolations("f.yml", `jobs:\n${line}\n`).length, 1, line);
+  }
+  for (const line of ["# sudo apt-get install -y age", "run: npx playwright install --only-shell chromium", "run: npm ci", "run: cargo install --locked --path ."]) {
+    assert.deepEqual(packageInstallViolations("f.yml", line), [], line);
+  }
+});

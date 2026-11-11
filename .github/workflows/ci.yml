@@ -121,8 +121,13 @@ jobs:
       - name: Verify Anthropic terminal SDK and accounting contract on disposable PostgreSQL
         # Changes maintenance-database ACLs: run sequentially, never as a generic ignored-test sweep.
         run: cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact
-      - name: Install age for the encrypted backup tests
-        run: sudo apt-get update && sudo apt-get install -y age
+      - name: Install age for the encrypted backup tests (pinned release, SHA-256 verified)
+        run: |
+          set -euo pipefail
+          bash .github/scripts/fetch-verified.sh https://github.com/FiloSottile/age/releases/download/v1.1.1/age-v1.1.1-linux-amd64.tar.gz cf16cbb108fc56e2064b00ba2b65d9fb1b8d7002ca5e38260ee1cc34f6aaa8f9 "${RUNNER_TEMP}/age.tar.gz"
+          tar -xzf "${RUNNER_TEMP}/age.tar.gz" -C "${RUNNER_TEMP}" age/age age/age-keygen
+          echo "${RUNNER_TEMP}/age" >> "${GITHUB_PATH}"
+          "${RUNNER_TEMP}/age/age" --version
       - name: Build the gateway binary for the backup lineage check
         run: cargo build -p open-model-gateway --all-features --bin open-model-gateway
       - name: Backup/restore drill on the disposable service database
@@ -162,8 +167,13 @@ jobs:
       - run: python3 -B -m unittest discover -s tests -p 'oci_*test.py' -v
       - run: npm run test:ci
       - run: npm run test:conflict-markers
-      - name: Install age (test:staging includes the encrypted backup tests)
-        run: sudo apt-get update && sudo apt-get install -y age
+      - name: Install age (pinned release, SHA-256 verified; test:staging includes the encrypted backup tests)
+        run: |
+          set -euo pipefail
+          bash .github/scripts/fetch-verified.sh https://github.com/FiloSottile/age/releases/download/v1.1.1/age-v1.1.1-linux-amd64.tar.gz cf16cbb108fc56e2064b00ba2b65d9fb1b8d7002ca5e38260ee1cc34f6aaa8f9 "${RUNNER_TEMP}/age.tar.gz"
+          tar -xzf "${RUNNER_TEMP}/age.tar.gz" -C "${RUNNER_TEMP}" age/age age/age-keygen
+          echo "${RUNNER_TEMP}/age" >> "${GITHUB_PATH}"
+          "${RUNNER_TEMP}/age/age" --version
       - run: npm run test:staging
       - run: npm run build:web
 
@@ -287,7 +297,10 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - uses: ./.github/actions/setup-node
       - run: npm ci
-      - run: npx playwright install --with-deps --only-shell chromium
+      # No --with-deps: that runs apt-get against the Ubuntu mirrors at run time
+      # (unpinned, and unreachable from the runners on 2026-11-11, #491). The
+      # runner image already carries the libraries the headless shell needs.
+      - run: npx playwright install --only-shell chromium
       - run: npm run test:browser
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()

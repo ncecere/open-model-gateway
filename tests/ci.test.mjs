@@ -131,7 +131,15 @@ test("special probes retain sequential ACL, exact contention/terminal, Docker an
     "cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored --test-threads=1",
     "cargo test -p open-model-gateway --all-features --lib management::tests::authz_matrix_tests::key_issuance_contention_tests::key_issuance_contention_measurement -- --ignored --exact",
     "cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact",
-    "sudo apt-get update && sudo apt-get install -y age",
+    // A pinned release through fetch-verified.sh, never apt-get at run time (#491).
+    [
+      "set -euo pipefail",
+      'bash .github/scripts/fetch-verified.sh https://github.com/FiloSottile/age/releases/download/v1.1.1/age-v1.1.1-linux-amd64.tar.gz cf16cbb108fc56e2064b00ba2b65d9fb1b8d7002ca5e38260ee1cc34f6aaa8f9 "${RUNNER_TEMP}/age.tar.gz"',
+      'tar -xzf "${RUNNER_TEMP}/age.tar.gz" -C "${RUNNER_TEMP}" age/age age/age-keygen',
+      'echo "${RUNNER_TEMP}/age" >> "${GITHUB_PATH}"',
+      '"${RUNNER_TEMP}/age/age" --version',
+      "",
+    ].join("\n"),
     "cargo build -p open-model-gateway --all-features --bin open-model-gateway",
     "python3 tests/backup.test.py",
   ]);
