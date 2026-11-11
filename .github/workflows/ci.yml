@@ -28,7 +28,7 @@ permissions:
 
 jobs:
   gateway-lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # 1.99.1, matches rust-toolchain.toml
@@ -40,7 +40,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   gateway-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -75,7 +75,7 @@ jobs:
       - run: node .github/scripts/rust-shards.mjs --shard ${{ matrix.shard }} --count 4
 
   gateway-special:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: mirror.gcr.io/library/postgres:17-alpine
@@ -137,7 +137,7 @@ jobs:
   # Stable protected-branch check name. The matrix needs result covers every leg;
   # skipped, cancelled, missing or additional dependencies must not turn green.
   gateway:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [gateway-lint, gateway-tests, gateway-special]
     if: always()
     steps:
@@ -148,7 +148,7 @@ jobs:
           GATEWAY_NEEDS: ${{ toJSON(needs) }}
 
   web:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-node
@@ -171,7 +171,7 @@ jobs:
   # (RustSec advisories, licences, bans, sources; policy in deny.toml) and
   # npm audit of the production dependencies. Actions pinned by commit SHA.
   cargo-deny:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -193,7 +193,7 @@ jobs:
   # No cluster is created; no Docker Hub pulls (kubeconform's own release
   # binary and SHA-pinned actions only).
   helm:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -235,7 +235,7 @@ jobs:
       - run: node --test tests/helm-chart.test.mjs
 
   npm-audit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -259,7 +259,7 @@ jobs:
   browser:
     # Playwright (Chromium) against the real gateway binary + built SPA, a disposable
     # database, the local signed-OIDC issuer and a mock upstream. No paid providers.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     services:
       postgres:
@@ -304,7 +304,7 @@ jobs:
   # the exact digests it publishes, so this job is skipped there.
   staging-image:
     if: github.event_name != 'push' || (github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v'))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
       # Approved staging rehearsal digest pins; same mirror defaults as Compose.

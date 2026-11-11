@@ -2587,7 +2587,7 @@ function assertPullRequestScan(ci, image) {
   // Nothing on the job can skip it, forgive it, give it a write token or set TRIVY_*.
   assert.deepEqual(Object.keys(job).sort(), ["env", "if", "runs-on", "steps", "timeout-minutes"]);
   assert.equal(job.if, PR_SCAN_JOB_IF);
-  assert.equal(job["runs-on"], "ubuntu-latest", "the pinned Trivy binary is the amd64 one");
+  assert.equal(job["runs-on"], "ubuntu-24.04", "the pinned Trivy binary is the amd64 one");
   assert.deepEqual(Object.keys(job.env).sort(), ["STAGING_CADDY_IMAGE", "STAGING_POSTGRES_IMAGE"]);
   const steps = stepsOf(job);
   // Checkout (no persisted token), BuildKit, build, then the scan: before any script
