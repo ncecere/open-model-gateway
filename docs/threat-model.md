@@ -282,7 +282,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 **SCIM-3. SCIM and manual grants are confused.** T, E · Asset: grant provenance · Attacker: SCIM client, Platform Admin.
 - Mitigation: SCIM changes only group-provenance grants; manual grants are separate rows. Pushed groups stop taking membership from the token (`effective_groups`).
 - Tests: `scim/tests.rs` `groups_feed_mappings_with_group_provenance`, `scim_takes_over_pushed_groups_and_delete_or_rename_revokes`, `users_are_provisioned_filtered_and_replaced`; `identity/tests.rs` `scim_managed_groups_replace_token_membership_at_sign_in`.
-- Residual: none found in tests; no live IdP run yet.
+- Residual: none found in tests. One live run against Authentik passed on v0.9.1 (#60, 2026-10-28); no later release has been run against a real identity provider.
 - Follow-up: #60.
 
 **SCIM-4. Deactivation leaves access behind.** E · Asset: sessions, keys · Attacker: deprovisioned user.
