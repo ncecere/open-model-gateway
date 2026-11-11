@@ -343,15 +343,17 @@ test("every workflow action is pinned to a commit SHA with a version comment", (
 test("every Dockerfile base image is pinned by digest", () => {
   const files = allDockerfiles();
   assert.ok(files.length >= 2, "expected to find the root and deploy/loadtest Dockerfiles");
-  const unpinned = [];
-  for (const { file, text } of files) {
-    text.split("\n").forEach((line, i) => {
-      const m = line.match(/^FROM\s+(\S+)/i);
-      if (m && !/@sha256:[0-9a-f]{64}$/.test(m[1])) unpinned.push(`${file}:${i + 1} ${m[1]}`);
-    });
-  }
-  assert.deepEqual(unpinned, []);
+  assert.deepEqual(files.flatMap(({ file, text }) => unpinnedDockerfileBases(file, text)), []);
 });
+
+export function unpinnedDockerfileBases(file, text) {
+  const unpinned = [];
+  text.split("\n").forEach((line, i) => {
+    const m = line.match(/^FROM\s+(\S+)/i);
+    if (m && !/@sha256:[0-9a-f]{64}$/.test(m[1])) unpinned.push(`${file}:${i + 1} ${m[1]}`);
+  });
+  return unpinned;
+}
 
 const RUNTIME_DOCKERFILES = ["Dockerfile", "deploy/loadtest/Dockerfile"];
 const APPROVED_RUNTIME = "gcr.io/distroless/cc-debian13:nonroot@sha256:cc66d222f0a7ec996b78a99fe76a969bc80b539a5016ad866c14d1949bc6d0ab";
@@ -491,6 +493,134 @@ export function parseToolchainToml(text) {
   if (!("channel" in table)) throw new Error("rust-toolchain.toml: [toolchain] has no channel");
   return table;
 }
+
+// ---- Dockerfile readers versus BuildKit (#485) ----
+//
+// Every check here that reads a Dockerfile must see the stages BuildKit builds, not
+// lines that merely look like `FROM`. Each fixture below was a way to show one of the
+// checks a stage that is not built, or to hide one that is; `docker build` accepted the
+// heredoc, continuation, `# escape=`, split-keyword, U+0085 and U+2028 forms and built
+// from the other base (verified by hand with Docker 29.1.3). All three readers must
+// refuse each fixture, for the stated reason.
+const OTHER_BASE = `mirror.gcr.io/library/debian:13-slim@sha256:${"b".repeat(64)}`;
+const WRONG_RUST = `mirror.gcr.io/library/rust:1.98.0-bookworm@sha256:${"c".repeat(64)}`;
+// The decoy: the stage that is really built last uses another base, and the approved
+// line follows it as something that is not an instruction.
+const decoy = (open, close = "") => `FROM ${OTHER_BASE} AS real\n${open}\nFROM ${APPROVED_RUNTIME} AS runtime\n${close}`;
+const REFUSED_DOCKERFILES = [
+  // Heredocs: the body is file or script content, never instructions.
+  ["the issue's COPY heredoc decoy", decoy("COPY <<EOF /decoy.txt", "EOF\n"), /heredoc/],
+  ["a RUN heredoc decoy", decoy("RUN <<EOF", "EOF\n"), /heredoc/],
+  ["an ADD heredoc decoy", decoy("ADD <<EOF /decoy.txt", "EOF\n"), /heredoc/],
+  ["a tab-stripping <<- heredoc decoy", decoy("COPY <<-EOF /decoy.txt", "\tEOF\n"), /heredoc/],
+  ["a double-quoted heredoc delimiter", decoy('COPY <<"EOF" /decoy.txt', "EOF\n"), /heredoc/],
+  ["a single-quoted heredoc delimiter", decoy("COPY <<'EOF' /decoy.txt", "EOF\n"), /heredoc/],
+  ["a quoted <<- heredoc delimiter", decoy("RUN <<-'EOF'", "\tEOF\n"), /heredoc/],
+  ["a heredoc after a flag", decoy("COPY --chmod=0444 <<EOF /decoy.txt", "EOF\n"), /heredoc/],
+  ["a heredoc in the middle of a RUN", decoy("RUN cat <<EOF >/decoy.txt", "EOF\n"), /heredoc/],
+  ["a heredoc opened on a continued line", decoy("RUN true \\\n  && cat <<EOF", "EOF\n"), /heredoc/],
+  ["two heredocs on one line", decoy("COPY <<A <<B /decoys/", "A\nB\n"), /heredoc/],
+  ["an ONBUILD heredoc", decoy("ONBUILD COPY <<EOF /decoy.txt", "EOF\n"), /heredoc/],
+  ["a lower-case copy heredoc", decoy("copy <<EOF /decoy.txt", "EOF\n"), /heredoc/],
+  ["a heredoc with no decoy in it", `FROM ${APPROVED_RUNTIME} AS runtime\nCOPY <<EOF /motd\nhello\nEOF\n`, /heredoc/],
+  // Line continuations: the next line belongs to the same instruction.
+  ["a FROM line continued from CMD", decoy("CMD true \\"), /continued line/],
+  ["a lower-case from line continued from CMD", `FROM ${OTHER_BASE} AS real\nCMD true \\\n  from ${APPROVED_RUNTIME} AS runtime\n`, /continued line/],
+  ["a FROM line continued past trailing blanks", decoy("CMD true \\ \t"), /continued line/],
+  ["a FROM line continued over a comment", decoy("CMD true \\\n# skipped by BuildKit"), /continued line/],
+  ["a FROM line continued over an empty line", decoy("CMD true \\\n"), /continued line/],
+  ["a FROM keyword split by a continuation", `FROM ${APPROVED_RUNTIME} AS runtime\nFRO\\\nM ${OTHER_BASE}\n`, /FROM must be on one line/],
+  ["a FROM image on a continued line", `FROM ${APPROVED_RUNTIME} AS runtime\nFROM \\\n  ${OTHER_BASE}\n`, /FROM must be on one line/],
+  ["a FROM stage name on a continued line", `FROM ${APPROVED_RUNTIME} \\\n  AS runtime\n`, /FROM must be on one line/],
+  ["a line ending in two backslashes", decoy("CMD true \\\\"), /backslash/],
+  // Parser directives: `# escape=` moves the continuation character, `# syntax=` replaces the parser.
+  ["an escape directive hiding a continuation", "# escape=`\n" + decoy("CMD true `"), /parser directive/],
+  ["an escape directive without spaces", "#escape=`\n" + decoy("CMD true `"), /parser directive/],
+  ["an escape directive in other case and spacing", " #\tEscape = `\n" + decoy("CMD true `"), /parser directive/],
+  ["an escape directive naming the default", `# escape=\\\nFROM ${APPROVED_RUNTIME} AS runtime\n`, /parser directive/],
+  ["a syntax directive", `# syntax=docker/dockerfile:1\nFROM ${APPROVED_RUNTIME} AS runtime\n`, /parser directive/],
+  ["an unknown directive", `# check=skip=all\nFROM ${APPROVED_RUNTIME} AS runtime\n`, /parser directive/],
+  // Characters JavaScript and Go disagree on (line ends, white space).
+  ["a FROM after U+0085, which Go trims and JavaScript does not", `FROM ${APPROVED_RUNTIME} AS runtime\n\u0085FROM ${OTHER_BASE}\n`, /printable ASCII/],
+  ["a FROM after U+2028, a line end only to JavaScript", `FROM ${OTHER_BASE} AS real\nCMD true  FROM ${APPROVED_RUNTIME} AS runtime\n`, /printable ASCII/],
+  ["a FROM after a bare carriage return", `FROM ${OTHER_BASE} AS real\nCMD true \rFROM ${APPROVED_RUNTIME} AS runtime\n`, /printable ASCII/],
+  ["CRLF line ends", `FROM ${APPROVED_RUNTIME} AS runtime\r\n`, /printable ASCII/],
+  ["a FROM after a vertical tab", `FROM ${APPROVED_RUNTIME} AS runtime\n\vFROM ${OTHER_BASE}\n`, /printable ASCII/],
+  ["a FROM after a form feed", `FROM ${APPROVED_RUNTIME} AS runtime\n\fFROM ${OTHER_BASE}\n`, /printable ASCII/],
+  ["a FROM after a no-break space", `FROM ${APPROVED_RUNTIME} AS runtime\n FROM ${OTHER_BASE}\n`, /printable ASCII/],
+  ["a byte order mark", `﻿FROM ${APPROVED_RUNTIME} AS runtime\n`, /printable ASCII/],
+  ["a NUL", `FROM ${APPROVED_RUNTIME} AS runtime\n\0`, /printable ASCII/],
+  // FROM arguments BuildKit expands or unquotes before it resolves the image.
+  ["a quoted FROM image", `FROM "${APPROVED_RUNTIME}" AS runtime\n`, /FROM must be written as/],
+  ["quotes inside a FROM image", `FROM mirror.gcr.io/library/ru""st:1.98.0-bookworm@sha256:${"c".repeat(64)} AS build\nFROM ${APPROVED_RUNTIME}\n`, /FROM must be written as/],
+  ["an escaped character in a FROM image", `FROM mirror.gcr.io/library/ru\\st:1.98.0-bookworm@sha256:${"c".repeat(64)} AS build\nFROM ${APPROVED_RUNTIME}\n`, /FROM must be written as/],
+  ["a FROM image from an ARG default", `ARG BASE=${OTHER_BASE}\nFROM \${BASE}\n`, /FROM must be written as/],
+  ["a FROM image from an unbraced ARG", `ARG BASE=${OTHER_BASE}\nFROM $BASE\n`, /FROM must be written as/],
+  ["a FROM image with an expansion default", `FROM \${BASE:-${WRONG_RUST}} AS build\nFROM ${APPROVED_RUNTIME}\n`, /FROM must be written as/],
+  ["a FROM repository from an ARG that a later ARG line redefines", `ARG R=rust:1.98.0-bookworm\nFROM \${R}@sha256:${"c".repeat(64)} AS build\nARG R=debian\nFROM ${APPROVED_RUNTIME}\n`, /FROM must be written as/],
+  ["a FROM with no image", "FROM\n", /FROM must be written as/],
+  ["a FROM with two images", `FROM ${OTHER_BASE} ${APPROVED_RUNTIME}\n`, /FROM must be written as/],
+  ["a FROM with AS and no name", `FROM ${APPROVED_RUNTIME} AS\n`, /FROM must be written as/],
+  ["a FROM with words after the stage name", `FROM ${OTHER_BASE} AS real ${APPROVED_RUNTIME}\n`, /FROM must be written as/],
+  ["a FROM with an unknown flag", `FROM --pull=always ${APPROVED_RUNTIME}\n`, /FROM must be written as/],
+  ["a FROM with two platform flags", `FROM --platform=linux/amd64 --platform=linux/arm64 ${APPROVED_RUNTIME}\n`, /FROM must be written as/],
+  ["a FROM with an empty platform flag", `FROM --platform= ${APPROVED_RUNTIME}\n`, /FROM must be written as/],
+];
+for (const [label, text, reason] of REFUSED_DOCKERFILES) {
+  test(`fixtures: every Dockerfile check refuses ${label} (#485)`, () => {
+    const good = RUNTIME_DOCKERFILES.map(file => ({ file, text: `FROM ${APPROVED_RUNTIME}\n` }));
+    for (const file of RUNTIME_DOCKERFILES) {
+      const violations = runtimeBaseViolations(good.map(source => source.file === file ? { file, text } : source));
+      assert.equal(violations.length, 1, `runtime base check, ${file}: ${JSON.stringify(violations)}`);
+      assert.ok(violations[0].startsWith(`${file}:`), `runtime base check must name ${file}: ${violations[0]}`);
+      assert.match(violations[0], reason, "runtime base check");
+    }
+    const thrown = message => message.startsWith("fixture/Dockerfile:") && reason.test(message);
+    assert.throws(() => parseDockerfileRustStages("fixture/Dockerfile", text), error => thrown(error.message), "Rust build-stage check");
+    assert.throws(() => unpinnedDockerfileBases("fixture/Dockerfile", text), error => thrown(error.message), "digest pin check");
+  });
+}
+
+test("fixtures: stages written in other accepted forms are still read as stages (#485)", () => {
+  const good = RUNTIME_DOCKERFILES.map(file => ({ file, text: `FROM ${APPROVED_RUNTIME}\n` }));
+  const runtime = text => runtimeBaseViolations(good.map(source => source.file === "Dockerfile" ? { file: "Dockerfile", text } : source));
+  const digest = "c".repeat(64);
+  for (const [label, from] of [
+    ["lower case", "from"], ["mixed case", "FrOm"], ["indented with spaces", "   FROM"], ["indented with a tab", "\tFROM"], ["indented mixed case", " \t fROM"],
+  ]) {
+    assert.equal(runtime(`FROM ${APPROVED_RUNTIME} AS runtime\n${from} ${OTHER_BASE}\n`).length, 1, `${label}: a later final stage`);
+    assert.equal(runtime(`FROM ${APPROVED_RUNTIME} AS runtime\n${from} ${OTHER_BASE} AS final\nCOPY --from=runtime / /\n`).length, 1, `${label}: a final stage that is not the one named runtime`);
+    assert.equal(runtime(`${from} ${OTHER_BASE} AS build\n${from} ${APPROVED_RUNTIME} as RUNTIME\n`).length, 0, `${label}: an approved final stage passes`);
+    assert.equal(runtime(`${from} --platform=linux/amd64 ${APPROVED_RUNTIME} AS runtime\n`).length, 1, `${label}: a platform override`);
+    assert.equal(parseDockerfileRustStages("f/Dockerfile", `${from} ${WRONG_RUST} AS build\n`).length, 1, `${label}: a Rust stage`);
+    assert.equal(parseDockerfileRustStages("f/Dockerfile", `${from} --platform=$BUILDPLATFORM ${WRONG_RUST} AS build\n`).length, 1, `${label}: a Rust stage with a platform`);
+    assert.deepEqual(unpinnedDockerfileBases("f/Dockerfile", `FROM ${OTHER_BASE}\n${from} debian:13 AS x\n`), ["f/Dockerfile:2 debian:13"], `${label}: an unpinned base`);
+    assert.deepEqual(unpinnedDockerfileBases("f/Dockerfile", `${from} --platform=linux/amd64 debian:13@sha256:${digest}\n${from} --platform=linux/arm64 debian:13\n`), ["f/Dockerfile:2 debian:13"], `${label}: an unpinned base behind a platform flag`);
+  }
+  // What the repository's Dockerfiles do use stays readable: comments, continued RUN/ENV/
+  // HEALTHCHECK lines, `--mount` and `--from` flags, and text that only mentions FROM.
+  const text = [
+    "# No `# syntax=` line; FROM debian:13 in a comment is not a stage.",
+    `FROM ${WRONG_RUST} AS build`,
+    "ARG CARGO_BUILD_JOBS=2",
+    "RUN --mount=type=cache,target=/build/target \\",
+    "    cargo build --locked \\",
+    " && echo FROM scratch",
+    "",
+    `FROM ${APPROVED_RUNTIME} AS runtime`,
+    "COPY --from=build --chmod=0555 /out/ /usr/local/bin/",
+    "ENV A=1 \\",
+    "    FROM=2",
+    "HEALTHCHECK --interval=30s \\",
+    '    CMD ["/usr/local/bin/x", "healthcheck"]',
+    'CMD ["serve"]',
+    "",
+  ].join("\n");
+  assert.deepEqual(runtime(text), []);
+  assert.deepEqual(parseDockerfileRustStages("f/Dockerfile", text).map(stage => [stage.line, stage.ref]), [[2, WRONG_RUST]]);
+  assert.deepEqual(unpinnedDockerfileBases("f/Dockerfile", text), []);
+  assert.deepEqual(unpinnedDockerfileBases("f/Dockerfile", text.replace(`@sha256:${digest}`, "")), [`f/Dockerfile:2 ${WRONG_RUST.split("@")[0]}`]);
+});
 
 function readRustToolchainChannel() {
   const text = readLocalFromRepo("rust-toolchain.toml");
