@@ -347,12 +347,61 @@ test("every Dockerfile base image is pinned by digest", () => {
 });
 
 export function unpinnedDockerfileBases(file, text) {
-  const unpinned = [];
-  text.split("\n").forEach((line, i) => {
-    const m = line.match(/^FROM\s+(\S+)/i);
-    if (m && !/@sha256:[0-9a-f]{64}$/.test(m[1])) unpinned.push(`${file}:${i + 1} ${m[1]}`);
+  return dockerfileStages(file, text).filter(stage => !/@sha256:[0-9a-f]{64}$/.test(stage.ref)).map(stage => `${file}:${stage.line} ${stage.ref}`);
+}
+
+// The stages of a Dockerfile as BuildKit's built-in frontend reads them (#485): the one
+// reader behind every check of a Dockerfile in this file. It does not parse what the
+// repository's Dockerfiles do not use; it throws, naming the file and line, so that no
+// line can pose as a stage or hide one:
+// - any character other than printable ASCII, tab and LF (Go and JavaScript disagree on
+//   which others are white space or end a line);
+// - a comment shaped like a parser directive (`# escape=` moves the continuation
+//   character, `# syntax=` replaces the parser), anywhere, not only at the top;
+// - `<<` on any instruction line: a heredoc body is content, not instructions;
+// - inside a continued instruction, a blank line or a comment (BuildKit skips them and
+//   continues) or a line starting with FROM; a line ending in two backslashes;
+// - a FROM that spans lines, or is not `FROM [--platform=<p>] <image> [AS <name>]` with a
+//   literal image (BuildKit expands variables and removes quotes and escapes there).
+export function dockerfileStages(file, text) {
+  const refuse = (line, why) => { throw new Error(`${file}:${line}: ${why}`); };
+  const lines = text.split("\n");
+  lines.forEach((line, i) => {
+    const bad = line.match(/[^\t\x20-\x7e]/u);
+    if (bad) refuse(i + 1, `only printable ASCII, tab and LF are allowed in a Dockerfile (found U+${bad[0].codePointAt(0).toString(16).toUpperCase().padStart(4, "0")})`);
   });
-  return unpinned;
+  const blank = line => /^[ \t]*$/.test(line), comment = line => /^[ \t]*#/.test(line);
+  const stages = [];
+  for (let i = 0; i < lines.length; i++) {
+    const first = i + 1;
+    if (blank(lines[i])) continue;
+    if (comment(lines[i])) {
+      if (/^[ \t]*#[ \t]*[A-Za-z][A-Za-z0-9]*[ \t]*=/.test(lines[i])) refuse(first, "a comment shaped like a parser directive ('# name=value') is not allowed");
+      continue;
+    }
+    let instruction = "";
+    for (;; i++) {
+      const line = lines[i];
+      if (line.includes("<<")) refuse(i + 1, "a heredoc ('<<') is not allowed");
+      if (i + 1 > first && /^[ \t]*FROM(?![^ \t])/i.test(line)) refuse(i + 1, "a continued line must not start with FROM");
+      const continued = line.match(/^(.*?)(\\+)[ \t]*$/);
+      if (!continued) { instruction += line; break; }
+      if (continued[2].length > 1) refuse(i + 1, "a line must not end in more than one backslash");
+      instruction += continued[1];
+      if (i + 1 === lines.length) break;
+      if (blank(lines[i + 1]) || comment(lines[i + 1])) refuse(i + 2, "a continued line must not be blank or a comment");
+    }
+    const [keyword, ...words] = instruction.trim().split(/[ \t]+/);
+    if (keyword.toLowerCase() !== "from") continue;
+    if (i + 1 !== first) refuse(first, "FROM must be on one line");
+    const flags = [];
+    while (words[0]?.startsWith("--")) flags.push(words.shift());
+    const platform = flags[0]?.match(/^--platform=(.+)$/)?.[1];
+    const shape = flags.length <= 1 && (flags.length === 0 || platform) && (words.length === 1 || (words.length === 3 && /^as$/i.test(words[1])));
+    if (!shape || !/^[A-Za-z0-9][A-Za-z0-9._\/:@-]*$/.test(words[0])) refuse(first, "FROM must be written as 'FROM [--platform=<p>] <image> [AS <name>]' with a literal image (no variables, quotes or escapes)");
+    stages.push({ line: first, platform, ref: words[0], name: words[2] });
+  }
+  return stages;
 }
 
 const RUNTIME_DOCKERFILES = ["Dockerfile", "deploy/loadtest/Dockerfile"];
@@ -362,7 +411,8 @@ export function runtimeBaseViolations(sources) {
   const out = [];
   if (JSON.stringify(sources.map(s => s.file).sort()) !== JSON.stringify([...RUNTIME_DOCKERFILES].sort())) out.push("expected exactly the production and load-test Dockerfiles");
   for (const { file, text } of sources) {
-    const stages = [...(text ?? "").matchAll(/^\s*FROM\s+(--platform=\S+\s+)?(\S+)/gim)].map(m => ({ platform: m[1], ref: m[2] }));
+    let stages;
+    try { stages = dockerfileStages(file, text ?? ""); } catch (error) { out.push(error.message); continue; }
     const distroless = stages.filter(stage => stage.ref.startsWith("gcr.io/distroless/"));
     if (distroless.length !== 1 || distroless[0].platform || distroless[0].ref !== APPROVED_RUNTIME || stages.at(-1)?.ref !== APPROVED_RUNTIME) out.push(`${file}: expected one distroless final FROM using the approved Debian 13 index`);
   }
@@ -499,8 +549,8 @@ export function parseToolchainToml(text) {
 // Every check here that reads a Dockerfile must see the stages BuildKit builds, not
 // lines that merely look like `FROM`. Each fixture below was a way to show one of the
 // checks a stage that is not built, or to hide one that is; `docker build` accepted the
-// heredoc, continuation, `# escape=`, split-keyword, U+0085 and U+2028 forms and built
-// from the other base (verified by hand with Docker 29.1.3). All three readers must
+// heredoc, continuation, lone-backslash, `# escape=`, split-keyword, U+0085 and U+2028
+// forms and built from the other base (verified by hand with Docker 29.1.3). All three readers must
 // refuse each fixture, for the stated reason.
 const OTHER_BASE = `mirror.gcr.io/library/debian:13-slim@sha256:${"b".repeat(64)}`;
 const WRONG_RUST = `mirror.gcr.io/library/rust:1.98.0-bookworm@sha256:${"c".repeat(64)}`;
@@ -532,6 +582,7 @@ const REFUSED_DOCKERFILES = [
   ["a FROM keyword split by a continuation", `FROM ${APPROVED_RUNTIME} AS runtime\nFRO\\\nM ${OTHER_BASE}\n`, /FROM must be on one line/],
   ["a FROM image on a continued line", `FROM ${APPROVED_RUNTIME} AS runtime\nFROM \\\n  ${OTHER_BASE}\n`, /FROM must be on one line/],
   ["a FROM stage name on a continued line", `FROM ${APPROVED_RUNTIME} \\\n  AS runtime\n`, /FROM must be on one line/],
+  ["a FROM continued from a line holding only a backslash", `FROM ${APPROVED_RUNTIME} AS runtime\n\\\nFROM ${OTHER_BASE}\n`, /continued line/],
   ["a line ending in two backslashes", decoy("CMD true \\\\"), /backslash/],
   // Parser directives: `# escape=` moves the continuation character, `# syntax=` replaces the parser.
   ["an escape directive hiding a continuation", "# escape=`\n" + decoy("CMD true `"), /parser directive/],
@@ -558,6 +609,8 @@ const REFUSED_DOCKERFILES = [
   ["a FROM image from an unbraced ARG", `ARG BASE=${OTHER_BASE}\nFROM $BASE\n`, /FROM must be written as/],
   ["a FROM image with an expansion default", `FROM \${BASE:-${WRONG_RUST}} AS build\nFROM ${APPROVED_RUNTIME}\n`, /FROM must be written as/],
   ["a FROM repository from an ARG that a later ARG line redefines", `ARG R=rust:1.98.0-bookworm\nFROM \${R}@sha256:${"c".repeat(64)} AS build\nARG R=debian\nFROM ${APPROVED_RUNTIME}\n`, /FROM must be written as/],
+  ["a variable inside a FROM repository", `ARG NAME=rust\nFROM mirror.gcr.io/library/\${NAME}:1.98.0-bookworm@sha256:${"c".repeat(64)} AS build\nFROM ${APPROVED_RUNTIME}\n`, /FROM must be written as/],
+  ["an unbraced variable as a FROM tag", `ARG TAG=1.98.0-bookworm\nFROM mirror.gcr.io/library/rust:$TAG@sha256:${"c".repeat(64)} AS build\nFROM ${APPROVED_RUNTIME}\n`, /FROM must be written as/],
   ["a FROM with no image", "FROM\n", /FROM must be written as/],
   ["a FROM with two images", `FROM ${OTHER_BASE} ${APPROVED_RUNTIME}\n`, /FROM must be written as/],
   ["a FROM with AS and no name", `FROM ${APPROVED_RUNTIME} AS\n`, /FROM must be written as/],
@@ -620,6 +673,19 @@ test("fixtures: stages written in other accepted forms are still read as stages 
   assert.deepEqual(parseDockerfileRustStages("f/Dockerfile", text).map(stage => [stage.line, stage.ref]), [[2, WRONG_RUST]]);
   assert.deepEqual(unpinnedDockerfileBases("f/Dockerfile", text), []);
   assert.deepEqual(unpinnedDockerfileBases("f/Dockerfile", text.replace(`@sha256:${digest}`, "")), [`f/Dockerfile:2 ${WRONG_RUST.split("@")[0]}`]);
+  assert.deepEqual(dockerfileStages("f/Dockerfile", text), [
+    { line: 2, platform: undefined, ref: WRONG_RUST, name: "build" },
+    { line: 8, platform: undefined, ref: APPROVED_RUNTIME, name: "runtime" },
+  ]);
+  assert.deepEqual(dockerfileStages("f/Dockerfile", `from --platform=$BUILDPLATFORM ${OTHER_BASE} as B\nRUN true \\`), [{ line: 1, platform: "$BUILDPLATFORM", ref: OTHER_BASE, name: "B" }]);
+  assert.deepEqual(dockerfileStages("f/Dockerfile", ""), []);
+});
+
+// BuildKit's own list of the stages (`docker buildx build --call=targets`), recorded here
+// so that a change to either Dockerfile's stages, or to how the reader finds them, shows.
+test("the reader finds the stages BuildKit builds in the repository's Dockerfiles (#485)", () => {
+  const stages = Object.fromEntries(allDockerfiles().map(({ file, text }) => [file, dockerfileStages(file, text).map(stage => stage.name ?? null)]));
+  assert.deepEqual(stages, { "Dockerfile": ["web", "build", "runtime"], "deploy/loadtest/Dockerfile": ["build", null] });
 });
 
 function readRustToolchainChannel() {
@@ -644,26 +710,6 @@ export function findDockerfiles(dir = root) {
   return out;
 }
 const allDockerfiles = () => findDockerfiles().map(p => ({ file: p.slice(root.length), text: readFileSync(p, "utf8") }));
-
-// `ARG NAME=value` defaults declared anywhere in a Dockerfile, so a `FROM ${NAME}` stage can
-// be resolved before it is checked. An ARG with no default (supplied only at build time)
-// cannot be resolved here and is left as-is; it will not match a `rust:` reference unless the
-// literal text already does.
-function resolveDockerfileArgs(text) {
-  const args = new Map();
-  for (const line of text.split("\n")) {
-    const m = line.match(/^\s*ARG\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+?)\s*$/);
-    if (m) args.set(m[1], m[2].replace(/^["']|["']$/g, ""));
-  }
-  return args;
-}
-
-function substituteArgs(target, args) {
-  return target.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (whole, braced, bare) => {
-    const name = braced ?? bare;
-    return args.has(name) ? args.get(name) : whole;
-  });
-}
 
 // Recognizes any reference whose repository is exactly `rust` (the final path segment, up to
 // but not including any `:tag` or `@digest`), case-insensitively, with any registry/path prefix
@@ -696,20 +742,14 @@ export function extractRustImageRef(ref) {
   };
 }
 
-// Every `FROM [--platform=...] <image>` line in one Dockerfile's text that names a `rust`
-// image, in any form (every build stage, not just the first match; ARG-substituted targets
-// resolved against ARG defaults declared anywhere earlier in the same file).
+// Every stage of one Dockerfile (`dockerfileStages`, which throws on what it refuses to
+// read) whose image is a `rust` image, in any form (every build stage, not just the first
+// match). A FROM image that comes from an ARG is refused there, not resolved here (#485).
 export function parseDockerfileRustStages(file, text) {
-  const out = [];
-  const args = resolveDockerfileArgs(text);
-  text.split("\n").forEach((line, i) => {
-    const m = line.match(/^\s*FROM\s+(?:--platform=\S+\s+)?(\S+)/i);
-    if (!m) return;
-    const target = substituteArgs(m[1], args);
-    const parsed = extractRustImageRef(target);
-    if (parsed) out.push({ file, line: i + 1, ref: target, ...parsed });
+  return dockerfileStages(file, text).flatMap(stage => {
+    const parsed = extractRustImageRef(stage.ref);
+    return parsed ? [{ file, line: stage.line, ref: stage.ref, ...parsed }] : [];
   });
-  return out;
 }
 
 // Every job `container:` (string or `{image:...}`) and `services.<name>` (string or
@@ -944,7 +984,7 @@ test("fixtures: mismatched Rust build-stage versions and digests across Dockerfi
   assert.equal(rustVersionViolations([...a, ...stageIn("B/Dockerfile", `1.99.1-bookworm@sha256:${"a".repeat(64)}`)], "1.99.1").length, 0, "two Dockerfiles pinning the identical tag and digest pass");
 });
 
-test("fixtures: a Rust image reference in any form (bare, floating tag, undigested, --platform, ARG-substituted) is caught", () => {
+test("fixtures: a Rust image reference in any form (bare, floating tag, undigested, --platform) is caught, and an ARG-substituted one is refused", () => {
   const channel = "1.99.1";
   const digest = "a".repeat(64);
   const stagesOf = text => parseDockerfileRustStages("fixture/Dockerfile", text);
@@ -954,8 +994,9 @@ test("fixtures: a Rust image reference in any form (bare, floating tag, undigest
   assert.equal(rustVersionViolations(stagesOf("FROM rust:1.99.1-bookworm AS build\n"), channel).length, 1, "correct version with no digest at all");
   assert.equal(rustVersionViolations(stagesOf(`FROM --platform=linux/amd64 rust:1.98.0-bookworm@sha256:${digest} AS build\n`), channel).length, 1, "--platform= flag must not hide the image");
   assert.equal(rustVersionViolations(stagesOf(`FROM --platform=linux/amd64 rust:1.99.1-bookworm@sha256:${digest} AS build\n`), channel).length, 0, "--platform= flag with a correct pin still passes");
-  assert.equal(rustVersionViolations(stagesOf(`ARG RUST_IMAGE=rust:1.98.0-bookworm@sha256:${digest}\nFROM \${RUST_IMAGE} AS build\n`), channel).length, 1, "ARG-substituted wrong version");
-  assert.deepEqual(rustVersionViolations(stagesOf(`ARG RUST_IMAGE=rust:1.99.1-bookworm@sha256:${digest}\nFROM \${RUST_IMAGE} AS build\n`), channel), [], "ARG-substituted correct pin passes");
+  // A FROM image taken from an ARG is no longer resolved (#485): the reader refuses it, whatever the ARG holds.
+  assert.throws(() => stagesOf(`ARG RUST_IMAGE=rust:1.98.0-bookworm@sha256:${digest}\nFROM \${RUST_IMAGE} AS build\n`), /fixture\/Dockerfile:2: FROM must be written as/, "ARG-substituted wrong version");
+  assert.throws(() => stagesOf(`ARG RUST_IMAGE=rust:1.99.1-bookworm@sha256:${digest}\nFROM \${RUST_IMAGE} AS build\n`), /fixture\/Dockerfile:2: FROM must be written as/, "ARG-substituted correct pin");
   assert.deepEqual(rustVersionViolations(stagesOf(`FROM mirror.gcr.io/library/rust:1.99.1-bookworm@sha256:${digest} AS build\n`), channel), [], "correctly pinned mirrored reference passes");
   assert.equal(stagesOf("FROM gcr.io/distroless/cc-debian12:nonroot@sha256:" + digest + "\n").length, 0, "a non-rust base image is not treated as a rust stage");
 });
