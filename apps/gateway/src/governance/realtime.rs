@@ -93,7 +93,7 @@ pub async fn window_output(
         .bind(deployment)
         .fetch_optional(&store.pool)
         .await
-        .map_err(storage)?;
+        .map_err(pool_storage)?;
     let window = limit.map_or(i64::from(cap), |l| l.min(i64::from(cap)));
     u32::try_from(window)
         .ok()

@@ -2427,6 +2427,9 @@ async fn rejection_fault_signature(pool: PgPool, fault: SettlementFault) {
     use crate::db::diagnostics::{Outcome, SqlxKind, Stage};
     use sqlx::Connection;
 
+    // Installs the log subscriber before any request, so the faulted request's
+    // `http.request` span exists when its accounting failure is logged.
+    drop(crate::log_capture_test::exclusive());
     // A shorter acquisition bound distinguishes pool timeout from the unchanged
     // three-second finalizer. The other hypotheses retain SQLx's default bound.
     let options = sqlx::postgres::PgPoolOptions::new();

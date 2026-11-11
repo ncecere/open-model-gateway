@@ -910,6 +910,8 @@ async fn diagnostic_drop_settlement_registers_before_spawn_and_outlives_scope() 
 
 /// #389: the production signal names the explicit settlement deadline, and a
 /// request whose accounting succeeds records nothing.
+/// (The mock repository hangs before any wait is marked, so the deadline
+/// reports the settlement's first wait, the queue.)
 #[tokio::test]
 async fn accounting_failure_signal_names_the_explicit_settlement_deadline_only_on_failure() {
     use crate::db::accounting_failure::{Cause, Stage};

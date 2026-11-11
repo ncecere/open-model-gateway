@@ -26,6 +26,11 @@ fn storage(error: sqlx::Error) -> InferenceError {
 fn begin_storage(error: sqlx::Error) -> InferenceError {
     storage_at(crate::db::accounting_failure::begin_error, error)
 }
+/// As [`storage`], for a statement run straight on the pool, outside a
+/// transaction: without a connection it is a failed start (#389).
+fn pool_storage(error: sqlx::Error) -> InferenceError {
+    storage_at(crate::db::accounting_failure::pool_statement_error, error)
+}
 fn storage_at(signal: fn(&sqlx::Error), error: sqlx::Error) -> InferenceError {
     #[cfg(test)]
     crate::db::diagnostics::observe_sqlx(crate::db::diagnostics::Stage::GovernanceStorage, &error);
@@ -1717,10 +1722,15 @@ async fn finish_unobserved(
         .map(|n| n as i64);
     // Provider-reported served model (0013), validated and bounded by type.
     let reported_model = record.usage.reported_model.map(|m| m.as_str().to_owned());
+    // What an elapsed settlement deadline was waiting on (#389).
+    use crate::db::accounting_failure::{Waiting, settlement_waiting};
+    settlement_waiting(Waiting::Queue);
     let _queued = gate(&store.lock_gates.settlement).await;
     timer.phase("queue");
     crate::telemetry::mark_phase(crate::telemetry::SpanName::SettlementQueue);
+    settlement_waiting(Waiting::Connection);
     let mut tx = crate::db::begin(&store.pool).await.map_err(begin_storage)?;
+    settlement_waiting(Waiting::Database);
     timer.phase("connect");
     crate::telemetry::mark_phase(crate::telemetry::SpanName::SettlementConnect);
     settlement_prefix(store, &mut tx).await?;

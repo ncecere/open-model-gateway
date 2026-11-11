@@ -537,7 +537,7 @@ impl Metrics {
         );
         registry.register(
             "accounting_failures",
-            "Failed accounting operations (the cause of 503 accounting_unavailable), by stage (pool_acquire_and_begin, governance_storage, explicit_settlement, cancellation_settlement) and cause (pool_timeout, pool_closed, lock_timeout, statement_timeout, backend_terminated, deadlock, other_database, io, tls, protocol, worker_crashed, other, deadline_exceeded). Fixed values only: no SQL, SQLSTATE, message or identifier",
+            "Failed accounting operations (the cause of 503 accounting_unavailable), by stage (route_lookup, pool_acquire_and_begin, governance_storage, explicit_settlement, cancellation_settlement) and cause (pool_timeout, pool_closed, lock_timeout, statement_timeout, backend_terminated, deadlock, read_only_transaction, too_many_connections, other_database, io, tls, protocol, worker_crashed, other; for the two settlement stages what the settlement waited on when its deadline elapsed: deadline_in_queue, deadline_acquiring_connection, deadline_in_database). Fixed values only: no SQL, SQLSTATE, message or identifier",
             metrics.accounting_failures.clone(),
         );
         registry.register(

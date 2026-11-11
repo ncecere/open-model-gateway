@@ -626,6 +626,6 @@ pub async fn batch_cost(store: &Store, job: Uuid) -> Result<(i64, i64, bool), In
         .bind(job)
         .fetch_one(&store.pool)
         .await
-        .map_err(storage)?;
+        .map_err(pool_storage)?;
     Ok((row.0.unwrap_or(0), row.1.unwrap_or(0), row.2))
 }

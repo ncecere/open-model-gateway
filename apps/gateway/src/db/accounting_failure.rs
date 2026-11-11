@@ -6,15 +6,17 @@
 //! enums below: never SQL text, bind values, a raw SQLSTATE, a driver or
 //! database message, an identifier or a credential. Nothing here runs when
 //! accounting succeeds.
-use std::{borrow::Cow, future::Future};
+use std::{borrow::Cow, cell::Cell, future::Future};
 
 /// Where the accounting operation failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Stage {
     /// Starting an accounting transaction: taking a pooled connection and
-    /// `BEGIN` (sqlx does not separate the two).
+    /// `BEGIN` (sqlx does not separate the two). Also an accounting statement
+    /// run without a transaction that got no connection.
     PoolAcquireAndBegin,
-    /// Any later statement of an accounting transaction, including `COMMIT`.
+    /// Any later statement of an accounting transaction, including `COMMIT`
+    /// (and a statement run without a transaction that did get a connection).
     GovernanceStorage,
     /// The reads before admission: the eligible deployments and the routing
     /// plan (connection, `BEGIN` and statements alike).
@@ -147,6 +149,8 @@ pub(crate) fn classify(error: &sqlx::Error) -> Cause {
             Some("57014") => Cause::StatementTimeout,
             Some("57P01") => Cause::BackendTerminated,
             Some("40P01") => Cause::Deadlock,
+            Some("25006") => Cause::ReadOnlyTransaction,
+            Some("53300") => Cause::TooManyConnections,
             _ => Cause::OtherDatabase,
         },
         sqlx::Error::PoolTimedOut => Cause::PoolTimeout,
@@ -173,7 +177,10 @@ pub(crate) fn storage_error(error: &sqlx::Error) {
 /// transaction: without a connection it never started, so that is the same
 /// failure as a failed start; anything else is a failed statement.
 pub(crate) fn pool_statement_error(error: &sqlx::Error) {
-    storage_error(error);
+    match error {
+        sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed => begin_error(error),
+        _ => storage_error(error),
+    }
 }
 
 /// A failed read before admission (eligible deployments, routing plan).
@@ -192,9 +199,17 @@ pub(crate) enum Waiting {
     Database,
 }
 
-/// Mark what the running settlement waits on next. Outside the two settlement
+tokio::task_local! {
+    /// What the settlement inside a deadline wrapper below is waiting on.
+    static WAITING: Cell<Waiting>;
+}
+
+/// Mark what the running settlement waits on next: one store into a
+/// task-local cell (no allocation, no lock). Outside the two settlement
 /// deadline wrappers below there is nothing to mark.
-pub(crate) fn settlement_waiting(_on: Waiting) {}
+pub(crate) fn settlement_waiting(on: Waiting) {
+    let _ = WAITING.try_with(|waiting| waiting.set(on));
+}
 
 /// An accounting transaction that was still a deadlock victim on its last
 /// permitted run (`governance::locks::retry_deadlocks`).
@@ -225,14 +240,27 @@ async fn settlement<F, T>(stage: Stage, future: F) -> Result<T, tokio::time::err
 where
     F: Future<Output = Result<T, tokio::time::error::Elapsed>>,
 {
-    let result = future.await;
-    if result.is_err() {
-        record(stage, Cause::DeadlineInQueue);
-    }
-    result
+    // A settlement queues first; it marks each later wait itself
+    // (`governance::finish_unobserved`).
+    WAITING
+        .scope(Cell::new(Waiting::Queue), async {
+            let result = future.await;
+            if result.is_err() {
+                let cause = match WAITING.with(Cell::get) {
+                    Waiting::Queue => Cause::DeadlineInQueue,
+                    Waiting::Connection => Cause::DeadlineAcquiringConnection,
+                    Waiting::Database => Cause::DeadlineInDatabase,
+                };
+                record(stage, cause);
+            }
+            result
+        })
+        .await
 }
 
-/// The only writer of the signal. Callers above fix which pairs can occur.
+/// The only writer of the signal. Callers above fix which pairs can occur:
+/// the three SQL stages with the fourteen driver causes, and the two
+/// settlement stages with the three deadline causes (48 label combinations).
 fn record(stage: Stage, cause: Cause) {
     record_to(&crate::metrics::METRICS, stage, cause);
 }
