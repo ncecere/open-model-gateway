@@ -28,6 +28,8 @@ In the identity provider, use:
 
 Admin › Settings › Sign-in also shows whether SCIM is on, user and group counts, and the time of the last SCIM write. It never shows the token.
 
+Before the identity provider sends its first push, set up a Platform Admin who can sign in and the group mapping: see [Before the first push](#before-the-first-push-bootstrap-admin-and-group-mapping).
+
 ## What is supported
 
 The subset of RFC 7643 and RFC 7644 that Okta and Entra use.
@@ -84,6 +86,33 @@ SCIM never removes platform access from the last active Platform Admin. An activ
 
 To retire the last Admin, grant Admin to someone else first, then repeat the change in the identity provider. The same rule applies to manual changes: Admin › Users and the management API refuse to revoke the last Admin grant, suspend the last Admin, or change or delete the group mapping that holds it. There is no last-owner safeguard for SCIM: losing a Team or Project owner through SCIM follows the identity provider.
 
+## Before the first push: bootstrap admin and group mapping
+
+Provisioning grants nothing. The people SCIM creates get access only from an SSO group mapping or a manual grant, and only a signed-in Platform Admin can create either. Set that administrator up before the identity provider pushes anything. Do the steps in this order.
+
+1. **Provision a bootstrap Platform Admin who can sign in.** Use an identity-provider account that a person controls and that has a verified email: an operator's own account, or a disposable one made for this purpose. Never use a placeholder address that has no account behind it. The identity provider must allow that account to open the gateway's OIDC application. Run the command with trusted database access (see [identity](identity.md#linking-suspension-and-cleanup)); `python3 scripts/staging.py provision-user --email …` runs the same command in the [staging rehearsal](staging.md#oidc-information-needed-next).
+
+   ```sh
+   cargo run -p open-model-gateway -- provision-user --email operator@example.org --platform-admin
+   ```
+
+   *Check:* the command prints `Provisioned user <id>. OIDC must provide the same verified email on first sign-in.`
+2. **Sign in once as that admin, while the SCIM provider is still off.** The first sign-in links the identity to the provisioned account by verified email. The link is one-use and is now consumed. *Check:* the dashboard opens and shows the Admin pages. If the sign-in is denied, stop and fix it; do not activate SCIM.
+3. **Create the SSO group mapping.** In Admin › SSO groups, add a mapping for the configured issuer whose group value is the `displayName` or `externalId` of the group the provider will push (see [Groups and access](#groups-and-access)). Map only the groups that should have access, to the lowest role they need. *Check:* the mapping is listed and enabled, and its issuer is the one shown in Admin › Settings › Sign-in. Mappings for another issuer are ignored.
+4. **Only then activate the SCIM provider and run the first sync.** If the provider has a dry-run mode, read its planned requests first. *Check:* Admin › Settings › Sign-in shows the user and group counts and a recent last SCIM write. In Admin › Users, members of the mapped group have a role that came from the group, everyone else pushed has no role, and the bootstrap admin still has its Admin role.
+
+### A pushed user with no grant is denied
+
+A pushed person who is in no mapped group and has no manual grant cannot sign in. This is correct behaviour, not a fault: neither provisioning nor authentication grants access ([identity](identity.md#authentication-is-not-entitlement)).
+
+- **After the push**, the account is active, has no grant, and may link once at its first sign-in. Admin › Users lists it without a role.
+- **When that person signs in**, the gateway links the identity, finds no platform role and denies the sign-in. No session is created. The browser returns to the sign-in page (`/?auth_error=access_denied`), which says "No access yet. Ask a platform admin to add you."
+- **The denied sign-in suspends the account** with the reason `entitlement_loss` and schedules the normal cleanup 30 days later. Admin › Users then shows the account as **No access**, and the person's page shows the cleanup date.
+- **To give access**, add the person to a mapped group in the identity provider, or create a mapping for a group they are already in. The suspension lifts at their next sign-in, or at the next SCIM group change that affects them, if that happens within the 30 days.
+- **`provision-user` does not lift it.** It refuses any suspended account with "Account is suspended; reactivate through audited platform management first".
+
+This is why the order above matters. If SCIM runs first and the only Platform Admin cannot sign in, nobody can create the mapping. Each pushed person who tries to sign in is denied and suspended, and `provision-user` then refuses those accounts, so the installation has no working administrator. If you are already there, provision an account that is not suspended and can sign in (step 1), sign in with it, and create the mapping. Do not grant access automatically or relax the suspension to get past this.
+
 ## Authentik
 
 Authentik 2025.10's SCIM provider needs three non-default settings:
@@ -102,9 +131,19 @@ Authentik 2025.10's SCIM provider needs three non-default settings:
 
 Authentik's provider also has a dry-run mode, a safe way to see the planned requests before turning it on.
 
+### Observed with Authentik during the live acceptance run (#60)
+
+These are observations from one run against Authentik 2025.10.3 on 2026-10-28, not guarantees about Authentik. They matter to anyone who scripts the provider's setup, its ownership checks or its teardown through Authentik's API. Check each against the version in use.
+
+- **Mapping expressions came back with trailing whitespace trimmed.** A script that compared the stored expression with the submitted text had to trim both first.
+- **Dramatiq actor names were module-qualified.** A lookup by the bare actor name did not find the task.
+- **A SCIM provider's `used_by` edges had two types.** User mappings and backchannel links appeared as `authentik_core.provider`. Group mappings and the filter group appeared as `authentik_providers_scim.scimprovider`. An ownership check had to expect both.
+- **Sign-ins left OAuth2 access tokens that added edges to the OAuth2 provider.** They had to be revoked, after confirming each token's provider and user, before a strict ownership check passed.
+- **The cleanup that reconciled disposable users deactivated them.** Run it only at the end of acceptance. Run earlier by mistake, it deactivated the test users.
+
 ## Operations and limits
 
 - Each write runs in one transaction under the installation lock, the same lock that sign-in and management use. The last-admin check runs at the end of that transaction (see [above](#the-last-platform-admin-is-protected)). A change to a very large group's name or `externalId` re-checks every member in that transaction.
 - Runtime database access is limited to the reviewed columns in `deploy/staging/runtime-grants.sql` (migration `0014_scim.sql`; the last-admin alert kind is in `0018_job_limits.sql`). SCIM user links cannot be deleted or re-keyed. Groups and memberships are directory state that can be removed, and grant history stays in the grant tables and audit log. `verify-privileges.sql` checks this and runs rollback-only probes.
 - Rate-limit `/scim` at the edge, and keep `Authorization` headers out of edge logs.
-- Tests in `apps/gateway/src/scim/tests.rs` use local requests only. Authentik 2025.10 was run against v0.7.1 on 2026-10-23, covering matching of existing users, one pushed group, and deactivate/reactivate; Okta and Entra have still not been run.
+- Tests in `apps/gateway/src/scim/tests.rs` use local requests only. Authentik has been run twice. Authentik 2025.10 was run against v0.7.1 on 2026-10-23, covering matching of existing users, one pushed group, and deactivate/reactivate. Live acceptance passed on 2026-10-28 against Authentik 2025.10.3 on a signed v0.9.1 image (#60), on an isolated staging installation that has since been removed. It covered provisioning, a denied sign-in with no grant, first linking with a mapped group grant, deactivation, and a group removal ending a live session. No later release has been run against a real provider. Okta and Entra have still not been run.

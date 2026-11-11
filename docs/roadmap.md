@@ -26,7 +26,7 @@ This current summary and phase 3 status supersede the **historical 2026-10-09–
   - **Installation logo:** an uploaded PNG/JPEG/WebP in the store (`branding`, migration 0023) replaces the Portal mark in the sidebar and on the sign-in page, served same-origin at `/api/v1/branding/logo` ([settings](settings.md#logo)).
   - **Not implemented yet:** referencing a `file_id` in Chat/Responses requests (phase 2) and an optional storage price. CSV exports and video outputs are planned consumers. Tested with mocks, an in-memory store and the official OpenAI Node SDK; no paid calls.
 - **Planned, not implemented:** an OpenRouter video adapter (video has no supported provider since OpenAI's Videos API shutdown on 2026-09-24), video remix/edits/extensions and reference inputs, batch metadata echo and input-order results, native batches for more providers (Bedrock, Vertex), realtime beyond the bounded OpenAI WebSocket subset (WebRTC/SIP, ephemeral client secrets, input transcription, automatic VAD responses), image edits and vision input, incremental tool-call/native-event fidelity beyond the implemented Responses/Messages text streaming, active health probes, hold-age notifications and webhooks, OpenAI Costs export support (#393).
-- **Quality gates and limits:** CI includes Rust/PostgreSQL integration tests, Vitest and a Playwright + axe browser suite ([verification](verification.md#browser-suite), [accessibility](accessibility.md)); this roadmap update is not a new gate run. Earlier capped live-provider checks and the v0.5.0 restore drill are not comprehensive acceptance. Live SCIM (#60), independent security review (#61), steady-load stalls (#132) and the second failover write outage (#149) remain open. There is no certified capacity or production-ready claim.
+- **Quality gates and limits:** CI includes Rust/PostgreSQL integration tests, Vitest and a Playwright + axe browser suite ([verification](verification.md#browser-suite), [accessibility](accessibility.md)); this roadmap update is not a new gate run. Earlier capped live-provider checks and the v0.5.0 restore drill are not comprehensive acceptance. Live SCIM acceptance passed once, on 2026-10-28 against Authentik 2025.10.3 on v0.9.1 (#60); no later release has been run against a real provider. Independent security review (#61), steady-load stalls (#132) and the second failover write outage (#149) remain open. There is no certified capacity or production-ready claim.
 
 ## Current program (selected 2026-10-09)
 
@@ -319,7 +319,7 @@ Implemented here means code plus local automated coverage—not proof of product
 - [x] Issuer JWKS cache with bounded TTL, rate-limited single-flight refresh on unknown key IDs and bounded outage grace; `none`/HMAC ID tokens rejected (2026-10-09).
 - [x] SCIM 2.0 provisioning (`/scim/v2`, `GATEWAY_SCIM_TOKEN_ENV`): users, groups, deactivation/reactivation without key resurrection, group-provenance grants; read-only status in Admin › Settings › Sign-in ([SCIM](scim.md), 2026-10-09).
 
-Operational follow-up: live generic OIDC and SCIM acceptance (against Authentik), session/attempt cleanup, login abuse limits, upstream single logout and revoke-all-device UX. See [identity](identity.md).
+Live SCIM acceptance against Authentik, with real OIDC sign-in, passed once on v0.9.1 (2026-10-28, #60; see [SCIM](scim.md#operations-and-limits)); it has not been repeated on a later release. Operational follow-up: the rest of live generic OIDC acceptance (see [live acceptance](live-acceptance.md)), session/attempt cleanup, login abuse limits, upstream single logout and revoke-all-device UX. See [identity](identity.md).
 
 ## 2. Management API and dashboard — implemented
 
@@ -388,7 +388,7 @@ Limits count attempts, including opt-in fallbacks. Reservations require accurate
 - [ ] Independent security review and threat model, RLS assessment, abuse controls, multi-replica load test.
 - [ ] Off-host encrypted backup/restore and actual recovery-time/cutover exercises.
 - [ ] OpenTelemetry metrics/traces and on-call runbooks.
-- [ ] Live IdP (Authentik) and SCIM acceptance, provider credential refresh, AWS IAM acceptance.
+- [ ] Live IdP (Authentik) acceptance beyond the SCIM run, provider credential refresh, AWS IAM acceptance. Live SCIM acceptance against Authentik passed once on v0.9.1 (2026-10-28, #60) and has not been repeated on a later release.
 - [ ] Tenant onboarding policies, quotas and financial billing if required.
 
 See [staging](staging.md) and [live acceptance](live-acceptance.md). OIDC remains disabled in the default rehearsal until the actual issuer/client information is supplied. Per-key restrictions are complete within the issuance-time scope above. Paginated workspace inventory, native streaming, active health/recovery probes and additional provider adapters remain unselected pending phases. Billing scope (internal allocation versus customer invoices/payment collection) still needs a product decision.

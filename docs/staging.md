@@ -140,7 +140,7 @@ python3 scripts/staging.py up
 
 The client must support authorization code + PKCE. IdP groups do not automatically grant gateway roles. First identity linking is explicit; do not weaken verified-email checks to accommodate a claim mismatch.
 
-Known staging limitations: issuer key rotation relies on the bounded JWKS refresh ([identity](identity.md#signing-keys-jwks)), not yet exercised against the real issuer; SCIM is not yet accepted against a real provider. Session/attempt cleanup, login abuse controls, independent security review and production-load acceptance also remain. Keep this pilot private.
+Known staging limitations: issuer key rotation relies on the bounded JWKS refresh ([identity](identity.md#signing-keys-jwks)), not yet exercised against the real issuer; SCIM passed one live acceptance run against Authentik 2025.10.3 on v0.9.1 (2026-10-28, #60) on a separate isolated installation, not in this rehearsal, and no later release has been run ([SCIM](scim.md#operations-and-limits)). Session/attempt cleanup, login abuse controls, independent security review and production-load acceptance also remain. Keep this pilot private.
 
 ## First real provider: explicit opt-in only
 
