@@ -57,8 +57,15 @@ pub(crate) struct Snapshot {
     pub dropped: usize,
     pub unavailable: bool,
 }
+/// A production accounting-failure signal (`db::accounting_failure`), mirrored
+/// to the request that owns this capture. Never part of a [`Snapshot`].
+pub(crate) type Signal = (
+    super::accounting_failure::Stage,
+    super::accounting_failure::Cause,
+);
 struct Inner {
     events: Mutex<Vec<Event>>,
+    signals: Mutex<Vec<Signal>>,
     pending: AtomicUsize,
     dropped: AtomicUsize,
     writers: AtomicUsize,
@@ -84,6 +91,7 @@ impl Handle {
     pub fn new() -> Self {
         Self(Arc::new(Inner {
             events: Mutex::new(Vec::with_capacity(CAPACITY)),
+            signals: Mutex::new(Vec::new()),
             pending: AtomicUsize::new(0),
             dropped: AtomicUsize::new(0),
             writers: AtomicUsize::new(0),
@@ -108,6 +116,20 @@ impl Handle {
             events: events.unwrap_or_default(),
             pending,
             dropped,
+        }
+    }
+    /// The production signals recorded while this capture was the current one.
+    pub fn signals(&self) -> Vec<Signal> {
+        self.0
+            .signals
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+    pub(super) fn signal(&self, signal: Signal) {
+        let mut signals = self.0.signals.lock().unwrap_or_else(|e| e.into_inner());
+        if signals.len() < CAPACITY {
+            signals.push(signal);
         }
     }
     fn push(&self, event: Event) {
@@ -195,26 +217,27 @@ impl Drop for Operation {
     }
 }
 fn error_fields(error: &sqlx::Error) -> (Option<SqlxKind>, Option<String>) {
-    let kind = match error {
-        sqlx::Error::Database(_) => SqlxKind::Database,
-        sqlx::Error::PoolClosed => SqlxKind::PoolClosed,
-        sqlx::Error::PoolTimedOut => SqlxKind::PoolTimedOut,
-        sqlx::Error::Io(_) => SqlxKind::Io,
-        sqlx::Error::Tls(_) => SqlxKind::Tls,
-        sqlx::Error::Protocol(_) => SqlxKind::Protocol,
-        sqlx::Error::WorkerCrashed => SqlxKind::WorkerCrashed,
-        _ => SqlxKind::Other,
+    // One classifier (#389): the production signal's, projected to the driver kind.
+    use super::accounting_failure::{Cause, classify, sqlstate};
+    let kind = match classify(error) {
+        Cause::LockTimeout
+        | Cause::StatementTimeout
+        | Cause::BackendTerminated
+        | Cause::Deadlock
+        | Cause::ReadOnlyTransaction
+        | Cause::OtherDatabase => SqlxKind::Database,
+        Cause::PoolClosed => SqlxKind::PoolClosed,
+        Cause::PoolTimeout => SqlxKind::PoolTimedOut,
+        Cause::Io => SqlxKind::Io,
+        Cause::Tls => SqlxKind::Tls,
+        Cause::Protocol => SqlxKind::Protocol,
+        Cause::WorkerCrashed => SqlxKind::WorkerCrashed,
+        Cause::Other
+        | Cause::DeadlineInQueue
+        | Cause::DeadlineAcquiringConnection
+        | Cause::DeadlineInDatabase => SqlxKind::Other,
     };
-    let code = error.as_database_error().and_then(|error| error.code());
-    let sqlstate = code
-        .filter(|code| {
-            code.len() == 5
-                && code
-                    .bytes()
-                    .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
-        })
-        .map(|code| code.into_owned());
-    (Some(kind), sqlstate)
+    (Some(kind), sqlstate(error).map(|code| code.into_owned()))
 }
 pub(crate) fn observe_sqlx(stage: Stage, error: &sqlx::Error) {
     if let Some(handle) = current() {

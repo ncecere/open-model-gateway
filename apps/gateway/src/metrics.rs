@@ -210,6 +210,7 @@ pub struct Metrics {
     time_to_first_token: Histograms<L2>,
     tokens: Family<L3, Counter>,
     settlements: Family<L1, Counter>,
+    accounting_failures: Family<L2, Counter>,
     denials: Family<L2, Counter>,
     admission_phases: Histograms<L2>,
     settlement_phases: Histograms<L2>,
@@ -349,7 +350,7 @@ pub struct AttemptObservation<'a> {
 }
 
 impl Metrics {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let mut registry = Registry::with_prefix("gateway");
         // Pre-create every trace label once. Recording increments plain atomic
         // counters, never takes a Family's lock or allocates label strings.
@@ -418,6 +419,7 @@ impl Metrics {
             time_to_first_token: Family::new_with_constructor(upstream_buckets),
             tokens: Family::default(),
             settlements: Family::default(),
+            accounting_failures: Family::default(),
             denials: Family::default(),
             admission_phases: Family::new_with_constructor(phase_buckets),
             settlement_phases: Family::new_with_constructor(phase_buckets),
@@ -532,6 +534,11 @@ impl Metrics {
             "settlements",
             "Attempt settlements: settled (exact), unknown (hold retained), held (finalization failed; pending reconciliation)",
             metrics.settlements.clone(),
+        );
+        registry.register(
+            "accounting_failures",
+            "Failed accounting operations (the cause of 503 accounting_unavailable), by stage (route_lookup, pool_acquire_and_begin, governance_storage, explicit_settlement, cancellation_settlement) and cause (pool_timeout, pool_closed, lock_timeout, statement_timeout, backend_terminated, deadlock, read_only_transaction, other_database, io, tls, protocol, worker_crashed, other; for the two settlement stages what the settlement waited on when its deadline elapsed: deadline_in_queue, deadline_acquiring_connection, deadline_in_database). Fixed values only (5 stages and 16 causes, at most 80 label combinations): no SQL, SQLSTATE, message or identifier",
+            metrics.accounting_failures.clone(),
         );
         registry.register(
             "admission_denials",
@@ -1155,6 +1162,34 @@ impl Metrics {
                     .inc_by(n as u64);
             }
         }
+    }
+
+    /// One failed accounting operation (`gateway_accounting_failures_total`).
+    pub(crate) fn observe_accounting_failure(
+        &self,
+        stage: crate::db::accounting_failure::Stage,
+        cause: crate::db::accounting_failure::Cause,
+    ) {
+        self.accounting_failures
+            .get_or_create(&[
+                ("stage", stage.as_str().to_owned()),
+                ("cause", cause.as_str().to_owned()),
+            ])
+            .inc();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn accounting_failure_count(
+        &self,
+        stage: crate::db::accounting_failure::Stage,
+        cause: crate::db::accounting_failure::Cause,
+    ) -> u64 {
+        self.accounting_failures
+            .get_or_create(&[
+                ("stage", stage.as_str().to_owned()),
+                ("cause", cause.as_str().to_owned()),
+            ])
+            .get()
     }
 
     #[cfg(test)]
@@ -1804,6 +1839,42 @@ mod tests {
         ] {
             assert_eq!(admission_outcome(&Err(other)), "rejected");
         }
+    }
+
+    /// #389: registered on the existing endpoint; no series until an
+    /// accounting operation fails; label values only from the closed enums.
+    #[tokio::test]
+    async fn accounting_failures_are_exported_only_after_a_failure_with_closed_labels() {
+        use crate::db::accounting_failure::{Cause, Stage, tests::exported_series};
+        let m = Metrics::new();
+        m.observe_settlement(Settlement::Settled);
+        assert!(
+            !m.render(None).await.contains("gateway_accounting_failures"),
+            "no series while accounting succeeds"
+        );
+        m.observe_accounting_failure(Stage::GovernanceStorage, Cause::LockTimeout);
+        m.observe_accounting_failure(Stage::GovernanceStorage, Cause::LockTimeout);
+        m.observe_accounting_failure(Stage::ExplicitSettlement, Cause::DeadlineInDatabase);
+        let out = m.render(None).await;
+        assert!(out.contains("# TYPE gateway_accounting_failures counter"));
+        for line in [
+            r#"gateway_accounting_failures_total{stage="governance_storage",cause="lock_timeout"} 2"#,
+            r#"gateway_accounting_failures_total{stage="explicit_settlement",cause="deadline_in_database"} 1"#,
+        ] {
+            assert!(out.contains(line), "missing: {line}");
+        }
+        assert_eq!(exported_series(&out).len(), 2);
+        assert_eq!(
+            m.accounting_failure_count(Stage::GovernanceStorage, Cause::LockTimeout),
+            2
+        );
+        // Every value the two enums can render, and nothing else: the type bound.
+        for stage in Stage::ALL {
+            for cause in Cause::ALL {
+                m.observe_accounting_failure(stage, cause);
+            }
+        }
+        assert_eq!(exported_series(&m.render(None).await).len(), 5 * 16);
     }
 
     #[tokio::test]

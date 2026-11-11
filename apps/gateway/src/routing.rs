@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::{
     auth::Principal,
-    inference::{error::InferenceError, types::Deployment},
+    inference::{error::InferenceError, repository::route_lookup_storage, types::Deployment},
     store::Store,
 };
 
@@ -140,7 +140,7 @@ async fn live_inputs(
         .bind(model)
         .fetch_optional(&store.pool)
         .await
-        .map_err(|_| InferenceError::Storage)?
+        .map_err(route_lookup_storage)?
         .unwrap_or_default();
     let rows = sqlx::query_as::<_, Candidate>(
         r#"SELECT d.id AS deployment_id, COALESCE(r.priority,0) AS priority,
@@ -164,7 +164,7 @@ async fn live_inputs(
     .bind(ids)
     .fetch_all(&store.pool)
     .await
-    .map_err(|_| InferenceError::Storage)?;
+    .map_err(route_lookup_storage)?;
     Ok((policy, rows))
 }
 
@@ -195,7 +195,7 @@ async fn cached_inputs(
                 .bind(model)
                 .fetch_optional(&store.pool)
                 .await
-                .map_err(|_| InferenceError::Storage)?;
+                .map_err(route_lookup_storage)?;
             let rows: Vec<(Uuid, i32, i32, String)> = sqlx::query_as(
                 r#"SELECT d.id, COALESCE(r.priority,0), COALESCE(r.weight,1), COALESCE(r.residency,'unspecified')
                    FROM models m JOIN deployments d ON d.model_id=m.id
@@ -208,7 +208,7 @@ async fn cached_inputs(
             .bind(model)
             .fetch_all(&store.pool)
             .await
-            .map_err(|_| InferenceError::Storage)?;
+            .map_err(route_lookup_storage)?;
             if rows.len() > MAX_CANDIDATES {
                 return Err(InferenceError::Configuration);
             }
@@ -239,7 +239,7 @@ async fn cached_inputs(
         .bind(&missing)
         .fetch_all(&store.pool)
         .await
-        .map_err(|_| InferenceError::Storage)?;
+        .map_err(route_lookup_storage)?;
         let mut fresh: Vec<(Uuid, HealthEntry)> = missing
             .iter()
             .map(|id| {

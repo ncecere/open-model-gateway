@@ -263,11 +263,10 @@ tokio::task_local! {
     static DEADLOCKED: Cell<bool>;
 }
 
-/// Record a storage error of the running governance attempt.
-pub(crate) fn note(error: &sqlx::Error) {
-    if is_deadlock(error) {
-        let _ = DEADLOCKED.try_with(|flag| flag.set(true));
-    }
+/// Record a storage error of the running governance attempt. True when it
+/// is a deadlock inside [`retry_deadlocks`], which may re-run the attempt.
+pub(crate) fn note(error: &sqlx::Error) -> bool {
+    is_deadlock(error) && DEADLOCKED.try_with(|flag| flag.set(true)).is_ok()
 }
 
 /// Attempts of one governance transaction when the database aborts it as a
@@ -292,6 +291,10 @@ macro_rules! retry_deadlocks {
             {
                 $crate::metrics::METRICS.observe_deadlock_retry($path);
                 continue;
+            }
+            if result.is_err() && deadlocked {
+                // Still a victim on the last run: an accounting failure (#389).
+                $crate::db::accounting_failure::deadlock_exhausted();
             }
             break result;
         }

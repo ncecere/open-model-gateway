@@ -440,6 +440,13 @@ impl InferenceRepository for Store {
     }
 }
 
+/// A failed read before admission (the eligible deployments here, the routing
+/// plan in `crate::routing`): recorded as the `route_lookup` stage (#389).
+pub(crate) fn route_lookup_storage(error: sqlx::Error) -> InferenceError {
+    crate::db::accounting_failure::route_lookup_error(&error);
+    InferenceError::Storage
+}
+
 impl Store {
     /// The eligible deployments of `model` for the principal, read live
     /// (revalidation, catalog eligibility and key restrictions in one
@@ -451,7 +458,7 @@ impl Store {
     ) -> Result<Vec<Deployment>, InferenceError> {
         let mut tx = crate::db::begin(&self.pool)
             .await
-            .map_err(|_| InferenceError::Storage)?;
+            .map_err(route_lookup_storage)?;
         // Candidate planning only: admission re-checks everything live under
         // its locks, so the scoped mode reads without row locks (no
         // MultiXacts on authority rows in the hot path).
@@ -462,7 +469,7 @@ impl Store {
         } else {
             crate::auth::revalidate(&mut tx, principal).await
         }
-        .map_err(|_| InferenceError::Storage)?;
+        .map_err(route_lookup_storage)?;
         let Some(lineage) = lineage else {
             // The key is no longer valid (a stale key-cache hit, or revoked
             // since authentication): refuse it as authentication would.
@@ -478,8 +485,8 @@ impl Store {
                 OR EXISTS(SELECT 1 FROM key_model_selections WHERE workspace_id=$1 AND governance_key_id=$3 AND model_id=m.id))
             ORDER BY d.created_at,d.id LIMIT 257
         "#).bind(principal.workspace_id).bind(model).bind(lineage)
-            .fetch_all(&mut *tx).await.map_err(|_| InferenceError::Storage)?;
-        tx.commit().await.map_err(|_| InferenceError::Storage)?;
+            .fetch_all(&mut *tx).await.map_err(route_lookup_storage)?;
+        tx.commit().await.map_err(route_lookup_storage)?;
         if deployments.len() > crate::routing::MAX_CANDIDATES {
             return Err(InferenceError::Configuration);
         }
@@ -494,7 +501,11 @@ impl Store {
             .bind(record.principal.key_id).bind(record.deployment_id).bind(&record.model)
             .bind(&record.provider).bind(record.streamed).bind(record.root_request_id).bind(record.attempt_number)
             .bind(&record.upstream_model).bind(&record.client.session_id).bind(&record.client.app).execute(&self.pool).await
-            .map_err(|_| InferenceError::Storage)?;
+            .map_err(|error| {
+                // A single statement on the pool (#389).
+                crate::db::accounting_failure::pool_statement_error(&error);
+                InferenceError::Storage
+            })?;
         Ok(())
     }
 }

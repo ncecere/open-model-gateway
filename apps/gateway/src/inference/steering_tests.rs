@@ -640,6 +640,8 @@ struct Observed {
     elapsed_ns: u64,
     phases: Option<Vec<PhaseTiming>>,
     database: crate::db::diagnostics::Snapshot,
+    /// #389: the production accounting-failure signals of this request.
+    signals: Vec<crate::db::diagnostics::Signal>,
 }
 
 async fn send_observed(app: &Router, request: Request) -> Observed {
@@ -660,6 +662,7 @@ async fn send_observed(app: &Router, request: Request) -> Observed {
         telemetry::with_phases(buffer.clone(), send(app, request)),
     )
     .await;
+    let signals = database.signals();
     let database = database.snapshot();
     let elapsed_ns = started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
     let phases = Arc::try_unwrap(buffer)
@@ -672,6 +675,7 @@ async fn send_observed(app: &Router, request: Request) -> Observed {
         elapsed_ns,
         phases,
         database,
+        signals,
     }
 }
 
@@ -776,6 +780,7 @@ async fn expect(
         elapsed_ns,
         phases,
         database,
+        ..
     } = send_observed(&w.app, request).await;
     let hits = w.approved.take();
     let got = (status.as_u16(), reason(&text));
@@ -2408,6 +2413,9 @@ async fn names_outside_the_management_charset_keep_resolving(pool: PgPool) {
 #[derive(Clone, Copy, Debug)]
 enum SettlementFault {
     PoolExhaustion,
+    /// #389: as `PoolExhaustion`, but with the pool's production acquire
+    /// timeout, which equals the settlement deadline that starts before it.
+    PoolExhaustionAtProductionTimeout,
     LockTimeout,
     StatementTimeout,
     BackendTermination,
@@ -2415,17 +2423,27 @@ enum SettlementFault {
 }
 
 async fn rejection_fault_signature(pool: PgPool, fault: SettlementFault) {
+    use crate::db::accounting_failure::{self, Cause};
     use crate::db::diagnostics::{Outcome, SqlxKind, Stage};
     use sqlx::Connection;
 
+    // Installs the log subscriber before any request, so the faulted request's
+    // `http.request` span exists when its accounting failure is logged.
+    drop(crate::log_capture_test::exclusive());
     // A shorter acquisition bound distinguishes pool timeout from the unchanged
     // three-second finalizer. The other hypotheses retain SQLx's default bound.
     let options = sqlx::postgres::PgPoolOptions::new();
-    let options = if matches!(fault, SettlementFault::PoolExhaustion) {
-        options.acquire_timeout(Duration::from_secs(1))
-    } else {
-        options
+    let options = match fault {
+        SettlementFault::PoolExhaustion => options.acquire_timeout(Duration::from_secs(1)),
+        SettlementFault::PoolExhaustionAtProductionTimeout => {
+            options.acquire_timeout(crate::config::ACQUIRE_TIMEOUT)
+        }
+        _ => options,
     };
+    let starved = matches!(
+        fault,
+        SettlementFault::PoolExhaustion | SettlementFault::PoolExhaustionAtProductionTimeout
+    );
     let w = world_with_pool_options(pool.clone(), options).await;
     let t = targets()
         .into_iter()
@@ -2486,7 +2504,7 @@ async fn rejection_fault_signature(pool: PgPool, fault: SettlementFault) {
                 .unwrap();
         }
     }
-    if !matches!(fault, SettlementFault::PoolExhaustion) {
+    if !starved {
         held.clear();
     }
 
@@ -2497,7 +2515,7 @@ async fn rejection_fault_signature(pool: PgPool, fault: SettlementFault) {
         // enters real pg_sleep; PostgreSQL, not a synthetic Rust error, cancels it.
         sqlx::raw_sql("CREATE FUNCTION steering370_sleep() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(10); RETURN NEW; END $$; CREATE TRIGGER steering370_sleep BEFORE UPDATE ON governance_reservations FOR EACH ROW EXECUTE FUNCTION steering370_sleep()")
             .execute(&pool).await.unwrap();
-    } else if !matches!(fault, SettlementFault::PoolExhaustion) {
+    } else if !starved {
         // Direct connection: its lease cannot consume the world's capacity.
         let mut connection = sqlx::PgConnection::connect_with(&pool.connect_options())
             .await
@@ -2518,6 +2536,48 @@ async fn rejection_fault_signature(pool: PgPool, fault: SettlementFault) {
         assert_eq!(reservations.len(), 1, "only the paused attempt is pending");
         blocker = Some(connection);
     }
+    // #389: the production signal this fault must produce (code compiled
+    // without `cfg(test)`): one counter increment and one WARN line.
+    let signal = match fault {
+        SettlementFault::PoolExhaustion => (
+            accounting_failure::Stage::PoolAcquireAndBegin,
+            Cause::PoolTimeout,
+        ),
+        SettlementFault::LockTimeout => (
+            accounting_failure::Stage::GovernanceStorage,
+            Cause::LockTimeout,
+        ),
+        SettlementFault::StatementTimeout => (
+            accounting_failure::Stage::GovernanceStorage,
+            Cause::StatementTimeout,
+        ),
+        SettlementFault::BackendTermination => (
+            accounting_failure::Stage::GovernanceStorage,
+            Cause::BackendTerminated,
+        ),
+        // The deadline names what the settlement was waiting on: a pooled
+        // connection (a starved pool), or the database (a lock wait).
+        SettlementFault::PoolExhaustionAtProductionTimeout => (
+            accounting_failure::Stage::ExplicitSettlement,
+            Cause::DeadlineAcquiringConnection,
+        ),
+        SettlementFault::FinalizationDeadline => (
+            accounting_failure::Stage::ExplicitSettlement,
+            Cause::DeadlineInDatabase,
+        ),
+    };
+    // The settlement deadline and the production acquire timeout are equal and
+    // run in different tasks (`db::begin` owns its own). The deadline starts
+    // first; when both expire in the same timer tick the pool timeout can
+    // still be the one reported. Both name the wait for a connection.
+    let racing = (
+        accounting_failure::Stage::PoolAcquireAndBegin,
+        Cause::PoolTimeout,
+    );
+    let at_production_timeout = matches!(fault, SettlementFault::PoolExhaustionAtProductionTimeout);
+    let counted = [signal, racing]
+        .map(|(stage, cause)| crate::metrics::METRICS.accounting_failure_count(stage, cause));
+    let log = crate::log_capture_test::Capture::start();
     pause.release.add_permits(1);
     if matches!(
         fault,
@@ -2566,10 +2626,19 @@ async fn rejection_fault_signature(pool: PgPool, fault: SettlementFault) {
         serde_json::from_str::<Value>(&observed.text).unwrap(),
         json!({"error": {"message": "Inference accounting is unavailable", "type": "accounting_unavailable", "param": null, "code": "accounting_unavailable"}})
     );
+    // #389: exactly this request's failure, once, under closed labels only.
+    let (signal, counted) = if at_production_timeout && observed.signals == [racing] {
+        (racing, counted[1])
+    } else {
+        (signal, counted[0])
+    };
+    assert_eq!(observed.signals, [signal], "{fault:?}");
     let snapshot = observed.database;
     assert!(!snapshot.unavailable);
-    assert_eq!(snapshot.pending, 0);
     assert_eq!(snapshot.dropped, 0);
+    if !at_production_timeout {
+        assert_eq!(snapshot.pending, 0);
+    }
     let expected = match fault {
         SettlementFault::PoolExhaustion => (
             Stage::PoolAcquireAndBegin,
@@ -2595,10 +2664,12 @@ async fn rejection_fault_signature(pool: PgPool, fault: SettlementFault) {
             Some(SqlxKind::Database),
             Some("57P01"),
         ),
-        SettlementFault::FinalizationDeadline => {
+        SettlementFault::PoolExhaustionAtProductionTimeout
+        | SettlementFault::FinalizationDeadline => {
             (Stage::ExplicitSettlement, Outcome::Timeout, None, None)
         }
     };
+    let deadline = signal.0 == accounting_failure::Stage::ExplicitSettlement;
     let failures: Vec<_> = snapshot
         .events
         .iter()
@@ -2615,25 +2686,91 @@ async fn rejection_fault_signature(pool: PgPool, fault: SettlementFault) {
             None,
         ));
     }
-    if !matches!(fault, SettlementFault::FinalizationDeadline) {
+    if !deadline {
         wanted.push((Stage::ExplicitSettlement, Outcome::Error, None, None));
     }
-    assert_eq!(failures, wanted, "{fault:?}: {snapshot:?}");
+    // At the production acquire timeout the test recorder's events depend on
+    // which of the two expired first (the detached begin may still be waiting).
+    if !at_production_timeout {
+        assert_eq!(failures, wanted, "{fault:?}: {snapshot:?}");
+    }
     let settlement = snapshot
         .events
         .iter()
         .find(|e| e.stage == Stage::ExplicitSettlement)
         .unwrap();
-    if matches!(fault, SettlementFault::FinalizationDeadline) {
+    if deadline {
         assert!(
             settlement.duration_ns >= 3_000_000_000,
             "the real finalization deadline elapsed"
         );
     }
+    assert!(
+        crate::metrics::METRICS.accounting_failure_count(signal.0, signal.1) > counted,
+        "{fault:?}: the production counter moved"
+    );
+    let labels = (signal.0.as_str().to_owned(), signal.1.as_str().to_owned());
+    let exposition = crate::metrics::METRICS.render(None).await;
+    assert!(
+        accounting_failure::tests::exported_series(&exposition)
+            .iter()
+            .any(|(stage, cause, count)| (stage, cause) == (&labels.0, &labels.1) && *count >= 1),
+        "{fault:?}: the series is on the metrics endpoint"
+    );
+    let logged = log.text();
+    drop(log);
+    assert!(
+        accounting_failure::tests::signal_lines(&logged).contains(&labels),
+        "{fault:?}: one structured WARN line names the stage and cause"
+    );
+    // This response is not streamed: its settlement runs inside the request's
+    // log span, so the line carries the request id.
+    assert!(
+        logged
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .any(
+                |line| line["target"] == "open_model_gateway::db::accounting_failure"
+                    && line["fields"]["stage"] == labels.0.as_str()
+                    && line["fields"]["cause"] == labels.1.as_str()
+                    && line["span"]["name"] == "http.request"
+                    && line["span"]["request_id"].is_string()
+            ),
+        "{fault:?}: the WARN line carries the request's log span"
+    );
+    for key in [&w.keys.personal_key.token, &w.keys.team_key.token] {
+        assert!(
+            !logged.contains(key.as_str()),
+            "the log line must not carry a key"
+        );
+    }
     eprintln!(
-        "{fault:?}: {}ms; {failures:?}",
+        "{fault:?}: {signal:?}; {}ms; {failures:?}",
         observed.elapsed_ns / 1_000_000
     );
+    w.close().await;
+}
+
+/// #389: a request whose accounting succeeds records no accounting-failure
+/// signal, whether the upstream answered 200 or refused the request.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn accounted_requests_record_no_accounting_failure_signal(pool: PgPool) {
+    let w = world(pool).await;
+    for (label, status) in [("chat/openai", 200), ("rerank/sglang", 400)] {
+        let t = targets().into_iter().find(|t| t.label == label).unwrap();
+        let body = (t.body)(t.model);
+        let observed = send_observed(
+            &w.app,
+            json_request(&w.keys.personal_key.token, t.path, &t.base(), &body),
+        )
+        .await;
+        assert_eq!(observed.status.as_u16(), status, "{label}");
+        assert_eq!(w.approved.take().len(), 1, "{label}: one upstream request");
+        assert!(
+            observed.signals.is_empty(),
+            "{label}: nothing is recorded when accounting succeeds"
+        );
+    }
     w.close().await;
 }
 
@@ -2656,6 +2793,15 @@ async fn blocked_settlement(pool: &PgPool, blocker: i32) -> i32 {
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn settlement_fault_pool_exhaustion_reports_pool_timed_out(pool: PgPool) {
     rejection_fault_signature(pool, SettlementFault::PoolExhaustion).await;
+}
+/// #389: under the production pool configuration a starved pool at settlement
+/// meets the settlement deadline first; it is still attributed to the wait
+/// for a connection, not to the database.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn settlement_fault_pool_exhaustion_at_the_production_acquire_timeout_names_the_connection_wait(
+    pool: PgPool,
+) {
+    rejection_fault_signature(pool, SettlementFault::PoolExhaustionAtProductionTimeout).await;
 }
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn settlement_fault_lock_timeout_reports_55p03(pool: PgPool) {
