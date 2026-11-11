@@ -238,7 +238,7 @@ def age_identity(folder, name="identity.txt"):
         subprocess.run(["age-keygen", "-o", str(path)], check=True, capture_output=True)
         public = subprocess.run(["age-keygen", "-y", str(path)], check=True, capture_output=True, text=True).stdout.strip()
     except FileNotFoundError:
-        raise AssertionError("age and age-keygen must be installed for the backup tests (CI: sudo apt-get install -y age)") from None
+        raise AssertionError("age and age-keygen must be installed for the backup tests (CI fetches the pinned release in .github/workflows/ci.yml)") from None
     return path, public
 
 

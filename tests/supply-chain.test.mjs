@@ -2587,7 +2587,7 @@ function assertPullRequestScan(ci, image) {
   // Nothing on the job can skip it, forgive it, give it a write token or set TRIVY_*.
   assert.deepEqual(Object.keys(job).sort(), ["env", "if", "runs-on", "steps", "timeout-minutes"]);
   assert.equal(job.if, PR_SCAN_JOB_IF);
-  assert.equal(job["runs-on"], "ubuntu-latest", "the pinned Trivy binary is the amd64 one");
+  assert.equal(job["runs-on"], "ubuntu-24.04", "the pinned Trivy binary is the amd64 one");
   assert.deepEqual(Object.keys(job.env).sort(), ["STAGING_CADDY_IMAGE", "STAGING_POSTGRES_IMAGE"]);
   const steps = stepsOf(job);
   // Checkout (no persisted token), BuildKit, build, then the scan: before any script
@@ -2661,4 +2661,162 @@ test("fixtures: a pull-request scan that is skipped, forgiven, redirected or rec
     mutate(fixture);
     assert.throws(() => assertPullRequestScan(fixture, image), { name: "AssertionError" }, name);
   }
+});
+
+// ---- runner images (#491) ----
+
+// A floating label (`ubuntu-latest`) changes the operating system under a job without a commit.
+// Only these exact images are approved; moving to a newer one is a reviewed change here.
+const APPROVED_RUNNERS = new Set(["ubuntu-24.04", "ubuntu-24.04-arm"]);
+const WORKFLOW_FILE = /^[A-Za-z0-9._-]+\.ya?ml$/;
+
+// `files` are the workflow file names of the repository: a job may hand its work to one of
+// them (its jobs are checked there) and to no other reusable workflow, whose runner the caller
+// cannot see or constrain.
+export function runnerViolations(file, data, files) {
+  const jobs = data?.jobs;
+  if (!jobs || typeof jobs !== "object" || Array.isArray(jobs) || Object.keys(jobs).length === 0) return [`${file}: a workflow needs a non-empty jobs mapping`];
+  const violations = [];
+  for (const [name, job] of Object.entries(jobs)) {
+    const where = `${file}: job ${name}`;
+    const runsOn = job?.["runs-on"];
+    if (job?.uses !== undefined) {
+      const local = typeof job.uses === "string" && job.uses.startsWith("./.github/workflows/") ? job.uses.slice("./.github/workflows/".length) : "";
+      if (runsOn !== undefined) violations.push(`${where}: a reusable-workflow call must not name a runner`);
+      else if (!WORKFLOW_FILE.test(local) || !files.includes(local)) violations.push(`${where}: only a workflow file of this checkout (./.github/workflows/<file>) may be called; another repository or commit chooses its own runner`);
+      continue;
+    }
+    if (typeof runsOn !== "string") { violations.push(`${where}: runs-on must be one runner label written as a string`); continue; }
+    if (APPROVED_RUNNERS.has(runsOn)) continue;
+    if (runsOn !== "${{ matrix.runner }}") { violations.push(`${where}: runs-on '${runsOn}' is not an approved runner image (${[...APPROVED_RUNNERS].join(", ")})`); continue; }
+    const matrix = job.strategy?.matrix;
+    const keys = matrix && typeof matrix === "object" && !Array.isArray(matrix) ? Object.keys(matrix) : [];
+    const include = matrix?.include;
+    if (keys.length !== 1 || keys[0] !== "include" || !Array.isArray(include) || include.length === 0) { violations.push(`${where}: a matrix runner needs a literal strategy.matrix.include list and no other matrix key`); continue; }
+    for (const leg of include) {
+      const legKeys = leg && typeof leg === "object" && !Array.isArray(leg) ? Object.keys(leg) : [];
+      if (legKeys.some(key => key.includes("${{")) || legKeys.filter(key => key.toLowerCase() === "runner").length !== 1) violations.push(`${where}: a matrix leg needs exactly one literal runner key`);
+      else if (!APPROVED_RUNNERS.has(leg.runner)) violations.push(`${where}: matrix runner '${leg.runner}' is not an approved runner image`);
+    }
+  }
+  return violations;
+}
+
+test("every workflow job runs on an approved, exact runner image (#491)", () => {
+  const entries = readdirSync(workflowsDir);
+  assert.deepEqual(entries.filter(f => !WORKFLOW_FILE.test(f)), [], "only .yml and .yaml files belong in .github/workflows");
+  for (const expected of ["branch-images.yml", "ci.yml", "codeql.yml", "image.yml", "loadtest-image.yml", "oci-import.yml", "prune-dev-images.yml"]) assert.ok(entries.includes(expected), expected);
+  const violations = entries.flatMap(f => runnerViolations(f, toData(parseStrict(readFileSync(join(workflowsDir, f), "utf8"), f)), entries));
+  assert.deepEqual(violations, []);
+});
+
+test("the runner check refuses floating, self-hosted, computed and unlisted runners (#491)", () => {
+  const files = ["image.yml"];
+  const check = (job, more = {}) => runnerViolations("fixture.yml", { jobs: { ...more, j: job } }, files);
+  const steps = [{ run: "true" }];
+  const good = { "runs-on": "ubuntu-24.04", steps };
+  const legs = [{ runner: "ubuntu-24.04" }, { runner: "ubuntu-24.04-arm" }];
+  const matrix = include => ({ "runs-on": "${{ matrix.runner }}", strategy: { matrix: { include } }, steps });
+  for (const job of [good, { "runs-on": "ubuntu-24.04-arm", steps }, { uses: "./.github/workflows/image.yml" }, matrix(legs)]) assert.deepEqual(check(job), []);
+  for (const [name, job, reason] of [
+    ["the floating label", { "runs-on": "ubuntu-latest", steps }, /not an approved runner image/],
+    ["a newer image", { "runs-on": "ubuntu-26.04", steps }, /not an approved runner image/],
+    ["another floating label", { "runs-on": "ubuntu-24.04-latest", steps }, /not an approved runner image/],
+    ["trailing text", { "runs-on": "ubuntu-24.04 ", steps }, /not an approved runner image/],
+    ["another case", { "runs-on": "Ubuntu-24.04", steps }, /not an approved runner image/],
+    ["self-hosted", { "runs-on": "self-hosted", steps }, /not an approved runner image/],
+    ["a label list", { "runs-on": ["ubuntu-24.04"], steps }, /one runner label written as a string/],
+    ["a runner group", { "runs-on": { group: "g", labels: "ubuntu-24.04" }, steps }, /one runner label written as a string/],
+    ["no runner", { steps }, /one runner label written as a string/],
+    // Each expression sits beside a valid matrix, so only the expression itself can be refused.
+    ["an input expression", { ...matrix(legs), "runs-on": "${{ inputs.runner }}" }, /not an approved runner image/],
+    ["an expression with a fallback", { ...matrix(legs), "runs-on": "${{ matrix.runner || 'ubuntu-latest' }}" }, /not an approved runner image/],
+    ["another matrix value", { ...matrix(legs), "runs-on": "${{ matrix.os }}" }, /not an approved runner image/],
+    ["other spacing", { ...matrix(legs), "runs-on": "${{matrix.runner}}" }, /not an approved runner image/],
+    ["a matrix runner without a matrix", { "runs-on": "${{ matrix.runner }}", steps }, /literal strategy\.matrix\.include/],
+    ["a runner axis beside include", { "runs-on": "${{ matrix.runner }}", strategy: { matrix: { runner: ["ubuntu-latest"], include: legs } }, steps }, /literal strategy\.matrix\.include/],
+    ["a computed matrix", { "runs-on": "${{ matrix.runner }}", strategy: { matrix: "${{ fromJSON(inputs.m) }}" }, steps }, /literal strategy\.matrix\.include/],
+    ["an empty include", matrix([]), /literal strategy\.matrix\.include/],
+    ["a floating first leg", matrix([{ runner: "ubuntu-latest" }, { runner: "ubuntu-24.04" }]), /matrix runner 'ubuntu-latest'/],
+    ["a floating last leg", matrix([{ runner: "ubuntu-24.04" }, { runner: "ubuntu-latest" }]), /matrix runner 'ubuntu-latest'/],
+    ["a leg without a runner", matrix([{ platform: "linux/amd64" }]), /exactly one literal runner key/],
+    ["a leg with a list runner", matrix([{ runner: ["ubuntu-24.04"] }]), /matrix runner/],
+    ["a leg with a second runner key", matrix([{ runner: "ubuntu-24.04", Runner: "ubuntu-latest" }]), /exactly one literal runner key/],
+    ["a leg with an expression key", matrix([{ runner: "ubuntu-24.04", "${{ insert }}": "x" }]), /exactly one literal runner key/],
+    ["a reusable call that also names a runner", { uses: "./.github/workflows/image.yml", "runs-on": "ubuntu-24.04" }, /must not name a runner/],
+    ["a reusable workflow of another repository", { uses: `some-org/shared-ci/.github/workflows/lint.yml@${"0".repeat(40)}` }, /only a workflow file of this checkout/],
+    ["this repository at another commit", { uses: `ncecere/open-model-gateway/.github/workflows/image.yml@${"0".repeat(40)}` }, /only a workflow file of this checkout/],
+    ["a local workflow that does not exist", { uses: "./.github/workflows/missing.yml" }, /only a workflow file of this checkout/],
+    ["a local path outside the workflows", { uses: "./.github/workflows/../../other/image.yml" }, /only a workflow file of this checkout/],
+    ["a call without a target", { uses: null, steps }, /only a workflow file of this checkout/],
+  ]) {
+    assert.deepEqual(check(job).map(v => reason.test(v)), [true], name);
+    assert.deepEqual(check(good, { first: job }).map(v => reason.test(v)), [true], `${name}, before a good job`);
+    assert.deepEqual(runnerViolations("fixture.yml", { jobs: { j: good, last: job } }, files).map(v => reason.test(v)), [true], `${name}, after a good job`);
+  }
+  for (const [name, data] of [["no jobs", {}], ["jobs under another key", { Jobs: { j: good } }], ["an empty jobs mapping", { jobs: {} }], ["a jobs list", { jobs: [good] }]]) {
+    assert.match(runnerViolations("fixture.yml", data, files).join(), /non-empty jobs mapping/, name);
+  }
+});
+
+// Operating-system packages installed at run time are neither pinned nor verified, and the
+// job fails whenever the runner cannot reach the mirrors (#491). A `run:` script is refused
+// if any word of it is a package manager (whatever its arguments, and however the script is
+// laid out over lines) or a Playwright option that calls one. A plain guard against the
+// ordinary ways of writing an install: it does not see a script file a step runs, an action
+// that installs packages, or a command name assembled by the shell.
+const PACKAGE_MANAGERS = new Set(["apt-get", "apt", "aptitude", "apt-fast", "nala", "add-apt-repository", "dpkg", "snap", "apk", "yum", "dnf", "zypper", "pacman"]);
+const PLAYWRIGHT_PACKAGES = ["install-deps", "--with-deps"];
+
+// Every `run:` string anywhere in a parsed workflow or composite action.
+const everyRunScript = node => (node && typeof node === "object"
+  ? Object.entries(node).flatMap(([key, value]) => (key === "run" && typeof value === "string" ? [value] : everyRunScript(value)))
+  : []);
+
+export function packageInstallViolations(file, data) {
+  return everyRunScript(data).flatMap(script => {
+    const words = script.split(/[^A-Za-z0-9_.+-]+/).map(word => word.toLowerCase());
+    const found = [...new Set(words.filter(word => PACKAGE_MANAGERS.has(word) || PLAYWRIGHT_PACKAGES.includes(word)))];
+    return found.length ? [`${file}: a run step installs packages at run time (${found.join(", ")}): ${JSON.stringify(script.slice(0, 60))}`] : [];
+  });
+}
+
+test("no workflow or composite action installs operating-system packages at run time (#491)", () => {
+  const files = [...readdirSync(workflowsDir).map(f => join(workflowsDir, f)), ...walk(join(root, ".github/actions")).filter(f => /\.ya?ml$/.test(f))];
+  const scripts = files.map(f => everyRunScript(toData(parseStrict(readFileSync(f, "utf8"), f))).length);
+  assert.ok(scripts.reduce((a, b) => a + b, 0) >= 40 && scripts.filter(n => n > 0).length >= 8, "the run steps of every workflow and the composite action are read");
+  assert.deepEqual(files.flatMap(f => packageInstallViolations(f, toData(parseStrict(readFileSync(f, "utf8"), f)))), []);
+
+  const check = run => packageInstallViolations("f.yml", { jobs: { first: { steps: [{ run: "true" }] }, j: { steps: [{ run: "echo ok" }, { name: "x", run }] } } });
+  for (const run of [
+    "sudo apt-get update && sudo apt-get install -y age",
+    "sudo apt-get update",
+    "sudo apt-get -y install age",
+    "sudo apt-get -o Acquire::Retries=3 install -y age",
+    "sudo -E apt-get -qq -o Dpkg::Use-Pty=0 install -y --no-install-recommends age",
+    "DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y age",
+    "sudo apt-get \\\n  install -y age",
+    "set -e\nsudo apt-get\ninstall age\n",
+    "apt install age",
+    "sudo APT-GET install age",
+    "sudo apt-get dist-upgrade",
+    "sudo apt-get build-dep age",
+    "sudo add-apt-repository ppa:x/y",
+    "sudo dpkg -i x.deb",
+    "sudo dpkg --install x.deb",
+    "sudo snap install x",
+    "apk add age",
+    "sudo dnf install age",
+    "sh -c 'apt-get install age'",
+    "echo age | xargs sudo apt-get install -y",
+    "npx playwright install --with-deps --only-shell chromium",
+    "npx playwright install chromium --with-deps",
+    "npx --yes playwright install-deps chromium",
+  ]) assert.equal(check(run).length, 1, run);
+  assert.equal(packageInstallViolations("action.yml", { runs: { using: "composite", steps: [{ run: "sudo apt-get install -y age", shell: "bash" }] } }).length, 1, "a composite action");
+  assert.equal(check("sudo apt-get install -y age").length + packageInstallViolations("f.yml", { jobs: { a: { steps: [{ run: "apk add x" }] }, b: { steps: [{ run: "dnf install y" }] } } }).length, 3, "every step is reported");
+  for (const run of ["npx playwright install --only-shell chromium", "npm ci", "cargo install --locked --path .", "adapt install", "echo snapshot aptly apt_get", "python3 -m pip install --require-hashes -r requirements.lock"]) {
+    assert.deepEqual(check(run), [], run);
+  }
+  assert.deepEqual(packageInstallViolations("f.yml", { jobs: { j: { name: "never apt-get install here", steps: [{ name: "apt-get", uses: "x/y@z", with: { run: 1 } }] } } }), [], "only run scripts are read");
 });
