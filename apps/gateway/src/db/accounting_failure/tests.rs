@@ -50,7 +50,7 @@ const STAGES: [&str; 5] = [
     "explicit_settlement",
     "cancellation_settlement",
 ];
-const CAUSES: [&str; 17] = [
+const CAUSES: [&str; 16] = [
     "pool_timeout",
     "pool_closed",
     "lock_timeout",
@@ -58,7 +58,6 @@ const CAUSES: [&str; 17] = [
     "backend_terminated",
     "deadlock",
     "read_only_transaction",
-    "too_many_connections",
     "other_database",
     "io",
     "tls",
@@ -155,10 +154,11 @@ fn classification_names_the_known_failures_and_buckets_everything_else() {
         (database(Some("57P01")), Cause::BackendTerminated),
         (database(Some("40P01")), Cause::Deadlock),
         (database(Some("25006")), Cause::ReadOnlyTransaction),
-        (database(Some("53300")), Cause::TooManyConnections),
-        // The neighbours of the named codes stay in the fixed bucket.
+        // The neighbours of the named code stay in the fixed bucket.
         (database(Some("25001")), Cause::OtherDatabase),
-        (database(Some("53400")), Cause::OtherDatabase),
+        // Raised only at connection startup, where sqlx retries it until the
+        // acquire timeout (`PoolTimedOut`): it has no cause of its own.
+        (database(Some("53300")), Cause::OtherDatabase),
         // Unrecognised, malformed or missing codes: one fixed bucket, never the code.
         (database(Some("23505")), Cause::OtherDatabase),
         (database(Some("XX000")), Cause::OtherDatabase),
@@ -522,5 +522,16 @@ async fn a_pool_statement_without_a_connection_is_recorded_as_a_failed_start() {
             (Stage::PoolAcquireAndBegin, Cause::PoolClosed),
             (Stage::PoolAcquireAndBegin, Cause::PoolClosed),
         ]
+    );
+}
+
+/// The settlement deadline starts before the pool's equal acquire timeout;
+/// the `deadline_acquiring_connection` attribution and its settlement-fault
+/// test depend on the two staying equal.
+#[test]
+fn the_acquire_timeout_equals_the_settlement_deadline() {
+    assert_eq!(
+        crate::config::ACQUIRE_TIMEOUT,
+        crate::inference::SETTLEMENT_DEADLINE
     );
 }

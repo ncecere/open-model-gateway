@@ -13,10 +13,15 @@ use std::{borrow::Cow, cell::Cell, future::Future};
 pub(crate) enum Stage {
     /// Starting an accounting transaction: taking a pooled connection and
     /// `BEGIN` (sqlx does not separate the two). Also an accounting statement
-    /// run without a transaction that got no connection.
+    /// run without a transaction that got no connection (a pool timeout or a
+    /// closed pool).
     PoolAcquireAndBegin,
-    /// Any later statement of an accounting transaction, including `COMMIT`
-    /// (and a statement run without a transaction that did get a connection).
+    /// Any later statement of an accounting transaction, including `COMMIT`,
+    /// and a statement run directly on the pool once it has a connection.
+    /// Known limit: an error raised while opening a new connection for such a
+    /// statement, other than a pool timeout or a closed pool (an
+    /// authentication, TLS or I/O failure during connect), is counted here
+    /// although no statement ran.
     GovernanceStorage,
     /// The reads before admission: the eligible deployments and the routing
     /// plan (connection, `BEGIN` and statements alike).
@@ -50,7 +55,8 @@ impl Stage {
 /// What kind of failure it was.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Cause {
-    /// No pooled connection within the pool's acquire timeout.
+    /// No connection within the pool's acquire timeout: every pooled
+    /// connection was busy, or a new one could not be opened in time.
     PoolTimeout,
     PoolClosed,
     /// SQLSTATE 55P03 (`lock_timeout`, or `NOWAIT`).
@@ -64,8 +70,6 @@ pub(crate) enum Cause {
     /// SQLSTATE 25006: a write reached a read-only server (a standby, or a
     /// primary demoted by a failover).
     ReadOnlyTransaction,
-    /// SQLSTATE 53300: the server refused a new connection (its limit is reached).
-    TooManyConnections,
     /// Any other error reported by the database, whatever its SQLSTATE.
     OtherDatabase,
     Io,
@@ -77,14 +81,15 @@ pub(crate) enum Cause {
     /// The settlement deadline elapsed while the settlement waited for its
     /// in-process slot (the settlement gate).
     DeadlineInQueue,
-    /// ... while it waited for a pooled connection and `BEGIN`.
+    /// ... while it waited for a pooled connection (a busy pool, or a new
+    /// connection not opened in time) or for `BEGIN`.
     DeadlineAcquiringConnection,
     /// ... while its transaction waited for the database (a lock or a statement).
     DeadlineInDatabase,
 }
 impl Cause {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 17] = [
+    pub(crate) const ALL: [Self; 16] = [
         Self::PoolTimeout,
         Self::PoolClosed,
         Self::LockTimeout,
@@ -92,7 +97,6 @@ impl Cause {
         Self::BackendTerminated,
         Self::Deadlock,
         Self::ReadOnlyTransaction,
-        Self::TooManyConnections,
         Self::OtherDatabase,
         Self::Io,
         Self::Tls,
@@ -112,7 +116,6 @@ impl Cause {
             Self::BackendTerminated => "backend_terminated",
             Self::Deadlock => "deadlock",
             Self::ReadOnlyTransaction => "read_only_transaction",
-            Self::TooManyConnections => "too_many_connections",
             Self::OtherDatabase => "other_database",
             Self::Io => "io",
             Self::Tls => "tls",
@@ -142,6 +145,11 @@ pub(crate) fn sqlstate(error: &sqlx::Error) -> Option<Cow<'_, str>> {
 
 /// The one classification of a driver error, shared with the test recorder
 /// (`db::diagnostics`). Never returns one of the three deadline causes.
+///
+/// SQLSTATE 53300 (`too_many_connections`) is not listed: the server raises it
+/// only at connection startup, and sqlx retries that refusal (like 57P03 and
+/// a refused TCP connection) until the acquire timeout, so it always arrives
+/// here as `PoolTimedOut`.
 pub(crate) fn classify(error: &sqlx::Error) -> Cause {
     match error {
         sqlx::Error::Database(_) => match sqlstate(error).as_deref() {
@@ -150,7 +158,6 @@ pub(crate) fn classify(error: &sqlx::Error) -> Cause {
             Some("57P01") => Cause::BackendTerminated,
             Some("40P01") => Cause::Deadlock,
             Some("25006") => Cause::ReadOnlyTransaction,
-            Some("53300") => Cause::TooManyConnections,
             _ => Cause::OtherDatabase,
         },
         sqlx::Error::PoolTimedOut => Cause::PoolTimeout,
@@ -174,8 +181,10 @@ pub(crate) fn storage_error(error: &sqlx::Error) {
 }
 
 /// A failed statement that was run straight on the pool, outside a
-/// transaction: without a connection it never started, so that is the same
-/// failure as a failed start; anything else is a failed statement.
+/// transaction: without a connection (a pool timeout or a closed pool) it
+/// never started, so that is the same failure as a failed start; anything
+/// else is counted as a failed statement, including any other error raised
+/// while a new connection was being opened for it (a known limit).
 pub(crate) fn pool_statement_error(error: &sqlx::Error) {
     match error {
         sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed => begin_error(error),
@@ -258,9 +267,11 @@ where
         .await
 }
 
-/// The only writer of the signal. Callers above fix which pairs can occur:
-/// the three SQL stages with the fourteen driver causes, and the two
-/// settlement stages with the three deadline causes (48 label combinations).
+/// The only writer of the signal. The types bound it to 5 stages and 16
+/// causes, so at most 80 label combinations. The callers above narrow that:
+/// the three SQL stages take only the thirteen driver causes and the two
+/// settlement stages only the three deadline causes (at most 45), and not
+/// every one of those occurs in practice.
 fn record(stage: Stage, cause: Cause) {
     record_to(&crate::metrics::METRICS, stage, cause);
 }

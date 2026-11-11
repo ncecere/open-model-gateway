@@ -1018,6 +1018,9 @@ async fn settle_attempt(
     result
 }
 
+/// How long a settlement may take: the one the request waits for and the
+/// detached one of a cancelled request alike.
+pub(crate) const SETTLEMENT_DEADLINE: Duration = Duration::from_secs(3);
 struct ExecutionGuard {
     repository: Arc<dyn InferenceRepository>,
     id: Uuid,
@@ -1106,7 +1109,7 @@ impl ExecutionGuard {
         let record = self.record(outcome, error);
         let attempt_telemetry = self.telemetry_now();
         let repository = self.repository.clone();
-        let settlement = timeout(Duration::from_secs(3), async move {
+        let settlement = timeout(SETTLEMENT_DEADLINE, async move {
             let settle = repository.finish_attempt(&record, &attempt_telemetry);
             match phases {
                 Some(buffer) => telemetry::with_phases(buffer, settle).await,
@@ -1171,7 +1174,7 @@ impl Drop for ExecutionGuard {
             // Construct only the future here; its unchanged deadline starts inside the owner task.
             let settlement = async move {
                 timeout(
-                    Duration::from_secs(3),
+                    SETTLEMENT_DEADLINE,
                     repository.finish_attempt(&record, &telemetry),
                 )
                 .await

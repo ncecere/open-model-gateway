@@ -431,8 +431,9 @@ impl Environment {
 }
 
 /// How long a request waits for a connection of the primary pool
-/// ([`Config::connect`]). Equal to the settlement deadline, which starts
-/// first (`db::accounting_failure` tells the two apart).
+/// ([`Config::connect`]). Equal to the settlement deadline
+/// (`inference::SETTLEMENT_DEADLINE`; a test in `db::accounting_failure`
+/// keeps the two equal), which starts first.
 pub(crate) const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(3);
 
 impl Config {

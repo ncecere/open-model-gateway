@@ -121,14 +121,24 @@ async fn deadlock_reruns_signal_only_when_exhausted() {
 /// maps its error to `InferenceError` maps it through `begin_storage`, so a
 /// starved or closed pool is recorded as `pool_acquire_and_begin`. The other
 /// starts (maintenance) return the driver error unchanged with `.await?`.
+/// A start is a call of `db::begin` or `db::begin_with_setup`, however it is
+/// named: `crate::db::begin(`, `db::begin(` or an imported `begin(`.
 #[test]
 fn every_governance_transaction_start_records_the_begin_stage() {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+    fn sources(directory: &Path, files: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                sources(&path, files);
+            } else {
+                files.push(path);
+            }
+        }
+    }
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = vec![src.join("governance.rs")];
-    for entry in std::fs::read_dir(src.join("governance")).unwrap() {
-        files.push(entry.unwrap().path());
-    }
+    sources(&src.join("governance"), &mut files);
     let (mut mapped, mut unmapped) = (0, 0);
     for path in files {
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
@@ -136,7 +146,22 @@ fn every_governance_transaction_start_records_the_begin_stage() {
             continue;
         }
         let source = std::fs::read_to_string(&path).unwrap();
-        for (at, _) in source.match_indices("crate::db::begin") {
+        let mut calls: Vec<usize> = ["begin(", "begin_with_setup("]
+            .iter()
+            .flat_map(|call| source.match_indices(call).map(|(at, _)| at))
+            .collect();
+        calls.sort_unstable();
+        for at in calls {
+            let before = &source[..at];
+            let line = before.rsplit('\n').next().unwrap();
+            // Not a call of the function: part of a longer name, a method of
+            // something else, a definition or a comment.
+            if before.ends_with(|c: char| c.is_alphanumeric() || c == '_' || c == '.')
+                || before.ends_with("fn ")
+                || line.trim_start().starts_with("//")
+            {
+                continue;
+            }
             // The whole statement, whatever its formatting.
             let statement: String = source[at..]
                 .split(';')

@@ -225,7 +225,6 @@ fn error_fields(error: &sqlx::Error) -> (Option<SqlxKind>, Option<String>) {
         | Cause::BackendTerminated
         | Cause::Deadlock
         | Cause::ReadOnlyTransaction
-        | Cause::TooManyConnections
         | Cause::OtherDatabase => SqlxKind::Database,
         Cause::PoolClosed => SqlxKind::PoolClosed,
         Cause::PoolTimeout => SqlxKind::PoolTimedOut,
