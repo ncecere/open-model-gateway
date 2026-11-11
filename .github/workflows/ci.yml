@@ -22,9 +22,10 @@ permissions:
 #
 # Third-party actions and run-time downloads get read-only tokens (#194): no job here
 # can write except `image`, which calls image.yml, whose write jobs use only the
-# allowlist in tests/supply-chain.test.mjs. Node, helm and kubeconform are pinned
-# releases fetched by .github/scripts/fetch-verified.sh, which checks a SHA-256
-# written in the workflow (.github/actions/setup-node, the helm job).
+# allowlist in tests/supply-chain.test.mjs. Node, helm, kubeconform and age are
+# pinned releases fetched by .github/scripts/fetch-verified.sh, which checks a
+# SHA-256 written in the workflow (.github/actions/setup-node, the helm job, the
+# backup tests). No job installs operating-system packages at run time (#491).
 
 jobs:
   gateway-lint:
