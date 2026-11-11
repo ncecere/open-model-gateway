@@ -296,6 +296,10 @@ const ALLOWED = {
   "supply-chain.test.mjs": [
     // RegExp.prototype.exec, not child_process.
     "while ((m = invocationRe.exec(script))) {",
+    // Dockerfile text that the reader of #485 parses and never runs: the list of allowed
+    // instruction keywords, and an accepted fixture line that uses the SHELL instruction.
+    'const DOCKERFILE_INSTRUCTIONS = ["ARG", "CMD", "COPY", "ENTRYPOINT", "ENV", "EXPOSE", "FROM", "HEALTHCHECK", "LABEL", "RUN", "SHELL", "STOPSIGNAL", "USER", "VOLUME", "WORKDIR"];',
+    `'SHELL ["/bin/sh", "-c"]',`,
     // A stand-in `python3` planted in the workspace that the handoff must never run: one
     // printf, in POSIX sh on purpose so that it means the same under any shell.
     "writeFileSync(tool, `#!/bin/sh\\nprintf stolen > '${marker}'\\n`);",

@@ -376,7 +376,7 @@ export function unpinnedDockerfileBases(file, text) {
 //   escapes there too), and a `--from=` or `--mount=...,from=` that is not the name of an
 //   earlier stage: no stage index (BuildKit resolves one for COPY only; a mount's `from=0`
 //   is the image `0`) and no external image, which the checks of FROM lines never see.
-// The instructions the two Dockerfiles use, and LABEL, SHELL and VOLUME, which cannot
+// The instructions the two Dockerfiles use, and three more ordinary ones, which cannot
 // name an image, fetch anything or change how the file is read.
 const DOCKERFILE_INSTRUCTIONS = ["ARG", "CMD", "COPY", "ENTRYPOINT", "ENV", "EXPOSE", "FROM", "HEALTHCHECK", "LABEL", "RUN", "SHELL", "STOPSIGNAL", "USER", "VOLUME", "WORKDIR"];
 const DOCKERFILE_RULES = ' (see "Dockerfile rules" in docs/verification.md)';
@@ -780,7 +780,7 @@ const REFUSED_DOCKERFILES = [
   ["a COPY --from a negative stage index", twoStages("COPY --from=-1 / /"), BY_NAME],
   ["a COPY --from a stage index in exponent form", twoStages("COPY --from=1e0 / /"), BY_NAME],
   ["a RUN mount from a stage index, which BuildKit pulls as the image '0'", twoStages("RUN --mount=type=bind,from=0,target=/m true"), /Dockerfile:3: '--from=' and a mount's 'from=' must name an earlier stage of this Dockerfile by name: no stage index and no external image, pinned by digest or not \(found '0'\)/],
-  ["a COPY --from an external image pinned by digest", twoStages(`COPY --from=${OTHER_BASE} /bin/sh /bin/sh`), BY_NAME],
+  ["a COPY --from an external image pinned by digest", twoStages(`COPY --from=${OTHER_BASE} /bin/busybox /b`), BY_NAME],
   ["a RUN mount from an external image pinned by digest", twoStages(`RUN --mount=type=bind,from=${OTHER_BASE},target=/m true`), BY_NAME],
   ["a COPY --from the approved runtime image itself", twoStages(`COPY --from=${APPROVED_RUNTIME} / /`), BY_NAME],
   ["a COPY --from a name that an earlier stage name is a prefix of", twoStages("COPY --from=buildx / /"), BY_NAME],
@@ -3258,7 +3258,7 @@ test("no workflow or composite action installs operating-system packages at run 
     "npx playwright install chromium --with-deps",
     "npx --yes playwright install-deps chromium",
   ]) assert.equal(check(run).length, 1, run);
-  assert.equal(packageInstallViolations("action.yml", { runs: { using: "composite", steps: [{ run: "sudo apt-get install -y age", shell: "bash" }] } }).length, 1, "a composite action");
+  assert.equal(packageInstallViolations("action.yml", { runs: { using: "composite", steps: [{ run: "sudo apt-get install -y age" }] } }).length, 1, "a composite action");
   assert.equal(check("sudo apt-get install -y age").length + packageInstallViolations("f.yml", { jobs: { a: { steps: [{ run: "apk add x" }] }, b: { steps: [{ run: "dnf install y" }] } } }).length, 3, "every step is reported");
   for (const run of ["npx playwright install --only-shell chromium", "npm ci", "cargo install --locked --path .", "adapt install", "echo snapshot aptly apt_get", "python3 -m pip install --require-hashes -r requirements.lock"]) {
     assert.deepEqual(check(run), [], run);
