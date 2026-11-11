@@ -23,6 +23,7 @@ pub(crate) enum Stage {
     CancellationSettlement,
 }
 impl Stage {
+    #[cfg(test)]
     pub(crate) const ALL: [Self; 4] = [
         Self::PoolAcquireAndBegin,
         Self::GovernanceStorage,
@@ -65,6 +66,7 @@ pub(crate) enum Cause {
     DeadlineExceeded,
 }
 impl Cause {
+    #[cfg(test)]
     pub(crate) const ALL: [Self; 13] = [
         Self::PoolTimeout,
         Self::PoolClosed,
@@ -116,8 +118,22 @@ pub(crate) fn sqlstate(error: &sqlx::Error) -> Option<Cow<'_, str>> {
 /// The one classification of a driver error, shared with the test recorder
 /// (`db::diagnostics`). Never returns [`Cause::DeadlineExceeded`].
 pub(crate) fn classify(error: &sqlx::Error) -> Cause {
-    let _ = error;
-    Cause::Other
+    match error {
+        sqlx::Error::Database(_) => match sqlstate(error).as_deref() {
+            Some("55P03") => Cause::LockTimeout,
+            Some("57014") => Cause::StatementTimeout,
+            Some("57P01") => Cause::BackendTerminated,
+            Some("40P01") => Cause::Deadlock,
+            _ => Cause::OtherDatabase,
+        },
+        sqlx::Error::PoolTimedOut => Cause::PoolTimeout,
+        sqlx::Error::PoolClosed => Cause::PoolClosed,
+        sqlx::Error::Io(_) => Cause::Io,
+        sqlx::Error::Tls(_) => Cause::Tls,
+        sqlx::Error::Protocol(_) => Cause::Protocol,
+        sqlx::Error::WorkerCrashed => Cause::WorkerCrashed,
+        _ => Cause::Other,
+    }
 }
 
 /// A failed start of an accounting transaction.
@@ -166,8 +182,21 @@ where
     result
 }
 
+/// The only writer of the signal. Callers above fix which pairs can occur:
+/// the two SQL stages with the twelve driver causes, and the two settlement
+/// stages with `deadline_exceeded` (26 label combinations).
 fn record(stage: Stage, cause: Cause) {
-    let _ = (stage, cause);
+    crate::metrics::METRICS.observe_accounting_failure(stage, cause);
+    tracing::warn!(
+        stage = stage.as_str(),
+        cause = cause.as_str(),
+        "accounting unavailable"
+    );
+    // Test builds also hand the pair to the request that owns the capture.
+    #[cfg(test)]
+    if let Some(handle) = super::diagnostics::current() {
+        handle.signal((stage, cause));
+    }
 }
 
 #[cfg(test)]

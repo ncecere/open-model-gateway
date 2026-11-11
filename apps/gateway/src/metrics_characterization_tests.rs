@@ -142,6 +142,10 @@ pub(crate) fn populated_registry() -> &'static Metrics {
     m.observe_aged_hold_alerts("fired", 1);
     m.observe_alert_delivery("delivered");
     m.observe_deadlock_retry("reconciliation");
+    m.observe_accounting_failure(
+        crate::db::accounting_failure::Stage::GovernanceStorage,
+        crate::db::accounting_failure::Cause::LockTimeout,
+    );
     drop(m.scope_lock_wait("rows", "admission"));
     m.observe_collection_error("reservations");
     m.observe_file_store("local", "put", None);

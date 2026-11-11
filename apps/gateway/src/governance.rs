@@ -20,10 +20,20 @@ use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 type Tx<'a> = Transaction<'a, Postgres>;
 fn storage(error: sqlx::Error) -> InferenceError {
+    storage_at(crate::db::accounting_failure::storage_error, error)
+}
+/// As [`storage`], for a failed start of an accounting transaction (#389).
+fn begin_storage(error: sqlx::Error) -> InferenceError {
+    storage_at(crate::db::accounting_failure::begin_error, error)
+}
+fn storage_at(signal: fn(&sqlx::Error), error: sqlx::Error) -> InferenceError {
     #[cfg(test)]
     crate::db::diagnostics::observe_sqlx(crate::db::diagnostics::Stage::GovernanceStorage, &error);
-    // A deadlock victim may be re-run (`locks::retry_deadlocks`).
-    locks::note(&error);
+    // A deadlock victim may be re-run (`locks::retry_deadlocks`), which
+    // reports the failure itself once the re-runs are used up (#389).
+    if !locks::note(&error) {
+        signal(&error);
+    }
     InferenceError::Storage
 }
 /// A private submodule so [`SharedEligibilityCommitted`]'s own tuple field
@@ -756,7 +766,7 @@ async fn admit_unobserved(
     let _queued = gate(&store.lock_gates.admission).await;
     timer.phase("queue");
     crate::telemetry::mark_phase(crate::telemetry::SpanName::AdmissionQueue);
-    let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
+    let mut tx = crate::db::begin(&store.pool).await.map_err(begin_storage)?;
     timer.phase("connect");
     crate::telemetry::mark_phase(crate::telemetry::SpanName::AdmissionConnect);
     // Catalog configuration (deployments, providers, models and their
@@ -1710,7 +1720,7 @@ async fn finish_unobserved(
     let _queued = gate(&store.lock_gates.settlement).await;
     timer.phase("queue");
     crate::telemetry::mark_phase(crate::telemetry::SpanName::SettlementQueue);
-    let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
+    let mut tx = crate::db::begin(&store.pool).await.map_err(begin_storage)?;
     timer.phase("connect");
     crate::telemetry::mark_phase(crate::telemetry::SpanName::SettlementConnect);
     settlement_prefix(store, &mut tx).await?;
@@ -1820,7 +1830,7 @@ pub async fn reconcile_expired(store: &Store, limit: i64) -> Result<u64, Inferen
 }
 async fn reconcile_batch(store: &Store, batch: i64) -> Result<usize, InferenceError> {
     {
-        let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
+        let mut tx = crate::db::begin(&store.pool).await.map_err(begin_storage)?;
         settlement_prefix(store, &mut tx).await?;
         let due: Vec<(Uuid, Uuid, Uuid, DateTime<Utc>)> = sqlx::query_as("SELECT execution_id,workspace_id,api_key_id,admitted_at FROM governance_reservations WHERE state='pending' AND lease_expires_at<=clock_timestamp() ORDER BY lease_expires_at,execution_id LIMIT $1 FOR UPDATE SKIP LOCKED")
             .bind(batch)
@@ -1937,7 +1947,7 @@ async fn resolve_usage_once(
     evidence: &str,
     actor: ReconcilingActor,
 ) -> Result<(), InferenceError> {
-    let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
+    let mut tx = crate::db::begin(&store.pool).await.map_err(begin_storage)?;
     if scoped(store) {
         // The actor's authority (workspace, user) cannot be revoked until
         // commit; then the reservation row, then its totals rows.

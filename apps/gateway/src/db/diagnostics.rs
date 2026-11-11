@@ -217,26 +217,23 @@ impl Drop for Operation {
     }
 }
 fn error_fields(error: &sqlx::Error) -> (Option<SqlxKind>, Option<String>) {
-    let kind = match error {
-        sqlx::Error::Database(_) => SqlxKind::Database,
-        sqlx::Error::PoolClosed => SqlxKind::PoolClosed,
-        sqlx::Error::PoolTimedOut => SqlxKind::PoolTimedOut,
-        sqlx::Error::Io(_) => SqlxKind::Io,
-        sqlx::Error::Tls(_) => SqlxKind::Tls,
-        sqlx::Error::Protocol(_) => SqlxKind::Protocol,
-        sqlx::Error::WorkerCrashed => SqlxKind::WorkerCrashed,
-        _ => SqlxKind::Other,
+    // One classifier (#389): the production signal's, projected to the driver kind.
+    use super::accounting_failure::{Cause, classify, sqlstate};
+    let kind = match classify(error) {
+        Cause::LockTimeout
+        | Cause::StatementTimeout
+        | Cause::BackendTerminated
+        | Cause::Deadlock
+        | Cause::OtherDatabase => SqlxKind::Database,
+        Cause::PoolClosed => SqlxKind::PoolClosed,
+        Cause::PoolTimeout => SqlxKind::PoolTimedOut,
+        Cause::Io => SqlxKind::Io,
+        Cause::Tls => SqlxKind::Tls,
+        Cause::Protocol => SqlxKind::Protocol,
+        Cause::WorkerCrashed => SqlxKind::WorkerCrashed,
+        Cause::Other | Cause::DeadlineExceeded => SqlxKind::Other,
     };
-    let code = error.as_database_error().and_then(|error| error.code());
-    let sqlstate = code
-        .filter(|code| {
-            code.len() == 5
-                && code
-                    .bytes()
-                    .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
-        })
-        .map(|code| code.into_owned());
-    (Some(kind), sqlstate)
+    (Some(kind), sqlstate(error).map(|code| code.into_owned()))
 }
 pub(crate) fn observe_sqlx(stage: Stage, error: &sqlx::Error) {
     if let Some(handle) = current() {

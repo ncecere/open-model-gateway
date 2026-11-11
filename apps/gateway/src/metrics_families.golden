@@ -1,3 +1,4 @@
+gateway_accounting_failures counter cause,stage System
 gateway_admission_denials counter code,scope Traffic
 gateway_admission_seconds histogram outcome,phase Traffic
 gateway_aged_hold_alerts counter result System

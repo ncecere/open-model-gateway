@@ -67,6 +67,7 @@ macro_rules! classes {
 // Alphabetical, matching metrics_families.golden. No name-prefix heuristics:
 // adding an instrument requires an explicit privacy decision here.
 classes! {
+    "gateway_accounting_failures" => (System, Counter, "1", ["cause", "stage"]),
     "gateway_admission_denials" => (Traffic, Counter, "1", ["code", "scope"]),
     "gateway_admission_seconds" => (Traffic, Histogram, "s", ["outcome", "phase"]),
     "gateway_aged_hold_alerts" => (System, Counter, "1", ["result"]),

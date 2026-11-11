@@ -1113,6 +1113,7 @@ impl ExecutionGuard {
                 None => settle.await,
             }
         });
+        let settlement = crate::db::accounting_failure::explicit_settlement(settlement);
         #[cfg(test)]
         let settlement = crate::db::diagnostics::settlement(
             self.diagnostics.clone(),
@@ -1175,6 +1176,7 @@ impl Drop for ExecutionGuard {
                 )
                 .await
             };
+            let settlement = crate::db::accounting_failure::cancellation_settlement(settlement);
             #[cfg(test)]
             let settlement = crate::db::diagnostics::settlement(
                 self.diagnostics.clone(),

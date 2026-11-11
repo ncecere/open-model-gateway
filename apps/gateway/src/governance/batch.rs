@@ -163,7 +163,7 @@ pub async fn preview_line(
     output_limit: u32,
     native_cache_controls: &[serde_json::Value],
 ) -> Result<LinePreview, InferenceError> {
-    let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
+    let mut tx = crate::db::begin(&store.pool).await.map_err(begin_storage)?;
     let price = match price_id {
         Some(id) => Some(price_version(&mut tx, id, deployment).await?),
         None => latest_price(&mut tx, deployment).await?,
@@ -203,7 +203,7 @@ pub(crate) async fn planned_output(
     deployment: Uuid,
     output_limit: u32,
 ) -> Result<u32, InferenceError> {
-    let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
+    let mut tx = crate::db::begin(&store.pool).await.map_err(begin_storage)?;
     let p = price_version(&mut tx, price, deployment).await?;
     let output = generation_bound(Some(p.output_token_limit), None, output_limit)?
         .max_output_tokens
@@ -217,7 +217,7 @@ pub async fn batch_prices_published(
     store: &Store,
     deployment: Uuid,
 ) -> Result<bool, InferenceError> {
-    let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
+    let mut tx = crate::db::begin(&store.pool).await.map_err(begin_storage)?;
     let price = latest_price(&mut tx, deployment).await?;
     tx.commit().await.map_err(storage)?;
     Ok(price.is_some_and(|p| p.has_batch_lines()))
@@ -261,7 +261,7 @@ async fn admit_batch_unobserved(
         .ok_or(InferenceError::Configuration)?;
     let workspace = record.principal.workspace_id;
     let _queued = gate(&store.lock_gates.admission).await;
-    let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
+    let mut tx = crate::db::begin(&store.pool).await.map_err(begin_storage)?;
     admission_prefix(store, &mut tx, &record.principal).await?;
     let (lineage, _shared) = authorize(store, &mut tx, &record.principal).await?;
     let (mut tokens, mut held) = (0i64, 0i64);
@@ -414,7 +414,7 @@ async fn admit_line_unobserved(
     }
     let workspace = record.principal.workspace_id;
     let _queued = gate(&store.lock_gates.admission).await;
-    let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
+    let mut tx = crate::db::begin(&store.pool).await.map_err(begin_storage)?;
     admission_prefix(store, &mut tx, &record.principal).await?;
     let (lineage, _shared) = authorize(store, &mut tx, &record.principal).await?;
     let envelope: Option<(String, Option<i64>, Uuid, DateTime<Utc>)> = sqlx::query_as("SELECT r.state,r.held_microusd,r.api_key_id,r.admitted_at FROM governance_reservations r JOIN async_jobs j ON j.execution_id=r.execution_id WHERE r.execution_id=$1 AND r.workspace_id=$2 AND j.id=$3 AND j.batch_mode='gateway' FOR UPDATE OF r")
@@ -551,7 +551,7 @@ async fn close_batch_once(
     elapsed_ms: u64,
     cancelled: bool,
 ) -> Result<bool, InferenceError> {
-    let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
+    let mut tx = crate::db::begin(&store.pool).await.map_err(begin_storage)?;
     settlement_prefix(store, &mut tx).await?;
     // The envelope's admission time (scoped mode reads it with its lock):
     // prunes the ledger's reservation lookup to its month.

@@ -210,6 +210,7 @@ pub struct Metrics {
     time_to_first_token: Histograms<L2>,
     tokens: Family<L3, Counter>,
     settlements: Family<L1, Counter>,
+    accounting_failures: Family<L2, Counter>,
     denials: Family<L2, Counter>,
     admission_phases: Histograms<L2>,
     settlement_phases: Histograms<L2>,
@@ -418,6 +419,7 @@ impl Metrics {
             time_to_first_token: Family::new_with_constructor(upstream_buckets),
             tokens: Family::default(),
             settlements: Family::default(),
+            accounting_failures: Family::default(),
             denials: Family::default(),
             admission_phases: Family::new_with_constructor(phase_buckets),
             settlement_phases: Family::new_with_constructor(phase_buckets),
@@ -532,6 +534,11 @@ impl Metrics {
             "settlements",
             "Attempt settlements: settled (exact), unknown (hold retained), held (finalization failed; pending reconciliation)",
             metrics.settlements.clone(),
+        );
+        registry.register(
+            "accounting_failures",
+            "Failed accounting operations (the cause of 503 accounting_unavailable), by stage (pool_acquire_and_begin, governance_storage, explicit_settlement, cancellation_settlement) and cause (pool_timeout, pool_closed, lock_timeout, statement_timeout, backend_terminated, deadlock, other_database, io, tls, protocol, worker_crashed, other, deadline_exceeded). Fixed values only: no SQL, SQLSTATE, message or identifier",
+            metrics.accounting_failures.clone(),
         );
         registry.register(
             "admission_denials",
@@ -1163,7 +1170,12 @@ impl Metrics {
         stage: crate::db::accounting_failure::Stage,
         cause: crate::db::accounting_failure::Cause,
     ) {
-        let _ = (stage, cause);
+        self.accounting_failures
+            .get_or_create(&[
+                ("stage", stage.as_str().to_owned()),
+                ("cause", cause.as_str().to_owned()),
+            ])
+            .inc();
     }
 
     #[cfg(test)]
@@ -1172,8 +1184,12 @@ impl Metrics {
         stage: crate::db::accounting_failure::Stage,
         cause: crate::db::accounting_failure::Cause,
     ) -> u64 {
-        let _ = (stage, cause);
-        0
+        self.accounting_failures
+            .get_or_create(&[
+                ("stage", stage.as_str().to_owned()),
+                ("cause", cause.as_str().to_owned()),
+            ])
+            .get()
     }
 
     #[cfg(test)]
