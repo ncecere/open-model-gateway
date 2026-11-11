@@ -613,6 +613,10 @@ const WRONG_RUST = `mirror.gcr.io/library/rust:1.98.0-bookworm@sha256:${"c".repe
 // The decoy: the stage that is really built last uses another base, and the approved
 // line follows it as something that is not an instruction.
 const decoy = (open, close = "") => `FROM ${OTHER_BASE} AS real\n${open}\nFROM ${APPROVED_RUNTIME} AS runtime\n${close}`;
+// An approved final stage after a build stage, then `body` as line 3.
+const twoStages = body => `FROM ${OTHER_BASE} AS build\nFROM ${APPROVED_RUNTIME} AS runtime\n${body}\n`;
+const BY_NAME = /must name an earlier stage of this Dockerfile by name: no stage index and no external image, pinned by digest or not/;
+const PLAIN_FLAG = /a COPY or RUN flag must be written as '--name' or '--name=value' in plain characters: lower-case letters and '-' in the name; letters, digits and \. _ \/ : @ , = - in the value/;
 const REFUSED_DOCKERFILES = [
   // Heredocs: the body is file or script content, never instructions.
   ["the issue's COPY heredoc decoy", decoy("COPY <<EOF /decoy.txt", "EOF\n"), /heredoc/],
@@ -754,6 +758,47 @@ const REFUSED_DOCKERFILES = [
   ["a 0x01 control character", `FROM ${APPROVED_RUNTIME} AS runtime\n\x01FROM ${OTHER_BASE}\n`, /printable ASCII, tab and LF are allowed in a Dockerfile \(found U\+0001\)/],
   ["a three-word FROM whose middle word is not AS", `FROM ${APPROVED_RUNTIME} IS runtime\n`, /FROM must be written as/],
   ["a three-word FROM whose middle word only starts with AS", `FROM ${APPROVED_RUNTIME} ASK runtime\n`, /FROM must be written as/],
+  // ---- Found by the second adversarial review (#485) ----
+  // `--from=` and a mount's `from=` may only name an earlier stage, by name. BuildKit
+  // resolves a stage index for COPY only: `RUN --mount=type=bind,from=0` looks for a stage
+  // named `0` (a name BuildKit does not allow) and then pulls docker.io/library/0:latest
+  // (built with Docker 29.1.3: "failed to resolve source metadata for
+  // docker.io/library/0:latest"). An external image, pinned or not, would put content the
+  // runtime-base and Rust checks never see into an approved stage.
+  ["a COPY --from a stage index", twoStages("COPY --from=0 / /"), BY_NAME],
+  ["a COPY --from a zero-padded stage index", twoStages("COPY --from=00 / /"), BY_NAME],
+  ["a COPY --from a negative stage index", twoStages("COPY --from=-1 / /"), BY_NAME],
+  ["a COPY --from a stage index in exponent form", twoStages("COPY --from=1e0 / /"), BY_NAME],
+  ["a RUN mount from a stage index, which BuildKit pulls as the image '0'", twoStages("RUN --mount=type=bind,from=0,target=/m true"), /Dockerfile:3: '--from=' and a mount's 'from=' must name an earlier stage of this Dockerfile by name: no stage index and no external image, pinned by digest or not \(found '0'\)/],
+  ["a COPY --from an external image pinned by digest", twoStages(`COPY --from=${OTHER_BASE} /bin/sh /bin/sh`), BY_NAME],
+  ["a RUN mount from an external image pinned by digest", twoStages(`RUN --mount=type=bind,from=${OTHER_BASE},target=/m true`), BY_NAME],
+  ["a COPY --from the approved runtime image itself", twoStages(`COPY --from=${APPROVED_RUNTIME} / /`), BY_NAME],
+  ["a COPY --from a name that an earlier stage name is a prefix of", twoStages("COPY --from=buildx / /"), BY_NAME],
+  ["a COPY --from a prefix of an earlier stage name", twoStages("COPY --from=buil / /"), BY_NAME],
+  ["a RUN mount from a name that an earlier stage name is a prefix of", twoStages("RUN --mount=type=bind,from=buildx,target=/m true"), BY_NAME],
+  ["a RUN mount from a later stage", `FROM ${OTHER_BASE} AS first\nRUN --mount=type=bind,from=runtime,target=/m true\nFROM ${APPROVED_RUNTIME} AS runtime\n`, BY_NAME],
+  ["a RUN mount from its own stage", twoStages("RUN --mount=type=bind,from=runtime,target=/m true"), BY_NAME],
+  // Every `from=` field of every mount is read, wherever it is: BuildKit uses the last one
+  // (built: `from=first,from=<image>` resolved the image).
+  ["a RUN mount with a second from= naming an external image", twoStages(`RUN --mount=type=bind,from=build,from=${OTHER_BASE},target=/m true`), BY_NAME],
+  ["a RUN mount with a second from= naming an image by tag", twoStages("RUN --mount=type=bind,from=build,from=busybox,target=/m true"), BY_NAME],
+  ["a RUN mount with a first from= naming an external image", twoStages(`RUN --mount=type=bind,from=${OTHER_BASE},from=build,target=/m true`), BY_NAME],
+  ["a RUN mount whose from= is the third field", twoStages("RUN --mount=type=bind,target=/m,from=busybox true"), BY_NAME],
+  ["a RUN mount whose from= is the fourth field", twoStages("RUN --mount=type=bind,target=/m,ro,from=busybox true"), BY_NAME],
+  ["a RUN mount whose from= is the sixth field", twoStages("RUN --mount=type=bind,source=/,target=/m,ro,from=build,from=busybox true"), BY_NAME],
+  // A backslash in a flag value: BuildKit removes it as an escape before reading the flag.
+  ["a backslash inside a COPY --from value", twoStages("COPY --from=bu\\ild / /"), PLAIN_FLAG],
+  ["a backslash inside a COPY --chmod value", twoStages("COPY --chmod=05\\55 a /b"), PLAIN_FLAG],
+  ["a backslash inside a RUN mount field", twoStages("RUN --mount=type=bind,from=bu\\ild,target=/m true"), PLAIN_FLAG],
+  ["a backslash before the value of a RUN flag", twoStages("RUN --network=\\none true"), PLAIN_FLAG],
+  // The flag refusal covers more than variables, quotes and escapes, and says what is allowed.
+  ["a COPY --exclude with a glob", twoStages("COPY --exclude=**/*.md . /src/"), /Dockerfile:3: a COPY or RUN flag must be written as '--name' or '--name=value' in plain characters: lower-case letters and '-' in the name; letters, digits and \. _ \/ : @ , = - in the value \(found '--exclude=\*\*\/\*\.md'\)/],
+  ["a COPY --chmod in symbolic form", twoStages("COPY --chmod=u+x a /b"), PLAIN_FLAG],
+  ["a COPY --chown with a tilde", twoStages("COPY --chown=~app a /b"), PLAIN_FLAG],
+  // No final newline: the last line is still the continuation of the CMD before it (built:
+  // `--call=targets` lists only `real`). The end-of-file test in the reader must be exact.
+  ["a FROM continued from CMD as the last line of a file with no final newline", `FROM ${OTHER_BASE} AS real\nCMD true \\\nFROM ${APPROVED_RUNTIME} AS runtime`, /Dockerfile:3: a continued line must not start with FROM/],
+  ["a lower-case from continued from RUN as the last line of a file with no final newline", `FROM ${OTHER_BASE} AS real\nRUN true \\\n\tfrom ${APPROVED_RUNTIME}`, /Dockerfile:3: a continued line must not start with FROM/],
 ];
 // Every refusal ends by pointing at the rules, so a contributor knows where to look.
 const REFUSAL_POINTER = ' (see "Dockerfile rules" in docs/verification.md)';
@@ -850,6 +895,25 @@ test("fixtures: a digest pin is exactly sha256: and 64 lower-case hex characters
     assert.deepEqual(unpinnedDockerfileBases("f/Dockerfile", `FROM ${OTHER_BASE}\nFROM ${ref} AS x\n`), [`f/Dockerfile:2 ${ref}`], label);
   }
   assert.deepEqual(unpinnedDockerfileBases("f/Dockerfile", `FROM debian:13@sha256:${hex} AS x\n`), []);
+});
+
+// The continuation test looks only at the end of a line. A pattern that can start
+// anywhere in the line (`/^(.*?)(\\+)[ \t]*$/` took 1.3 s on 20,000 backslashes) is
+// quadratic on a long run of backslashes that does not end the line.
+test("a long run of backslashes inside a line is read in linear time (#485)", () => {
+  const run = "\\".repeat(100_000);
+  const text = `FROM ${OTHER_BASE} AS build\nRUN ${run}x\nRUN ${run}x \t\nFROM ${APPROVED_RUNTIME} AS runtime\n`;
+  const started = performance.now();
+  const stages = dockerfileStages("f/Dockerfile", text);
+  const elapsed = performance.now() - started;
+  assert.deepEqual(stages, [
+    { line: 1, platform: undefined, ref: OTHER_BASE, name: "build" },
+    { line: 4, platform: undefined, ref: APPROVED_RUNTIME, name: "runtime" },
+  ]);
+  assert.ok(elapsed < 500, `reading took ${Math.round(elapsed)} ms`);
+  // The same run at the end of a line is still more than one backslash.
+  assert.throws(() => dockerfileStages("f/Dockerfile", `FROM ${OTHER_BASE}\nRUN true ${run}\n`), /f\/Dockerfile:2: a line must not end in more than one backslash/);
+  assert.throws(() => dockerfileStages("f/Dockerfile", `FROM ${OTHER_BASE}\nRUN true ${run} \t \n`), /f\/Dockerfile:2: a line must not end in more than one backslash/);
 });
 
 // `--from=` and a mount's `from=` may name an earlier stage (by name in any case, as
