@@ -2759,19 +2759,64 @@ test("the runner check refuses floating, self-hosted, computed and unlisted runn
   }
 });
 
-// Operating-system packages installed at run time are neither pinned nor verified, and
-// the job fails whenever the runner cannot reach the mirrors (#491).
-export const packageInstallViolations = (file, text) => text.split("\n").flatMap((line, i) =>
-  !/^\s*#/.test(line) && /\b(apt-get|apt|aptitude|dpkg|snap|pip3?|pipx|brew)\s+(-\S+\s+)*(install|upgrade|update|-i)\b|--with-deps\b/.test(line) ? [`${file}:${i + 1}: installs packages at run time`] : []);
+// Operating-system packages installed at run time are neither pinned nor verified, and the
+// job fails whenever the runner cannot reach the mirrors (#491). A `run:` script is refused
+// if any word of it is a package manager (whatever its arguments, and however the script is
+// laid out over lines) or a Playwright option that calls one. A plain guard against the
+// ordinary ways of writing an install: it does not see a script file a step runs, an action
+// that installs packages, or a command name assembled by the shell.
+const PACKAGE_MANAGERS = new Set(["apt-get", "apt", "aptitude", "apt-fast", "nala", "add-apt-repository", "dpkg", "snap", "apk", "yum", "dnf", "zypper", "pacman"]);
+const PLAYWRIGHT_PACKAGES = ["install-deps", "--with-deps"];
+
+// Every `run:` string anywhere in a parsed workflow or composite action.
+const everyRunScript = node => (node && typeof node === "object"
+  ? Object.entries(node).flatMap(([key, value]) => (key === "run" && typeof value === "string" ? [value] : everyRunScript(value)))
+  : []);
+
+export function packageInstallViolations(file, data) {
+  return everyRunScript(data).flatMap(script => {
+    const words = script.split(/[^A-Za-z0-9_.+-]+/).map(word => word.toLowerCase());
+    const found = [...new Set(words.filter(word => PACKAGE_MANAGERS.has(word) || PLAYWRIGHT_PACKAGES.includes(word)))];
+    return found.length ? [`${file}: a run step installs packages at run time (${found.join(", ")}): ${JSON.stringify(script.slice(0, 60))}`] : [];
+  });
+}
 
 test("no workflow or composite action installs operating-system packages at run time (#491)", () => {
   const files = [...readdirSync(workflowsDir).map(f => join(workflowsDir, f)), ...walk(join(root, ".github/actions")).filter(f => /\.ya?ml$/.test(f))];
-  assert.ok(files.length >= 8);
-  assert.deepEqual(files.flatMap(f => packageInstallViolations(f.slice(root.length + 1), readFileSync(f, "utf8"))), []);
-  for (const line of ["run: sudo apt-get update && sudo apt-get install -y age", "  - run: sudo apt-get -y install age", "run: apt install age", "run: sudo dpkg -i x.deb", "run: pip install x", "run: sudo snap install x", "- run: npx playwright install --with-deps --only-shell chromium", "run: sudo apt-get update"]) {
-    assert.equal(packageInstallViolations("f.yml", `jobs:\n${line}\n`).length, 1, line);
+  const scripts = files.map(f => everyRunScript(toData(parseStrict(readFileSync(f, "utf8"), f))).length);
+  assert.ok(scripts.reduce((a, b) => a + b, 0) >= 40 && scripts.filter(n => n > 0).length >= 8, "the run steps of every workflow and the composite action are read");
+  assert.deepEqual(files.flatMap(f => packageInstallViolations(f, toData(parseStrict(readFileSync(f, "utf8"), f)))), []);
+
+  const check = run => packageInstallViolations("f.yml", { jobs: { first: { steps: [{ run: "true" }] }, j: { steps: [{ run: "echo ok" }, { name: "x", run }] } } });
+  for (const run of [
+    "sudo apt-get update && sudo apt-get install -y age",
+    "sudo apt-get update",
+    "sudo apt-get -y install age",
+    "sudo apt-get -o Acquire::Retries=3 install -y age",
+    "sudo -E apt-get -qq -o Dpkg::Use-Pty=0 install -y --no-install-recommends age",
+    "DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y age",
+    "sudo apt-get \\\n  install -y age",
+    "set -e\nsudo apt-get\ninstall age\n",
+    "apt install age",
+    "sudo APT-GET install age",
+    "sudo apt-get dist-upgrade",
+    "sudo apt-get build-dep age",
+    "sudo add-apt-repository ppa:x/y",
+    "sudo dpkg -i x.deb",
+    "sudo dpkg --install x.deb",
+    "sudo snap install x",
+    "apk add age",
+    "sudo dnf install age",
+    "sh -c 'apt-get install age'",
+    "echo age | xargs sudo apt-get install -y",
+    "npx playwright install --with-deps --only-shell chromium",
+    "npx playwright install chromium --with-deps",
+    "npx --yes playwright install-deps chromium",
+  ]) assert.equal(check(run).length, 1, run);
+  assert.equal(packageInstallViolations("action.yml", { runs: { using: "composite", steps: [{ run: "sudo apt-get install -y age", shell: "bash" }] } }).length, 1, "a composite action");
+  assert.equal(check("sudo apt-get install -y age").length + packageInstallViolations("f.yml", { jobs: { a: { steps: [{ run: "apk add x" }] }, b: { steps: [{ run: "dnf install y" }] } } }).length, 3, "every step is reported");
+  for (const run of ["npx playwright install --only-shell chromium", "npm ci", "cargo install --locked --path .", "adapt install", "echo snapshot aptly apt_get", "python3 -m pip install --require-hashes -r requirements.lock"]) {
+    assert.deepEqual(check(run), [], run);
   }
-  for (const line of ["# sudo apt-get install -y age", "run: npx playwright install --only-shell chromium", "run: npm ci", "run: cargo install --locked --path ."]) {
-    assert.deepEqual(packageInstallViolations("f.yml", line), [], line);
-  }
+  assert.deepEqual(packageInstallViolations("f.yml", { jobs: { j: { name: "never apt-get install here", steps: [{ name: "apt-get", uses: "x/y@z", with: { run: 1 } }] } } }), [], "only run scripts are read");
 });

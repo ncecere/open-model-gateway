@@ -124,10 +124,11 @@ jobs:
       - name: Install age for the encrypted backup tests (pinned release, SHA-256 verified)
         run: |
           set -euo pipefail
-          bash .github/scripts/fetch-verified.sh https://github.com/FiloSottile/age/releases/download/v1.1.1/age-v1.1.1-linux-amd64.tar.gz cf16cbb108fc56e2064b00ba2b65d9fb1b8d7002ca5e38260ee1cc34f6aaa8f9 "${RUNNER_TEMP}/age.tar.gz"
+          bash .github/scripts/fetch-verified.sh https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10 "${RUNNER_TEMP}/age.tar.gz"
           tar -xzf "${RUNNER_TEMP}/age.tar.gz" -C "${RUNNER_TEMP}" age/age age/age-keygen
           echo "${RUNNER_TEMP}/age" >> "${GITHUB_PATH}"
           "${RUNNER_TEMP}/age/age" --version
+          "${RUNNER_TEMP}/age/age-keygen" --version
       - name: Build the gateway binary for the backup lineage check
         run: cargo build -p open-model-gateway --all-features --bin open-model-gateway
       - name: Backup/restore drill on the disposable service database
@@ -170,10 +171,11 @@ jobs:
       - name: Install age (pinned release, SHA-256 verified; test:staging includes the encrypted backup tests)
         run: |
           set -euo pipefail
-          bash .github/scripts/fetch-verified.sh https://github.com/FiloSottile/age/releases/download/v1.1.1/age-v1.1.1-linux-amd64.tar.gz cf16cbb108fc56e2064b00ba2b65d9fb1b8d7002ca5e38260ee1cc34f6aaa8f9 "${RUNNER_TEMP}/age.tar.gz"
+          bash .github/scripts/fetch-verified.sh https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10 "${RUNNER_TEMP}/age.tar.gz"
           tar -xzf "${RUNNER_TEMP}/age.tar.gz" -C "${RUNNER_TEMP}" age/age age/age-keygen
           echo "${RUNNER_TEMP}/age" >> "${GITHUB_PATH}"
           "${RUNNER_TEMP}/age/age" --version
+          "${RUNNER_TEMP}/age/age-keygen" --version
       - run: npm run test:staging
       - run: npm run build:web
 
