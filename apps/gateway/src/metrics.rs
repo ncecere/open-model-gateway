@@ -350,7 +350,7 @@ pub struct AttemptObservation<'a> {
 }
 
 impl Metrics {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let mut registry = Registry::with_prefix("gateway");
         // Pre-create every trace label once. Recording increments plain atomic
         // counters, never takes a Family's lock or allocates label strings.
@@ -1854,12 +1854,12 @@ mod tests {
         );
         m.observe_accounting_failure(Stage::GovernanceStorage, Cause::LockTimeout);
         m.observe_accounting_failure(Stage::GovernanceStorage, Cause::LockTimeout);
-        m.observe_accounting_failure(Stage::ExplicitSettlement, Cause::DeadlineExceeded);
+        m.observe_accounting_failure(Stage::ExplicitSettlement, Cause::DeadlineInDatabase);
         let out = m.render(None).await;
         assert!(out.contains("# TYPE gateway_accounting_failures counter"));
         for line in [
             r#"gateway_accounting_failures_total{stage="governance_storage",cause="lock_timeout"} 2"#,
-            r#"gateway_accounting_failures_total{stage="explicit_settlement",cause="deadline_exceeded"} 1"#,
+            r#"gateway_accounting_failures_total{stage="explicit_settlement",cause="deadline_in_database"} 1"#,
         ] {
             assert!(out.contains(line), "missing: {line}");
         }
@@ -1874,7 +1874,7 @@ mod tests {
                 m.observe_accounting_failure(stage, cause);
             }
         }
-        assert_eq!(exported_series(&m.render(None).await).len(), 4 * 13);
+        assert_eq!(exported_series(&m.render(None).await).len(), 5 * 17);
     }
 
     #[tokio::test]

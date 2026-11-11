@@ -2060,6 +2060,8 @@ async fn resolve_usage_once(
     tx.commit().await.map_err(storage)
 }
 #[cfg(all(test, feature = "integration-tests"))]
+mod accounting_failure_tests;
+#[cfg(all(test, feature = "integration-tests"))]
 mod anthropic_cache_tests;
 #[cfg(all(test, feature = "integration-tests"))]
 mod audio_tests;

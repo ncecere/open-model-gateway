@@ -16,6 +16,9 @@ pub(crate) enum Stage {
     PoolAcquireAndBegin,
     /// Any later statement of an accounting transaction, including `COMMIT`.
     GovernanceStorage,
+    /// The reads before admission: the eligible deployments and the routing
+    /// plan (connection, `BEGIN` and statements alike).
+    RouteLookup,
     /// The three-second deadline of a settlement the request waited for.
     ExplicitSettlement,
     /// The three-second deadline of the detached settlement of a cancelled
@@ -24,9 +27,10 @@ pub(crate) enum Stage {
 }
 impl Stage {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 4] = [
+    pub(crate) const ALL: [Self; 5] = [
         Self::PoolAcquireAndBegin,
         Self::GovernanceStorage,
+        Self::RouteLookup,
         Self::ExplicitSettlement,
         Self::CancellationSettlement,
     ];
@@ -34,6 +38,7 @@ impl Stage {
         match self {
             Self::PoolAcquireAndBegin => "pool_acquire_and_begin",
             Self::GovernanceStorage => "governance_storage",
+            Self::RouteLookup => "route_lookup",
             Self::ExplicitSettlement => "explicit_settlement",
             Self::CancellationSettlement => "cancellation_settlement",
         }
@@ -54,6 +59,11 @@ pub(crate) enum Cause {
     BackendTerminated,
     /// SQLSTATE 40P01, after the deadlock re-runs were used up.
     Deadlock,
+    /// SQLSTATE 25006: a write reached a read-only server (a standby, or a
+    /// primary demoted by a failover).
+    ReadOnlyTransaction,
+    /// SQLSTATE 53300: the server refused a new connection (its limit is reached).
+    TooManyConnections,
     /// Any other error reported by the database, whatever its SQLSTATE.
     OtherDatabase,
     Io,
@@ -62,25 +72,34 @@ pub(crate) enum Cause {
     WorkerCrashed,
     /// Any other driver error.
     Other,
-    /// The settlement deadline elapsed before the database answered.
-    DeadlineExceeded,
+    /// The settlement deadline elapsed while the settlement waited for its
+    /// in-process slot (the settlement gate).
+    DeadlineInQueue,
+    /// ... while it waited for a pooled connection and `BEGIN`.
+    DeadlineAcquiringConnection,
+    /// ... while its transaction waited for the database (a lock or a statement).
+    DeadlineInDatabase,
 }
 impl Cause {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 13] = [
+    pub(crate) const ALL: [Self; 17] = [
         Self::PoolTimeout,
         Self::PoolClosed,
         Self::LockTimeout,
         Self::StatementTimeout,
         Self::BackendTerminated,
         Self::Deadlock,
+        Self::ReadOnlyTransaction,
+        Self::TooManyConnections,
         Self::OtherDatabase,
         Self::Io,
         Self::Tls,
         Self::Protocol,
         Self::WorkerCrashed,
         Self::Other,
-        Self::DeadlineExceeded,
+        Self::DeadlineInQueue,
+        Self::DeadlineAcquiringConnection,
+        Self::DeadlineInDatabase,
     ];
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
@@ -90,13 +109,17 @@ impl Cause {
             Self::StatementTimeout => "statement_timeout",
             Self::BackendTerminated => "backend_terminated",
             Self::Deadlock => "deadlock",
+            Self::ReadOnlyTransaction => "read_only_transaction",
+            Self::TooManyConnections => "too_many_connections",
             Self::OtherDatabase => "other_database",
             Self::Io => "io",
             Self::Tls => "tls",
             Self::Protocol => "protocol",
             Self::WorkerCrashed => "worker_crashed",
             Self::Other => "other",
-            Self::DeadlineExceeded => "deadline_exceeded",
+            Self::DeadlineInQueue => "deadline_in_queue",
+            Self::DeadlineAcquiringConnection => "deadline_acquiring_connection",
+            Self::DeadlineInDatabase => "deadline_in_database",
         }
     }
 }
@@ -116,7 +139,7 @@ pub(crate) fn sqlstate(error: &sqlx::Error) -> Option<Cow<'_, str>> {
 }
 
 /// The one classification of a driver error, shared with the test recorder
-/// (`db::diagnostics`). Never returns [`Cause::DeadlineExceeded`].
+/// (`db::diagnostics`). Never returns one of the three deadline causes.
 pub(crate) fn classify(error: &sqlx::Error) -> Cause {
     match error {
         sqlx::Error::Database(_) => match sqlstate(error).as_deref() {
@@ -145,6 +168,33 @@ pub(crate) fn begin_error(error: &sqlx::Error) {
 pub(crate) fn storage_error(error: &sqlx::Error) {
     record(Stage::GovernanceStorage, classify(error));
 }
+
+/// A failed statement that was run straight on the pool, outside a
+/// transaction: without a connection it never started, so that is the same
+/// failure as a failed start; anything else is a failed statement.
+pub(crate) fn pool_statement_error(error: &sqlx::Error) {
+    storage_error(error);
+}
+
+/// A failed read before admission (eligible deployments, routing plan).
+pub(crate) fn route_lookup_error(error: &sqlx::Error) {
+    record(Stage::RouteLookup, classify(error));
+}
+
+/// What a settlement is waiting on, for the cause of an elapsed deadline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Waiting {
+    /// Its in-process slot (the settlement gate).
+    Queue,
+    /// A pooled connection and `BEGIN`.
+    Connection,
+    /// The database, inside its transaction.
+    Database,
+}
+
+/// Mark what the running settlement waits on next. Outside the two settlement
+/// deadline wrappers below there is nothing to mark.
+pub(crate) fn settlement_waiting(_on: Waiting) {}
 
 /// An accounting transaction that was still a deadlock victim on its last
 /// permitted run (`governance::locks::retry_deadlocks`).
@@ -177,16 +227,19 @@ where
 {
     let result = future.await;
     if result.is_err() {
-        record(stage, Cause::DeadlineExceeded);
+        record(stage, Cause::DeadlineInQueue);
     }
     result
 }
 
-/// The only writer of the signal. Callers above fix which pairs can occur:
-/// the two SQL stages with the twelve driver causes, and the two settlement
-/// stages with `deadline_exceeded` (26 label combinations).
+/// The only writer of the signal. Callers above fix which pairs can occur.
 fn record(stage: Stage, cause: Cause) {
-    crate::metrics::METRICS.observe_accounting_failure(stage, cause);
+    record_to(&crate::metrics::METRICS, stage, cause);
+}
+
+/// [`record`] on the given metrics (the process-wide instance outside tests).
+fn record_to(metrics: &crate::metrics::Metrics, stage: Stage, cause: Cause) {
+    metrics.observe_accounting_failure(stage, cause);
     tracing::warn!(
         stage = stage.as_str(),
         cause = cause.as_str(),

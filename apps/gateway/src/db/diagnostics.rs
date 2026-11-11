@@ -224,6 +224,8 @@ fn error_fields(error: &sqlx::Error) -> (Option<SqlxKind>, Option<String>) {
         | Cause::StatementTimeout
         | Cause::BackendTerminated
         | Cause::Deadlock
+        | Cause::ReadOnlyTransaction
+        | Cause::TooManyConnections
         | Cause::OtherDatabase => SqlxKind::Database,
         Cause::PoolClosed => SqlxKind::PoolClosed,
         Cause::PoolTimeout => SqlxKind::PoolTimedOut,
@@ -231,7 +233,10 @@ fn error_fields(error: &sqlx::Error) -> (Option<SqlxKind>, Option<String>) {
         Cause::Tls => SqlxKind::Tls,
         Cause::Protocol => SqlxKind::Protocol,
         Cause::WorkerCrashed => SqlxKind::WorkerCrashed,
-        Cause::Other | Cause::DeadlineExceeded => SqlxKind::Other,
+        Cause::Other
+        | Cause::DeadlineInQueue
+        | Cause::DeadlineAcquiringConnection
+        | Cause::DeadlineInDatabase => SqlxKind::Other,
     };
     (Some(kind), sqlstate(error).map(|code| code.into_owned()))
 }

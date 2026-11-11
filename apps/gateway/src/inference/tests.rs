@@ -933,7 +933,7 @@ async fn accounting_failure_signal_names_the_explicit_settlement_deadline_only_o
     let (engine, repository, _adapter) = fixture(Mode::Complete, EngineLimits::default());
     repository.hang_finish.store(true, Ordering::SeqCst);
     let before =
-        METRICS.accounting_failure_count(Stage::ExplicitSettlement, Cause::DeadlineExceeded);
+        METRICS.accounting_failure_count(Stage::ExplicitSettlement, Cause::DeadlineInQueue);
     let result = diagnostics::scope(
         capture.clone(),
         engine.execute(principal(), request(false), Uuid::new_v4()),
@@ -942,10 +942,10 @@ async fn accounting_failure_signal_names_the_explicit_settlement_deadline_only_o
     assert!(matches!(result, Err(InferenceError::Storage)));
     assert_eq!(
         capture.signals(),
-        [(Stage::ExplicitSettlement, Cause::DeadlineExceeded)]
+        [(Stage::ExplicitSettlement, Cause::DeadlineInQueue)]
     );
     assert!(
-        METRICS.accounting_failure_count(Stage::ExplicitSettlement, Cause::DeadlineExceeded)
+        METRICS.accounting_failure_count(Stage::ExplicitSettlement, Cause::DeadlineInQueue)
             > before
     );
 }
@@ -961,7 +961,7 @@ async fn accounting_failure_signal_names_the_cancellation_settlement_deadline() 
     let (engine, repository, _) = fixture(Mode::Pending, EngineLimits::default());
     repository.hang_finish.store(true, Ordering::SeqCst);
     let before =
-        METRICS.accounting_failure_count(Stage::CancellationSettlement, Cause::DeadlineExceeded);
+        METRICS.accounting_failure_count(Stage::CancellationSettlement, Cause::DeadlineInQueue);
     let output = diagnostics::scope(
         capture.clone(),
         engine.execute(principal(), request(true), Uuid::new_v4()),
@@ -980,11 +980,11 @@ async fn accounting_failure_signal_names_the_cancellation_settlement_deadline() 
     .expect("the detached settlement deadline is reported");
     assert_eq!(
         capture.signals(),
-        [(Stage::CancellationSettlement, Cause::DeadlineExceeded)]
+        [(Stage::CancellationSettlement, Cause::DeadlineInQueue)]
     );
     assert_eq!(repository.finish_calls.load(Ordering::SeqCst), 1);
     assert!(
-        METRICS.accounting_failure_count(Stage::CancellationSettlement, Cause::DeadlineExceeded)
+        METRICS.accounting_failure_count(Stage::CancellationSettlement, Cause::DeadlineInQueue)
             > before
     );
 }

@@ -116,3 +116,45 @@ async fn deadlock_reruns_signal_only_when_exhausted() {
         [(Stage::GovernanceStorage, Cause::Deadlock)]
     );
 }
+
+/// #389: every accounting transaction start in the governance sources that
+/// maps its error to `InferenceError` maps it through `begin_storage`, so a
+/// starved or closed pool is recorded as `pool_acquire_and_begin`. The other
+/// starts (maintenance) return the driver error unchanged with `.await?`.
+#[test]
+fn every_governance_transaction_start_records_the_begin_stage() {
+    use std::path::Path;
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = vec![src.join("governance.rs")];
+    for entry in std::fs::read_dir(src.join("governance")).unwrap() {
+        files.push(entry.unwrap().path());
+    }
+    let (mut mapped, mut unmapped) = (0, 0);
+    for path in files {
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        if !name.ends_with(".rs") || name.ends_with("tests.rs") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).unwrap();
+        for (at, _) in source.match_indices("crate::db::begin") {
+            // The whole statement, whatever its formatting.
+            let statement: String = source[at..]
+                .split(';')
+                .next()
+                .unwrap()
+                .split_whitespace()
+                .collect();
+            if statement.ends_with(".await?") && !statement.contains("map_err") {
+                unmapped += 1;
+                continue;
+            }
+            assert!(
+                statement.ends_with(".await.map_err(begin_storage)?"),
+                "{name}: a transaction start that is not mapped through begin_storage"
+            );
+            mapped += 1;
+        }
+    }
+    assert!(mapped >= 16, "found {mapped} starts; did the scan break?");
+    assert!(unmapped <= 3, "found {unmapped} unmapped starts");
+}
