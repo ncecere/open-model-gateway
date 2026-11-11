@@ -640,6 +640,8 @@ struct Observed {
     elapsed_ns: u64,
     phases: Option<Vec<PhaseTiming>>,
     database: crate::db::diagnostics::Snapshot,
+    /// #389: the production accounting-failure signals of this request.
+    signals: Vec<crate::db::diagnostics::Signal>,
 }
 
 async fn send_observed(app: &Router, request: Request) -> Observed {
@@ -660,6 +662,7 @@ async fn send_observed(app: &Router, request: Request) -> Observed {
         telemetry::with_phases(buffer.clone(), send(app, request)),
     )
     .await;
+    let signals = database.signals();
     let database = database.snapshot();
     let elapsed_ns = started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
     let phases = Arc::try_unwrap(buffer)
@@ -672,6 +675,7 @@ async fn send_observed(app: &Router, request: Request) -> Observed {
         elapsed_ns,
         phases,
         database,
+        signals,
     }
 }
 
@@ -776,6 +780,7 @@ async fn expect(
         elapsed_ns,
         phases,
         database,
+        ..
     } = send_observed(&w.app, request).await;
     let hits = w.approved.take();
     let got = (status.as_u16(), reason(&text));
@@ -2415,6 +2420,7 @@ enum SettlementFault {
 }
 
 async fn rejection_fault_signature(pool: PgPool, fault: SettlementFault) {
+    use crate::db::accounting_failure::{self, Cause};
     use crate::db::diagnostics::{Outcome, SqlxKind, Stage};
     use sqlx::Connection;
 
@@ -2518,6 +2524,32 @@ async fn rejection_fault_signature(pool: PgPool, fault: SettlementFault) {
         assert_eq!(reservations.len(), 1, "only the paused attempt is pending");
         blocker = Some(connection);
     }
+    // #389: the production signal this fault must produce (code compiled
+    // without `cfg(test)`): one counter increment and one WARN line.
+    let signal = match fault {
+        SettlementFault::PoolExhaustion => (
+            accounting_failure::Stage::PoolAcquireAndBegin,
+            Cause::PoolTimeout,
+        ),
+        SettlementFault::LockTimeout => (
+            accounting_failure::Stage::GovernanceStorage,
+            Cause::LockTimeout,
+        ),
+        SettlementFault::StatementTimeout => (
+            accounting_failure::Stage::GovernanceStorage,
+            Cause::StatementTimeout,
+        ),
+        SettlementFault::BackendTermination => (
+            accounting_failure::Stage::GovernanceStorage,
+            Cause::BackendTerminated,
+        ),
+        SettlementFault::FinalizationDeadline => (
+            accounting_failure::Stage::ExplicitSettlement,
+            Cause::DeadlineExceeded,
+        ),
+    };
+    let counted = crate::metrics::METRICS.accounting_failure_count(signal.0, signal.1);
+    let log = crate::log_capture_test::Capture::start();
     pause.release.add_permits(1);
     if matches!(
         fault,
@@ -2630,10 +2662,59 @@ async fn rejection_fault_signature(pool: PgPool, fault: SettlementFault) {
             "the real finalization deadline elapsed"
         );
     }
+    // #389: exactly this request's failure, once, under closed labels only.
+    assert_eq!(observed.signals, [signal], "{fault:?}");
+    assert!(
+        crate::metrics::METRICS.accounting_failure_count(signal.0, signal.1) > counted,
+        "{fault:?}: the production counter moved"
+    );
+    let labels = (signal.0.as_str().to_owned(), signal.1.as_str().to_owned());
+    let exposition = crate::metrics::METRICS.render(None).await;
+    assert!(
+        accounting_failure::tests::exported_series(&exposition)
+            .iter()
+            .any(|(stage, cause, count)| (stage, cause) == (&labels.0, &labels.1) && *count >= 1),
+        "{fault:?}: the series is on the metrics endpoint"
+    );
+    let logged = log.text();
+    drop(log);
+    assert!(
+        accounting_failure::tests::signal_lines(&logged).contains(&labels),
+        "{fault:?}: one structured WARN line names the stage and cause"
+    );
+    for key in [&w.keys.personal_key.token, &w.keys.team_key.token] {
+        assert!(
+            !logged.contains(key.as_str()),
+            "the log line must not carry a key"
+        );
+    }
     eprintln!(
         "{fault:?}: {}ms; {failures:?}",
         observed.elapsed_ns / 1_000_000
     );
+    w.close().await;
+}
+
+/// #389: a request whose accounting succeeds records no accounting-failure
+/// signal, whether the upstream answered 200 or refused the request.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn accounted_requests_record_no_accounting_failure_signal(pool: PgPool) {
+    let w = world(pool).await;
+    for (label, status) in [("chat/openai", 200), ("rerank/sglang", 400)] {
+        let t = targets().into_iter().find(|t| t.label == label).unwrap();
+        let body = (t.body)(t.model);
+        let observed = send_observed(
+            &w.app,
+            json_request(&w.keys.personal_key.token, t.path, &t.base(), &body),
+        )
+        .await;
+        assert_eq!(observed.status.as_u16(), status, "{label}");
+        assert_eq!(w.approved.take().len(), 1, "{label}: one upstream request");
+        assert!(
+            observed.signals.is_empty(),
+            "{label}: nothing is recorded when accounting succeeds"
+        );
+    }
     w.close().await;
 }
 

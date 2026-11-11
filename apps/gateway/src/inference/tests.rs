@@ -908,6 +908,87 @@ async fn diagnostic_drop_settlement_registers_before_spawn_and_outlives_scope() 
     );
 }
 
+/// #389: the production signal names the explicit settlement deadline, and a
+/// request whose accounting succeeds records nothing.
+#[tokio::test]
+async fn accounting_failure_signal_names_the_explicit_settlement_deadline_only_on_failure() {
+    use crate::db::accounting_failure::{Cause, Stage};
+    use crate::db::diagnostics::{self, Handle};
+    use crate::metrics::METRICS;
+    let capture = Handle::new();
+    let (engine, repository, _adapter) = fixture(Mode::Complete, EngineLimits::default());
+    let result = diagnostics::scope(
+        capture.clone(),
+        engine.execute(principal(), request(false), Uuid::new_v4()),
+    )
+    .await;
+    assert!(result.is_ok());
+    assert_eq!(repository.finishes.lock().unwrap().len(), 1);
+    assert!(
+        capture.signals().is_empty(),
+        "nothing is recorded when accounting succeeds"
+    );
+
+    let capture = Handle::new();
+    let (engine, repository, _adapter) = fixture(Mode::Complete, EngineLimits::default());
+    repository.hang_finish.store(true, Ordering::SeqCst);
+    let before =
+        METRICS.accounting_failure_count(Stage::ExplicitSettlement, Cause::DeadlineExceeded);
+    let result = diagnostics::scope(
+        capture.clone(),
+        engine.execute(principal(), request(false), Uuid::new_v4()),
+    )
+    .await;
+    assert!(matches!(result, Err(InferenceError::Storage)));
+    assert_eq!(
+        capture.signals(),
+        [(Stage::ExplicitSettlement, Cause::DeadlineExceeded)]
+    );
+    assert!(
+        METRICS.accounting_failure_count(Stage::ExplicitSettlement, Cause::DeadlineExceeded)
+            > before
+    );
+}
+
+/// #389: the detached settlement of a cancelled request reports its own
+/// deadline under its own stage, to the request that owned it.
+#[tokio::test]
+async fn accounting_failure_signal_names_the_cancellation_settlement_deadline() {
+    use crate::db::accounting_failure::{Cause, Stage};
+    use crate::db::diagnostics::{self, Handle};
+    use crate::metrics::METRICS;
+    let capture = Handle::new();
+    let (engine, repository, _) = fixture(Mode::Pending, EngineLimits::default());
+    repository.hang_finish.store(true, Ordering::SeqCst);
+    let before =
+        METRICS.accounting_failure_count(Stage::CancellationSettlement, Cause::DeadlineExceeded);
+    let output = diagnostics::scope(
+        capture.clone(),
+        engine.execute(principal(), request(true), Uuid::new_v4()),
+    )
+    .await
+    .unwrap();
+    assert!(capture.signals().is_empty());
+    drop(output);
+    // The unchanged three-second deadline of the detached settlement.
+    timeout(Duration::from_secs(10), async {
+        while capture.signals().is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the detached settlement deadline is reported");
+    assert_eq!(
+        capture.signals(),
+        [(Stage::CancellationSettlement, Cause::DeadlineExceeded)]
+    );
+    assert_eq!(repository.finish_calls.load(Ordering::SeqCst), 1);
+    assert!(
+        METRICS.accounting_failure_count(Stage::CancellationSettlement, Cause::DeadlineExceeded)
+            > before
+    );
+}
+
 #[test]
 fn registry_rejects_duplicate_and_invalid_ids() {
     let mut registry = ProviderRegistry::default();

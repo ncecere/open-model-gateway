@@ -1157,6 +1157,25 @@ impl Metrics {
         }
     }
 
+    /// One failed accounting operation (`gateway_accounting_failures_total`).
+    pub(crate) fn observe_accounting_failure(
+        &self,
+        stage: crate::db::accounting_failure::Stage,
+        cause: crate::db::accounting_failure::Cause,
+    ) {
+        let _ = (stage, cause);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn accounting_failure_count(
+        &self,
+        stage: crate::db::accounting_failure::Stage,
+        cause: crate::db::accounting_failure::Cause,
+    ) -> u64 {
+        let _ = (stage, cause);
+        0
+    }
+
     #[cfg(test)]
     pub(crate) fn settlement_count(&self, settlement: Settlement) -> u64 {
         self.settlements
@@ -1804,6 +1823,42 @@ mod tests {
         ] {
             assert_eq!(admission_outcome(&Err(other)), "rejected");
         }
+    }
+
+    /// #389: registered on the existing endpoint; no series until an
+    /// accounting operation fails; label values only from the closed enums.
+    #[tokio::test]
+    async fn accounting_failures_are_exported_only_after_a_failure_with_closed_labels() {
+        use crate::db::accounting_failure::{Cause, Stage, tests::exported_series};
+        let m = Metrics::new();
+        m.observe_settlement(Settlement::Settled);
+        assert!(
+            !m.render(None).await.contains("gateway_accounting_failures"),
+            "no series while accounting succeeds"
+        );
+        m.observe_accounting_failure(Stage::GovernanceStorage, Cause::LockTimeout);
+        m.observe_accounting_failure(Stage::GovernanceStorage, Cause::LockTimeout);
+        m.observe_accounting_failure(Stage::ExplicitSettlement, Cause::DeadlineExceeded);
+        let out = m.render(None).await;
+        assert!(out.contains("# TYPE gateway_accounting_failures counter"));
+        for line in [
+            r#"gateway_accounting_failures_total{stage="governance_storage",cause="lock_timeout"} 2"#,
+            r#"gateway_accounting_failures_total{stage="explicit_settlement",cause="deadline_exceeded"} 1"#,
+        ] {
+            assert!(out.contains(line), "missing: {line}");
+        }
+        assert_eq!(exported_series(&out).len(), 2);
+        assert_eq!(
+            m.accounting_failure_count(Stage::GovernanceStorage, Cause::LockTimeout),
+            2
+        );
+        // Every value the two enums can render, and nothing else: the type bound.
+        for stage in Stage::ALL {
+            for cause in Cause::ALL {
+                m.observe_accounting_failure(stage, cause);
+            }
+        }
+        assert_eq!(exported_series(&m.render(None).await).len(), 4 * 13);
     }
 
     #[tokio::test]

@@ -57,8 +57,15 @@ pub(crate) struct Snapshot {
     pub dropped: usize,
     pub unavailable: bool,
 }
+/// A production accounting-failure signal (`db::accounting_failure`), mirrored
+/// to the request that owns this capture. Never part of a [`Snapshot`].
+pub(crate) type Signal = (
+    super::accounting_failure::Stage,
+    super::accounting_failure::Cause,
+);
 struct Inner {
     events: Mutex<Vec<Event>>,
+    signals: Mutex<Vec<Signal>>,
     pending: AtomicUsize,
     dropped: AtomicUsize,
     writers: AtomicUsize,
@@ -84,6 +91,7 @@ impl Handle {
     pub fn new() -> Self {
         Self(Arc::new(Inner {
             events: Mutex::new(Vec::with_capacity(CAPACITY)),
+            signals: Mutex::new(Vec::new()),
             pending: AtomicUsize::new(0),
             dropped: AtomicUsize::new(0),
             writers: AtomicUsize::new(0),
@@ -108,6 +116,20 @@ impl Handle {
             events: events.unwrap_or_default(),
             pending,
             dropped,
+        }
+    }
+    /// The production signals recorded while this capture was the current one.
+    pub fn signals(&self) -> Vec<Signal> {
+        self.0
+            .signals
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+    pub(super) fn signal(&self, signal: Signal) {
+        let mut signals = self.0.signals.lock().unwrap_or_else(|e| e.into_inner());
+        if signals.len() < CAPACITY {
+            signals.push(signal);
         }
     }
     fn push(&self, event: Event) {
