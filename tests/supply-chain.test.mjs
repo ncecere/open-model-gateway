@@ -2662,3 +2662,64 @@ test("fixtures: a pull-request scan that is skipped, forgiven, redirected or rec
     assert.throws(() => assertPullRequestScan(fixture, image), { name: "AssertionError" }, name);
   }
 });
+
+// ---- runner images (#491) ----
+
+// A floating label (`ubuntu-latest`) changes the operating system under every job without a
+// commit. Only these exact images are approved; moving to a newer one is a reviewed change here.
+const APPROVED_RUNNERS = new Set(["ubuntu-24.04", "ubuntu-24.04-arm"]);
+
+export function runnerViolations(file, data) {
+  const violations = [];
+  for (const [name, job] of Object.entries(data?.jobs ?? {})) {
+    const where = `${file}: job ${name}`;
+    if (job?.uses !== undefined && job["runs-on"] === undefined) continue; // a reusable-workflow call has no runner
+    const runsOn = job?.["runs-on"];
+    if (typeof runsOn !== "string") { violations.push(`${where}: runs-on must be one runner label written as a string`); continue; }
+    if (APPROVED_RUNNERS.has(runsOn)) continue;
+    if (runsOn !== "${{ matrix.runner }}") { violations.push(`${where}: runs-on '${runsOn}' is not an approved runner image (${[...APPROVED_RUNNERS].join(", ")})`); continue; }
+    const matrix = job.strategy?.matrix;
+    const keys = matrix && typeof matrix === "object" && !Array.isArray(matrix) ? Object.keys(matrix) : [];
+    const include = matrix?.include;
+    if (keys.length !== 1 || keys[0] !== "include" || !Array.isArray(include) || include.length === 0) { violations.push(`${where}: a matrix runner needs a literal strategy.matrix.include list and no other matrix key`); continue; }
+    for (const leg of include) {
+      if (!APPROVED_RUNNERS.has(leg?.runner)) violations.push(`${where}: matrix runner '${leg?.runner}' is not an approved runner image`);
+    }
+  }
+  return violations;
+}
+
+test("every workflow job runs on an approved, exact runner image (#491)", () => {
+  const files = readdirSync(workflowsDir).filter(f => /\.ya?ml$/.test(f));
+  assert.ok(files.includes("ci.yml") && files.includes("image.yml"));
+  const violations = files.flatMap(f => runnerViolations(f, toData(parseStrict(readFileSync(join(workflowsDir, f), "utf8"), f))));
+  assert.deepEqual(violations, []);
+});
+
+test("the runner check refuses floating, self-hosted, computed and unlisted runners (#491)", () => {
+  const check = job => runnerViolations("fixture.yml", { jobs: { j: job } });
+  const steps = [{ run: "true" }];
+  assert.deepEqual(check({ "runs-on": "ubuntu-24.04", steps }), []);
+  assert.deepEqual(check({ "runs-on": "ubuntu-24.04-arm", steps }), []);
+  assert.deepEqual(check({ uses: "./.github/workflows/image.yml" }), []);
+  assert.deepEqual(check({ "runs-on": "${{ matrix.runner }}", strategy: { matrix: { include: [{ runner: "ubuntu-24.04" }, { runner: "ubuntu-24.04-arm" }] } }, steps }), []);
+  for (const [name, job] of [
+    ["the floating label", { "runs-on": "ubuntu-latest", steps }],
+    ["a newer image", { "runs-on": "ubuntu-26.04", steps }],
+    ["another floating label", { "runs-on": "ubuntu-24.04-latest", steps }],
+    ["trailing text", { "runs-on": "ubuntu-24.04 ", steps }],
+    ["self-hosted", { "runs-on": "self-hosted", steps }],
+    ["a label list", { "runs-on": ["ubuntu-24.04"], steps }],
+    ["a runner group", { "runs-on": { group: "g", labels: "ubuntu-24.04" }, steps }],
+    ["an input expression", { "runs-on": "${{ inputs.runner }}", steps }],
+    ["an expression with a fallback", { "runs-on": "${{ matrix.runner || 'ubuntu-latest' }}", steps }],
+    ["no runner", { steps }],
+    ["a reusable call that also names a runner", { uses: "./.github/workflows/image.yml", "runs-on": "ubuntu-latest" }],
+    ["a matrix runner without a matrix", { "runs-on": "${{ matrix.runner }}", steps }],
+    ["a floating matrix leg", { "runs-on": "${{ matrix.runner }}", strategy: { matrix: { include: [{ runner: "ubuntu-24.04" }, { runner: "ubuntu-latest" }] } }, steps }],
+    ["a matrix leg without a runner", { "runs-on": "${{ matrix.runner }}", strategy: { matrix: { include: [{ platform: "linux/amd64" }] } }, steps }],
+    ["a runner axis beside include", { "runs-on": "${{ matrix.runner }}", strategy: { matrix: { runner: ["ubuntu-latest"], include: [{ runner: "ubuntu-24.04" }] } }, steps }],
+    ["a computed matrix", { "runs-on": "${{ matrix.runner }}", strategy: { matrix: "${{ fromJSON(inputs.m) }}" }, steps }],
+    ["an empty include", { "runs-on": "${{ matrix.runner }}", strategy: { matrix: { include: [] } }, steps }],
+  ]) assert.equal(check(job).length >= 1, true, name);
+});
