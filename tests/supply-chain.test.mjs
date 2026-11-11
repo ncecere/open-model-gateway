@@ -3258,7 +3258,7 @@ test("no workflow or composite action installs operating-system packages at run 
     "npx playwright install chromium --with-deps",
     "npx --yes playwright install-deps chromium",
   ]) assert.equal(check(run).length, 1, run);
-  assert.equal(packageInstallViolations("action.yml", { runs: { using: "composite", steps: [{ run: "sudo apt-get install -y age" }] } }).length, 1, "a composite action");
+  assert.equal(packageInstallViolations("action.yml", { runs: { using: "composite", steps: [{ run: "sudo apt-get install -y age", shell: "bash" }] } }).length, 1, "a composite action");
   assert.equal(check("sudo apt-get install -y age").length + packageInstallViolations("f.yml", { jobs: { a: { steps: [{ run: "apk add x" }] }, b: { steps: [{ run: "dnf install y" }] } } }).length, 3, "every step is reported");
   for (const run of ["npx playwright install --only-shell chromium", "npm ci", "cargo install --locked --path .", "adapt install", "echo snapshot aptly apt_get", "python3 -m pip install --require-hashes -r requirements.lock"]) {
     assert.deepEqual(check(run), [], run);

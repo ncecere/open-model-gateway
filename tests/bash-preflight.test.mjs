@@ -300,6 +300,10 @@ const ALLOWED = {
     // instruction keywords, and an accepted fixture line that uses the SHELL instruction.
     'const DOCKERFILE_INSTRUCTIONS = ["ARG", "CMD", "COPY", "ENTRYPOINT", "ENV", "EXPOSE", "FROM", "HEALTHCHECK", "LABEL", "RUN", "SHELL", "STOPSIGNAL", "USER", "VOLUME", "WORKDIR"];',
     `'SHELL ["/bin/sh", "-c"]',`,
+    // A composite-action fixture handed to packageInstallViolations as data and never run. It
+    // keeps its `shell:` key because a real composite step must have one: without it, a check
+    // that skipped every valid composite action would still pass.
+    "assert.equal(packageInstallViolations(\"action.yml\", { runs: { using: \"composite\", steps: [{ run: \"sudo apt-get install -y age\", shell: \"bash\" }] } }).length, 1, \"a composite action\");",
     // A stand-in `python3` planted in the workspace that the handoff must never run: one
     // printf, in POSIX sh on purpose so that it means the same under any shell.
     "writeFileSync(tool, `#!/bin/sh\\nprintf stolen > '${marker}'\\n`);",
