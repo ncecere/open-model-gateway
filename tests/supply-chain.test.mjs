@@ -346,62 +346,118 @@ test("every Dockerfile base image is pinned by digest", () => {
   assert.deepEqual(files.flatMap(({ file, text }) => unpinnedDockerfileBases(file, text)), []);
 });
 
+const DIGEST_PINNED = /@sha256:[0-9a-f]{64}$/;
+
 export function unpinnedDockerfileBases(file, text) {
-  return dockerfileStages(file, text).filter(stage => !/@sha256:[0-9a-f]{64}$/.test(stage.ref)).map(stage => `${file}:${stage.line} ${stage.ref}`);
+  return dockerfileStages(file, text).filter(stage => !DIGEST_PINNED.test(stage.ref)).map(stage => `${file}:${stage.line} ${stage.ref}`);
 }
 
 // The stages of a Dockerfile as BuildKit's built-in frontend reads them (#485): the one
 // reader behind every check of a Dockerfile in this file. It does not parse what the
 // repository's Dockerfiles do not use; it throws, naming the file and line, so that no
-// line can pose as a stage or hide one:
+// line can pose as a stage or hide one, and no image enters a stage unpinned:
 // - any character other than printable ASCII, tab and LF (Go and JavaScript disagree on
 //   which others are white space or end a line);
-// - a comment shaped like a parser directive (`# escape=` moves the continuation
-//   character, `# syntax=` replaces the parser), anywhere, not only at the top;
-// - `<<` on any instruction line: a heredoc body is content, not instructions;
+// - a `#!` line, or a comment shaped like a parser directive (`# escape=` moves the
+//   continuation character, `# syntax=` replaces the parser), anywhere in the file;
 // - inside a continued instruction, a blank line or a comment (BuildKit skips them and
 //   continues) or a line starting with FROM; a line ending in two backslashes;
+// - `<<` anywhere in an instruction once its continued lines are joined, as BuildKit
+//   joins them before it looks for heredocs: a heredoc body is content, not instructions;
+// - an instruction that is not in DOCKERFILE_INSTRUCTIONS (`//syntax=` also replaces the
+//   parser; ADD fetches remote content; ONBUILD and MAINTAINER are not used);
 // - a FROM that spans lines, or is not `FROM [--platform=<p>] <image> [AS <name>]` with a
-//   literal image (BuildKit expands variables and removes quotes and escapes there).
+//   literal image (BuildKit expands variables and removes quotes and escapes there);
+// - a COPY or RUN flag that is not plain `--name[=value]` (BuildKit removes quotes there
+//   too), and a `--from=` or `--mount=...,from=` that names neither an earlier stage nor
+//   an image pinned by digest.
+// The instructions the two Dockerfiles use, and LABEL, SHELL and VOLUME, which cannot
+// name an image, fetch anything or change how the file is read.
+const DOCKERFILE_INSTRUCTIONS = ["ARG", "CMD", "COPY", "ENTRYPOINT", "ENV", "EXPOSE", "FROM", "HEALTHCHECK", "LABEL", "RUN", "SHELL", "STOPSIGNAL", "USER", "VOLUME", "WORKDIR"];
+const DOCKERFILE_RULES = ' (see "Dockerfile rules" in docs/verification.md)';
+
 export function dockerfileStages(file, text) {
-  const refuse = (line, why) => { throw new Error(`${file}:${line}: ${why}`); };
+  const refuse = (line, why) => { throw new Error(`${file}:${line}: ${why}${DOCKERFILE_RULES}`); };
+  const stages = [];
+  for (const { line, last, joined } of dockerfileInstructions(text, refuse)) {
+    const [keyword, ...words] = joined.trim().split(/[ \t]+/);
+    const instruction = keyword.toUpperCase();
+    if (!DOCKERFILE_INSTRUCTIONS.includes(instruction)) refuse(line, `'${keyword}' is not an allowed instruction (allowed: ${DOCKERFILE_INSTRUCTIONS.join(", ")})`);
+    if (instruction === "FROM") {
+      if (last !== line) refuse(line, "FROM must be on one line");
+      stages.push({ line, ...fromArguments(words, why => refuse(line, why)) });
+    } else if (instruction === "COPY" || instruction === "RUN") {
+      for (const ref of flagImages(words, why => refuse(line, why))) {
+        if (!isEarlierStage(ref, stages) && !DIGEST_PINNED.test(ref)) refuse(line, `'--from=' and a mount's 'from=' must name an earlier stage or an image pinned by digest (found '${ref}')`);
+      }
+    }
+  }
+  return stages;
+}
+
+// Each instruction with its continued lines joined: the number of its first and last
+// line, and its text. Comments and blank lines between instructions are dropped.
+function dockerfileInstructions(text, refuse) {
   const lines = text.split("\n");
   lines.forEach((line, i) => {
     const bad = line.match(/[^\t\x20-\x7e]/u);
     if (bad) refuse(i + 1, `only printable ASCII, tab and LF are allowed in a Dockerfile (found U+${bad[0].codePointAt(0).toString(16).toUpperCase().padStart(4, "0")})`);
   });
   const blank = line => /^[ \t]*$/.test(line), comment = line => /^[ \t]*#/.test(line);
-  const stages = [];
+  const instructions = [];
   for (let i = 0; i < lines.length; i++) {
     const first = i + 1;
     if (blank(lines[i])) continue;
     if (comment(lines[i])) {
-      if (/^[ \t]*#[ \t]*[A-Za-z][A-Za-z0-9]*[ \t]*=/.test(lines[i])) refuse(first, "a comment shaped like a parser directive ('# name=value') is not allowed");
+      if (/^[ \t]*#!/.test(lines[i])) refuse(first, "a '#!' line is not allowed");
+      if (/^[ \t]*#[ \t]*[A-Za-z][A-Za-z0-9]*[ \t]*=/.test(lines[i])) refuse(first, "a comment shaped like a parser directive ('# name=value') is not allowed; reword the comment");
       continue;
     }
-    let instruction = "";
+    let joined = "";
     for (;; i++) {
       const line = lines[i];
-      if (line.includes("<<")) refuse(i + 1, "a heredoc ('<<') is not allowed");
       if (i + 1 > first && /^[ \t]*FROM(?![^ \t])/i.test(line)) refuse(i + 1, "a continued line must not start with FROM");
       const continued = line.match(/^(.*?)(\\+)[ \t]*$/);
-      if (!continued) { instruction += line; break; }
+      if (!continued) { joined += line; break; }
       if (continued[2].length > 1) refuse(i + 1, "a line must not end in more than one backslash");
-      instruction += continued[1];
+      joined += continued[1];
       if (i + 1 === lines.length) break;
       if (blank(lines[i + 1]) || comment(lines[i + 1])) refuse(i + 2, "a continued line must not be blank or a comment");
     }
-    const [keyword, ...words] = instruction.trim().split(/[ \t]+/);
-    if (keyword.toLowerCase() !== "from") continue;
-    if (i + 1 !== first) refuse(first, "FROM must be on one line");
-    const flags = [];
-    while (words[0]?.startsWith("--")) flags.push(words.shift());
-    const platform = flags[0]?.match(/^--platform=(.+)$/)?.[1];
-    const shape = flags.length <= 1 && (flags.length === 0 || platform) && (words.length === 1 || (words.length === 3 && /^as$/i.test(words[1])));
-    if (!shape || !/^[A-Za-z0-9][A-Za-z0-9._\/:@-]*$/.test(words[0])) refuse(first, "FROM must be written as 'FROM [--platform=<p>] <image> [AS <name>]' with a literal image (no variables, quotes or escapes)");
-    stages.push({ line: first, platform, ref: words[0], name: words[2] });
+    if (joined.includes("<<")) refuse(first, "'<<' is not allowed in an instruction; heredocs cannot be told apart safely");
+    instructions.push({ line: first, last: i + 1, joined });
   }
-  return stages;
+  return instructions;
+}
+
+// The platform, image and stage name of `FROM [--platform=<p>] <image> [AS <name>]`.
+function fromArguments(words, refuse) {
+  const flags = [];
+  while (words[0]?.startsWith("--")) flags.push(words.shift());
+  const platform = flags[0]?.match(/^--platform=(.+)$/)?.[1];
+  const shape = flags.length <= 1 && (flags.length === 0 || platform) && (words.length === 1 || (words.length === 3 && /^as$/i.test(words[1])));
+  if (!shape || !/^[A-Za-z0-9][A-Za-z0-9._\/:@-]*$/.test(words[0])) refuse("FROM must be written as 'FROM [--platform=<p>] <image> [AS <name>]' with a literal image (no variables, quotes or escapes)");
+  return { platform, ref: words[0], name: words[2] };
+}
+
+// What the leading flags of a COPY or RUN take content from: the value of `--from=`, and
+// of each `from=` field (the key in any case, as BuildKit reads it) of a `--mount=`.
+function flagImages(words, refuse) {
+  const refs = [];
+  for (const flag of words) {
+    if (!flag.startsWith("--")) break;
+    if (!/^--[a-z][a-z-]*(=[A-Za-z0-9._\/:@,=-]*)?$/.test(flag)) refuse(`a COPY or RUN flag must be written as '--name' or '--name=value' in plain characters (no variables, quotes or escapes; found '${flag}')`);
+    if (flag.startsWith("--from=")) refs.push(flag.slice("--from=".length));
+    if (flag.startsWith("--mount=")) refs.push(...flag.slice("--mount=".length).split(",").filter(field => /^from=/i.test(field)).map(field => field.slice("from=".length)));
+  }
+  return refs;
+}
+
+// Whether `ref` is a stage before the current one (the last in `stages`): its index, or
+// its name in any case (verified with a real build: `--from=BUILD` finds `AS Build`).
+function isEarlierStage(ref, stages) {
+  const earlier = stages.slice(0, -1);
+  return /^[0-9]+$/.test(ref) ? Number(ref) < earlier.length : earlier.some(stage => stage.name?.toLowerCase() === ref.toLowerCase());
 }
 
 const RUNTIME_DOCKERFILES = ["Dockerfile", "deploy/loadtest/Dockerfile"];
