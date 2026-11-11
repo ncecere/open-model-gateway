@@ -13,11 +13,13 @@
 //
 // A suite calls `bashPath()` once at the top of the file, so an unsupported shell fails
 // the whole file before any test or fixture runs, and starts Bash only through
-// `runBash()`, which runs the file that was checked. Neither takes a file to check and
-// only PATH selects the shell; `findBash`/`checkBash` take arguments so that
-// tests/bash-preflight.test.mjs can exercise them, and no other test file may use them.
+// `runBash()`, which runs the file that was checked and makes every `bash` the fixture
+// looks up itself (`#!/usr/bin/env bash`, `bash file`) that same file. Neither takes a
+// file to check and only PATH selects the shell; `findBash`/`checkBash` take arguments so
+// that tests/bash-preflight.test.mjs can exercise them, and no other test file may use them.
 import { spawnSync } from "node:child_process";
-import { accessSync, constants, statSync } from "node:fs";
+import { accessSync, constants, mkdtempSync, rmSync, statSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
 export const MINIMUM_BASH = [4, 4];
@@ -38,9 +40,10 @@ export function findBash(path) {
   throw new Error(`${NEED}; there is no executable 'bash' on PATH. ${HINT}`);
 }
 
-// Asks `file` itself for its version, then for the behaviour the fixtures rely on.
-export function checkBash(file) {
-  const ask = script => spawnSync(file, ["--noprofile", "--norc", "-e", "-c", script], { encoding: "utf8", timeout: 10_000 });
+// Asks `file` itself for its version, then for the behaviour the fixtures rely on. Each
+// answer must come within `limit` milliseconds; only the test of the limit passes one.
+export function checkBash(file, limit = 10_000) {
+  const ask = script => spawnSync(file, ["--noprofile", "--norc", "-e", "-c", script], { encoding: "utf8", timeout: limit });
   const answer = ask('echo "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"');
   if (answer.error) throw new Error(`${NEED}; '${file}' could not be run (${answer.error.code ?? answer.error.message}). ${HINT}`);
   const version = /^(\d{1,3})\.(\d{1,3})\n$/.exec(answer.stdout);
@@ -59,7 +62,26 @@ export function bashPath() {
   return checked;
 }
 
-// spawnSync for the checked Bash; `args` and `options` are spawnSync's.
-export function runBash(args, options) {
-  return spawnSync(bashPath(), args, options);
+// A private directory holding only `bash`, a link to the checked file. Made once per
+// process and removed when it ends.
+let linked;
+function bashDir() {
+  if (!linked) {
+    const dir = mkdtempSync(join(tmpdir(), "checked-bash-"));
+    process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
+    symlinkSync(bashPath(), join(dir, "bash"));
+    linked = dir;
+  }
+  return linked;
+}
+
+// spawnSync for the checked Bash; `args` and `options` are spawnSync's. The fixture's PATH
+// (the caller's `env.PATH`, or else the inherited one) gets the private directory first,
+// so that a `bash` looked up inside the fixture is the checked file too, and loses its
+// relative and empty entries: those name whatever directory the fixture happens to be
+// in, which the preflight did not look at.
+export function runBash(args, options = {}) {
+  const { PATH = "", ...rest } = options.env ?? process.env;
+  const path = [bashDir(), ...String(PATH).split(delimiter).filter(isAbsolute)].join(delimiter);
+  return spawnSync(bashPath(), args, { ...options, env: { ...rest, PATH: path } });
 }

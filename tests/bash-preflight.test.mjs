@@ -73,19 +73,23 @@ test("a shell that reports a new version but does not stop `set -e` at a failing
 });
 
 // The stand-ins above answer by looking for the string BASH_VERSINFO, so they would not
-// notice a probe that had stopped probing. This one is the real Bash with `-e` taken out
-// of its arguments: it reports a supported version and runs every script, but a failing
-// `[[ ]]` does not end it, as under Bash 3.2 and 4.0. Only a real probe refuses it.
-test("a working Bash that reports a supported version but ignores `set -e` is refused by the probe (#380)", async t => {
+// notice a probe that had stopped probing. This one is the real Bash, except that a
+// failing `[[ ]]` does not end a `set -e` script, as under Bash 3.2 and 4.0: every `]]`
+// in a script becomes `]] || ! :`, which leaves the status at 1 and `set -e` out of it.
+// It reports a supported version and still stops at a failing `false`, so only a probe
+// of `[[ ]]` itself refuses it.
+test("a working Bash that reports a supported version but does not stop `set -e` at [[ ]] is refused (#380)", async t => {
   const { bashPath, checkBash } = await preflight();
   const dir = scratch(t);
-  const file = standIn(join(dir, "no-errexit"), `for a do shift; [ "$a" = -e ] || set -- "$@" "$a"; done\nexec '${bashPath()}' "$@"`);
-  const version = spawnSync(file, ["--noprofile", "--norc", "-e", "-c", 'echo "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"'], { encoding: "utf8" });
-  assert.equal(version.status, 0, version.stderr);
-  assert.equal(version.stdout.trim(), checkBash(bashPath()).version, "the stand-in answers the version question like the real one");
+  const file = standIn(join(dir, "old-errexit"), `for a do shift; set -- "$@" "$(printf '%s' "$a" | sed 's/\\]\\]/]] || ! :/g')"; done\nexec '${bashPath()}' "$@"`);
+  const ask = script => spawnSync(file, ["--noprofile", "--norc", "-e", "-c", script], { encoding: "utf8" });
+  const version = ask('echo "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"').stdout.trim();
+  assert.equal(version, checkBash(bashPath()).version, "the stand-in answers the version question like the real one");
+  assert.equal(ask("false; exit 0").status, 1, "the stand-in stops at a failing simple command");
+  assert.equal(ask("[[ a = a ]] && echo same").stdout, "same\n", "the stand-in evaluates [[ ]]");
   assert.throws(() => checkBash(file), error => {
     assert.ok(error.message.includes(NEED) && error.message.includes(`'${file}'`), error.message);
-    assert.ok(error.message.includes(`reports Bash ${version.stdout.trim()} but does not stop a 'set -e' script at a failing [[ ]] (exit status 0)`), error.message);
+    assert.ok(error.message.includes(`reports Bash ${version} but does not stop a 'set -e' script at a failing [[ ]] (exit status 0)`), error.message);
     return true;
   });
 });
@@ -177,7 +181,7 @@ test("the suites use the checked shell, and nothing but PATH selects it (#380)",
   // PATH is the only variable the preflight reads. The other mention hands the caller's
   // or the inherited environment on to the fixture, as spawnSync does by default.
   assert.deepEqual(source.match(/process\.env[\w.[\]"']*/g), ["process.env.PATH", "process.env"], "no environment variable but PATH reaches the preflight");
-  assert.ok(source.includes("{ ...(options.env ?? process.env), PATH: "), "the environment is only passed on to the fixture");
+  assert.ok(source.includes('const { PATH = "", ...rest } = options.env ?? process.env;'), "the environment is only passed on to the fixture");
   // No argument or skip escape hatch in the helper's code; its comments may use the words.
   assert.equal(code("a(); // never a skip\n  // todo\nb(); /* skip */ c();\n/* process.argv\n */d();"), "a(); // never a skip\n\nb();  c();\nd();");
   assert.match(code('const url = "https://example.org/"; test.skip("x");'), /skip/, "code after a // inside a line is still read");

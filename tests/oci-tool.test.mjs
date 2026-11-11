@@ -110,11 +110,11 @@ if (name === 'fetch-verified.sh') {
   const executable = (path, text) => { writeFileSync(path, text); chmodSync(path, 0o755); };
   executable(join(bin, "fetch-verified.sh"), fake);
   // Support the existing convention: bash "$script_dir/fetch-verified.sh" ...
-  executable(join(dir, "fetch-verified.sh"), `#!/bin/bash\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(join(bin, "fetch-verified.sh"))} "$@"\n`);
+  executable(join(dir, "fetch-verified.sh"), `#!/usr/bin/env bash\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(join(bin, "fetch-verified.sh"))} "$@"\n`);
   for (const name of ["git", "tar", "go", "rm", "DATA", "curl", "wget", "gh", "make", "gcc", "cc"]) executable(join(bin, name), fake);
   // Filesystem/shell primitives only: no inherited PATH or executable lookup fallback.
-  // The helper's own `bash` is the preflighted one, not whatever /bin holds.
-  symlinkSync(bashPath(), join(bin, "bash"));
+  // The helper looks bash up on this PATH too and finds the preflighted one: runBash()
+  // puts a directory holding only that link first, so none is placed here.
   for (const name of ["env", "mkdir", "mktemp", "dirname", "basename", "chmod", "cp", "mv", "cat", "rmdir", "readlink", "pwd", "cut", "sed", "grep", "tr", "find"]) {
     const native = ["/bin", "/usr/bin"].map(p => join(p, name)).find(existsSync);
     assert.ok(native, `missing filesystem primitive ${name}`);
