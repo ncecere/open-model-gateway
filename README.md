@@ -105,6 +105,7 @@ npm run typecheck:web
 npm run test:web
 npm run test:demo
 npm run test:container   # builds the image; needs Docker
+npm run test:supply-chain   # needs Bash 4.4+ first on PATH (macOS's /bin/bash 3.2 is refused)
 npm run test:staging
 npm run build:web
 # Playwright + axe against a disposable database on 54339 (never the demo):

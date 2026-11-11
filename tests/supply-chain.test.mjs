@@ -22,6 +22,10 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { runInNewContext } from "node:vm";
 import { isMap, isScalar, parseDocument, visit } from "yaml";
+import { bashPath, runBash } from "./bash-preflight.mjs";
+
+// An unsupported shell fails this file here, before any test or fixture runs (#380).
+bashPath();
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const workflowsDir = join(root, ".github/workflows");
@@ -1336,7 +1340,7 @@ if (command === 'docker') {
   writeFileSync(join(dir, "index.json"), JSON.stringify(index));
   writeFileSync(join(dir, "download.jsonl"), JSON.stringify(probeBundle()) + "\n");
   writeFileSync(env.GITHUB_ENV, ""); writeFileSync(env.GITHUB_OUTPUT, "");
-  const run = (script, overrides = {}, cwd = root) => spawnSync("bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
+  const run = (script, overrides = {}, cwd = root) => runBash(["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
     cwd, env: { ...env, ...overrides }, encoding: "utf8", timeout: 10_000,
   });
   const calls = () => existsSync(join(dir, "calls")) ? readFileSync(join(dir, "calls"), "utf8").trim().split("\n").filter(Boolean).map(JSON.parse) : [];
@@ -1952,7 +1956,7 @@ if (a.slice(0, 3).join(' ') === 'buildx imagetools create') {
   chmodSync(join(bin, "docker"), 0o700);
   return { dir, env, run(changes = {}) {
     const script = publicationData().image.jobs.publish.steps.find(s => s.id === "index").run;
-    const result = spawnSync("bash", ["-c", script], { cwd: root, env: { ...env, ...changes }, encoding: "utf8", timeout: 10000 });
+    const result = runBash(["-c", script], { cwd: root, env: { ...env, ...changes }, encoding: "utf8", timeout: 10000 });
     assert.ifError(result.error);
     const calls = readFileSync(join(dir, "calls"), "utf8").trim().split("\n").map(JSON.parse);
     if (existsSync(join(dir, "private"))) {
@@ -2049,7 +2053,7 @@ test("all image producers isolate unprivileged builds, verified digest import an
 test("every publication shell snippet parses without executing any build or registry command", () => {
   for (const [name, data] of Object.entries(publicationData())) {
     for (const [where, script] of runScripts(data)) {
-      const result = spawnSync("bash", ["--noprofile", "--norc", "-n"], { input: script, encoding: "utf8" });
+      const result = runBash(["--noprofile", "--norc", "-n"], { input: script, encoding: "utf8" });
       assert.equal(result.status, 0, `${name}: ${where}: ${result.stderr}`);
     }
   }
@@ -2122,7 +2126,7 @@ function handoffFixture() {
   };
   delete env.GITHUB_TOKEN;
   delete env.GH_TOKEN;
-  const run = (script, overrides = {}) => spawnSync("bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
+  const run = (script, overrides = {}) => runBash(["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
     cwd: dir, env: { ...env, ...overrides }, encoding: "utf8",
   });
   return { dir, env, run, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
@@ -2254,7 +2258,7 @@ function runFetch(args, { curlBody, curlFails = false } = {}) {
     const dest = join(dir, "out", "tool");
     spawnSync("mkdir", ["-p", join(dir, "out")]);
     const resolved = args.map(a => (a === "DEST" ? dest : a));
-    const r = spawnSync("bash", [join(root, FETCH_SCRIPT), ...resolved], { env: { ...process.env, PATH: `${stub}:${process.env.PATH}` }, encoding: "utf8" });
+    const r = runBash([join(root, FETCH_SCRIPT), ...resolved], { env: { ...process.env, PATH: `${stub}:${process.env.PATH}` }, encoding: "utf8" });
     return { ...r, dest, leftovers: readdirSync(join(dir, "out")), curlArgs: readFileSync(join(dir, "args.log"), "utf8"), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
   } catch (e) {
     rmSync(dir, { recursive: true, force: true });
@@ -2262,7 +2266,7 @@ function runFetch(args, { curlBody, curlFails = false } = {}) {
   }
 }
 
-const sha256 = body => spawnSync("bash", ["-c", `printf '%s' "$1" | (sha256sum 2>/dev/null || shasum -a 256) | cut -d' ' -f1`, "_", body], { encoding: "utf8" }).stdout.trim();
+const sha256 = body => runBash(["-c", `printf '%s' "$1" | (sha256sum 2>/dev/null || shasum -a 256) | cut -d' ' -f1`, "_", body], { encoding: "utf8" }).stdout.trim();
 const GOOD_URL = "https://example.org/releases/tool.tar.gz";
 
 test("fetch-verified.sh moves a download into place only after the checksum matches", () => {
@@ -2331,7 +2335,7 @@ test("fetch-verified.sh refuses to overwrite an existing destination", () => {
   try {
     const dest = join(dir, "tool");
     writeFileSync(dest, "original");
-    const r = spawnSync("bash", [join(root, FETCH_SCRIPT), GOOD_URL, sha256("payload\n"), dest], { encoding: "utf8" });
+    const r = runBash([join(root, FETCH_SCRIPT), GOOD_URL, sha256("payload\n"), dest], { encoding: "utf8" });
     assert.notEqual(r.status, 0);
     assert.equal(readFileSync(dest, "utf8"), "original");
   } finally {

@@ -15,6 +15,7 @@ Run from the repository root. None of them make paid provider calls or touch the
 | `npm run test:browser` | Playwright end-to-end journey and axe accessibility scans (below) | Disposable PostgreSQL, Rust, Chromium (`npx playwright install chromium`) |
 | `npm run test:demo` | Local demo issuer and runtime helper | Node, Python 3 |
 | `npm run test:ci` | CI graph/refusal policy and synthetic Cargo/libtest discovery, exact-once sharding and execution counts (no Rust builds) | Node 22, `npm ci` |
+| `npm run test:supply-chain` / `node --test tests/oci-tool.test.mjs` | Supply-chain policy (below): action and image pins, write-token allowlist, checksummed downloads, and the workflow `run:` scripts and helper scripts run as fixtures against stand-in tools (nothing is downloaded, published or signed) | Node 22, `npm ci`, Python 3, `jq`, Git, and **Bash 4.4 or newer first on `PATH`** ([Bash for the shell fixtures](#bash-for-the-shell-fixtures)) |
 | `npm run test:container` | Runtime image contract (`tests/container-image.test.mjs`): distroless (no shell, package manager, curl, perl, Node or Cargo), UID 10001, read-only root filesystem, `_FILE` secret import and refusal, `serve` never migrates, explicit `migrate`, exec-form `healthcheck`, graceful `SIGTERM` as PID 1 | Docker, Node; builds the image unless `OMG_CONTAINER_IMAGE` names one; uses a throwaway `mirror.gcr.io/library/postgres:17-alpine` on an internal network |
 | `npm run test:staging` | Staging (including the runtime-image checks of `verify`), provider-acceptance and backup helpers | Python 3 |
 | `cargo deny check` | Supply chain: RustSec advisories (vulnerable, unmaintained, unsound, yanked), licence allow-list, duplicate-version warnings, crates.io-only sources; policy in `deny.toml` | [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny) 0.20 (`cargo install cargo-deny --locked` or the release binary); fetches the advisory database |
@@ -76,6 +77,18 @@ The job also runs `node --test tests/vendored-advisories.test.mjs` with the inst
 To bump one, change the version in the URL and the checksum together and take the checksum from the vendor's published checksum file.
 
 **Residual risk.** The write-job allowlist is trusted code that holds the job token, and so is what it runs: the Buildx and Docker engine that come with the runner image, BuildKit, and GitHub's own actions (`actions/*`, `github/codeql-action`), pinned by SHA but not audited by us. The runner image itself is GitHub's. The image build (`docker/build-push-action`) fetches Rust crates (locked by `Cargo.lock`) and npm packages (`package-lock.json` integrity hashes) inside the Dockerfile's build stages, and reads the BuildKit `type=gha` layer cache that earlier builds of the same ref wrote; a compromised dependency reaches the image, which is why the image is scanned, attested and tested but not rebuilt from source by anyone else. Not covered by a checksum of ours, and run only in read-only jobs: the Rust toolchain (`dtolnay/rust-toolchain` runs rustup, which verifies component hashes from the channel manifest over TLS; the version it installs is pinned to an exact release by `rust-toolchain.toml`, not the floating `stable` channel — see [Rust toolchain](#rust-toolchain)), Playwright's Chromium (version fixed by `package-lock.json`), apt packages (`age`, signed by the distribution), CodeQL's bundle and Trivy's vulnerability database. The SARIF file passes from the read-only analysis job to the upload job as data.
+
+### Bash for the shell fixtures
+
+`npm run test:supply-chain` and `tests/oci-tool.test.mjs` run the real workflow `run:` scripts and `.github/scripts/*.sh` under Bash and check that their guards refuse. **The minimum supported Bash is 4.4** (#380); CI's Ubuntu runners have 5.2. With an older, missing or non-Bash `bash` first on `PATH`, both suites fail at once, before any test or fixture runs, with a message naming the required version, the file found and its version. It is a failure, never a skip, and there is no variable or flag that turns the check off: install a newer Bash and put it first on `PATH`. macOS ships `/bin/bash` 3.2, which is refused; Homebrew's `bash` is supported. The suites run every fixture with the `bash` that was checked, not `/bin/bash`.
+
+Why 4.4, measured with the official Bash builds of each release:
+
+- **Before 4.1 a failing `[[ ... ]]` does not end a `set -e` script.** The workflow guards are bare `[[ ... ]]` lines under `set -euo pipefail`. Under 3.2 and 4.0 a script whose first guard fails carries on and returns the status of its last line, so the `workflow_call` probe guard and the empty `ARTIFACT_ID` importer guard returned 0 in the tests where they must refuse. From 4.1 on both refuse.
+- **Under 4.1 to 4.3 `.github/scripts/build-oras.sh` exits 1 after a failed build, not the build's own status,** and one `tests/oci-tool.test.mjs` test (exit 71 after a compiler failure with a read-only module cache) fails.
+- Under 4.4, 5.0, 5.1, 5.2 and 5.3 both suites pass.
+
+The check (`tests/bash-preflight.mjs`) asks the `bash` it found for `BASH_VERSINFO` and also runs the first behaviour above directly. The workflows themselves run only on GitHub's Ubuntu runners (Bash 5.2), so nothing changes there; the guards are not weaker under a newer Bash, and no assertion was changed.
 
 ### Rust toolchain
 

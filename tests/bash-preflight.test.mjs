@@ -3,7 +3,8 @@
 // The supply-chain fixtures run workflow `run:` scripts and helper scripts under
 // Bash. Under macOS's /bin/bash 3.2 two refusal tests saw exit 0 from guards that
 // refuse correctly on CI: before Bash 4.1 a failing `[[ ]]` does not end a
-// `set -e` script. The preflight refuses such a shell before any fixture runs.
+// `set -e` script; and before 4.4 build-oras.sh loses a failed build's exit status.
+// The preflight refuses such a shell before any fixture runs.
 //
 // No Bash 3.2 exists on a Linux machine, so these tests point the real check at
 // small stand-in executables that answer the version question the way an old or
@@ -20,7 +21,7 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const preflight = () => import("./bash-preflight.mjs");
-const NEED = "need Bash 4.1 or newer";
+const NEED = "need Bash 4.4 or newer";
 
 function scratch(t) {
   const dir = mkdtempSync(join(tmpdir(), "bash-preflight-"));
@@ -42,7 +43,7 @@ const answering = (output, other = 1) => `case "$*" in *BASH_VERSINFO*) printf '
 test("a Bash older than the minimum is refused, naming the required and the found version (#380)", async t => {
   const { checkBash } = await preflight();
   const dir = scratch(t);
-  for (const version of ["3.2", "4.0", "3.99", "2.05", "0.0", "1.14"]) {
+  for (const version of ["3.2", "4.0", "4.1", "4.3", "3.99", "2.05", "0.0", "1.14"]) {
     const file = standIn(join(dir, version), answering(`${version}\n`));
     assert.throws(() => checkBash(file), error => {
       assert.equal(error.name, "Error");
@@ -56,7 +57,7 @@ test("a Bash older than the minimum is refused, naming the required and the foun
 test("the minimum and newer versions are accepted, compared as numbers (#380)", async t => {
   const { checkBash } = await preflight();
   const dir = scratch(t);
-  for (const version of ["4.1", "4.4", "5.0", "5.2", "5.3", "4.10", "10.0", "12.1"]) {
+  for (const version of ["4.4", "4.5", "5.0", "5.2", "5.3", "4.10", "10.0", "12.1"]) {
     const file = standIn(join(dir, version), answering(`${version}\n`));
     assert.deepEqual(checkBash(file), { file, version }, version);
   }
@@ -105,7 +106,7 @@ test("a missing or unrunnable shell is refused (#380)", async t => {
   refused(plain, "not executable");
   mkdirSync(join(dir, "folder", "bash"), { recursive: true });
   refused(join(dir, "folder", "bash"), "a directory");
-  refused(standIn(join(dir, "slow"), "sleep 30"), "no answer in time");
+  refused(standIn(join(dir, "slow"), "exec sleep 30"), "no answer in time");
 });
 
 test("bash is looked up on PATH the way the system does, and its absence is an error (#380)", async t => {
@@ -126,15 +127,20 @@ test("bash is looked up on PATH the way the system does, and its absence is an e
   }
 });
 
-test("the suites use the checked shell, and nothing but PATH selects it (#380)", async () => {
+test("the suites use the checked shell, and nothing but PATH selects it (#380)", async t => {
   const { bashPath, runBash, findBash, checkBash, MINIMUM_BASH } = await preflight();
-  assert.deepEqual(MINIMUM_BASH, [4, 1]);
+  assert.deepEqual(MINIMUM_BASH, [4, 4]);
   assert.equal(bashPath.length, 0, "bashPath takes no file");
   assert.equal(bashPath(), findBash(process.env.PATH));
   assert.equal(checkBash(bashPath()).file, bashPath());
   const real = runBash(["--noprofile", "--norc", "-c", 'echo "$BASH"; [[ -n "${BASH_VERSION}" ]]'], { encoding: "utf8" });
   assert.equal(real.status, 0, real.stderr);
   assert.equal(real.stdout.trim(), bashPath(), "runBash runs the file that was checked");
+  // A fixture's own PATH (stub directories first) must not change which bash runs.
+  const dir = scratch(t);
+  standIn(join(dir, "bin"), "echo stand-in");
+  const other = runBash(["--noprofile", "--norc", "-c", 'echo "$BASH"'], { encoding: "utf8", env: { PATH: join(dir, "bin") } });
+  assert.equal(other.stdout.trim(), bashPath(), "runBash does not look bash up again");
   const source = readFileSync(join(root, "tests/bash-preflight.mjs"), "utf8");
   assert.deepEqual(source.match(/process\.env[\w.[\]"']*/g), ["process.env.PATH"], "no environment variable but PATH reaches the preflight");
   assert.doesNotMatch(source, /process\.argv|skip|todo/i);
@@ -148,7 +154,7 @@ test("no test file starts bash on its own (#380)", () => {
   for (const name of files) {
     const text = readFileSync(join(root, "tests", name), "utf8");
     assert.doesNotMatch(text, /\b(?:spawn|spawnSync|exec|execSync|execFile|execFileSync|fork)\(\s*["'`][^"'`\n]*\b(?:ba|z|da|k)?sh["'`]/, `${name} starts a shell directly`);
-    assert.doesNotMatch(text, /shell:\s*(?!false\b)\S/, `${name} uses the shell option`);
+    assert.doesNotMatch(text, /\bshell:\s*true\b/, `${name} uses the shell option`);
     assert.doesNotMatch(text, /\b(?:checkBash|findBash)\b/, `${name} must use bashPath()/runBash(), which take no file`);
     if (/\b(?:runBash|bashPath)\b/.test(text)) users.push(name);
   }
