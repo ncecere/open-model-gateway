@@ -367,7 +367,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 | SMTP: invitations, alerts, test send (`email.rs`) | `smtp_host` setting | Platform Admin picks a host from the operator's list | `GATEWAY_SMTP_HOST_ALLOWLIST` before the credential is read; `egress::resolve`; TLS unless the relay is loopback |
 | Alert notifications (`alerts.rs`) | Email through the relay above; there is no webhook receiver | n/a | As SMTP |
 | Audit export: webhook, OTLP, syslog over TLS (`audit_export.rs`) | `GATEWAY_AUDIT_*` URL | Operator; a Platform Admin can only send a test record to it | HTTPS (loopback HTTP in development), no URL credentials; `check_url` and the resolver; no redirects |
-| OIDC discovery, token and JWKS (`identity.rs`, `identity/oidc.rs`) | `GATEWAY_OIDC_ISSUER`, then the endpoints its discovery document names | Operator; the IdP is trusted for the document | `validate_url` and `check_url` before every request, including discovered ones; resolver; no redirects |
+| OIDC discovery, token and JWKS (`identity/config.rs`, `identity/oidc.rs`) | `GATEWAY_OIDC_ISSUER`, then the endpoints its discovery document names | Operator; the IdP is trusted for the document | `validate_url` and `check_url` before every request, including discovered ones; resolver; no redirects |
 | S3 file store (`filestore/s3/`) | `GATEWAY_S3_ENDPOINT` or AWS S3 for the region | Operator | Must be in `GATEWAY_S3_ENDPOINT_ALLOWLIST`; IP literals checked at startup; resolver |
 | AWS SDK credential providers: IMDS, Pod Identity, STS, SSO | The SDK's own endpoints and the operator's environment | Operator | Bypass the egress policy by design (EGR-3) |
 | `healthcheck` CLI | The gateway's own listener | Operator at the command line | Loopback unless `--allow-non-loopback` |
@@ -414,7 +414,7 @@ Not covered end to end: Bedrock (its SigV4 SDK transport has no loopback test co
 - Follow-up: none (fixed in #144).
 
 **EGR-5. Cloud traffic goes over plain HTTP.** I, T · Asset: credentials, prompts · Attacker: network attacker.
-- Mitigation: OpenAI, Anthropic and OpenRouter use constant `https://` base URLs (`const BASE`); OpenRouter also sets `https_only(true)`. Bedrock endpoints and profiles must be in `GATEWAY_BEDROCK_ENDPOINT_ALLOWLIST` and `GATEWAY_AWS_PROFILE_ALLOWLIST`. An explicit S3 endpoint must be allowlisted. Identity URLs must be HTTPS except development loopback (`identity.rs` `validate_url`).
+- Mitigation: OpenAI, Anthropic and OpenRouter use constant `https://` base URLs (`const BASE`); OpenRouter also sets `https_only(true)`. Bedrock endpoints and profiles must be in `GATEWAY_BEDROCK_ENDPOINT_ALLOWLIST` and `GATEWAY_AWS_PROFILE_ALLOWLIST`. An explicit S3 endpoint must be allowlisted. Identity URLs must be HTTPS except development loopback (`identity/config.rs` `validate_url`).
 - Tests: `management/resources.rs` `openrouter_is_a_fixed_https_cloud_profile`; `providers/bedrock/auth_tests.rs` `server_allowlists_gate_profiles_endpoints_and_regions`; `filestore/s3/tests.rs` `validates_bucket_prefix_region_and_endpoint_allowlist`; `identity/tests.rs` `transport_and_origin_configuration_is_strict`.
 - Residual: an allowlisted S3 endpoint may be plain HTTP (the allowlist entry is the approval, per [architecture](architecture.md)).
 - Follow-up: none.

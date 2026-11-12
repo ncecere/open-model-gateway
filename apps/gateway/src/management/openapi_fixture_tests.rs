@@ -28,7 +28,7 @@ struct Browser {
     id: Uuid,
 }
 /// A live browser session. The rows are what the OIDC callback writes
-/// (identity.rs `callback`): a device label and `last_seen_at` on the session
+/// (identity/login.rs `callback`): a device label and `last_seen_at` on the session
 /// and the user's sign-in times. `legacy` is a session created before
 /// migration 0041, which has no device label or `last_seen_at` until first used.
 async fn browser(pool: &PgPool, user: &BrowserPrincipal, legacy: bool) -> Browser {

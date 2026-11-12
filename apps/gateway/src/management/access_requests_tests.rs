@@ -432,7 +432,7 @@ async fn access_requests_reason_export_cleanup_and_holds(pool: PgPool) {
     let (_, r) = submit(&f, &f.outsider, f.team, "subject-reason").await;
     let id = request_id(&r);
     // A person who exports has signed in: the OIDC callback stores both times with
-    // the session (identity.rs), which this direct handler call bypasses.
+    // the session (identity/login.rs), which this direct handler call bypasses.
     sqlx::query("UPDATE users SET first_signed_in_at=now(),last_signed_in_at=now() WHERE id=$1")
         .bind(f.outsider.user_id)
         .execute(&pool)

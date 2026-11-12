@@ -582,7 +582,7 @@ async fn dashboard_sessions_run_as_runtime(pool: &PgPool) {
         .execute(pool)
         .await
         .unwrap();
-    // The sign-in INSERT, as runtime (identity.rs callback).
+    // The sign-in INSERT, as runtime (identity/login.rs callback).
     sqlx::query("INSERT INTO browser_sessions(token_hash,user_id,csrf_hash,expires_at,verified_email,client_label,last_seen_at) SELECT sha256(convert_to($1,'UTF8')),id,sha256('csrf'::bytea),now()+interval '12 hours','sessions-probe@example.test','Firefox on Linux',now()-interval '1 hour' FROM users WHERE id=$2")
         .bind(&token).bind(user).execute(&runtime).await.expect("runtime inserts a session with its device label");
     let identity = open_model_gateway::identity::IdentityState::new(
