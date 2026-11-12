@@ -99,7 +99,13 @@ pub mod seam {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
+    use proc_macro2::{Delimiter, TokenStream, TokenTree};
+    use syn::parse::Parser;
+
     use super::*;
+    use crate::configuration_source_tests::{production_sources, test_only};
 
     #[test]
     fn secrets_have_the_expected_length_and_differ() {
@@ -134,22 +140,95 @@ mod tests {
         assert!(bytes_quiet::<16>().is_ok());
     }
 
-    /// The random-number entry points named by the production code of one
-    /// source file.
+    /// Names that reach a random number generator: the `rand` crate, the
+    /// crates under and beside it, and its generators by name.
+    const NEEDLES: [&str; 10] = [
+        "rand",
+        "rand_core",
+        "getrandom",
+        "fastrand",
+        "OsRng",
+        "SysRng",
+        "ThreadRng",
+        "thread_rng",
+        "StdRng",
+        "SmallRng",
+    ];
+
+    /// The length in tokens of the test module that starts at `trees[0]`:
+    /// outer attributes of which one is `#[cfg(test)]` or
+    /// `#[cfg(all(test, ...))]` (`test_only`), an optional visibility, then
+    /// `mod name;` or `mod name { ... }`. Anything else is not a test module.
+    fn test_module(trees: &[TokenTree]) -> Option<usize> {
+        let mut at = 0;
+        let mut attributes = TokenStream::new();
+        while let [TokenTree::Punct(hash), TokenTree::Group(group), ..] = &trees[at..]
+            && hash.as_char() == '#'
+            && group.delimiter() == Delimiter::Bracket
+        {
+            attributes.extend(trees[at..at + 2].iter().cloned());
+            at += 2;
+        }
+        let attributes = syn::Attribute::parse_outer.parse2(attributes).ok()?;
+        if !test_only(&attributes) {
+            return None;
+        }
+        if matches!(trees.get(at), Some(TokenTree::Ident(word)) if word == "pub") {
+            at += 1;
+            if matches!(trees.get(at), Some(TokenTree::Group(group)) if group.delimiter() == Delimiter::Parenthesis)
+            {
+                at += 1;
+            }
+        }
+        match &trees[at..] {
+            [TokenTree::Ident(word), TokenTree::Ident(_), body, ..] if word == "mod" => {
+                match body {
+                    TokenTree::Punct(end) if end.as_char() == ';' => Some(at + 3),
+                    TokenTree::Group(group) if group.delimiter() == Delimiter::Brace => {
+                        Some(at + 3)
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn scan(stream: TokenStream, found: &mut BTreeSet<&'static str>) {
+        let trees: Vec<TokenTree> = stream.into_iter().collect();
+        let mut at = 0;
+        while at < trees.len() {
+            if let Some(length) = test_module(&trees[at..]) {
+                at += length;
+                continue;
+            }
+            match &trees[at] {
+                TokenTree::Group(group) => scan(group.stream(), found),
+                TokenTree::Punct(_) => {}
+                // An identifier, or a name inside a literal (a path in an
+                // attribute string such as `#[serde(default = "...")]`).
+                word => {
+                    let word = word.to_string();
+                    for word in word.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
+                        found.extend(NEEDLES.iter().filter(|needle| **needle == word));
+                    }
+                }
+            }
+            at += 1;
+        }
+    }
+
+    /// The random-number entry points named by one source file outside its
+    /// test modules (#506). Only a test module is left out, at any depth; a
+    /// `#[cfg(test)]` on anything else (a `use`, a function, an impl) is
+    /// scanned, and so is everything after it and after a test module. The
+    /// file is read as tokens, so whatever is not recognised as a test module
+    /// is scanned. `//` comments are not tokens; doc comments are attributes
+    /// and count. A file that does not lex as Rust fails the test.
     fn draws(source: &str) -> Vec<&'static str> {
-        // Production code only; inline `mod tests` blocks come last.
-        let production = source.split("#[cfg(test)]").next().unwrap_or_default();
-        [
-            "rand::",
-            "OsRng",
-            "SysRng",
-            "thread_rng",
-            "StdRng",
-            "SmallRng",
-        ]
-        .into_iter()
-        .filter(|needle| production.contains(needle))
-        .collect()
+        let mut found = BTreeSet::new();
+        scan(source.parse().expect("Rust source"), &mut found);
+        found.into_iter().collect()
     }
 
     const DRAW: &str = "fn r() -> u8 { rand::random::<u8>() }\n";
@@ -170,7 +249,7 @@ mod tests {
             "#[cfg(any(test, feature = \"integration-tests\"))]\nmod seam {}\n",
         ] {
             let source = format!("fn a() {{}}\n{early}{DRAW}");
-            assert_eq!(draws(&source), ["rand::"], "{source}");
+            assert_eq!(draws(&source), ["rand"], "{source}");
         }
     }
 
@@ -181,7 +260,7 @@ mod tests {
             format!("#[cfg(any(test, feature = \"integration-tests\"))]\nmod seam {{\n{DRAW}}}\n"),
             format!("mod inner {{\n{DRAW}}}\n"),
         ] {
-            assert_eq!(draws(&source), ["rand::"], "{source}");
+            assert_eq!(draws(&source), ["rand"], "{source}");
         }
     }
 
@@ -198,37 +277,76 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_scan_reads_names_not_substrings_and_fails_closed() {
+        for (source, expected) in [
+            ("use getrandom::fill;", vec!["getrandom"]),
+            ("use rand as r;", vec!["rand"]),
+            ("fn a() { let _ = fastrand::u8(..); }", vec!["fastrand"]),
+            (
+                "fn a() { let _ = vec![rand::rngs::OsRng]; }",
+                vec!["OsRng", "rand"],
+            ),
+            (
+                "#[serde(default = \"rand::random\")]\nstruct A;",
+                vec!["rand"],
+            ),
+            ("fn a() { rand_core::OsRng; }", vec!["OsRng", "rand_core"]),
+            // Not a test module: scanned.
+            ("#[cfg(not(test))]\nmod m { use rand::Rng; }", vec!["rand"]),
+            (
+                "#[cfg(test)]\nimpl A { fn a() { rand::rng(); } }",
+                vec!["rand"],
+            ),
+            ("#[cfg(test)]\nmod m!{ rand }", vec!["rand"]),
+            (
+                "#[cfg(feature = \"test\")]\nmod m { use rand::Rng; }",
+                vec!["rand"],
+            ),
+            // A test module, with a visibility or a doc comment.
+            ("#[cfg(test)]\npub(crate) mod m { use rand::Rng; }", vec![]),
+            (
+                "/// Tests.\n#[cfg(test)]\npub mod m { use rand::Rng; }",
+                vec![],
+            ),
+            // Other names, and `//` comments.
+            (
+                "// rand::random\nfn operand(random: u8, brand: u8) {}",
+                vec![],
+            ),
+        ] {
+            assert_eq!(draws(source), expected, "{source}");
+        }
+    }
+
     /// Secrets are generated only here: no other production module uses
     /// `rand` (no ThreadRng, seeded or weaker generators for secrets).
     #[test]
     fn only_this_module_draws_randomness() {
-        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-            for entry in std::fs::read_dir(dir).unwrap() {
-                let path = entry.unwrap().path();
-                if path.is_dir() {
-                    walk(&path, out);
-                } else if path.extension().is_some_and(|e| e == "rs") {
-                    out.push(path);
-                }
-            }
-        }
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut files = Vec::new();
-        walk(&root, &mut files);
         let mut offenders = Vec::new();
-        for path in files {
-            let name = path.file_name().unwrap().to_string_lossy().into_owned();
-            let test_file = name.ends_with("_tests.rs") || name == "tests.rs";
+        let mut scanned = 0;
+        // Every file that is not declared only under a test gate; a file name
+        // does not make a file a test file.
+        for source in production_sources() {
             // routing.rs: a seeded StdRng for deterministic, non-secret
             // weighted candidate order (never a secret).
-            if test_file || path.ends_with("entropy.rs") || path.ends_with("routing.rs") {
+            if matches!(source.name.as_str(), "entropy.rs" | "routing.rs") {
                 continue;
             }
-            let text = std::fs::read_to_string(&path).unwrap();
+            let text = std::fs::read_to_string(root.join(&source.name)).unwrap();
             for needle in draws(&text) {
-                offenders.push(format!("{}: {needle}", path.display()));
+                offenders.push(format!("{}: {needle}", source.name));
             }
+            scanned += 1;
         }
-        assert!(offenders.is_empty(), "{offenders:#?}");
+        assert!(
+            scanned > 200,
+            "scanned {scanned} files; did the scan break?"
+        );
+        assert!(
+            offenders.is_empty(),
+            "random number generators named outside entropy.rs (code, macros, attribute strings or doc comments): {offenders:#?}"
+        );
     }
 }
