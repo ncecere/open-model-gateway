@@ -319,6 +319,162 @@ mod tests {
         }
     }
 
+    /// Whether the scan reads a file. RED stub: the reviewed behaviour.
+    fn read(name: &str, production: &BTreeSet<String>) -> bool {
+        production.contains(name)
+    }
+
+    /// What is wrong with `routing.rs`. RED stub: the file is not read.
+    fn routing_problems(_source: &str) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Whether a literal that could not be read hides an escape. RED stub.
+    fn hides_an_escape(_raw: &str) -> bool {
+        false
+    }
+
+    /// A file declared only under a test gate is still read unless its name
+    /// is a test name as well: `include!` or a `cfg_attr` path can pull such
+    /// a file into production, which the declaration does not show (#506).
+    #[test]
+    fn only_a_file_that_is_a_test_by_declaration_and_by_name_is_not_read() {
+        let production: BTreeSet<String> = ["alerts.rs", "harmless_tests.rs", "a/tests/used.rs"]
+            .map(str::to_owned)
+            .into_iter()
+            .collect();
+        for (name, expected) in [
+            ("alerts.rs", true),
+            // Declared in production: the name does not matter.
+            ("harmless_tests.rs", true),
+            ("a/tests/used.rs", true),
+            // Declared test-only, but not a test name.
+            ("authz_matrix.rs", true),
+            ("providers/contract.rs", true),
+            ("log_capture_test.rs", true),
+            ("management_openapi/schema.rs", true),
+            ("contests.rs", true),
+            ("tests_helper/mod.rs", true),
+            // Declared test-only and named as tests.
+            ("tests.rs", false),
+            ("identity/tests.rs", false),
+            ("configuration_unsafe_tests.rs", false),
+            ("scim/tests/users.rs", false),
+            ("tests/payload.rs", false),
+        ] {
+            assert_eq!(read(name, &production), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn generators_reached_through_other_crates_are_named() {
+        for (source, expected) in [
+            (
+                "fn x() { let _ = tokio::macros::support::thread_rng_n(4); }",
+                vec!["thread_rng_n"],
+            ),
+            ("use rand_chacha::ChaCha20Rng;", vec!["rand_chacha"]),
+            ("use rand_pcg::Pcg64;", vec!["rand_pcg"]),
+            ("use rand_xoshiro::Xoshiro256PlusPlus;", vec!["rand_xoshiro"]),
+            ("use rand_distr::Normal;", vec!["rand_distr"]),
+            ("fn a() { nanorand::tls_rng(); }", vec!["nanorand"]),
+            ("fn a() { oorandom::Rand32::new(1); }", vec!["oorandom"]),
+        ] {
+            assert_eq!(draws(source), expected, "{source}");
+        }
+    }
+
+    /// A macro can drop the attribute of a module in its body, so a test
+    /// module is left out only where the compiler reads it as a module: at
+    /// the top of a file or directly inside `mod name { }` (#506).
+    #[test]
+    fn a_test_module_is_left_out_only_at_module_level() {
+        const MODULE: &str = "#[cfg(test)] mod x { fn r() -> u8 { rand::random::<u8>() } }";
+        for source in [
+            format!("keep! {{ {MODULE} }}"),
+            format!("keep!({MODULE});"),
+            format!("keep![{MODULE}];"),
+            format!("fn f() {{ {MODULE} }}"),
+            format!("impl A {{ fn f() {{ {MODULE} }} }}"),
+            format!("mod outer {{ keep! {{ {MODULE} }} }}"),
+            format!("keep! {{ mod outer {{ {MODULE} }} }}"),
+            format!("macro_rules! m {{ () => {{ {MODULE} }}; }}"),
+            format!("const A: u8 = {{ {MODULE} 1 }};"),
+        ] {
+            assert_eq!(draws(&source), ["rand"], "{source}");
+        }
+        for source in [
+            MODULE.to_owned(),
+            format!("mod outer {{ {MODULE} }}"),
+            format!("pub(crate) mod outer {{ mod inner {{ {MODULE} }} }}"),
+            format!("#[cfg(feature = \"a\")] mod outer {{ {MODULE} }}"),
+        ] {
+            assert!(draws(&source).is_empty(), "{source}");
+        }
+    }
+
+    /// The value of a string is scanned, not its spelling (#506).
+    #[test]
+    fn a_name_spelled_with_escapes_in_a_literal_is_reported() {
+        for source in [
+            r#"#[serde(default = "\x72and::random")] struct A;"#,
+            r#"#[serde(default = "\u{72}and::random")] struct A;"#,
+            r#"#[serde(default = "\u{0072}\u{61}nd::random")] struct A;"#,
+            "#[serde(default = \"ra\\\n    nd::random\")] struct A;",
+            r#"#[serde(default = "\nrand::random")] struct A;"#,
+            r##"#[serde(default = r#"rand::random"#)] struct A;"##,
+            r#"const A: &[u8] = b"\x72and::random";"#,
+            r#"const A: &core::ffi::CStr = c"\x72and::random";"#,
+        ] {
+            assert_eq!(draws(source), ["rand"], "{source}");
+        }
+        // No escape in a raw string: these are other names.
+        assert!(draws(r#"const A: &str = r"\x72and \u{72}and";"#).is_empty());
+        assert!(draws("const A: (u8, char, f32) = (0x72, '\\x72', 1.5e3);").is_empty());
+    }
+
+    #[test]
+    fn a_literal_that_cannot_be_read_must_not_hold_an_escape() {
+        for raw in [r"\x72and", r"x\u{72}and", r"(/*\x72*/)"] {
+            assert!(hides_an_escape(raw), "{raw}");
+        }
+        for raw in ["(/*ERROR*/)", r"a\nb", "rand"] {
+            assert!(!hides_an_escape(raw), "{raw}");
+        }
+    }
+
+    /// `routing.rs` is read like any other file; it may name exactly the
+    /// reviewed generator and must not hand it on (#506).
+    #[test]
+    fn routing_may_name_only_its_reviewed_generator_and_not_re_export_it() {
+        const REVIEWED: &str = "use rand::{SeedableRng, rngs::StdRng};\nfn order(seed: [u8; 32]) { let _ = StdRng::from_seed(seed); }\n";
+        assert_eq!(routing_problems(REVIEWED), Vec::<String>::new());
+        for (extra, problem) in [
+            ("use rand::rngs::SmallRng;\n", "SmallRng"),
+            ("fn a() { let _ = rand::rngs::OsRng; }\n", "OsRng"),
+            ("fn a() { fastrand::u8(..); }\n", "fastrand"),
+            ("pub use rand::rngs::StdRng as Seeded;\n", "re-exports StdRng"),
+            ("pub(crate) use rand;\n", "re-exports rand"),
+            ("pub(in crate::routing) use ::rand::{self as r};\n", "re-exports rand"),
+            ("mod a { pub(super) use rand::*; }\n", "re-exports rand"),
+            ("keep! { pub use rand::rngs::{StdRng}; }\n", "re-exports StdRng"),
+        ] {
+            let problems = routing_problems(&format!("{REVIEWED}{extra}"));
+            assert!(
+                problems.iter().any(|found| found.contains(problem)),
+                "{extra}: {problems:?}"
+            );
+        }
+        // A reviewed name that is gone is a change to review as well.
+        assert!(!routing_problems("use rand::Rng;\n").is_empty());
+        assert!(!routing_problems("fn a() {}\n").is_empty());
+        // A private import and other public re-exports are fine.
+        assert_eq!(
+            routing_problems(&format!("{REVIEWED}pub use std::fmt;\nuse rand::Rng;\n")),
+            Vec::<String>::new()
+        );
+    }
+
     /// Secrets are generated only here: no other production module uses
     /// `rand` (no ThreadRng, seeded or weaker generators for secrets).
     #[test]
