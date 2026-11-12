@@ -101,7 +101,7 @@ pub mod seam {
 mod tests {
     use std::collections::BTreeSet;
 
-    use proc_macro2::{Delimiter, TokenStream, TokenTree};
+    use proc_macro2::{Delimiter, Literal, TokenStream, TokenTree};
     use syn::parse::Parser;
 
     use super::*;
@@ -141,16 +141,27 @@ mod tests {
     }
 
     /// Names that reach a random number generator: the `rand` crate, the
-    /// crates under and beside it, and its generators by name.
-    const NEEDLES: [&str; 10] = [
+    /// crates under and beside it, other generator crates, and generators by
+    /// name (`thread_rng_n` is tokio's, public as
+    /// `tokio::macros::support::thread_rng_n`). A name is matched whole, so
+    /// each one is listed. An API that draws without one of these names
+    /// (`Uuid::new_v4()`) is outside this scan (#511).
+    const NEEDLES: [&str; 17] = [
         "rand",
         "rand_core",
+        "rand_chacha",
+        "rand_pcg",
+        "rand_xoshiro",
+        "rand_distr",
         "getrandom",
         "fastrand",
+        "nanorand",
+        "oorandom",
         "OsRng",
         "SysRng",
         "ThreadRng",
         "thread_rng",
+        "thread_rng_n",
         "StdRng",
         "SmallRng",
     ];
@@ -160,6 +171,10 @@ mod tests {
     /// `#[cfg(all(test, ...))]` (`test_only`), an optional visibility, then
     /// `mod name;` or `mod name { ... }`. Anything else is not a test module.
     fn test_module(trees: &[TokenTree]) -> Option<usize> {
+        // Nearly every token: not an attribute, so not a test module.
+        if !matches!(trees.first(), Some(TokenTree::Punct(hash)) if hash.as_char() == '#') {
+            return None;
+        }
         let mut at = 0;
         let mut attributes = TokenStream::new();
         while let [TokenTree::Punct(hash), TokenTree::Group(group), ..] = &trees[at..]
@@ -194,32 +209,77 @@ mod tests {
         }
     }
 
-    fn scan(stream: TokenStream, found: &mut BTreeSet<&'static str>) {
+    /// Whether a literal that could not be read spells an escape (`\x..` or
+    /// `\u{..}`), which could hide a name from the scan of its source text.
+    fn hides_an_escape(raw: &str) -> bool {
+        raw.contains("\\x") || raw.contains("\\u")
+    }
+
+    /// The text of a literal in which names are looked for: the value of a
+    /// string, byte string or C string, so that `"\x72and"` reads `rand`; the
+    /// source text of any other literal. A literal that cannot be read is
+    /// scanned as source text and must not hold an escape.
+    fn literal_text(literal: &Literal) -> String {
+        match syn::Lit::new(literal.clone()) {
+            syn::Lit::Str(text) => text.value(),
+            syn::Lit::ByteStr(text) => String::from_utf8_lossy(&text.value()).into_owned(),
+            syn::Lit::CStr(text) => text.value().to_string_lossy().into_owned(),
+            syn::Lit::Verbatim(raw) => {
+                let raw = raw.to_string();
+                assert!(
+                    !hides_an_escape(&raw),
+                    "a literal the scan cannot read holds an escape: {raw}"
+                );
+                raw
+            }
+            // Numbers, characters and booleans: one character names nothing.
+            _ => literal.to_string(),
+        }
+    }
+
+    fn names(text: &str, found: &mut BTreeSet<&'static str>) {
+        for word in text.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
+            found.extend(NEEDLES.iter().filter(|needle| **needle == word));
+        }
+    }
+
+    /// `module`: the tokens are the items of a module, that is the top of a
+    /// file or the braces of a `mod name { }` that is itself at module level.
+    /// Only there is a test module left out. Any other group (the body of a
+    /// macro invocation or of a function, parentheses, brackets) is scanned
+    /// in full, a `#[cfg(test)] mod` in it included: a macro can drop the
+    /// attribute and keep the module.
+    fn scan(stream: TokenStream, module: bool, found: &mut BTreeSet<&'static str>) {
         let trees: Vec<TokenTree> = stream.into_iter().collect();
         let mut at = 0;
         while at < trees.len() {
-            if let Some(length) = test_module(&trees[at..]) {
+            if module && let Some(length) = test_module(&trees[at..]) {
                 at += length;
                 continue;
             }
             match &trees[at] {
-                TokenTree::Group(group) => scan(group.stream(), found),
-                TokenTree::Punct(_) => {}
-                // An identifier, or a name inside a literal (a path in an
-                // attribute string such as `#[serde(default = "...")]`).
-                word => {
-                    let word = word.to_string();
-                    for word in word.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
-                        found.extend(NEEDLES.iter().filter(|needle| **needle == word));
-                    }
+                TokenTree::Group(group) => {
+                    let items = module
+                        && group.delimiter() == Delimiter::Brace
+                        && at >= 2
+                        && matches!(
+                            &trees[at - 2..at],
+                            [TokenTree::Ident(word), TokenTree::Ident(_)] if word == "mod"
+                        );
+                    scan(group.stream(), items, found);
                 }
+                TokenTree::Punct(_) => {}
+                TokenTree::Ident(word) => names(&word.to_string(), found),
+                // A name inside a literal: a path in an attribute string
+                // such as `#[serde(default = "...")]`.
+                TokenTree::Literal(literal) => names(&literal_text(literal), found),
             }
             at += 1;
         }
     }
 
     /// The random-number entry points named by one source file outside its
-    /// test modules (#506). Only a test module is left out, at any depth; a
+    /// test modules (#506). Only a test module is left out, at module level; a
     /// `#[cfg(test)]` on anything else (a `use`, a function, an impl) is
     /// scanned, and so is everything after it and after a test module. The
     /// file is read as tokens, so whatever is not recognised as a test module
@@ -227,7 +287,7 @@ mod tests {
     /// and count. A file that does not lex as Rust fails the test.
     fn draws(source: &str) -> Vec<&'static str> {
         let mut found = BTreeSet::new();
-        scan(source.parse().expect("Rust source"), &mut found);
+        scan(source.parse().expect("Rust source"), true, &mut found);
         found.into_iter().collect()
     }
 
@@ -319,19 +379,72 @@ mod tests {
         }
     }
 
-    /// Whether the scan reads a file. RED stub: the reviewed behaviour.
+    /// Whether the scan reads the file `name` (a path under `src`).
+    /// `production` is the shared inventory: every file that is not declared
+    /// only under a test gate. A file outside it is left unread only if its
+    /// name says it is a test file too (`tests.rs`, `*_tests.rs`, or under a
+    /// `tests/` directory): the inventory follows `mod` declarations, and
+    /// does not see a file pulled into production by `include!` or by a
+    /// `cfg_attr` path (#510).
     fn read(name: &str, production: &BTreeSet<String>) -> bool {
-        production.contains(name)
+        let mut parts = name.rsplit('/');
+        let file = parts.next().unwrap_or_default();
+        let test_name =
+            file == "tests.rs" || file.ends_with("_tests.rs") || parts.any(|dir| dir == "tests");
+        production.contains(name) || !test_name
     }
 
-    /// What is wrong with `routing.rs`. RED stub: the file is not read.
-    fn routing_problems(_source: &str) -> Vec<String> {
-        Vec::new()
+    /// The names `routing.rs` is reviewed to use: a seeded `StdRng` for
+    /// deterministic, non-secret weighted candidate order (never a secret).
+    const ROUTING: [&str; 2] = ["StdRng", "rand"];
+
+    /// The needle names in every `pub use` / `pub(...) use` of `stream`, at
+    /// any depth, test modules included.
+    fn re_exports(stream: TokenStream, found: &mut BTreeSet<&'static str>) {
+        let trees: Vec<TokenTree> = stream.into_iter().collect();
+        for (at, tree) in trees.iter().enumerate() {
+            if let TokenTree::Group(group) = tree {
+                re_exports(group.stream(), found);
+            }
+            if !matches!(tree, TokenTree::Ident(word) if word == "pub") {
+                continue;
+            }
+            let mut next = at + 1;
+            if matches!(trees.get(next), Some(TokenTree::Group(group)) if group.delimiter() == Delimiter::Parenthesis)
+            {
+                next += 1;
+            }
+            if !matches!(trees.get(next), Some(TokenTree::Ident(word)) if word == "use") {
+                continue;
+            }
+            let import = trees[next + 1..]
+                .iter()
+                .take_while(|tree| !matches!(tree, TokenTree::Punct(end) if end.as_char() == ';'))
+                .cloned()
+                .collect();
+            scan(import, false, found);
+        }
     }
 
-    /// Whether a literal that could not be read hides an escape. RED stub.
-    fn hides_an_escape(_raw: &str) -> bool {
-        false
+    /// What is wrong with `routing.rs`: it names anything but exactly the
+    /// reviewed set, or it re-exports a generator, which would hand it to
+    /// other modules under a name this scan does not know.
+    fn routing_problems(source: &str) -> Vec<String> {
+        let mut problems = Vec::new();
+        let named = draws(source);
+        if named != ROUTING {
+            problems.push(format!(
+                "routing.rs: names {named:?}, reviewed for {ROUTING:?}"
+            ));
+        }
+        let mut exported = BTreeSet::new();
+        re_exports(source.parse().expect("Rust source"), &mut exported);
+        problems.extend(
+            exported
+                .into_iter()
+                .map(|name| format!("routing.rs: re-exports {name}")),
+        );
+        problems
     }
 
     /// A file declared only under a test gate is still read unless its name
@@ -375,7 +488,10 @@ mod tests {
             ),
             ("use rand_chacha::ChaCha20Rng;", vec!["rand_chacha"]),
             ("use rand_pcg::Pcg64;", vec!["rand_pcg"]),
-            ("use rand_xoshiro::Xoshiro256PlusPlus;", vec!["rand_xoshiro"]),
+            (
+                "use rand_xoshiro::Xoshiro256PlusPlus;",
+                vec!["rand_xoshiro"],
+            ),
             ("use rand_distr::Normal;", vec!["rand_distr"]),
             ("fn a() { nanorand::tls_rng(); }", vec!["nanorand"]),
             ("fn a() { oorandom::Rand32::new(1); }", vec!["oorandom"]),
@@ -453,11 +569,20 @@ mod tests {
             ("use rand::rngs::SmallRng;\n", "SmallRng"),
             ("fn a() { let _ = rand::rngs::OsRng; }\n", "OsRng"),
             ("fn a() { fastrand::u8(..); }\n", "fastrand"),
-            ("pub use rand::rngs::StdRng as Seeded;\n", "re-exports StdRng"),
+            (
+                "pub use rand::rngs::StdRng as Seeded;\n",
+                "re-exports StdRng",
+            ),
             ("pub(crate) use rand;\n", "re-exports rand"),
-            ("pub(in crate::routing) use ::rand::{self as r};\n", "re-exports rand"),
+            (
+                "pub(in crate::routing) use ::rand::{self as r};\n",
+                "re-exports rand",
+            ),
             ("mod a { pub(super) use rand::*; }\n", "re-exports rand"),
-            ("keep! { pub use rand::rngs::{StdRng}; }\n", "re-exports StdRng"),
+            (
+                "keep! { pub use rand::rngs::{StdRng}; }\n",
+                "re-exports StdRng",
+            ),
         ] {
             let problems = routing_problems(&format!("{REVIEWED}{extra}"));
             assert!(
@@ -479,23 +604,52 @@ mod tests {
     /// `rand` (no ThreadRng, seeded or weaker generators for secrets).
     #[test]
     fn only_this_module_draws_randomness() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        walk(&root, &mut files);
+        files.sort();
+        let mut production: BTreeSet<String> = production_sources()
+            .into_iter()
+            .map(|source| source.name)
+            .collect();
         let mut offenders = Vec::new();
         let mut scanned = 0;
-        // Every file that is not declared only under a test gate; a file name
-        // does not make a file a test file.
-        for source in production_sources() {
-            // routing.rs: a seeded StdRng for deterministic, non-secret
-            // weighted candidate order (never a secret).
-            if matches!(source.name.as_str(), "entropy.rs" | "routing.rs") {
+        for path in files {
+            let name = path
+                .strip_prefix(&root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            let declared = production.remove(&name);
+            // entropy.rs is the module. A file is otherwise left unread only
+            // if it is a test file by declaration and by name.
+            if name == "entropy.rs" || !(declared || read(&name, &production)) {
                 continue;
             }
-            let text = std::fs::read_to_string(root.join(&source.name)).unwrap();
-            for needle in draws(&text) {
-                offenders.push(format!("{}: {needle}", source.name));
-            }
+            let text = std::fs::read_to_string(&path).unwrap();
             scanned += 1;
+            if name == "routing.rs" {
+                offenders.extend(routing_problems(&text));
+                continue;
+            }
+            for needle in draws(&text) {
+                offenders.push(format!("{name}: {needle}"));
+            }
         }
+        assert!(
+            production.is_empty(),
+            "inventory files the scan did not find: {production:?}"
+        );
         assert!(
             scanned > 200,
             "scanned {scanned} files; did the scan break?"
