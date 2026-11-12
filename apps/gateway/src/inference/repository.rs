@@ -136,7 +136,7 @@ pub trait InferenceRepository: Send + Sync {
     /// (`deployments`), unchanged for interactive requests.
     ///
     /// A repository that pins one attempt to a single route (gateway-run
-    /// batch lines, `jobs::runner::LineRepository`) can narrow this to just
+    /// batch lines, `jobs::runner::repository::LineRepository`) can narrow this to just
     /// that route. Then the deterministic pre-admission check this shares
     /// with interactive requests (#228) judges a pinned line on its own
     /// route only, instead of on every deployment of the model, so a pin
