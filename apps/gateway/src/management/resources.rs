@@ -227,7 +227,7 @@ pub(super) fn require_platform_admin(role: &str) -> Result<(), ApiError> {
 /// (`u.token_id()` is `None`).
 ///
 /// Takes the owner's user-scope authority lock *shared* -- the same
-/// precedent `governance.rs::resolve_usage` already uses
+/// precedent `governance::resolve_usage` (`governance/reconcile.rs`) already uses
 /// (`locks::shared([Scope::Workspace, Scope::User])`): every owner-loss
 /// path (role-grant revoke, suspension, cleanup; migration 0051's deferred
 /// and immediate triggers) takes this same lock *exclusive* before

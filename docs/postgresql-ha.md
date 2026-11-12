@@ -151,7 +151,7 @@ An attempt admitted before the failover keeps running upstream. When it ends, th
 
 1. The client gets an error: a 503 `accounting_unavailable` for a complete response, or an error event instead of a normal end for a stream.
 2. The execution stays `started` and its reservation `pending`, with the hold in place. `gateway_settlements_total{outcome="held"}` counts it, whether the write failed or timed out; the error log also records `inference finalization failed; reconciliation required`.
-3. A reservation's lease ends `GATEWAY_REQUEST_TIMEOUT_SECONDS` + 5 s after admission. Every 5 s, each replica reconciles expired leases (`reconcile_expired` in `apps/gateway/src/governance.rs`, with `FOR UPDATE SKIP LOCKED` so replicas never collide): the reservation becomes `unknown`, the execution `cancelled` with `lease_expired`, and an `unknown` ledger row is appended.
+3. A reservation's lease ends `GATEWAY_REQUEST_TIMEOUT_SECONDS` + 5 s after admission. Every 5 s, each replica reconciles expired leases (`reconcile_expired` in `apps/gateway/src/governance/reconcile.rs`, with `FOR UPDATE SKIP LOCKED` so replicas never collide): the reservation becomes `unknown`, the execution `cancelled` with `lease_expired`, and an `unknown` ledger row is appended.
 4. The hold is kept. Unknown cost is never treated as zero and never refunded automatically ([cancellation and reconciliation](governance.md#cancellation-reconciliation-and-retention)).
 
 A cancelled request (client disconnect) is finalized in the background with the same 3 s limit and follows the same path when that write fails.
