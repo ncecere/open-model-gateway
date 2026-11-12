@@ -1797,7 +1797,7 @@ async fn omitted_maximum_validation_uses_the_clamped_bound_not_the_raw_omission(
     // it as `Unsupported` (every capable route refuses, so 501
     // `unsupported_capability`) even though planning above had just proven
     // the clamped bound satisfies this exact adapter - planning and dispatch
-    // disagreed. The fix (`jobs::runner::LineRun::execute` copying the
+    // disagreed. The fix (`jobs::runner::line::LineRun::execute` copying the
     // plan's resolved `output` onto the request before the engine ever sees
     // it) makes them agree, so the line reaches the adapter's real
     // `execute` and completes, with the adapter observing the same

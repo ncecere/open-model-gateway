@@ -47,7 +47,7 @@ The frontends (`protocols/chat_completions.rs`, `responses.rs`, `messages.rs`) n
 
 **Recommendation:** inspect input inside the engine, after step 3 and before step 4, once per root request. Reasons:
 
-- **One place.** Chat, Responses, Messages and gateway-run batch lines all pass through it; `jobs/runner.rs` calls the same `execute_protocol`.
+- **One place.** Chat, Responses, Messages and gateway-run batch lines all pass through it; `jobs/runner/line.rs` calls the same `execute_protocol`.
 - **Cheap failures first.** `model_not_found` and unsupported capabilities fail before any detector is paid for.
 - **No reservation for a blocked input.** Inspection happens before the first `admit`, so a blocked input reserves nothing and is charged nothing upstream. Admission sees the request that is actually sent, including any redaction.
 - **Same input on failover.** Attempts 2–3 reuse the inspected request, since each attempt already gets `request.clone()`. Input is not inspected again.
