@@ -134,6 +134,70 @@ mod tests {
         assert!(bytes_quiet::<16>().is_ok());
     }
 
+    /// The random-number entry points named by the production code of one
+    /// source file.
+    fn draws(source: &str) -> Vec<&'static str> {
+        // Production code only; inline `mod tests` blocks come last.
+        let production = source.split("#[cfg(test)]").next().unwrap_or_default();
+        [
+            "rand::",
+            "OsRng",
+            "SysRng",
+            "thread_rng",
+            "StdRng",
+            "SmallRng",
+        ]
+        .into_iter()
+        .filter(|needle| production.contains(needle))
+        .collect()
+    }
+
+    const DRAW: &str = "fn r() -> u8 { rand::random::<u8>() }\n";
+
+    /// Only test modules are left out of the scan (#506): a `#[cfg(test)]` on
+    /// anything else does not end the production code of a file.
+    #[test]
+    fn a_draw_after_an_early_test_only_item_is_reported() {
+        for early in [
+            "#[cfg(test)]\nuse std::fmt;\n",
+            "#[cfg(test)]\n#[path = \"a/tests.rs\"]\nmod tests;\n",
+            "#[cfg(all(test, feature = \"integration-tests\"))]\nmod gated;\n",
+            "#[cfg(test)]\nmod tests {\n    fn t() {}\n}\n",
+            "#[cfg(all(test, feature = \"integration-tests\"))]\nmod gated {\n    fn t() {}\n}\n",
+            // Not a module, so the helper is scanned too, and so is what follows.
+            "#[cfg(test)]\nfn helper() {}\n",
+            // Built without `test` as well: production code.
+            "#[cfg(any(test, feature = \"integration-tests\"))]\nmod seam {}\n",
+        ] {
+            let source = format!("fn a() {{}}\n{early}{DRAW}");
+            assert_eq!(draws(&source), ["rand::"], "{source}");
+        }
+    }
+
+    #[test]
+    fn a_draw_in_a_test_only_function_or_a_shared_module_is_reported() {
+        for source in [
+            format!("#[cfg(test)]\n{DRAW}"),
+            format!("#[cfg(any(test, feature = \"integration-tests\"))]\nmod seam {{\n{DRAW}}}\n"),
+            format!("mod inner {{\n{DRAW}}}\n"),
+        ] {
+            assert_eq!(draws(&source), ["rand::"], "{source}");
+        }
+    }
+
+    #[test]
+    fn a_draw_inside_a_test_module_is_not_reported() {
+        for source in [
+            format!("fn a() {{}}\n#[cfg(test)]\nmod tests {{\n{DRAW}}}\n"),
+            format!(
+                "#[cfg(all(test, feature = \"integration-tests\"))]\n#[allow(dead_code)]\nmod x {{\n{DRAW}}}\nfn a() {{}}\n"
+            ),
+            format!("mod outer {{\n    #[cfg(test)]\n    mod tests {{\n{DRAW}    }}\n}}\n"),
+        ] {
+            assert!(draws(&source).is_empty(), "{source}");
+        }
+    }
+
     /// Secrets are generated only here: no other production module uses
     /// `rand` (no ThreadRng, seeded or weaker generators for secrets).
     #[test]
@@ -161,19 +225,8 @@ mod tests {
                 continue;
             }
             let text = std::fs::read_to_string(&path).unwrap();
-            // Production code only; inline `mod tests` blocks come last.
-            let production = text.split("#[cfg(test)]").next().unwrap_or_default();
-            for needle in [
-                "rand::",
-                "OsRng",
-                "SysRng",
-                "thread_rng",
-                "StdRng",
-                "SmallRng",
-            ] {
-                if production.contains(needle) {
-                    offenders.push(format!("{}: {needle}", path.display()));
-                }
+            for needle in draws(&text) {
+                offenders.push(format!("{}: {needle}", path.display()));
             }
         }
         assert!(offenders.is_empty(), "{offenders:#?}");
