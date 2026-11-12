@@ -25,7 +25,6 @@
     "apps/gateway/src/protocols/realtime.rs": 1126,
     "apps/gateway/src/providers/openai.rs": 868,
     "apps/gateway/src/route_policy.rs": 1545,
-    "apps/gateway/src/scim.rs": 1837,
     "apps/gateway/src/telemetry.rs": 890
   },
   "baseline": {
@@ -50,7 +49,6 @@
     "apps/gateway/src/protocols/realtime.rs": 1126,
     "apps/gateway/src/providers/openai.rs": 868,
     "apps/gateway/src/route_policy.rs": 1545,
-    "apps/gateway/src/scim.rs": 1837,
     "apps/gateway/src/telemetry.rs": 890
   }
 }
