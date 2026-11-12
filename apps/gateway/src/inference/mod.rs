@@ -263,7 +263,7 @@ impl Drop for RequestTelemetry {
 }
 
 /// One ambient admission/settlement phase group: a reserved wrapper span id,
-/// its start, and the [`telemetry::PhaseBuffer`] governance.rs's real phase
+/// its start, and the [`telemetry::PhaseBuffer`] the governance module's real phase
 /// boundaries (`telemetry::mark_phase`) record into inside [`telemetry::with_phases`].
 /// `None` is the allocation-free path when telemetry is inactive.
 type PhaseGroup = Option<(Arc<Mutex<telemetry::PhaseBuffer>>, [u8; 8], u64)>;
