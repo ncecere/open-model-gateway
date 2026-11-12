@@ -42,11 +42,7 @@ mod users;
 
 use discovery::{resource_type, resource_types, schema, schemas, service_provider_config};
 pub(crate) use groups::effective_groups;
-#[cfg(test)]
-use groups::{GroupDraft, apply_group_patch};
 use groups::{create_group, delete_group, get_group, list_groups, patch_group, replace_group};
-#[cfg(test)]
-use users::{UserDraft, apply_user_patch};
 use users::{create_user, delete_user, get_user, list_users, patch_user, replace_user};
 
 const USER_SCHEMA: &str = "urn:ietf:params:scim:schemas:core:2.0:User";
@@ -631,6 +627,12 @@ pub(crate) async fn summary(
     }))
 }
 
+// Test-only imports sit here, after all production code: the entropy source scan
+// (`entropy.rs`) reads a file only up to its first `#[cfg(test)]` (#506).
+#[cfg(test)]
+use groups::{GroupDraft, apply_group_patch};
+#[cfg(test)]
+use users::{UserDraft, apply_user_patch};
 #[cfg(test)]
 #[path = "scim/tests.rs"]
 mod tests;
