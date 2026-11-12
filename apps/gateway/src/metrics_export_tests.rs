@@ -46,7 +46,12 @@ fn registration_inventory_includes_families_without_instantiated_series() {
         }
     }
     let mut registrations = Registrations::default();
-    registrations.visit_file(&syn::parse_file(include_str!("metrics.rs")).unwrap());
+    for source in [
+        include_str!("metrics.rs"),
+        include_str!("metrics/registry.rs"),
+    ] {
+        registrations.visit_file(&syn::parse_file(source).unwrap());
+    }
     assert_eq!(
         registrations.0,
         CLASSES.iter().map(|c| c.name.to_owned()).collect()
