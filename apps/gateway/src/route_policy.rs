@@ -508,12 +508,12 @@ mod tests {
         while i < n || j < m {
             if i < n && j < m && old[i] == new[j] {
                 (i, j) = (i + 1, j + 1);
-            } else if j < m && (i == n || lcs[i][j + 1] >= lcs[i + 1][j]) {
-                out.push(format!("+ {}", new[j]));
-                j += 1;
-            } else {
+            } else if i < n && (j == m || lcs[i + 1][j] >= lcs[i][j + 1]) {
                 out.push(format!("- {}", old[i]));
                 i += 1;
+            } else {
+                out.push(format!("+ {}", new[j]));
+                j += 1;
             }
         }
         out
@@ -522,11 +522,11 @@ mod tests {
     #[test]
     fn line_diff_reports_added_removed_changed_and_reordered_lines() {
         assert!(line_diff(&["a", "b"], &["a", "b"]).is_empty());
-        assert_eq!(line_diff(&["a", "b"], &["a", "c"]), ["+ c", "- b"]);
+        assert_eq!(line_diff(&["a", "b"], &["a", "c"]), ["- b", "+ c"]);
         assert_eq!(line_diff(&["a"], &["a", "b"]), ["+ b"]);
         assert_eq!(line_diff(&["a", "b"], &["b"]), ["- a"]);
         // Order matters: a swap moves one line.
-        assert_eq!(line_diff(&["a", "b"], &["b", "a"]), ["+ b", "- b"]);
+        assert_eq!(line_diff(&["a", "b"], &["b", "a"]), ["- a", "+ a"]);
     }
 
     /// Pins every declaration independently of the matrix tests, which derive
