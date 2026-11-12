@@ -1,0 +1,288 @@
+# Authorization snapshot of route_policy::ROUTES, one entry per line in table order (first match wins):
+# METHODS<TAB>PATH<TAB>ACCESS<TAB>TOKEN. Any change to this file is an authorization change and needs
+# a security review (two independent reviews, one adversarial; see AGENTS.md). Regenerate with
+# OMG_REGENERATE_ROUTE_POLICY=1 cargo test -p open-model-gateway --lib route_policy_matches_snapshot
+GET	/api/v1/platform/report-schedules/{id}/runs	PlatformRead	denied
+GET	/api/v1/workspaces/{ws}/report-schedules/{id}/runs	WorkspaceReportAdmin	denied
+GET	/api/v1/platform/report-schedules/{id}/runs/{run}/csv	PlatformRead	denied
+GET	/api/v1/workspaces/{ws}/report-schedules/{id}/runs/{run}/csv	WorkspaceReportAdmin	denied
+GET	/api/v1/platform/report-schedules/{id}/runs/{run}	PlatformRead	denied
+GET	/api/v1/workspaces/{ws}/report-schedules/{id}/runs/{run}	WorkspaceReportAdmin	denied
+GET	/api/v1/platform/report-schedules	PlatformRead	denied
+POST	/api/v1/platform/report-schedules	PlatformWrite	denied
+GET	/api/v1/platform/report-schedules/{id}	PlatformRead	denied
+PATCH DELETE	/api/v1/platform/report-schedules/{id}	PlatformWrite	denied
+GET POST	/api/v1/workspaces/{ws}/report-schedules	WorkspaceReportAdmin	denied
+GET PATCH DELETE	/api/v1/workspaces/{ws}/report-schedules/{id}	WorkspaceReportAdmin	denied
+GET	/api/v1/auth/config	Anonymous	denied
+GET	/api/v1/auth/login	Anonymous	denied
+GET	/api/v1/auth/callback	Anonymous	denied
+POST	/api/v1/auth/logout	BrowserLogout	denied
+GET	/api/v1/branding/logo	Anonymous	denied
+GET	/metrics	Anonymous	denied
+GET	/health/live	Health	denied
+GET	/health/ready	Health	denied
+GET	/v1/models	InferenceKey	denied
+POST	/v1/chat/completions	InferenceKey	denied
+POST	/v1/responses	InferenceKey	denied
+POST	/v1/messages	InferenceKey	denied
+POST	/v1/embeddings	InferenceKey	denied
+POST	/v1/realtime/client_secrets	InferenceKey	denied
+POST	/v1/realtime/calls	InferenceKey	denied
+POST	/v1/images/generations	InferenceKey	denied
+POST	/v1/rerank	InferenceKey	denied
+POST	/v1/systemone	InferenceKey	denied
+POST	/v1/audio/transcriptions	InferenceKey	denied
+POST	/v1/audio/speech	InferenceKey	denied
+GET POST	/v1/videos	InferenceKey	denied
+GET DELETE	/v1/videos/{id}	InferenceKey	denied
+GET	/v1/videos/{id}/content	InferenceKey	denied
+GET POST	/v1/files	InferenceKey	denied
+GET DELETE	/v1/files/{id}	InferenceKey	denied
+GET	/v1/files/{id}/content	InferenceKey	denied
+GET POST	/v1/batches	InferenceKey	denied
+GET	/v1/batches/{id}	InferenceKey	denied
+POST	/v1/batches/{id}/cancel	InferenceKey	denied
+GET	/v1/realtime	InferenceKey	denied
+GET	/scim/v2/ServiceProviderConfig	Scim	denied
+GET	/scim/v2/ResourceTypes	Scim	denied
+GET	/scim/v2/ResourceTypes/{id}	Scim	denied
+GET	/scim/v2/Schemas	Scim	denied
+GET	/scim/v2/Schemas/{id}	Scim	denied
+GET POST	/scim/v2/Users	Scim	denied
+GET PUT PATCH DELETE	/scim/v2/Users/{id}	Scim	denied
+GET POST	/scim/v2/Groups	Scim	denied
+GET PUT PATCH DELETE	/scim/v2/Groups/{id}	Scim	denied
+*	/scim	Scim	denied
+*	/scim/{*rest}	Scim	denied
+GET	/api/v1/platform/provider-cost-imports	PlatformRead	denied
+POST	/api/v1/platform/provider-cost-imports	PlatformWrite	denied
+GET	/api/v1/platform/provider-cost-imports/{id}	PlatformRead	denied
+GET	/api/v1/platform/provider-cost-imports/{id}/lines	PlatformRead	denied
+GET	/api/v1/platform/provider-cost-mappings	PlatformRead	denied
+POST	/api/v1/platform/provider-cost-mappings	PlatformWrite	denied
+GET	/api/v1/platform/provider-cost-mappings/{id}	PlatformRead	denied
+GET	/api/v1/platform/provider-reconciliations	PlatformRead	denied
+POST	/api/v1/platform/provider-reconciliations	PlatformWrite	denied
+GET	/api/v1/platform/provider-reconciliations/{id}	PlatformRead	denied
+GET	/api/v1/access-request-targets	Browser	denied
+GET POST	/api/v1/me/access-requests	Browser	denied
+GET	/api/v1/me/access-requests/{id}	Browser	denied
+POST	/api/v1/me/access-requests/{id}/withdraw	Browser	denied
+GET	/api/v1/workspaces/{ws}/access-requests	WorkspaceAdmin	denied
+POST	/api/v1/workspaces/{ws}/access-requests/{id}/approve	WorkspaceAdmin	denied
+POST	/api/v1/workspaces/{ws}/access-requests/{id}/deny	WorkspaceAdmin	denied
+GET	/api/v1/platform/access-requests	PlatformRead	denied
+POST	/api/v1/platform/access-requests/{id}/approve	PlatformWrite	denied
+POST	/api/v1/platform/access-requests/{id}/deny	PlatformWrite	denied
+PUT	/api/v1/platform/workspaces/{ws}/discoverable	PlatformWrite	denied
+GET	/api/v1/platform/workspace-templates	PlatformRead	denied
+POST	/api/v1/platform/workspace-templates	PlatformWrite	denied
+GET	/api/v1/platform/workspace-templates/{id}	PlatformRead	denied
+POST	/api/v1/platform/workspace-templates/{id}/versions	PlatformWrite	denied
+POST	/api/v1/platform/workspace-templates/{id}/apply	PlatformWrite	denied
+POST	/api/v1/platform/workspace-templates/{id}/versions/{version}/review	PlatformWrite	denied
+POST	/api/v1/platform/workspace-templates/{id}/versions/{version}/publish	PlatformWrite	denied
+POST	/api/v1/platform/workspace-templates/{id}/versions/{version}/retire	PlatformWrite	denied
+GET	/api/v1/platform/access-reviews	PlatformRead	denied
+POST	/api/v1/platform/access-reviews	PlatformWrite	denied
+GET	/api/v1/platform/access-reviews/{id}	PlatformRead	denied
+GET	/api/v1/platform/access-reviews/{id}/items	PlatformRead	denied
+POST	/api/v1/platform/access-reviews/{id}/close	PlatformWrite	denied
+GET	/api/v1/platform/access-reviews/{id}/export	PlatformRead	denied
+POST	/api/v1/platform/access-reviews/{id}/items/{item}/reviewer	PlatformWrite	denied
+GET	/api/v1/me/access-reviews	Browser	denied
+POST	/api/v1/me/access-reviews/{item}/decision	Browser	denied
+GET	/api/v1/me	Browser	denied
+GET	/api/v1/me/summary	Browser	denied
+GET	/api/v1/me/keys	Browser	denied
+GET	/api/v1/me/models	Browser	denied
+GET	/api/v1/me/export	Browser	denied
+GET	/api/v1/me/notifications	Browser	denied
+GET	/api/v1/me/notifications/summary	Browser	denied
+POST	/api/v1/me/notifications/read	Browser	denied
+GET	/api/v1/me/sessions	Browser	denied
+DELETE	/api/v1/me/sessions/{session}	Browser	denied
+POST	/api/v1/me/sessions/revoke-others	Browser	denied
+POST	/api/v1/invitations/accept	Browser	denied
+GET	/api/v1/workspaces/{ws}	WorkspaceMetadata	scope:platform:read
+PATCH	/api/v1/workspaces/{ws}	WorkspaceAdmin	denied
+GET	/api/v1/workspaces/{ws}/access	WorkspaceMetadata	scope:platform:read
+GET	/api/v1/workspaces/{ws}/catalog	WorkspaceMetadata	scope:platform:read
+GET	/api/v1/workspaces/{ws}/available-models	WorkspaceMetadata	scope:platform:read
+GET	/api/v1/workspaces/{ws}/models	WorkspaceMetadata	scope:platform:read
+POST	/api/v1/workspaces/{ws}/models	WorkspaceAdmin	denied
+DELETE	/api/v1/workspaces/{ws}/models/{model}	WorkspaceAdmin	denied
+GET	/api/v1/workspaces/{ws}/models/compare	WorkspaceMember	denied
+GET	/api/v1/workspaces/{ws}/policy	WorkspaceMetadata	scope:platform:read
+PUT	/api/v1/workspaces/{ws}/policy	WorkspaceAdmin	denied
+GET	/api/v1/workspaces/{ws}/members	WorkspaceAdminOrReader	scope:platform:read
+POST	/api/v1/workspaces/{ws}/members	WorkspaceAdmin	denied
+DELETE	/api/v1/workspaces/{ws}/members/{user}	WorkspaceAdmin	denied
+GET POST	/api/v1/workspaces/{ws}/invitations	WorkspaceAdmin	denied
+DELETE	/api/v1/workspaces/{ws}/invitations/{id}	WorkspaceAdmin	denied
+GET	/api/v1/workspaces/{ws}/member-candidates	WorkspaceAdmin	denied
+GET POST	/api/v1/workspaces/{ws}/service-accounts	WorkspaceAdmin	denied
+PATCH	/api/v1/workspaces/{ws}/service-accounts/{id}	WorkspaceAdmin	denied
+GET POST	/api/v1/workspaces/{ws}/keys	WorkspaceMember	denied
+GET DELETE PATCH	/api/v1/workspaces/{ws}/keys/{key}	WorkspaceKey	denied
+GET	/api/v1/workspaces/{ws}/keys/{key}/stats	WorkspaceKey	denied
+POST	/api/v1/workspaces/{ws}/keys/{key}/rotate	WorkspaceKeyRotate	denied
+GET	/api/v1/workspaces/{ws}/keys/{key}/access	WorkspaceKey	denied
+GET PUT	/api/v1/workspaces/{ws}/keys/{key}/policy	WorkspaceKey	denied
+GET	/api/v1/workspaces/{ws}/key-issuance	WorkspaceMember	denied
+GET	/api/v1/workspaces/{ws}/key-safety	WorkspaceMember	denied
+GET	/api/v1/workspaces/{ws}/executions	WorkspaceMember	denied
+GET	/api/v1/workspaces/{ws}/usage	WorkspaceMember	denied
+GET	/api/v1/workspaces/{ws}/audit	WorkspaceMember	denied
+GET	/api/v1/workspaces/{ws}/requests	WorkspaceMember	denied
+GET	/api/v1/workspaces/{ws}/requests/{root}	WorkspaceMember	denied
+GET	/api/v1/workspaces/{ws}/generations	WorkspaceMember	denied
+GET	/api/v1/workspaces/{ws}/sessions	WorkspaceMember	denied
+GET	/api/v1/workspaces/{ws}/sessions/{session}	WorkspaceMember	denied
+GET	/api/v1/workspaces/{ws}/logs/metrics	WorkspaceMember	denied
+GET	/api/v1/workspaces/{ws}/usage/overview	WorkspaceMetadata	scope:platform:read
+GET	/api/v1/workspaces/{ws}/usage/explore	WorkspaceMetadata	scope:platform:read
+GET	/api/v1/workspaces/{ws}/usage/storage	WorkspaceAdmin	denied
+GET	/api/v1/workspaces/{ws}/cost-report	WorkspaceMetadata	scope:platform:read
+GET	/api/v1/workspaces/{ws}/cost-summary	WorkspaceMetadata	scope:platform:read
+GET	/api/v1/workspaces/{ws}/costs	WorkspaceMetadata	scope:platform:read
+GET	/api/v1/workspaces/{ws}/holds	WorkspaceMetadata	denied
+GET	/api/v1/workspaces/{ws}/usage-export	WorkspaceMetadata	scope:platform:read
+POST	/api/v1/workspaces/{ws}/costs/{execution}/reconcile	WorkspacePlatformWrite	scope:governance:write
+GET	/api/v1/workspaces/{ws}/files	WorkspaceMember	denied
+DELETE	/api/v1/workspaces/{ws}/files/{id}	WorkspaceMember	denied
+GET	/api/v1/workspaces/{ws}/files/{id}/content	WorkspaceMember	denied
+POST	/api/v1/workspaces/{ws}/files/upload	WorkspaceMember	denied
+GET	/api/v1/workspaces/{ws}/batches	WorkspaceMember	denied
+GET	/api/v1/workspaces/{ws}/batches/{id}	WorkspaceMember	denied
+POST	/api/v1/workspaces/{ws}/batches/{id}/cancel	WorkspaceMember	denied
+GET	/api/v1/workspaces/{ws}/alerts/rules	WorkspaceAdminOrReader	scope:platform:read
+POST	/api/v1/workspaces/{ws}/alerts/rules	WorkspaceAdmin	denied
+GET	/api/v1/workspaces/{ws}/alerts/rules/{id}	WorkspaceAdminOrReader	scope:platform:read
+PUT DELETE	/api/v1/workspaces/{ws}/alerts/rules/{id}	WorkspaceAdmin	denied
+GET	/api/v1/workspaces/{ws}/alerts/events	WorkspaceAdminOrReader	scope:platform:read
+GET	/api/v1/platform/catalogs	PlatformRead	scope:platform:read
+POST	/api/v1/platform/catalogs	PlatformWrite	scope:catalog:write
+GET	/api/v1/platform/catalogs/{id}	PlatformRead	scope:platform:read
+PATCH DELETE	/api/v1/platform/catalogs/{id}	PlatformWrite	scope:catalog:write
+GET	/api/v1/platform/catalogs/{id}/models	PlatformRead	scope:platform:read
+PUT	/api/v1/platform/catalogs/{id}/models	PlatformWrite	scope:catalog:write
+GET	/api/v1/platform/models/{id}/catalogs	PlatformRead	scope:platform:read
+PUT	/api/v1/platform/models/{id}/catalogs	PlatformWrite	scope:catalog:write
+GET	/api/v1/platform/workspace-types/{kind}/catalogs	PlatformRead	scope:platform:read
+PUT	/api/v1/platform/workspace-types/{kind}/catalogs	PlatformWrite	scope:catalog:write
+GET	/api/v1/platform/catalog-defaults	PlatformRead	scope:platform:read
+PUT	/api/v1/platform/catalog-defaults	PlatformWrite	scope:catalog:write
+GET	/api/v1/platform/workspaces/{ws}/catalogs	PlatformRead	scope:platform:read
+PUT DELETE	/api/v1/platform/workspaces/{ws}/catalogs	PlatformWrite	scope:catalog:write
+POST	/api/v1/platform/workspaces/{ws}/models	PlatformWrite	scope:catalog:write
+DELETE	/api/v1/platform/workspaces/{ws}/models/{model}	PlatformWrite	scope:catalog:write
+PUT DELETE	/api/v1/platform/settings/general/logo	PlatformWrite	scope:settings:write
+GET	/api/v1/platform/key-safety	PlatformRead	scope:platform:read
+GET	/api/v1/platform/alerts/webhooks	PlatformRead	scope:platform:read
+POST	/api/v1/platform/alerts/webhooks	PlatformWrite	scope:settings:write
+GET	/api/v1/platform/alerts/webhooks/{id}	PlatformRead	scope:platform:read
+GET	/api/v1/platform/alerts/webhooks/{id}/deliveries	PlatformRead	scope:platform:read
+POST	/api/v1/platform/alerts/webhooks/{id}/test	PlatformWrite	scope:settings:write
+PATCH DELETE	/api/v1/platform/alerts/webhooks/{id}	PlatformWrite	scope:settings:write
+GET	/api/v1/platform/alerts/rules	PlatformRead	scope:platform:read
+POST	/api/v1/platform/alerts/rules	PlatformWrite	scope:governance:write
+GET	/api/v1/platform/alerts/rules/{id}	PlatformRead	scope:platform:read
+PUT DELETE	/api/v1/platform/alerts/rules/{id}	PlatformWrite	scope:governance:write
+GET	/api/v1/platform/alerts/events	PlatformRead	scope:platform:read
+POST	/api/v1/platform/users/{user}/sessions/revoke	PlatformWrite	scope:access:write
+GET	/api/v1/platform/models/compare	PlatformRead	scope:platform:read
+GET	/api/v1/platform/usage/overview	PlatformRead	scope:platform:read
+GET	/api/v1/platform/usage/storage	PlatformRead	scope:platform:read
+GET	/api/v1/platform/usage/explore	PlatformRead	scope:platform:read
+GET	/api/v1/platform/workspaces/{ws}/member-candidates	PlatformRead	scope:platform:read
+GET	/api/v1/platform/workspaces/{ws}/members	PlatformRead	scope:platform:read
+POST	/api/v1/platform/workspaces/{ws}/members	PlatformWrite	scope:access:write
+DELETE	/api/v1/platform/workspaces/{ws}/members/{user}	PlatformWrite	scope:access:write
+GET	/api/v1/platform/users/{user}/export	PlatformRead	scope:platform:read
+GET	/api/v1/platform/workspaces	PlatformRead	scope:platform:read
+POST	/api/v1/platform/workspaces	PlatformWrite	scope:access:write
+GET	/api/v1/platform/workspaces/{ws}	PlatformRead	scope:platform:read
+PATCH	/api/v1/platform/workspaces/{ws}	PlatformWrite	scope:access:write
+GET	/api/v1/platform/users	PlatformRead	scope:platform:read
+POST	/api/v1/platform/users	PlatformWrite	scope:access:write
+GET	/api/v1/platform/users/{user}	PlatformRead	scope:platform:read
+PATCH	/api/v1/platform/users/{user}	PlatformWrite	scope:access:write
+POST	/api/v1/platform/users/{user}/roles	PlatformWrite	scope:access:write
+POST	/api/v1/platform/users/{user}/remove-personal-data	PlatformWrite	scope:access:write
+DELETE	/api/v1/platform/users/{user}/roles/{role}	PlatformWrite	scope:access:write
+GET	/api/v1/platform/oidc/group-mappings	PlatformRead	scope:platform:read
+POST	/api/v1/platform/oidc/group-mappings	PlatformWrite	scope:access:write
+PATCH DELETE	/api/v1/platform/oidc/group-mappings/{id}	PlatformWrite	scope:access:write
+POST	/api/v1/platform/oidc/group-mappings/preview	PlatformWrite	denied
+POST	/api/v1/platform/oidc/group-mappings/{id}/preview	PlatformWrite	denied
+GET	/api/v1/platform/cost-centers	PlatformRead	scope:platform:read
+POST	/api/v1/platform/cost-centers	PlatformWrite	scope:governance:write
+GET	/api/v1/platform/cost-centers/{id}	PlatformRead	scope:platform:read
+PATCH DELETE	/api/v1/platform/cost-centers/{id}	PlatformWrite	scope:governance:write
+GET	/api/v1/platform/deployments/{deployment}/batch-scheduling	PlatformRead	scope:platform:read
+PUT	/api/v1/platform/deployments/{deployment}/batch-scheduling	PlatformWrite	scope:governance:write
+GET	/api/v1/platform/batches	PlatformRead	scope:platform:read
+GET	/api/v1/platform/providers	PlatformRead	scope:platform:read
+POST	/api/v1/platform/providers	PlatformWrite	scope:catalog:write
+GET	/api/v1/platform/providers/{id}	PlatformRead	scope:platform:read
+PATCH DELETE	/api/v1/platform/providers/{id}	PlatformWrite	scope:catalog:write
+GET	/api/v1/platform/models	PlatformRead	scope:platform:read
+POST	/api/v1/platform/models	PlatformWrite	scope:catalog:write
+GET	/api/v1/platform/models/{id}	PlatformRead	scope:platform:read
+PATCH DELETE	/api/v1/platform/models/{id}	PlatformWrite	scope:catalog:write
+GET	/api/v1/platform/deployments	PlatformRead	scope:platform:read
+POST	/api/v1/platform/deployments	PlatformWrite	scope:catalog:write
+GET	/api/v1/platform/deployments/{id}	PlatformRead	scope:platform:read
+PATCH DELETE	/api/v1/platform/deployments/{id}	PlatformWrite	scope:catalog:write
+POST	/api/v1/platform/deployments/{id}/configuration/preview	PlatformWrite	denied
+POST	/api/v1/platform/deployment-bulk-operations	PlatformWrite	denied
+GET	/api/v1/platform/deployment-bulk-operations/{idempotency_key}	PlatformWrite	denied
+POST	/api/v1/platform/deployments/{id}/configuration/apply	PlatformWrite	denied
+POST	/api/v1/platform/deployments/{id}/configuration/restore-preview	PlatformWrite	denied
+GET	/api/v1/platform/deployments/{id}/configuration/history	PlatformRead	denied
+GET	/api/v1/platform/deployments/{id}/configuration/history/{change}	PlatformRead	denied
+GET	/api/v1/platform/holds	PlatformRead	scope:platform:read
+GET	/api/v1/platform/audit	PlatformRead	scope:platform:read
+GET	/api/v1/platform/server-policy	PlatformRead	scope:platform:read
+GET	/api/v1/platform/settings/general	PlatformRead	scope:platform:read
+PUT	/api/v1/platform/settings/general	PlatformWrite	scope:settings:write
+GET	/api/v1/platform/settings/privacy	PlatformRead	scope:platform:read
+PUT	/api/v1/platform/settings/privacy	PlatformWrite	scope:settings:write
+GET	/api/v1/platform/settings/email	PlatformRead	scope:platform:read
+PUT	/api/v1/platform/settings/email	PlatformWrite	scope:settings:write
+POST	/api/v1/platform/settings/email/test	PlatformWrite	scope:settings:write
+GET	/api/v1/platform/settings/sign-in	PlatformRead	scope:platform:read
+GET	/api/v1/platform/logs/requests	PlatformRead	scope:platform:read
+GET	/api/v1/platform/logs/requests/{root}	PlatformRead	scope:platform:read
+GET	/api/v1/platform/logs/generations	PlatformRead	scope:platform:read
+GET	/api/v1/platform/logs/sessions	PlatformRead	scope:platform:read
+GET	/api/v1/platform/logs/sessions/{ws}/{session}	PlatformRead	scope:platform:read
+GET	/api/v1/platform/logs/metrics	PlatformRead	scope:platform:read
+GET	/api/v1/platform/legal-holds	PlatformRead	scope:platform:read
+POST	/api/v1/platform/legal-holds	PlatformWrite	scope:governance:write
+POST	/api/v1/platform/legal-holds/{hold}/release	PlatformWrite	scope:governance:write
+GET	/api/v1/platform/settings/audit-export	PlatformRead	scope:platform:read
+POST	/api/v1/platform/settings/audit-export/test	PlatformWrite	scope:settings:write
+POST	/api/v1/platform/model-setup	PlatformWrite	scope:catalog:write
+GET	/api/v1/platform/overview	PlatformRead	scope:platform:read
+GET	/api/v1/platform/settings/storage	PlatformRead	scope:platform:read
+PUT	/api/v1/platform/settings/storage	PlatformWrite	scope:settings:write
+POST	/api/v1/platform/settings/storage/test	PlatformWrite	scope:settings:write
+GET	/api/v1/platform/installation/policy	PlatformRead	scope:platform:read
+PUT	/api/v1/platform/installation/policy	PlatformWrite	scope:governance:write
+GET	/api/v1/platform/workspace-types/{kind}/policy	PlatformRead	scope:platform:read
+PUT	/api/v1/platform/workspace-types/{kind}/policy	PlatformWrite	scope:governance:write
+GET	/api/v1/platform/workspaces/{ws}/policy	PlatformRead	scope:platform:read
+PUT DELETE	/api/v1/platform/workspaces/{ws}/policy	PlatformWrite	scope:governance:write
+GET	/api/v1/platform/deployments/{deployment}/prices	PlatformRead	scope:platform:read
+POST	/api/v1/platform/deployments/{deployment}/prices	PlatformWrite	scope:catalog:write
+GET	/api/v1/platform/deployments/{deployment}/price-suggestion	PlatformRead	scope:platform:read
+GET	/api/v1/platform/models/{model}/routing	PlatformRead	scope:platform:read
+PUT	/api/v1/platform/models/{model}/routing	PlatformWrite	scope:catalog:write
+GET	/api/v1/platform/deployments/{deployment}/routing	PlatformRead	scope:platform:read
+PUT	/api/v1/platform/deployments/{deployment}/routing	PlatformWrite	scope:catalog:write
+GET	/api/v1/platform/cost-report	PlatformRead	scope:platform:read
+GET POST	/api/v1/platform/admin-tokens	PlatformWrite	browser-admin-only
+DELETE	/api/v1/platform/admin-tokens/{token}	PlatformWrite	browser-admin-only
