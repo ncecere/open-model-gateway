@@ -18,7 +18,6 @@
     "apps/gateway/src/management/governance/suggestion.rs": 1092,
     "apps/gateway/src/management/mod.rs": 898,
     "apps/gateway/src/management/resources.rs": 1462,
-    "apps/gateway/src/metrics.rs": 1643,
     "apps/gateway/src/protocols/realtime.rs": 1126,
     "apps/gateway/src/providers/openai.rs": 868,
     "apps/gateway/src/telemetry.rs": 890
@@ -38,7 +37,6 @@
     "apps/gateway/src/management/governance/suggestion.rs": 1092,
     "apps/gateway/src/management/mod.rs": 898,
     "apps/gateway/src/management/resources.rs": 1462,
-    "apps/gateway/src/metrics.rs": 1643,
     "apps/gateway/src/protocols/realtime.rs": 1126,
     "apps/gateway/src/providers/openai.rs": 868,
     "apps/gateway/src/telemetry.rs": 890
