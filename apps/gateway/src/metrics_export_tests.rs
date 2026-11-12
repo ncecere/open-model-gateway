@@ -46,11 +46,20 @@ fn registration_inventory_includes_families_without_instantiated_series() {
         }
     }
     let mut registrations = Registrations::default();
-    for source in [
-        include_str!("metrics.rs"),
-        include_str!("metrics/registry.rs"),
-    ] {
-        registrations.visit_file(&syn::parse_file(source).unwrap());
+    // `metrics.rs` and every file of its module directory, read at run time,
+    // so a family registered in any child module is inventoried.
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = vec![src.join("metrics.rs")];
+    for entry in std::fs::read_dir(src.join("metrics")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|ext| ext == "rs") {
+            files.push(path);
+        }
+    }
+    assert!(files.len() > 2, "the metrics module files were not found");
+    for file in files {
+        let source = std::fs::read_to_string(&file).unwrap();
+        registrations.visit_file(&syn::parse_file(&source).unwrap());
     }
     assert_eq!(
         registrations.0,
