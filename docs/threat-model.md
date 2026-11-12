@@ -67,7 +67,7 @@ flowchart LR
   E --> DB[(PostgreSQL)]
   U -- "usage" --> S["governance::finish (settle or unknown)"]
   S --> DB
-  B[Browser] -- "OIDC code + PKCE" --> O["identity.rs login / callback"]
+  B[Browser] -- "OIDC code + PKCE" --> O["identity/login.rs login / callback"]
   O --> IdP[(IdP)]
   B -- "session cookie + Origin + X-CSRF-Token" --> M["/api/v1/* require_session"]
   M --> DB
@@ -212,7 +212,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 - Follow-up: none.
 
 **KEY-8. A browser session is stolen, fixed or outlives its use.** S, E · Asset: sessions · Attacker: unauthenticated internet client with a stolen cookie.
-- Mitigation: `identity.rs` `callback` issues a fresh 256-bit session and CSRF token per sign-in and stores only SHA-256 hashes. Cookies are `HttpOnly` (session), `Secure` outside development loopback, `SameSite=Lax` (session) or `Strict` (CSRF), host-only, `Path=/` (`set_cookie`). `cookie` rejects duplicate or malformed cookies. Sessions end 12 hours after sign-in, or after 2 hours without recorded activity (`identity/session_policy.rs`; `GATEWAY_SESSION_LIFETIME` and `GATEWAY_SESSION_IDLE_TIMEOUT`, #80). Both deadlines are stored per session and compared with the database clock. Logout revokes the current session; suspension, entitlement loss, SCIM deactivation and email changes revoke all of a user's sessions.
+- Mitigation: `identity/login.rs` `callback` issues a fresh 256-bit session and CSRF token per sign-in and stores only SHA-256 hashes. Cookies are `HttpOnly` (session), `Secure` outside development loopback, `SameSite=Lax` (session) or `Strict` (CSRF), host-only, `Path=/` (`set_cookie`). `cookie` rejects duplicate or malformed cookies. Sessions end 12 hours after sign-in, or after 2 hours without recorded activity (`identity/session_policy.rs`; `GATEWAY_SESSION_LIFETIME` and `GATEWAY_SESSION_IDLE_TIMEOUT`, #80). Both deadlines are stored per session and compared with the database clock. Logout revokes the current session; suspension, entitlement loss, SCIM deactivation and email changes revoke all of a user's sessions.
 - Tests: `identity/tests.rs` `complete_oidc_flow_uses_pkce_and_fresh_hashed_sessions`, `cookie_attributes_are_host_only_and_explicit`, `duplicate_and_malformed_cookies_are_rejected`, `expiry_revocation_and_disabled_user_are_checked_every_request`, `sessions_without_verified_email_cannot_authenticate`; `management/directory/tests.rs` `mutable_email_cannot_become_verified_invitation_evidence_in_an_existing_session`.
 - Mitigation (#79): users list their live sessions (`management/sessions.rs`; public `id`, fixed-vocabulary device label from `identity/client_label.rs`, no address or raw user agent) and sign one or all others out; a Platform Admin can sign out all of a person's sessions without suspending them, seeing only a count. Revocation is checked on every request (`verify_session`), so it applies on every replica at once.
 - Tests (#79): `management/sessions_tests.rs` (own sessions only, public fields only, cross-user `404`, current kept, concurrent revocations, admin revoke and count, keys untouched); `identity/tests.rs` `your_sessions_end_to_end` (device label at sign-in, current marker, last-seen at most every 5 minutes, a revoked cookie gets `401`, CSRF required); browser journey "signs out their other sessions".
@@ -367,7 +367,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 | SMTP: invitations, alerts, test send (`email.rs`) | `smtp_host` setting | Platform Admin picks a host from the operator's list | `GATEWAY_SMTP_HOST_ALLOWLIST` before the credential is read; `egress::resolve`; TLS unless the relay is loopback |
 | Alert notifications (`alerts.rs`) | Email through the relay above; there is no webhook receiver | n/a | As SMTP |
 | Audit export: webhook, OTLP, syslog over TLS (`audit_export.rs`) | `GATEWAY_AUDIT_*` URL | Operator; a Platform Admin can only send a test record to it | HTTPS (loopback HTTP in development), no URL credentials; `check_url` and the resolver; no redirects |
-| OIDC discovery, token and JWKS (`identity.rs`) | `GATEWAY_OIDC_ISSUER`, then the endpoints its discovery document names | Operator; the IdP is trusted for the document | `validate_url` and `check_url` before every request, including discovered ones; resolver; no redirects |
+| OIDC discovery, token and JWKS (`identity.rs`, `identity/oidc.rs`) | `GATEWAY_OIDC_ISSUER`, then the endpoints its discovery document names | Operator; the IdP is trusted for the document | `validate_url` and `check_url` before every request, including discovered ones; resolver; no redirects |
 | S3 file store (`filestore/s3/`) | `GATEWAY_S3_ENDPOINT` or AWS S3 for the region | Operator | Must be in `GATEWAY_S3_ENDPOINT_ALLOWLIST`; IP literals checked at startup; resolver |
 | AWS SDK credential providers: IMDS, Pod Identity, STS, SSO | The SDK's own endpoints and the operator's environment | Operator | Bypass the egress policy by design (EGR-3) |
 | `healthcheck` CLI | The gateway's own listener | Operator at the command line | Loopback unless `--allow-non-loopback` |
@@ -568,7 +568,7 @@ Not covered end to end: Bedrock (its SigV4 SDK transport has no loopback test co
 ### Dashboard
 
 **WEB-1. Cross-site request forgery.** T · Asset: configuration, keys · Attacker: malicious website visited by a signed-in user.
-- Mitigation: `identity.rs` `verify_csrf` requires, for every method other than GET and HEAD, exactly one `Origin` equal to `GATEWAY_PUBLIC_URL` and an `X-CSRF-Token` whose hash matches the session's. `omg_csrf` is `SameSite=Strict`. No CORS is enabled. `apps/web/src/lib/api.ts` refuses a mutation when the CSRF cookie is missing.
+- Mitigation: `identity/session.rs` `verify_csrf` requires, for every method other than GET and HEAD, exactly one `Origin` equal to `GATEWAY_PUBLIC_URL` and an `X-CSRF-Token` whose hash matches the session's. `omg_csrf` is `SameSite=Strict`. No CORS is enabled. `apps/web/src/lib/api.ts` refuses a mutation when the CSRF cookie is missing.
 - Tests: `identity/tests.rs` `middleware_and_logout_enforce_csrf_and_exact_origin`, `discovery_and_csrf_origin_validation`; `apps/web/src/lib/api.test.ts` "blocks mutation without CSRF before sending the request".
 - Residual: GET handlers must stay free of side effects; that is a convention, not a check.
 - Follow-up: none.
