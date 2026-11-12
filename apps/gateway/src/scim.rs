@@ -627,8 +627,6 @@ pub(crate) async fn summary(
     }))
 }
 
-// Test-only imports sit here, after all production code: the entropy source scan
-// (`entropy.rs`) reads a file only up to its first `#[cfg(test)]` (#506).
 #[cfg(test)]
 use groups::{GroupDraft, apply_group_patch};
 #[cfg(test)]
