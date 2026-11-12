@@ -4,7 +4,6 @@
   "markers": 58,
   "markersBaseline": 58,
   "files": {
-    "apps/gateway/src/alerts.rs": 1671,
     "apps/gateway/src/audit_export.rs": 1342,
     "apps/gateway/src/billing/v3.rs": 966,
     "apps/gateway/src/filestore/files.rs": 1012,
@@ -27,7 +26,6 @@
     "apps/gateway/src/telemetry.rs": 890
   },
   "baseline": {
-    "apps/gateway/src/alerts.rs": 1671,
     "apps/gateway/src/audit_export.rs": 1342,
     "apps/gateway/src/billing/v3.rs": 966,
     "apps/gateway/src/filestore/files.rs": 1012,

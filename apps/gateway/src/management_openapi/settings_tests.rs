@@ -296,9 +296,9 @@ fn management_openapi_settings_every_incident_has_its_fired_email() {
         wrong["cleared_email"] = Value::Null;
         assert!(accepted("SettingsPlatformEvents", &wrong), "{resolution}");
     }
-    // A cleared incident of a rule kind always has its cleared email (alerts.rs
-    // resolve inserts it with the resolution); an aged hold or a key reminder is
-    // cleared silently.
+    // A cleared incident of a rule kind always has its cleared email
+    // (alerts/incidents.rs resolve inserts it with the resolution); an aged hold
+    // or a key reminder is cleared silently.
     let mut silent = cleared.clone();
     silent["cleared_email"] = Value::Null;
     assert!(!accepted("SettingsPlatformEvents", &silent));

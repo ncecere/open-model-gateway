@@ -305,7 +305,7 @@ fn management_openapi_hardening_notification_money_details_are_individually_sign
             .is_valid(&json!({name: value}))
     };
     // `pending_microusd` is sum(held - held_unknown) with no sign guard
-    // (alerts.rs spend_conditions; budget_totals has no >= 0 check, migration 0015):
+    // (alerts/evaluation.rs spend_conditions; budget_totals has no >= 0 check, migration 0015):
     // drifted totals can report a negative pending amount.
     assert!(accepts("pending_microusd", "-5") && accepts("pending_microusd", "5"));
     assert!(!accepts("pending_microusd", "-0") && !accepts("pending_microusd", "05"));

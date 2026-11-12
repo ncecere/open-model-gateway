@@ -2124,7 +2124,7 @@
         }
       },
       "additionalProperties": false,
-      "description": "Closed envelope shared by every alert incident variant: identity and lifecycle fields. Every incident has its `fired` email delivery (each producer inserts it in the incident's own transaction, deliveries are immutable), so `email` is never null. `cleared_email` exists only for a cleared incident (alerts.rs resolve: superseded and rule_disabled never enqueue one, and a silently cleared key-expiry reminder or aged-hold incident has none); a cleared incident of a rule kind (budget, spend, spike, error rate, provider, batch, admission ceiling; never a built-in, which includes the personal budget alert, never a key reminder or an aged hold) always has one: every `cleared` resolution of a rule incident goes through alerts.rs resolve, which inserts the `resolved` delivery in the same transaction. The variants (installation rules by kind, built-ins, aged holds, admission ceilings, workspace rules by kind, personal budget, key expiry) pin rule, workspace, connection, kind and the closed per-kind details exactly; this base `details` is the reviewed stored producer-specific JSON. This is the base of the installation history.",
+      "description": "Closed envelope shared by every alert incident variant: identity and lifecycle fields. Every incident has its `fired` email delivery (each producer inserts it in the incident's own transaction, deliveries are immutable), so `email` is never null. `cleared_email` exists only for a cleared incident (alerts/incidents.rs resolve: superseded and rule_disabled never enqueue one, and a silently cleared key-expiry reminder or aged-hold incident has none); a cleared incident of a rule kind (budget, spend, spike, error rate, provider, batch, admission ceiling; never a built-in, which includes the personal budget alert, never a key reminder or an aged hold) always has one: every `cleared` resolution of a rule incident goes through alerts/incidents.rs resolve, which inserts the `resolved` delivery in the same transaction. The variants (installation rules by kind, built-ins, aged holds, admission ceilings, workspace rules by kind, personal budget, key expiry) pin rule, workspace, connection, kind and the closed per-kind details exactly; this base `details` is the reviewed stored producer-specific JSON. This is the base of the installation history.",
       "allOf": [
         {
           "if": {
@@ -7766,7 +7766,7 @@
         "window_end"
       ],
       "additionalProperties": false,
-      "description": "alerts.rs budget_condition: one workspace or key budget layer that reached a threshold. The window is the current UTC window of the period and is null exactly for the lifetime period. Nothing here identifies a key or an owner. Unknown-cost requests are counted, never treated as zero spend.",
+      "description": "alerts/evaluation.rs budget_condition: one workspace or key budget layer that reached a threshold. The window is the current UTC window of the period and is null exactly for the lifetime period. Nothing here identifies a key or an owner. Unknown-cost requests are counted, never treated as zero spend.",
       "allOf": [
         {
           "if": {
@@ -7850,7 +7850,7 @@
         "window_end"
       ],
       "additionalProperties": false,
-      "description": "alerts.rs spend_conditions: installation-wide spend against the rule's reference amount for its period. The window is null exactly for the lifetime period.",
+      "description": "alerts/evaluation.rs spend_conditions: installation-wide spend against the rule's reference amount for its period. The window is null exactly for the lifetime period.",
       "allOf": [
         {
           "if": {
@@ -7929,7 +7929,7 @@
         "unknown_cost_requests"
       ],
       "additionalProperties": false,
-      "description": "alerts.rs spike_conditions: settled spend of the last hour against the 7-day baseline; unknown-cost attempts are counted, never treated as zero.",
+      "description": "alerts/evaluation.rs spike_conditions: settled spend of the last hour against the 7-day baseline; unknown-cost attempts are counted, never treated as zero.",
       "allOf": [
         {
           "if": {
@@ -8007,7 +8007,7 @@
         "window_minutes"
       ],
       "additionalProperties": false,
-      "description": "alerts.rs error_rate_conditions: failed and finished attempts in the window against the rule's threshold."
+      "description": "alerts/evaluation.rs error_rate_conditions: failed and finished attempts in the window against the rule's threshold."
     },
     "SettingsProviderDetails": {
       "type": "object",
@@ -8058,7 +8058,7 @@
         "threshold_percent"
       ],
       "additionalProperties": false,
-      "description": "alerts.rs provider_conditions: upstream failures of one connection. consecutive_failures is null when the incident fired by error rate; each threshold is null when the rule does not set it."
+      "description": "alerts/evaluation.rs provider_conditions: upstream failures of one connection. consecutive_failures is null when the incident fired by error rate; each threshold is null when the rule does not set it."
     },
     "SettingsBatchFailedDetails": {
       "type": "object",
@@ -8118,7 +8118,7 @@
         "failed"
       ],
       "additionalProperties": false,
-      "description": "alerts.rs batch_failed_conditions: one batch that ended failed or expired; the client batch id only."
+      "description": "alerts/evaluation.rs batch_failed_conditions: one batch that ended failed or expired; the client batch id only."
     },
     "SettingsBatchStalledDetails": {
       "type": "object",
@@ -8163,7 +8163,7 @@
         "window_minutes"
       ],
       "additionalProperties": false,
-      "description": "alerts.rs batch_stalled_conditions: one unfinished batch without progress for the window."
+      "description": "alerts/evaluation.rs batch_stalled_conditions: one unfinished batch without progress for the window."
     },
     "SettingsKeyExpiryDetails": {
       "type": "object",
@@ -8183,7 +8183,7 @@
         "threshold_days"
       ],
       "additionalProperties": false,
-      "description": "alerts.rs key_expiring_tick: when the key expires and which band fired; never the key id, name or holder."
+      "description": "alerts/key_expiry.rs key_expiring_tick: when the key expires and which band fired; never the key id, name or holder."
     },
     "SettingsAgedHoldDetails": {
       "type": "object",
@@ -8215,7 +8215,7 @@
         "resource"
       ],
       "additionalProperties": false,
-      "description": "alerts.rs fire_scim_last_admin: the kind of SCIM resource whose change was refused; no names, emails or ids."
+      "description": "alerts/incidents.rs fire_scim_last_admin: the kind of SCIM resource whose change was refused; no names, emails or ids."
     },
     "SettingsPartitionsDetails": {
       "type": "object",
@@ -8405,7 +8405,7 @@
           }
         }
       ],
-      "description": "An installation-wide spend spike (alerts.rs spike_conditions): an installation rule has no workspace."
+      "description": "An installation-wide spend spike (alerts/evaluation.rs spike_conditions): an installation rule has no workspace."
     },
     "SettingsInstallationErrorRateEvent": {
       "allOf": [
@@ -8435,7 +8435,7 @@
           }
         }
       ],
-      "description": "An installation-wide error rate (alerts.rs error_rate_conditions): an installation rule has no workspace."
+      "description": "An installation-wide error rate (alerts/evaluation.rs error_rate_conditions): an installation rule has no workspace."
     },
     "SettingsInstallationProviderEvent": {
       "allOf": [
@@ -9070,7 +9070,7 @@
         }
       },
       "additionalProperties": false,
-      "description": "Closed envelope shared by every alert incident variant: identity and lifecycle fields. Every incident has its `fired` email delivery (each producer inserts it in the incident's own transaction, deliveries are immutable), so `email` is never null. `cleared_email` exists only for a cleared incident (alerts.rs resolve: superseded and rule_disabled never enqueue one, and a silently cleared key-expiry reminder or aged-hold incident has none); a cleared incident of a rule kind (budget, spend, spike, error rate, provider, batch, admission ceiling; never a built-in, which includes the personal budget alert, never a key reminder or an aged hold) always has one: every `cleared` resolution of a rule incident goes through alerts.rs resolve, which inserts the `resolved` delivery in the same transaction. The variants (installation rules by kind, built-ins, aged holds, admission ceilings, workspace rules by kind, personal budget, key expiry) pin rule, workspace, connection, kind and the closed per-kind details exactly; this base `details` is the reviewed stored producer-specific JSON. This is the base of the workspace history: a workspace history always names its workspace and never carries a connection, so those two fields are fixed here, and only the rule slot varies (null for built-ins, key reminders and aged holds).",
+      "description": "Closed envelope shared by every alert incident variant: identity and lifecycle fields. Every incident has its `fired` email delivery (each producer inserts it in the incident's own transaction, deliveries are immutable), so `email` is never null. `cleared_email` exists only for a cleared incident (alerts/incidents.rs resolve: superseded and rule_disabled never enqueue one, and a silently cleared key-expiry reminder or aged-hold incident has none); a cleared incident of a rule kind (budget, spend, spike, error rate, provider, batch, admission ceiling; never a built-in, which includes the personal budget alert, never a key reminder or an aged hold) always has one: every `cleared` resolution of a rule incident goes through alerts/incidents.rs resolve, which inserts the `resolved` delivery in the same transaction. The variants (installation rules by kind, built-ins, aged holds, admission ceilings, workspace rules by kind, personal budget, key expiry) pin rule, workspace, connection, kind and the closed per-kind details exactly; this base `details` is the reviewed stored producer-specific JSON. This is the base of the workspace history: a workspace history always names its workspace and never carries a connection, so those two fields are fixed here, and only the rule slot varies (null for built-ins, key reminders and aged holds).",
       "allOf": [
         {
           "if": {
