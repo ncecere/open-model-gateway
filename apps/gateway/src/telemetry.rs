@@ -593,7 +593,7 @@ impl Drop for Context {
 tokio::task_local! {
     /// Ambient per the one wrapped await, never a request-wide thread-local:
     /// bridges a reserved "admission"/"settlement" wrapper span to the real
-    /// phase boundaries reached inside `governance.rs`'s admission/
+    /// phase boundaries reached inside the `governance` module's admission/
     /// settlement transactions, across the `InferenceRepository`
     /// trait-object boundary (PR 2 does not change that trait). Absent for
     /// every call that is not wrapped in [`with_phases`] (disabled

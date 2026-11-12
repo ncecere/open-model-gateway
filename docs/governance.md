@@ -145,7 +145,7 @@ Every management change that can affect an admission decision, and the locks it 
 | `scim.rs` `persist_user` (create, replace, patch, delete user) | SCIM suspension or reactivation | `lock_users` for that user (last-admin check under the installation row) |
 | `scim.rs` `sync_users` (group create, replace, patch, delete) | SCIM group grants, entitlement loss | `lock_users` for every affected user |
 | `bootstrap.rs` `seed`, `demo.rs` | Development seed, demo | Catalog lock exclusive |
-| `governance.rs` `resolve_usage` | Evidence-backed usage reconciliation | Shared workspace and actor-user locks, then the reservation row and its totals rows |
+| `governance/reconcile.rs` `resolve_usage` | Evidence-backed usage reconciliation | Shared workspace and actor-user locks, then the reservation row and its totals rows |
 
 Changes that cannot affect admission take no scope lock: settings, branding, alerts, invitations (an invitation authorizes nothing until accepted), file and batch management, cost center renames (the name is snapshotted at admission; either value is a valid order). Grants and insertions that only widen access (new keys, new grants) need no lock: a racing admission simply ran before them.
 
