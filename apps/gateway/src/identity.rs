@@ -628,8 +628,7 @@ pub async fn prune_sessions_fenced(
     Ok(pruned)
 }
 
-// Test-only imports sit here, after all production code: source scans such as the
-// entropy guard (`entropy.rs`) read a file only up to its first test gate (#506).
+// Test-only imports sit here, after all production code.
 #[cfg(all(test, feature = "integration-tests"))]
 use login::{CallbackQuery, LoginQuery, consume_attempt, resolve_identity, resolve_identity_with};
 #[cfg(test)]
