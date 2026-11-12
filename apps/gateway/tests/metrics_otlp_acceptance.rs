@@ -917,9 +917,11 @@ fn verify_receipt(
         .collect();
     // These Families have no samples in a fresh, healthy serve process:
     // audit export is unconfigured; loopback collector egress is allowed;
-    // no deadlocks or collection errors occur; the freshly migrated database
-    // has no completed hours due for rollup (nor inference history).
+    // no deadlocks, accounting failures (#389) or collection errors occur; the
+    // freshly migrated database has no completed hours due for rollup (nor
+    // inference history).
     for dormant in [
+        "gateway_accounting_failures",
         "gateway_audit_export_deliveries",
         "gateway_egress_denied",
         "gateway_lock_deadlock_retries",

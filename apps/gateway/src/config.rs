@@ -430,6 +430,12 @@ impl Environment {
     }
 }
 
+/// How long a request waits for a connection of the primary pool
+/// ([`Config::connect`]). Equal to the settlement deadline
+/// (`inference::SETTLEMENT_DEADLINE`; a test in `db::accounting_failure`
+/// keeps the two equal), which starts first.
+pub(crate) const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(3);
+
 impl Config {
     pub fn from_env() -> Result<Self> {
         let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL is required")?;
@@ -610,7 +616,7 @@ impl Config {
     pub async fn connect(&self) -> Result<sqlx::PgPool> {
         PgPoolOptions::new()
             .max_connections(self.database_max_connections)
-            .acquire_timeout(Duration::from_secs(3))
+            .acquire_timeout(ACQUIRE_TIMEOUT)
             .connect(&self.database_url)
             .await
             .context("could not connect to PostgreSQL")

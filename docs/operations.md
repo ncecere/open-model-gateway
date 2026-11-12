@@ -366,6 +366,7 @@ There are no workspace, key, user, request IDs, or prompt and response data in a
 | `gateway_upstream_time_to_first_token_seconds` | histogram | `provider`, `model` (streams) |
 | `gateway_inference_tokens_total` | counter | `provider`, `model`, `direction` (provider-reported only; unknown usage is not counted as zero) |
 | `gateway_settlements_total` | counter | `outcome`: `settled` (exact cost), `unknown` (hold retained), `held` (finalization failed or timed out after 3 s; the reservation stays pending until reconciliation) |
+| `gateway_accounting_failures_total` | counter | `stage`, `cause`. One increment, and one `WARN` log line with the same two fields, for each failed accounting operation: the cause of `503 accounting_unavailable`. Both labels are fixed lists (5 stages and 16 causes, so at most 80 label combinations); no SQL, SQLSTATE, message or identifier. No series exists until the first failure. See [Accounting failures](#accounting-failures). |
 | `gateway_admission_seconds` | histogram | `phase`, `outcome`. Wall-clock time of each phase of a durable interactive admission transaction: `queue` (in-process wait for an admission slot), `connect` (pool acquire and `BEGIN`), `locks` (scoped: the shared catalog and authority locks, one statement; global: the installation row lock wait), `price` (global mode only: shared catalog lock and latest price, before the installation lock), `read` (scoped: latest price, live authorization and the deployment check with the admission clock; global: authorization and deployment check), `lock_rows` (scoped: the workspace's and lineage's totals and counter rows, the wait for other admissions of the same workspace), `limits` (policies, budgets with their totals and the rate counters, one statement), `write` (execution, reservation and hold in one statement with trigger fan-out), `commit`, and `total`. Scoped admissions of one workspace serialize from `lock_rows` to `commit`; in the global mode everything from `locks` to `commit` is serialized installation-wide. Settlement phases: `queue`, `connect`, `locks` (its reservation row), `read`, `lock_rows` (its totals rows), `write`, `commit`. `outcome` is `admitted`, `denied` (a limit or budget denial), `rejected` (other refusals such as an unavailable model) or `error` (database failure). Phases after an early return are not observed. Buckets run from 100 µs to about 52 s. Batch-line and realtime-window admissions are not included. |
 | `gateway_settlement_seconds` | histogram | `phase` (`queue`, `connect`, `locks`, `read`, `lock_rows`, `write`, `commit`, `total`), `outcome` (`settled`, `unknown`, `replay`, `conflict`, `error`). Terminal settlement of an interactive attempt (`finish`); a replay stops after `locks`. |
 | `gateway_lock_deadlock_retries_total` | counter | `path` (`admission`, `settlement`, `reconciliation`). Governance transactions re-run after PostgreSQL aborted them as a deadlock victim (SQLSTATE 40P01; at most two re-runs, never of upstream work). The canonical lock order keeps it at 0; a rise means a session changed authority scopes out of order. |
@@ -389,6 +390,46 @@ There are no workspace, key, user, request IDs, or prompt and response data in a
 | `gateway_file_store_bytes_total` | counter | `backend`, `op` (`put`; `get` counts objects read to the end). Plaintext bytes. |
 
 Gauges and counters are per replica. Aggregate them with `sum`. The reservation gauge counts the whole installation and is exported by one replica (the `metrics` lease holder); `max` across replicas is the safest aggregation.
+
+### Accounting failures
+
+`gateway_accounting_failures_total{stage,cause}` says why accounting failed. On a request the client sees `503 accounting_unavailable` (for a stream that already started, an error event instead of a normal end).
+
+| `stage` | Where it failed |
+|---|---|
+| `route_lookup` | The reads before admission: the eligible deployments and the routing plan (connection, `BEGIN` and statements alike). |
+| `pool_acquire_and_begin` | Taking a pooled connection and `BEGIN` for an accounting transaction. Also an accounting statement run without a transaction that got no connection (a pool timeout or a closed pool). |
+| `governance_storage` | Any later statement of an accounting transaction, including `COMMIT`. It also covers a statement run directly on the pool once it has a connection. An error raised while opening a new connection for such a statement, other than a pool timeout or a closed pool (an authentication, TLS or I/O failure during connect), is counted here although no statement ran; that is a known limit. |
+| `explicit_settlement` | The 3 s deadline of a settlement the request waited for. |
+| `cancellation_settlement` | The same deadline for the detached settlement of a cancelled request; no response carries it. |
+
+| `cause` | Meaning |
+|---|---|
+| `pool_timeout` | No connection within the acquire timeout (3 s): every pooled connection was busy, or a new connection could not be opened in time (connection refused, the server at its connection limit or still starting, or a slow connect). sqlx retries those refusals until the timeout, so they appear here and not under their own SQLSTATE. |
+| `pool_closed` | The pool is closed (shutdown). |
+| `lock_timeout` | SQLSTATE 55P03. |
+| `statement_timeout` | SQLSTATE 57014: `statement_timeout` or a cancel request. |
+| `backend_terminated` | SQLSTATE 57P01. |
+| `deadlock` | SQLSTATE 40P01, only after the re-runs counted by `gateway_lock_deadlock_retries_total` were used up. |
+| `read_only_transaction` | SQLSTATE 25006: a write reached a read-only server (a standby, or the old primary after a failover). |
+| `other_database` | Any other SQLSTATE; the code itself is never exported. |
+| `io`, `tls`, `protocol`, `worker_crashed`, `other` | The driver's other error kinds. |
+| `deadline_in_queue` | The settlement deadline elapsed while the settlement waited for its in-process slot (the settlement gate). |
+| `deadline_acquiring_connection` | The deadline elapsed while the settlement was waiting for a pooled connection (a busy pool, or a new connection not opened in time) or for `BEGIN`. |
+| `deadline_in_database` | The deadline elapsed inside the settlement transaction: a lock or statement wait. |
+
+There are 5 stages and 16 causes, so at most 80 label combinations. The code narrows that: the first three stages take only the first thirteen causes and the two settlement stages only the three `deadline_*` causes (at most 3 × 13 + 2 × 3 = 45), and not every one of those occurs in practice. A settlement that fails with a database error within its deadline is counted once, at the stage of that error; one that times out is counted once, at its settlement stage. The settlement deadline and the pool's acquire timeout are both 3 s and the deadline starts first, so a starved pool at settlement appears as `explicit_settlement` with `deadline_acquiring_connection` (when the two expire together it can instead be `pool_acquire_and_begin` with `pool_timeout`), and at admission or route lookup as `pool_timeout`. That holds for the settlements that hold a settlement-gate permit: the gate admits at most three tenths of the pool's connections at a time (a quarter with `GATEWAY_ADMISSION_MODE=global`; at least one; `LockGates::for_pool` in `apps/gateway/src/governance.rs`). Settlements queued behind them report `deadline_in_queue`, which therefore also follows from a starved pool or a slow database.
+
+Counted, besides interactive requests, so the counter can be higher than the number of 503 responses:
+
+- reconciliation of expired holds;
+- batch and job accounting done through `governance::batch` and `governance::jobs` (admission, settlement, lease extension, price preview), and the route lookups of the job runner;
+- database errors in realtime session accounting;
+- an operator's usage reconciliation through the management API, which answers `503 Reconciliation unavailable`.
+
+Not covered: realtime accounting deadlines (a realtime accounting step that exceeds its own 5 s or 3 s timeout), database errors in the job runner itself (`jobs/*`), and `accounting_unavailable` from an internal consistency check, which has no database cause.
+
+The `WARN` line `accounting unavailable` has only the fields `stage` and `cause`. It carries the request's log span (`request_id`, `method`) when the failure happens before the response headers are sent: the route lookup, admission, the settlement of a response that is not streamed, and the opening of a realtime session. It carries no `request_id` for the settlement of a streamed response (it runs while the body is sent), the detached settlement of a cancelled request, a realtime session after its upgrade, and background work.
 
 ### Alerting and dashboards
 

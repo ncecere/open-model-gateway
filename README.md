@@ -105,13 +105,14 @@ npm run typecheck:web
 npm run test:web
 npm run test:demo
 npm run test:container   # builds the image; needs Docker
+npm run test:supply-chain   # needs Bash 4.4+ first on PATH (macOS's /bin/bash 3.2 is refused)
 npm run test:staging
 npm run build:web
 # Playwright + axe against a disposable database on 54339 (never the demo):
 npm run test:browser
 ```
 
-Mock-provider and SDK tests require no paid calls or real enterprise IdP modifications. See [staging](docs/staging.md) for restricted runtime roles, the image, TLS rehearsal and backup/restore tooling, and [Kubernetes](docs/kubernetes.md) for the Helm chart (explicit migration Job, optional CloudNativePG Cluster/Pooler, NetworkPolicy, loadtest profile). **Use a new enterprise staging database; do not run initialization against an existing legacy deployment.** Production load/availability, real-provider certification, live IdP/SCIM acceptance, observability and off-host recovery acceptance remain unfinished.
+Mock-provider and SDK tests require no paid calls or real enterprise IdP modifications. See [staging](docs/staging.md) for restricted runtime roles, the image, TLS rehearsal and backup/restore tooling, and [Kubernetes](docs/kubernetes.md) for the Helm chart (explicit migration Job, optional CloudNativePG Cluster/Pooler, NetworkPolicy, loadtest profile). **Use a new enterprise staging database; do not run initialization against an existing legacy deployment.** Production load/availability, real-provider certification, full live IdP acceptance, observability and off-host recovery acceptance remain unfinished. Live SCIM acceptance has passed once, against Authentik on v0.9.1 ([SCIM](docs/scim.md#operations-and-limits)), and has not been repeated on a later release.
 
 ## Releases and security
 

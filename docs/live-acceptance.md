@@ -21,7 +21,7 @@ Provide issuer URL, client ID, staging origin, public/confidential client type, 
 - Verify new ordinary identity behavior and explicit linking for a pre-provisioned email. An email-only match must not bypass linking approval.
 - Create a separate test organization/team/project. Verify platform admin, org admin, shared-workspace admin and member access, including negative API requests—not just hidden navigation.
 - Verify a personal workspace's keys, requests, sessions and files remain owner-private, even from another operator. Platform Admins and Auditors may see its identity with its usage, cost and storage totals and its platform-managed configuration (policy/limits, catalog overrides), and nothing else.
-- Exercise the issuer's signing-key rotation: publish a new key, sign in with it without restarting the gateway (one rate-limited JWKS refetch), and confirm Admin › Settings › Sign-in shows the refreshed keys. If SCIM is enabled, also run [SCIM](scim.md) provisioning and deactivation against the real provider.
+- Exercise the issuer's signing-key rotation: publish a new key, sign in with it without restarting the gateway (one rate-limited JWKS refetch), and confirm Admin › Settings › Sign-in shows the refreshed keys. If SCIM is enabled, also run [SCIM](scim.md) provisioning and deactivation against the real provider. First sign in as the bootstrap administrator and create the group mapping, in the order given in [Before the first push](scim.md#before-the-first-push-bootstrap-admin-and-group-mapping); that section also describes the expected denial for a pushed user with no grant.
 
 ## 3. One model/provider first
 
