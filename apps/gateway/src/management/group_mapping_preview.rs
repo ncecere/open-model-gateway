@@ -329,7 +329,7 @@ async fn preview_existing_mapping(
 /// Matching is exact (review #89 item 4): the real reconciliation
 /// (`lifecycle::apply_group_grants`) compares `group_value` by equality,
 /// never case-folded, and SCIM's own membership resolution
-/// (`scim::managed_values`/`member_values`) matches `scim_groups`'
+/// (`scim::groups::managed_values`/`member_values`) matches `scim_groups`'
 /// `display_name`/`external_id` the same exact way. `scim_issuer` (review
 /// #89 item 2) is the one issuer SCIM is actually bound to; a mapping
 /// proposed under any other issuer can never receive SCIM-sourced grants in
