@@ -266,6 +266,7 @@ impl Request {
         }
         Ok(())
     }
+    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     pub(super) fn normalize(self) -> Result<ChatRequest> {
         let temperature = self.temperature.flatten();
         let top_p = self.top_p.flatten();

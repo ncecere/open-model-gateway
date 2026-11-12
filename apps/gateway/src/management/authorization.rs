@@ -331,6 +331,7 @@ fn audit_unavailable() -> ApiError {
 /// unaudited attempt go out silently. A `BrowserPrincipal` is never
 /// manufactured: the handler extension inserted below (only when the route
 /// is admitted and token-ready) is `ManagementPrincipal::AdminToken`.
+#[cfg_attr(not(test), expect(clippy::cognitive_complexity, reason = "#499"))]
 async fn handle_admin_token(
     s: Store,
     context: AdminTokenContext,

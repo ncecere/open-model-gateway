@@ -324,6 +324,7 @@ async fn accepts(files: &FileStorage, purpose: Purpose) -> Result<(), UploadErro
 /// user file), the trailing fields are read, and the file is then committed,
 /// moved to the right purpose (a streamed re-encryption, never buffered) or
 /// discarded.
+#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 pub async fn receive<S, E>(
     files: &FileStorage,
     who: Uploader,

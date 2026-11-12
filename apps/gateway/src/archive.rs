@@ -245,6 +245,10 @@ async fn archive_at(
     result
 }
 
+#[cfg_attr(
+    not(test),
+    expect(clippy::too_many_lines, clippy::cognitive_complexity, reason = "#499")
+)]
 async fn archive_in(
     conn: &mut PgConnection,
     req: &Request,

@@ -65,6 +65,7 @@ pub fn router_with_identity(
     build_router(store, web, engine, Some(identity))
 }
 
+#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 fn build_router(
     store: Store,
     web: Option<WebAssets>,

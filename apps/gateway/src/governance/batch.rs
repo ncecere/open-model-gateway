@@ -240,6 +240,7 @@ pub async fn admit_batch(
     crate::metrics::observe_admission(&result.as_ref().map(|_| ()).map_err(|e| *e));
     result
 }
+#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 async fn admit_batch_unobserved(
     store: &Store,
     record: &ExecutionStart,
@@ -393,6 +394,7 @@ pub async fn admit_line(
     result
 }
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 async fn admit_line_unobserved(
     store: &Store,
     batch: LineContext,

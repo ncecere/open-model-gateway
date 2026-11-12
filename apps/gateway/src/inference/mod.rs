@@ -483,6 +483,7 @@ impl Engine {
             .await
     }
 
+    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     pub async fn execute_protocol(
         &self,
         principal: Principal,

@@ -595,6 +595,10 @@ fn push_warning(out: &mut Value, w: &str) {
     }
 }
 /// Pure mapping from one catalog model (+ image endpoint body) to a v3 draft.
+#[cfg_attr(
+    not(test),
+    expect(clippy::too_many_lines, clippy::cognitive_complexity, reason = "#499")
+)]
 pub(crate) fn map(model: &Value, workload: WorkloadKind, images: Option<&[u8]>) -> Value {
     let pricing = &model["pricing"];
     let mut d = Draft {

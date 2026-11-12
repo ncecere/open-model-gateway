@@ -62,6 +62,7 @@ impl Jobs {
             .await
     }
 
+    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     async fn submit_native(&self, job: JobRow) -> JobResult<()> {
         if !store::claim_submit(&self.store, job.id).await? {
             return Ok(());
@@ -228,6 +229,7 @@ impl Jobs {
         Ok(ids)
     }
 
+    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     async fn collect_native(
         &self,
         job: JobRow,

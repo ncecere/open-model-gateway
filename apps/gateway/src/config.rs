@@ -437,6 +437,7 @@ impl Environment {
 pub(crate) const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(3);
 
 impl Config {
+    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     pub fn from_env() -> Result<Self> {
         let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL is required")?;
         let listen = std::env::var("GATEWAY_LISTEN")

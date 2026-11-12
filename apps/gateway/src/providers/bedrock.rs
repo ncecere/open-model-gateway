@@ -214,6 +214,7 @@ struct Input {
     tools: Option<aws::ToolConfiguration>,
 }
 
+#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 fn encode(request: &ChatRequest) -> Result<Input> {
     super::messages::validate(request, super::messages::ProviderClass::Bedrock)?;
     let invalid = || InferenceError::InvalidRequest;

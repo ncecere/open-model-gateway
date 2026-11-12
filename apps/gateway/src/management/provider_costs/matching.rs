@@ -107,6 +107,10 @@ fn model_matches(binding: &Binding, model: &str, o: &Observation) -> bool {
             || o.reported_upstream_model == o.upstream_model)
 }
 
+#[cfg_attr(
+    not(test),
+    expect(clippy::too_many_lines, clippy::cognitive_complexity, reason = "#499")
+)]
 pub(super) async fn snapshot(
     tx: &mut Transaction<'_, Postgres>,
     import_id: Uuid,

@@ -753,6 +753,10 @@ async fn admit_checked(
     result
 }
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(
+    not(test),
+    expect(clippy::too_many_lines, clippy::cognitive_complexity, reason = "#499")
+)]
 async fn admit_unobserved(
     store: &Store,
     record: &ExecutionStart,
@@ -1402,6 +1406,7 @@ fn cache_bound_violated(
         (_, CacheRate::Priced { .. }) => false,
     }))
 }
+#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 async fn pinned_value(
     tx: &mut Tx<'_>,
     r: &Reservation,
@@ -1949,6 +1954,7 @@ pub async fn resolve_usage(
         resolve_usage_once(store, workspace, execution, usage, evidence, actor).await
     )
 }
+#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 async fn resolve_usage_once(
     store: &Store,
     workspace: Uuid,

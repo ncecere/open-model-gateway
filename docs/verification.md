@@ -15,6 +15,7 @@ Run from the repository root. None of them make paid provider calls or touch the
 | `npm run test:browser` | Playwright end-to-end journey and axe accessibility scans (below) | Disposable PostgreSQL, Rust, Chromium (`npx playwright install chromium`) |
 | `npm run test:demo` | Local demo issuer and runtime helper | Node, Python 3 |
 | `npm run test:ci` | CI graph/refusal policy and synthetic Cargo/libtest discovery, exact-once sharding and execution counts (no Rust builds) | Node 22, `npm ci` |
+| `npm run test:structure` | [Structure ratchet](#structure-ratchet): production lines per gateway source file against the checked-in allowance list, the Clippy switches and marker count, and unit tests of each rule (reads files only; no Rust build) | Node 22 |
 | `npm run test:supply-chain` / `node --test tests/oci-tool.test.mjs` | Supply-chain policy (below): action and image pins, write-token allowlist, checksummed downloads, and the workflow `run:` scripts and helper scripts run as fixtures against stand-in tools (nothing is downloaded, published or signed) | Node 22, `npm ci`, Python 3, `jq`, Git, and **Bash 4.4 or newer first on `PATH`** ([Bash for the shell fixtures](#bash-for-the-shell-fixtures)) |
 | `npm run test:container` | Runtime image contract (`tests/container-image.test.mjs`): distroless (no shell, package manager, curl, perl, Node or Cargo), UID 10001, read-only root filesystem, `_FILE` secret import and refusal, `serve` never migrates, explicit `migrate`, exec-form `healthcheck`, graceful `SIGTERM` as PID 1 | Docker, Node; builds the image unless `OMG_CONTAINER_IMAGE` names one; uses a throwaway `mirror.gcr.io/library/postgres:17-alpine` on an internal network |
 | `npm run test:staging` | Staging (including the runtime-image checks of `verify`), provider-acceptance and backup helpers | Python 3 |
@@ -119,6 +120,67 @@ This exists because CI and local development can otherwise drift onto different 
 4. Run the full local gates in [Test commands](#test-commands) above on the newly pinned version before opening the PR; `tests/supply-chain.test.mjs` also runs as part of `npm run test:supply-chain`.
 
 An optional non-blocking scheduled job on the floating `stable` channel would give early warning of an upcoming deprecation, but it would need its own job with a read-only token and no secrets, distinct from the pinned jobs above; none exists yet (#354 leaves it for a follow-up rather than adding a job that is not yet verified to run safely).
+
+### Structure ratchet
+
+The gateway crate has files and functions that are too large (#499). Two checks stop them growing while they are being split. Neither changes what the gateway does.
+
+**File size** (`npm run test:structure`; `tests/structure.mjs`, `tests/structure.test.mjs`). The test counts the production lines of every `.rs` file under `apps/gateway/src` and compares them with `tests/structure-allowance.json`.
+
+- Test files are not counted. A test file is `tests.rs`, a file ending in `_tests.rs`, any file under a `tests` directory, or a module that its parent declares under `#[cfg(test)]` or `#[cfg(all(test, ...))]` (with everything in that module's directory, for example `management_openapi/`).
+- In other files every line counts, blank lines and comments included, except top-level test modules: a `#[cfg(test)]` or `#[cfg(all(test, ...))]` attribute at the start of a line followed by a `mod` item. An inline `mod x { ... }` is left out up to its closing brace. Code after it still counts. A `#[cfg(test)]` on a function, an `impl` or a `use` is counted.
+
+Three checks stop a file leaving the count by accident:
+
+- A file that is skipped as a test file may not also be declared by production code. `pub mod adv_tests;` without `#[cfg(test)]`, or a production `#[path = "..."]` into a test-only directory, fails: rename or move the file. Test names and test-only directories are not measured.
+- A measured file may not contain `rustfmt::skip`. The counting relies on rustfmt's layout.
+- Nothing under `apps/gateway/src` may be a symbolic link. Links are not followed.
+
+The rules:
+
+1. A file with more than 800 production lines must be in `files`, and may not exceed its ceiling there.
+2. A ceiling may be at most 50 lines above the file's real size.
+3. A listed file that is at or under 800 lines, or that no longer exists, must be removed.
+4. The list only shrinks. Every entry in `files` must also be in `baseline`, with a ceiling no higher than the baseline value. An entry in `baseline` with no entry in `files` must be deleted, so a file taken off the list stays off.
+
+To lower an allowance after shrinking a file, set its number in `files` to the new size that the failure message prints. Leave `baseline` alone. When the file reaches 800 lines or fewer, delete its entry from both `files` and `baseline`. Never add an entry and never raise a number: split the file instead.
+
+**Splitting a listed file.** A listed file cannot be renamed while it is still over 800 lines: rule 3 refuses the old path and rule 1 refuses the new one. Keep the file at its path and move code out into child modules (`x.rs` plus `x/part.rs`). Lower its ceiling as it shrinks.
+
+The test also reads the raw text of the list and fails when a key is written twice in one section. `JSON.parse` would keep the last one and say nothing.
+
+The limit of rule 4: `baseline` is a second copy in the same file, not git history. Someone can edit both copies in one commit and the test will pass. The test does not prevent that. It makes it visible: any added line or raised number in `baseline` shows in the diff, and a reviewer must refuse it. The same holds for the `800` and `50` constants in `tests/structure.mjs`.
+
+**Function length and complexity** (Clippy). `apps/gateway/src/lib.rs` and `apps/gateway/src/main.rs` turn on `clippy::too_many_lines` and `clippy::cognitive_complexity` for the non-test build, at Clippy's default thresholds (there is no threshold setting in `clippy.toml`, and none may be added). CI runs Clippy with `-D warnings`, so a new offender fails the build. Test code is not checked.
+
+Each function that offended when this landed carries a marker directly above it:
+
+```rust
+#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
+```
+
+`expect` works in both directions. A new long function fails because it has no marker. A marked function that no longer offends also fails (`this lint expectation is unfulfilled`), so the marker has to be deleted in the commit that fixes the function. To find the remaining work, search for `reason = "#499"`.
+
+Do not add a marker to new code, and do not use `allow`. Clippy does the checking. `npm run test:structure` checks that its switches are still on:
+
+- `lib.rs` and `main.rs` each contain the crate line `#![cfg_attr(not(test), warn(clippy::too_many_lines, clippy::cognitive_complexity))]`.
+- `apps/gateway/clippy.toml` sets neither `too-many-lines-threshold` nor `cognitive-complexity-threshold`. A `clippy.toml` or `.clippy.toml` at the repository root is checked too if one appears.
+- Under `apps/gateway/src`, `clippy::too_many_lines` and `clippy::cognitive_complexity` are named only on the two crate lines and in markers. A marker is the attribute above, for one lint or both, on one line or in the four-line form rustfmt writes. An `allow`, another level, another reason or a comment that names a lint fails. So does `reason = "#499"` on anything else.
+- The number of markers equals `markers` in `tests/structure-allowance.json` (58 when this landed), and `markers` may not exceed `markersBaseline`.
+
+When you remove a marker, lower `markers` by one in the same commit. Leave `markersBaseline` alone. Never add a marker and never raise either number. As with `baseline`, someone can raise both numbers in one commit; the diff shows it and a reviewer must refuse it.
+
+The thresholds are Clippy's, so a toolchain bump may change which functions offend; handle that in the bump's own PR ([Rust toolchain](#rust-toolchain)).
+
+**Known limits.** The ratchet stops accidental growth. It does not resist someone who sets out to get around it. Nothing enforces the following; review must catch them:
+
+- Code pulled in with `include!`, or with a `#[path]` to a file that does not end in `.rs`, is not counted.
+- A `#[cfg(test)]` line inside a block comment, a string literal or a macro body can confuse the line counter. Every such case found so far had to be constructed on purpose.
+- A `mod x;` declared inside an inline module (not at the start of a line) is not followed when deciding which files are test-only or declared by production code.
+- Clippy does not see a long body moved into a `macro_rules!`, or a long closure or block in a `static` or `const` initialiser.
+- Clippy does not lint code that is compiled only without the `integration-tests` feature. #502 tracks linting the default build.
+- An `allow` of a whole Clippy group (`clippy::pedantic`, `clippy::nursery`, `clippy::all`) placed after the crate line could switch the lints off without naming them.
+- Only `apps/gateway/src` is covered. Other crates and `build.rs` are not.
 
 ### No Docker Hub pulls in CI
 

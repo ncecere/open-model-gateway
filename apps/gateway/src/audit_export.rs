@@ -1054,6 +1054,10 @@ fn backoff(attempts: i32) -> f64 {
 }
 
 /// Deliver the oldest queued events once (the lease holder's loop calls it).
+#[cfg_attr(
+    not(test),
+    expect(clippy::too_many_lines, clippy::cognitive_complexity, reason = "#499")
+)]
 pub async fn deliver_once(
     store: &Store,
     exporter: &Exporter,
@@ -1231,6 +1235,7 @@ pub async fn status(store: &Store) -> Result<Value, sqlx::Error> {
 /// and back, instead of naming the destination on every attempt. A
 /// webhook/syslog destination's host is unchanged: named on every failure,
 /// which is what operators rely on to triage a misconfigured destination.
+#[cfg_attr(not(test), expect(clippy::cognitive_complexity, reason = "#499"))]
 fn log_delivery_outcome(outcome: &Outcome, exporter: &Exporter, otlp_failing: &Cell<bool>) {
     match *outcome {
         Outcome::Failed(category) if exporter.transport() == "otlp" => {

@@ -352,6 +352,7 @@ impl Engine {
     /// Execute one non-generation workload with per-attempt admission and
     /// explicit failover. Unsupported model/protocol pairs fail before any
     /// admission or dispatch.
+    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     pub async fn execute_workload<W: Workload>(
         &self,
         principal: Principal,

@@ -177,6 +177,7 @@ fn thresholds(values: Option<Vec<i32>>) -> Result<Vec<i32>, ApiError> {
 }
 
 /// Strict validation; `workspace` selects the narrower workspace-rule shape.
+#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 pub(super) fn validate(b: RuleInput, workspace: bool) -> Result<Valid, ApiError> {
     let name = b.name.trim().to_owned();
     if !valid_name(&name) {

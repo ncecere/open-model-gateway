@@ -149,6 +149,8 @@ test("special probes retain sequential ACL, exact contention/terminal, Docker an
   ]);
   assert.equal(job.steps.find(s => s.run?.includes("--test filestore_s3")).env.FILESTORE_REQUIRE_DOCKER, "1");
   assert.ok(runs(loadWorkflow().jobs.web).includes("npm run test:ci"));
+  // The file-size ratchet (#500) only holds while CI runs it.
+  assert.ok(runs(loadWorkflow().jobs.web).includes("npm run test:structure"));
   // The web job installs the same pinned age, once, before the staging tests that use it (#491).
   const webRuns = runs(loadWorkflow().jobs.web);
   assert.equal(webRuns.filter(run => run === AGE_INSTALL).length, 1);

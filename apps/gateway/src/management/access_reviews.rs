@@ -175,6 +175,7 @@ pub(super) async fn items(
 
 /// `POST /api/v1/platform/access-reviews`: starts a campaign and snapshots
 /// its items in one statement.
+#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 pub(super) async fn create(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
@@ -568,6 +569,7 @@ type RemovalTarget = (
 /// keys (slice 6): the revoke path, every key of the lineage revoked).
 /// A refused removal records nothing. Locks before any check or write; the
 /// same 404 as any decision for an item the viewer may not decide.
+#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 async fn remove(
     s: &Store,
     u: &BrowserPrincipal,

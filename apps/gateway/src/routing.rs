@@ -178,6 +178,7 @@ const POLICY_SQL: &str = r#"SELECT r.strategy, r.max_attempts, r.allow_ambiguous
 /// and passive health read at most once per [`crate::cache::HEALTH_TTL`]
 /// (this replica's own results invalidate it at once). Candidates missing
 /// from the snapshot are dropped, as the live join drops them.
+#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 async fn cached_inputs(
     store: &Store,
     principal: &Principal,

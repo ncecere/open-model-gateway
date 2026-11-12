@@ -140,6 +140,7 @@ fn item_metadata(item: &Value, nullable: bool) -> Result<()> {
     Ok(())
 }
 impl Request {
+    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     fn normalize(self) -> Result<ChatRequest> {
         if self.store || self.text.is_some_and(|t| t.format.kind != "text") {
             return Err(InferenceError::InvalidRequest);

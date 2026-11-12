@@ -1,4 +1,8 @@
 #![deny(unsafe_code)]
+// Structure ratchet (#499, docs/verification.md): no new long or tangled function
+// in the non-test build. Today's offenders carry an `expect` that names #499;
+// remove the marker when the function is fixed. Never `allow`, never a threshold.
+#![cfg_attr(not(test), warn(clippy::too_many_lines, clippy::cognitive_complexity))]
 
 use std::sync::Arc;
 
@@ -363,6 +367,10 @@ async fn wait_for_database(config: &Config, schema: bool, timeout_seconds: u64) 
 /// production.
 const DEFAULT_LOG_FILTER: &str = "open_model_gateway=info";
 
+#[cfg_attr(
+    not(test),
+    expect(clippy::too_many_lines, clippy::cognitive_complexity, reason = "#499")
+)]
 async fn run(cli: Cli, process_start_unix_nano: u64) -> Result<()> {
     tracing_subscriber::fmt()
         .json()

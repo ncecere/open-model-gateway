@@ -18,6 +18,7 @@ pub(super) struct State {
     ids: BTreeSet<String>,
 }
 impl State {
+    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     pub(super) fn push(&mut self, event: aws::ConverseStreamOutput) -> Result<Vec<ChatEvent>> {
         use aws::ConverseStreamOutput as E;
         let invalid = || InferenceError::InvalidUpstream;

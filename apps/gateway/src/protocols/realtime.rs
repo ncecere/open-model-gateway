@@ -820,6 +820,10 @@ fn is_output_delta(text: &str) -> bool {
     })
 }
 
+#[cfg_attr(
+    not(test),
+    expect(clippy::too_many_lines, clippy::cognitive_complexity, reason = "#499")
+)]
 async fn proxy(socket: WebSocket, mut session: RealtimeSession) {
     let Some(mut upstream) = session.take_upstream() else {
         let _ = session
