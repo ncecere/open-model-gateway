@@ -160,6 +160,7 @@ impl ProviderAdapter for AnthropicAdapter {
         )))
     }
 }
+#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 fn encode(model: &str, request: &ChatRequest) -> Result<Value> {
     super::messages::validate(request, super::messages::ProviderClass::Anthropic)?;
     if request
@@ -377,6 +378,7 @@ enum BlockKind {
     Redacted,
 }
 impl State {
+    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     fn push(&mut self, value: Value) -> Result<Vec<ChatEvent>> {
         if self.done {
             return Err(InferenceError::InvalidUpstream);

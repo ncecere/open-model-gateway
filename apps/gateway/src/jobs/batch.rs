@@ -175,6 +175,7 @@ impl Jobs {
     /// `POST /v1/batches`: validate the input, choose the mode and admit the
     /// batch's ceiling (one "Jobs at once" slot). Nothing is sent upstream
     /// here; the runner/poller starts the work.
+    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     pub async fn create_batch(
         &self,
         principal: Principal,

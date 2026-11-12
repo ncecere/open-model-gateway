@@ -651,6 +651,7 @@ pub fn upload_router(identity: IdentityState) -> Router<Store> {
             authenticate_management,
         ))
 }
+#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 fn routes() -> Router<Store> {
     Router::new()
         .merge(scheduled_reports::routes())

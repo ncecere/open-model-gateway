@@ -71,6 +71,7 @@ pub(super) fn decode(s: &str) -> Result<String, ApiError> {
         .map_err(|_| invalid())
 }
 impl Filters {
+    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     fn parse(raw: Option<String>, details: bool, csv: bool) -> Result<Self, ApiError> {
         let mut params = HashMap::new();
         if let Some(raw) = raw {
@@ -264,6 +265,7 @@ fn cost_centers() -> String {
         "(SELECT coalesce(jsonb_agg(v ORDER BY v->>'name',v->>'id'),'[]'::jsonb) FROM (SELECT jsonb_build_object('id',cost_center_id::text,'name',coalesce(min(cost_center_name),'Unallocated'),'totals',{TOTALS}) v FROM rows GROUP BY cost_center_id ORDER BY min(cost_center_name),cost_center_id LIMIT 100) b)"
     )
 }
+#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 async fn report(
     tx: &mut Transaction<'_, Postgres>,
     f: &Filters,

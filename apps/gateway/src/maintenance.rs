@@ -70,6 +70,7 @@ const SETTINGS_REFRESH: Duration = Duration::from_secs(60);
 /// `retention_days` is the environment override; without it the
 /// installation setting applies. Compaction never touches the ledger,
 /// reservations, prices or audit history.
+#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 pub fn start(store: Store, retention_days: Option<i32>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(5));

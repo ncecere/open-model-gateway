@@ -1203,6 +1203,7 @@ pub async fn evaluate_once(store: &Store) -> anyhow::Result<Option<Report>> {
 /// transaction are fenced to the term (a replica whose term ended commits
 /// nothing more). The tick lock still excludes a concurrent operator
 /// `alerts evaluate --once`.
+#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 pub async fn evaluate_once_fenced(
     store: &Store,
     fence: Option<&crate::leases::Fence>,

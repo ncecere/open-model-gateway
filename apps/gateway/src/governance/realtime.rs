@@ -166,6 +166,7 @@ pub async fn reserve_window(
         reserve_window_once(store, principal, id, model, window, armed).await
     )
 }
+#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 async fn reserve_window_once(
     store: &Store,
     principal: &Principal,

@@ -239,6 +239,7 @@ struct State {
     closed_parts: std::collections::BTreeSet<u64>,
 }
 impl State {
+    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     fn push(&mut self, value: Value) -> Result<Vec<ChatEvent>> {
         let kind = string(&value["type"])?;
         let mut events = vec![];

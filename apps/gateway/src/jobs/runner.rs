@@ -233,6 +233,7 @@ impl Runner {
         result
     }
 
+    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     async fn run_claimed(
         &self,
         job: &JobRow,
@@ -476,6 +477,7 @@ impl Runner {
         self.finalize(job, files, work, stop).await
     }
 
+    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     async fn finalize(
         &self,
         job: &JobRow,
@@ -1241,6 +1243,7 @@ impl LineRun {
 }
 
 /// Store finished lines in encrypted segments as they complete.
+#[cfg_attr(not(test), expect(clippy::cognitive_complexity, reason = "#499"))]
 async fn write_segments(
     store: Store,
     files: crate::filestore::FileStorage,

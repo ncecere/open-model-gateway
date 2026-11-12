@@ -336,6 +336,7 @@ fn management_openapi_money_raw_upload_request_vectors() {
 pub(crate) fn upload_parses(input: &serde_json::Value) -> bool {
     serde_json::from_str::<Upload>(&input.to_string()).is_ok_and(|upload| parse(&upload).is_ok())
 }
+#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 pub(super) fn parse(b: &Upload) -> Result<Parsed, ApiError> {
     let groups: BTreeSet<&str> = b.request.group_by.iter().map(String::as_str).collect();
     if !bounded(&b.account_id, 200)

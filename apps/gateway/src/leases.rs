@@ -291,6 +291,7 @@ impl Leases {
 /// Run one tick of a singleton job if this replica holds `lease`: `job`
 /// receives the fence for its transactions. Fencing failures (the term ended
 /// mid-run) are expected and reported as `fenced`.
+#[cfg_attr(not(test), expect(clippy::cognitive_complexity, reason = "#499"))]
 pub async fn run_singleton<T, F, Fut>(
     leases: &Leases,
     lease: Lease,

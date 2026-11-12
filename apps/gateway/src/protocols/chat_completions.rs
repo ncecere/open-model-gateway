@@ -119,6 +119,7 @@ fn function_name(name: &str) -> bool {
 }
 
 impl Request {
+    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     fn normalize(self) -> Result<ChatRequest, InferenceError> {
         let invalid = InferenceError::InvalidRequest;
         if self.model.trim().is_empty()

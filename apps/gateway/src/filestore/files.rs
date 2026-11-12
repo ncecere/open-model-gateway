@@ -636,6 +636,7 @@ impl FileStorage {
     /// first two steps of the write path). The purpose's Settings toggle is
     /// **not** checked: callers check [`Self::accepts`] before [`Self::commit`].
     /// Dropping the result unfinished deletes the object and the reservation.
+    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     pub(crate) async fn stage(
         &self,
         new: NewFile,

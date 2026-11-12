@@ -19,6 +19,10 @@ pub async fn seed(store: &Store, environment: Environment) -> Result<bool> {
     ensure_database(&store.pool).await?;
     seed_data(store).await
 }
+#[cfg_attr(
+    not(test),
+    expect(clippy::too_many_lines, clippy::cognitive_complexity, reason = "#499")
+)]
 async fn seed_data(store: &Store) -> Result<bool> {
     let mut tx = crate::db::begin(&store.pool).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(72419502)")

@@ -498,6 +498,7 @@ impl Engine {
     /// Admit and connect one realtime session. Failover follows the route
     /// plan only for failures before the session is returned (admission or
     /// upstream connect/configuration); every attempt is admitted separately.
+    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     pub async fn open_realtime(
         &self,
         principal: Principal,

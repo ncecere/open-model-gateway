@@ -551,6 +551,7 @@ async fn platform_deny(
 ) -> ApiResult {
     decision(&s, &u, None, id, false).await
 }
+#[cfg_attr(not(test), expect(clippy::cognitive_complexity, reason = "#499"))]
 async fn decision(
     s: &Store,
     u: &BrowserPrincipal,

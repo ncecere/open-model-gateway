@@ -505,6 +505,7 @@ impl IdentityState {
         .await
     }
 
+    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     async fn build(
         store: Store,
         config: Option<IdentityConfig>,
@@ -1133,6 +1134,7 @@ pub(crate) fn display_name(raw: &str) -> Option<String> {
     (!name.is_empty() && name.chars().count() <= 200 && !name.chars().any(char::is_control))
         .then(|| name.to_owned())
 }
+#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 async fn callback(
     State(state): State<IdentityState>,
     PeerIp(peer): PeerIp,
@@ -1323,6 +1325,10 @@ async fn resolve_identity(
 
 /// With SCIM enabled, SCIM-managed groups take their membership from SCIM, not the
 /// token: the claim is merged as (token groups not managed by SCIM) ∪ (SCIM groups).
+#[cfg_attr(
+    not(test),
+    expect(clippy::too_many_lines, clippy::cognitive_complexity, reason = "#499")
+)]
 async fn resolve_identity_with(
     store: &Store,
     issuer: &str,

@@ -1,4 +1,8 @@
 #![deny(unsafe_code)]
+// Structure ratchet (#499, docs/verification.md): no new long or tangled function
+// in the non-test build. Today's offenders carry an `expect` that names #499;
+// remove the marker when the function is fixed. Never `allow`, never a threshold.
+#![cfg_attr(not(test), warn(clippy::too_many_lines, clippy::cognitive_complexity))]
 // Test code may begin transactions directly; production code uses `db::begin`.
 #![cfg_attr(test, allow(clippy::disallowed_methods))]
 pub mod admin_tokens;

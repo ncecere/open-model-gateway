@@ -63,6 +63,10 @@ type ModelRow = (
     i64,
     i64,
 );
+#[cfg_attr(
+    not(test),
+    expect(clippy::too_many_lines, clippy::cognitive_complexity, reason = "#499")
+)]
 async fn access(
     s: Store,
     u: impl Actor,

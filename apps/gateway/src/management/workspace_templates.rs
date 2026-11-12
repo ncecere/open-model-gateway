@@ -486,6 +486,7 @@ fn assignment_plan<'a>(c: &'a Content, b: &ApplyInput) -> Result<Vec<Planned<'a>
 /// selections, the local limits (tighten-only against the live platform
 /// layers) and the slot members. Any failure rolls everything back. The
 /// application is recorded immutably; a replay returns it.
+#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 pub(super) async fn apply(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,

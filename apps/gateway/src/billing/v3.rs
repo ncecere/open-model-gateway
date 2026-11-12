@@ -561,6 +561,7 @@ pub struct Valuation {
     /// and of a complete settlement.
     pub audio: AudioTokenCostComponents,
 }
+#[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
 pub fn value(
     lines: &PriceLines,
     max: &MaxUnits,

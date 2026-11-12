@@ -350,6 +350,7 @@ pub struct AttemptObservation<'a> {
 }
 
 impl Metrics {
+    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     pub(crate) fn new() -> Self {
         let mut registry = Registry::with_prefix("gateway");
         // Pre-create every trace label once. Recording increments plain atomic
@@ -1459,6 +1460,7 @@ impl Metrics {
             .inc();
     }
 
+    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     async fn refresh(&self, store: &Store) {
         let pool = &store.pool;
         let size = i64::from(pool.size());
