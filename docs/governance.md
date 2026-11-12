@@ -142,8 +142,8 @@ Every management change that can affect an admission decision, and the locks it 
 | `management/directory.rs` workspaces (create, disable, cost center), users (create, suspend, reactivate), platform role grant/revoke, entitlement-loss deactivation, group mappings, cost centers | Platform directory | Catalog lock exclusive (last-admin checks under the installation row) |
 | `lifecycle.rs` `cleanup_inactive_accounts` | Cleanup of suspended accounts (keys, grants, memberships revoked, personal workspace disabled) | `lock_users`: personal workspaces, users, lineages of their keys |
 | `identity.rs` `resolve_identity_with` | Sign-in: group grants, entitlement loss, cleanup, account rebinding | `lock_users` for the linked account, the email's account and the id a new account gets |
-| `scim.rs` `persist_user` (create, replace, patch, delete user) | SCIM suspension or reactivation | `lock_users` for that user (last-admin check under the installation row) |
-| `scim.rs` `sync_users` (group create, replace, patch, delete) | SCIM group grants, entitlement loss | `lock_users` for every affected user |
+| `scim/users.rs` `persist_user` (create, replace, patch, delete user) | SCIM suspension or reactivation | `lock_users` for that user (last-admin check under the installation row) |
+| `scim/groups.rs` `sync_users` (group create, replace, patch, delete) | SCIM group grants, entitlement loss | `lock_users` for every affected user |
 | `bootstrap.rs` `seed`, `demo.rs` | Development seed, demo | Catalog lock exclusive |
 | `governance.rs` `resolve_usage` | Evidence-backed usage reconciliation | Shared workspace and actor-user locks, then the reservation row and its totals rows |
 
