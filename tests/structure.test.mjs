@@ -98,11 +98,22 @@ test("a module declared under #[cfg(test)] is a test file, with its directory", 
       ["#[cfg(test)]", "pub(crate) mod mock;", ""].join("\n"),
     ],
     [`${SRC}/providers/openai/mock.rs`, lines(3)],
+    // The real tree mounts management_openapi/ this way (management/mod.rs).
+    [
+      `${SRC}/management/mod.rs`,
+      ["#[cfg(test)]", "#[path = \"../contract_tree/mod.rs\"]", "pub(crate) mod openapi;", ""].join(
+        "\n",
+      ),
+    ],
+    [`${SRC}/contract_tree/mod.rs`, "pub(crate) mod vectors;\n"],
+    [`${SRC}/contract_tree/vectors.rs`, lines(3)],
   ]);
   const isTestOnly = testOnlyModules(sources);
   const testOnly = [...sources.keys()].filter(isTestOnly).sort();
   assert.deepEqual(testOnly, [
     `${SRC}/authz_matrix.rs`,
+    `${SRC}/contract_tree/mod.rs`,
+    `${SRC}/contract_tree/vectors.rs`,
     `${SRC}/management_openapi/mod.rs`,
     `${SRC}/management_openapi/quality.rs`,
     `${SRC}/management_openapi/quality/deep.rs`,
@@ -114,6 +125,7 @@ test("a module declared under #[cfg(test)] is a test file, with its directory", 
   assert.deepEqual([...measure(sources).keys()].sort(), [
     `${SRC}/auth.rs`,
     `${SRC}/lib.rs`,
+    `${SRC}/management/mod.rs`,
     `${SRC}/providers/harness.rs`,
     `${SRC}/providers/mock.rs`,
     `${SRC}/providers/mod.rs`,
