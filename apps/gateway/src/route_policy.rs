@@ -99,1426 +99,320 @@ macro_rules! route {
         }
     };
 }
-pub(crate) const ROUTES: &[Route] = &[
-    route!(
-        "GET",
-        "/api/v1/platform/report-schedules/{id}/runs",
-        PlatformRead,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/report-schedules/{id}/runs",
-        WorkspaceReportAdmin,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/report-schedules/{id}/runs/{run}/csv",
-        PlatformRead,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/report-schedules/{id}/runs/{run}/csv",
-        WorkspaceReportAdmin,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/report-schedules/{id}/runs/{run}",
-        PlatformRead,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/report-schedules/{id}/runs/{run}",
-        WorkspaceReportAdmin,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/report-schedules",
-        PlatformRead,
-        DENIED
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/report-schedules",
-        PlatformWrite,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/report-schedules/{id}",
-        PlatformRead,
-        DENIED
-    ),
-    route!(
-        "PATCH DELETE",
-        "/api/v1/platform/report-schedules/{id}",
-        PlatformWrite,
-        DENIED
-    ),
-    route!(
-        "GET POST",
-        "/api/v1/workspaces/{ws}/report-schedules",
-        WorkspaceReportAdmin,
-        DENIED
-    ),
-    route!(
-        "GET PATCH DELETE",
-        "/api/v1/workspaces/{ws}/report-schedules/{id}",
-        WorkspaceReportAdmin,
-        DENIED
-    ),
-    route!("GET", "/api/v1/auth/config", Anonymous, DENIED),
-    route!("GET", "/api/v1/auth/login", Anonymous, DENIED),
-    route!("GET", "/api/v1/auth/callback", Anonymous, DENIED),
-    route!("POST", "/api/v1/auth/logout", BrowserLogout, DENIED),
-    route!("GET", "/api/v1/branding/logo", Anonymous, DENIED),
+/// One route per line: `"METHODS" "/template" => Access, TOKEN_POLICY;`, in
+/// the order `find` searches. Each entry expands through `route!`, so it
+/// still needs all four parts. rustfmt leaves the body of a brace-delimited
+/// macro call alone, which keeps every entry on its own line.
+macro_rules! routes {
+    ($($methods:literal $path:literal => $access:ident, $token:ident;)*) => {
+        &[$(route!($methods, $path, $access, $token)),*]
+    };
+}
+pub(crate) const ROUTES: &[Route] = routes! {
+    "GET"                  "/api/v1/platform/report-schedules/{id}/runs" => PlatformRead, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/report-schedules/{id}/runs" => WorkspaceReportAdmin, DENIED;
+    "GET"                  "/api/v1/platform/report-schedules/{id}/runs/{run}/csv" => PlatformRead, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/report-schedules/{id}/runs/{run}/csv" => WorkspaceReportAdmin, DENIED;
+    "GET"                  "/api/v1/platform/report-schedules/{id}/runs/{run}" => PlatformRead, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/report-schedules/{id}/runs/{run}" => WorkspaceReportAdmin, DENIED;
+    "GET"                  "/api/v1/platform/report-schedules" => PlatformRead, DENIED;
+    "POST"                 "/api/v1/platform/report-schedules" => PlatformWrite, DENIED;
+    "GET"                  "/api/v1/platform/report-schedules/{id}" => PlatformRead, DENIED;
+    "PATCH DELETE"         "/api/v1/platform/report-schedules/{id}" => PlatformWrite, DENIED;
+    "GET POST"             "/api/v1/workspaces/{ws}/report-schedules" => WorkspaceReportAdmin, DENIED;
+    "GET PATCH DELETE"     "/api/v1/workspaces/{ws}/report-schedules/{id}" => WorkspaceReportAdmin, DENIED;
+    "GET"                  "/api/v1/auth/config" => Anonymous, DENIED;
+    "GET"                  "/api/v1/auth/login" => Anonymous, DENIED;
+    "GET"                  "/api/v1/auth/callback" => Anonymous, DENIED;
+    "POST"                 "/api/v1/auth/logout" => BrowserLogout, DENIED;
+    "GET"                  "/api/v1/branding/logo" => Anonymous, DENIED;
     // Unauthenticated, optional separate listener; never mounted on the public router.
-    route!("GET", "/metrics", Anonymous, DENIED),
-    route!("GET", "/health/live", Health, DENIED),
-    route!("GET", "/health/ready", Health, DENIED),
-    route!("GET", "/v1/models", InferenceKey, DENIED),
-    route!("POST", "/v1/chat/completions", InferenceKey, DENIED),
-    route!("POST", "/v1/responses", InferenceKey, DENIED),
+    "GET"                  "/metrics" => Anonymous, DENIED;
+    "GET"                  "/health/live" => Health, DENIED;
+    "GET"                  "/health/ready" => Health, DENIED;
+    "GET"                  "/v1/models" => InferenceKey, DENIED;
+    "POST"                 "/v1/chat/completions" => InferenceKey, DENIED;
+    "POST"                 "/v1/responses" => InferenceKey, DENIED;
     // Also /v1/messages?beta=true: queries never widen this exact POST template.
-    route!("POST", "/v1/messages", InferenceKey, DENIED),
-    route!("POST", "/v1/embeddings", InferenceKey, DENIED),
-    route!("POST", "/v1/realtime/client_secrets", InferenceKey, DENIED),
-    route!("POST", "/v1/realtime/calls", InferenceKey, DENIED),
-    route!("POST", "/v1/images/generations", InferenceKey, DENIED),
-    route!("POST", "/v1/rerank", InferenceKey, DENIED),
-    route!("POST", "/v1/systemone", InferenceKey, DENIED),
-    route!("POST", "/v1/audio/transcriptions", InferenceKey, DENIED),
-    route!("POST", "/v1/audio/speech", InferenceKey, DENIED),
-    route!("GET POST", "/v1/videos", InferenceKey, DENIED),
-    route!("GET DELETE", "/v1/videos/{id}", InferenceKey, DENIED),
-    route!("GET", "/v1/videos/{id}/content", InferenceKey, DENIED),
-    route!("GET POST", "/v1/files", InferenceKey, DENIED),
-    route!("GET DELETE", "/v1/files/{id}", InferenceKey, DENIED),
-    route!("GET", "/v1/files/{id}/content", InferenceKey, DENIED),
-    route!("GET POST", "/v1/batches", InferenceKey, DENIED),
-    route!("GET", "/v1/batches/{id}", InferenceKey, DENIED),
-    route!("POST", "/v1/batches/{id}/cancel", InferenceKey, DENIED),
-    route!("GET", "/v1/realtime", InferenceKey, DENIED),
-    route!("GET", "/scim/v2/ServiceProviderConfig", Scim, DENIED),
-    route!("GET", "/scim/v2/ResourceTypes", Scim, DENIED),
-    route!("GET", "/scim/v2/ResourceTypes/{id}", Scim, DENIED),
-    route!("GET", "/scim/v2/Schemas", Scim, DENIED),
-    route!("GET", "/scim/v2/Schemas/{id}", Scim, DENIED),
-    route!("GET POST", "/scim/v2/Users", Scim, DENIED),
-    route!("GET PUT PATCH DELETE", "/scim/v2/Users/{id}", Scim, DENIED),
-    route!("GET POST", "/scim/v2/Groups", Scim, DENIED),
-    route!("GET PUT PATCH DELETE", "/scim/v2/Groups/{id}", Scim, DENIED),
-    route!("*", "/scim", Scim, DENIED),
-    route!("*", "/scim/{*rest}", Scim, DENIED),
-    route!(
-        "GET",
-        "/api/v1/platform/provider-cost-imports",
-        PlatformRead,
-        DENIED
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/provider-cost-imports",
-        PlatformWrite,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/provider-cost-imports/{id}",
-        PlatformRead,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/provider-cost-imports/{id}/lines",
-        PlatformRead,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/provider-cost-mappings",
-        PlatformRead,
-        DENIED
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/provider-cost-mappings",
-        PlatformWrite,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/provider-cost-mappings/{id}",
-        PlatformRead,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/provider-reconciliations",
-        PlatformRead,
-        DENIED
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/provider-reconciliations",
-        PlatformWrite,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/provider-reconciliations/{id}",
-        PlatformRead,
-        DENIED
-    ),
-    route!("GET", "/api/v1/access-request-targets", Browser, DENIED),
-    route!("GET POST", "/api/v1/me/access-requests", Browser, DENIED),
-    route!("GET", "/api/v1/me/access-requests/{id}", Browser, DENIED),
-    route!(
-        "POST",
-        "/api/v1/me/access-requests/{id}/withdraw",
-        Browser,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/access-requests",
-        WorkspaceAdmin,
-        DENIED
-    ),
-    route!(
-        "POST",
-        "/api/v1/workspaces/{ws}/access-requests/{id}/approve",
-        WorkspaceAdmin,
-        DENIED
-    ),
-    route!(
-        "POST",
-        "/api/v1/workspaces/{ws}/access-requests/{id}/deny",
-        WorkspaceAdmin,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/access-requests",
-        PlatformRead,
-        DENIED
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/access-requests/{id}/approve",
-        PlatformWrite,
-        DENIED
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/access-requests/{id}/deny",
-        PlatformWrite,
-        DENIED
-    ),
-    route!(
-        "PUT",
-        "/api/v1/platform/workspaces/{ws}/discoverable",
-        PlatformWrite,
-        DENIED
-    ),
+    "POST"                 "/v1/messages" => InferenceKey, DENIED;
+    "POST"                 "/v1/embeddings" => InferenceKey, DENIED;
+    "POST"                 "/v1/realtime/client_secrets" => InferenceKey, DENIED;
+    "POST"                 "/v1/realtime/calls" => InferenceKey, DENIED;
+    "POST"                 "/v1/images/generations" => InferenceKey, DENIED;
+    "POST"                 "/v1/rerank" => InferenceKey, DENIED;
+    "POST"                 "/v1/systemone" => InferenceKey, DENIED;
+    "POST"                 "/v1/audio/transcriptions" => InferenceKey, DENIED;
+    "POST"                 "/v1/audio/speech" => InferenceKey, DENIED;
+    "GET POST"             "/v1/videos" => InferenceKey, DENIED;
+    "GET DELETE"           "/v1/videos/{id}" => InferenceKey, DENIED;
+    "GET"                  "/v1/videos/{id}/content" => InferenceKey, DENIED;
+    "GET POST"             "/v1/files" => InferenceKey, DENIED;
+    "GET DELETE"           "/v1/files/{id}" => InferenceKey, DENIED;
+    "GET"                  "/v1/files/{id}/content" => InferenceKey, DENIED;
+    "GET POST"             "/v1/batches" => InferenceKey, DENIED;
+    "GET"                  "/v1/batches/{id}" => InferenceKey, DENIED;
+    "POST"                 "/v1/batches/{id}/cancel" => InferenceKey, DENIED;
+    "GET"                  "/v1/realtime" => InferenceKey, DENIED;
+    "GET"                  "/scim/v2/ServiceProviderConfig" => Scim, DENIED;
+    "GET"                  "/scim/v2/ResourceTypes" => Scim, DENIED;
+    "GET"                  "/scim/v2/ResourceTypes/{id}" => Scim, DENIED;
+    "GET"                  "/scim/v2/Schemas" => Scim, DENIED;
+    "GET"                  "/scim/v2/Schemas/{id}" => Scim, DENIED;
+    "GET POST"             "/scim/v2/Users" => Scim, DENIED;
+    "GET PUT PATCH DELETE" "/scim/v2/Users/{id}" => Scim, DENIED;
+    "GET POST"             "/scim/v2/Groups" => Scim, DENIED;
+    "GET PUT PATCH DELETE" "/scim/v2/Groups/{id}" => Scim, DENIED;
+    "*"                    "/scim" => Scim, DENIED;
+    "*"                    "/scim/{*rest}" => Scim, DENIED;
+    "GET"                  "/api/v1/platform/provider-cost-imports" => PlatformRead, DENIED;
+    "POST"                 "/api/v1/platform/provider-cost-imports" => PlatformWrite, DENIED;
+    "GET"                  "/api/v1/platform/provider-cost-imports/{id}" => PlatformRead, DENIED;
+    "GET"                  "/api/v1/platform/provider-cost-imports/{id}/lines" => PlatformRead, DENIED;
+    "GET"                  "/api/v1/platform/provider-cost-mappings" => PlatformRead, DENIED;
+    "POST"                 "/api/v1/platform/provider-cost-mappings" => PlatformWrite, DENIED;
+    "GET"                  "/api/v1/platform/provider-cost-mappings/{id}" => PlatformRead, DENIED;
+    "GET"                  "/api/v1/platform/provider-reconciliations" => PlatformRead, DENIED;
+    "POST"                 "/api/v1/platform/provider-reconciliations" => PlatformWrite, DENIED;
+    "GET"                  "/api/v1/platform/provider-reconciliations/{id}" => PlatformRead, DENIED;
+    "GET"                  "/api/v1/access-request-targets" => Browser, DENIED;
+    "GET POST"             "/api/v1/me/access-requests" => Browser, DENIED;
+    "GET"                  "/api/v1/me/access-requests/{id}" => Browser, DENIED;
+    "POST"                 "/api/v1/me/access-requests/{id}/withdraw" => Browser, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/access-requests" => WorkspaceAdmin, DENIED;
+    "POST"                 "/api/v1/workspaces/{ws}/access-requests/{id}/approve" => WorkspaceAdmin, DENIED;
+    "POST"                 "/api/v1/workspaces/{ws}/access-requests/{id}/deny" => WorkspaceAdmin, DENIED;
+    "GET"                  "/api/v1/platform/access-requests" => PlatformRead, DENIED;
+    "POST"                 "/api/v1/platform/access-requests/{id}/approve" => PlatformWrite, DENIED;
+    "POST"                 "/api/v1/platform/access-requests/{id}/deny" => PlatformWrite, DENIED;
+    "PUT"                  "/api/v1/platform/workspaces/{ws}/discoverable" => PlatformWrite, DENIED;
     // #84: onboarding templates, browser-only Platform Admin authoring and review.
-    route!(
-        "GET",
-        "/api/v1/platform/workspace-templates",
-        PlatformRead,
-        DENIED
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/workspace-templates",
-        PlatformWrite,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/workspace-templates/{id}",
-        PlatformRead,
-        DENIED
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/workspace-templates/{id}/versions",
-        PlatformWrite,
-        DENIED
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/workspace-templates/{id}/apply",
-        PlatformWrite,
-        DENIED
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/workspace-templates/{id}/versions/{version}/review",
-        PlatformWrite,
-        DENIED
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/workspace-templates/{id}/versions/{version}/publish",
-        PlatformWrite,
-        DENIED
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/workspace-templates/{id}/versions/{version}/retire",
-        PlatformWrite,
-        DENIED
-    ),
+    "GET"                  "/api/v1/platform/workspace-templates" => PlatformRead, DENIED;
+    "POST"                 "/api/v1/platform/workspace-templates" => PlatformWrite, DENIED;
+    "GET"                  "/api/v1/platform/workspace-templates/{id}" => PlatformRead, DENIED;
+    "POST"                 "/api/v1/platform/workspace-templates/{id}/versions" => PlatformWrite, DENIED;
+    "POST"                 "/api/v1/platform/workspace-templates/{id}/apply" => PlatformWrite, DENIED;
+    "POST"                 "/api/v1/platform/workspace-templates/{id}/versions/{version}/review" => PlatformWrite, DENIED;
+    "POST"                 "/api/v1/platform/workspace-templates/{id}/versions/{version}/publish" => PlatformWrite, DENIED;
+    "POST"                 "/api/v1/platform/workspace-templates/{id}/versions/{version}/retire" => PlatformWrite, DENIED;
     // #90: access review campaigns, browser-only (Platform Admins start them;
     // Platform Admins and Auditors read).
-    route!(
-        "GET",
-        "/api/v1/platform/access-reviews",
-        PlatformRead,
-        DENIED
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/access-reviews",
-        PlatformWrite,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/access-reviews/{id}",
-        PlatformRead,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/access-reviews/{id}/items",
-        PlatformRead,
-        DENIED
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/access-reviews/{id}/close",
-        PlatformWrite,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/access-reviews/{id}/export",
-        PlatformRead,
-        DENIED
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/access-reviews/{id}/items/{item}/reviewer",
-        PlatformWrite,
-        DENIED
-    ),
+    "GET"                  "/api/v1/platform/access-reviews" => PlatformRead, DENIED;
+    "POST"                 "/api/v1/platform/access-reviews" => PlatformWrite, DENIED;
+    "GET"                  "/api/v1/platform/access-reviews/{id}" => PlatformRead, DENIED;
+    "GET"                  "/api/v1/platform/access-reviews/{id}/items" => PlatformRead, DENIED;
+    "POST"                 "/api/v1/platform/access-reviews/{id}/close" => PlatformWrite, DENIED;
+    "GET"                  "/api/v1/platform/access-reviews/{id}/export" => PlatformRead, DENIED;
+    "POST"                 "/api/v1/platform/access-reviews/{id}/items/{item}/reviewer" => PlatformWrite, DENIED;
     // #90 slice 2: each reviewer's inbox and decisions (who may decide is
     // derived live per item; anything else is 404).
-    route!("GET", "/api/v1/me/access-reviews", Browser, DENIED),
-    route!(
-        "POST",
-        "/api/v1/me/access-reviews/{item}/decision",
-        Browser,
-        DENIED
-    ),
-    route!("GET", "/api/v1/me", Browser, DENIED),
-    route!("GET", "/api/v1/me/summary", Browser, DENIED),
-    route!("GET", "/api/v1/me/keys", Browser, DENIED),
-    route!("GET", "/api/v1/me/models", Browser, DENIED),
-    route!("GET", "/api/v1/me/export", Browser, DENIED),
-    route!("GET", "/api/v1/me/notifications", Browser, DENIED),
-    route!("GET", "/api/v1/me/notifications/summary", Browser, DENIED),
-    route!("POST", "/api/v1/me/notifications/read", Browser, DENIED),
-    route!("GET", "/api/v1/me/sessions", Browser, DENIED),
+    "GET"                  "/api/v1/me/access-reviews" => Browser, DENIED;
+    "POST"                 "/api/v1/me/access-reviews/{item}/decision" => Browser, DENIED;
+    "GET"                  "/api/v1/me" => Browser, DENIED;
+    "GET"                  "/api/v1/me/summary" => Browser, DENIED;
+    "GET"                  "/api/v1/me/keys" => Browser, DENIED;
+    "GET"                  "/api/v1/me/models" => Browser, DENIED;
+    "GET"                  "/api/v1/me/export" => Browser, DENIED;
+    "GET"                  "/api/v1/me/notifications" => Browser, DENIED;
+    "GET"                  "/api/v1/me/notifications/summary" => Browser, DENIED;
+    "POST"                 "/api/v1/me/notifications/read" => Browser, DENIED;
+    "GET"                  "/api/v1/me/sessions" => Browser, DENIED;
     // Session ownership is checked by the handler, returning 404 across users.
-    route!("DELETE", "/api/v1/me/sessions/{session}", Browser, DENIED),
-    route!("POST", "/api/v1/me/sessions/revoke-others", Browser, DENIED),
-    route!("POST", "/api/v1/invitations/accept", Browser, DENIED),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}",
-        WorkspaceMetadata,
-        PLATFORM_READ
-    ),
-    route!("PATCH", "/api/v1/workspaces/{ws}", WorkspaceAdmin, DENIED),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/access",
-        WorkspaceMetadata,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/catalog",
-        WorkspaceMetadata,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/available-models",
-        WorkspaceMetadata,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/models",
-        WorkspaceMetadata,
-        PLATFORM_READ
-    ),
-    route!(
-        "POST",
-        "/api/v1/workspaces/{ws}/models",
-        WorkspaceAdmin,
-        DENIED
-    ),
-    route!(
-        "DELETE",
-        "/api/v1/workspaces/{ws}/models/{model}",
-        WorkspaceAdmin,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/models/compare",
-        WorkspaceMember,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/policy",
-        WorkspaceMetadata,
-        PLATFORM_READ
-    ),
-    route!(
-        "PUT",
-        "/api/v1/workspaces/{ws}/policy",
-        WorkspaceAdmin,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/members",
-        WorkspaceAdminOrReader,
-        PLATFORM_READ
-    ),
-    route!(
-        "POST",
-        "/api/v1/workspaces/{ws}/members",
-        WorkspaceAdmin,
-        DENIED
-    ),
-    route!(
-        "DELETE",
-        "/api/v1/workspaces/{ws}/members/{user}",
-        WorkspaceAdmin,
-        DENIED
-    ),
-    route!(
-        "GET POST",
-        "/api/v1/workspaces/{ws}/invitations",
-        WorkspaceAdmin,
-        DENIED
-    ),
-    route!(
-        "DELETE",
-        "/api/v1/workspaces/{ws}/invitations/{id}",
-        WorkspaceAdmin,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/member-candidates",
-        WorkspaceAdmin,
-        DENIED
-    ),
-    route!(
-        "GET POST",
-        "/api/v1/workspaces/{ws}/service-accounts",
-        WorkspaceAdmin,
-        DENIED
-    ),
-    route!(
-        "PATCH",
-        "/api/v1/workspaces/{ws}/service-accounts/{id}",
-        WorkspaceAdmin,
-        DENIED
-    ),
+    "DELETE"               "/api/v1/me/sessions/{session}" => Browser, DENIED;
+    "POST"                 "/api/v1/me/sessions/revoke-others" => Browser, DENIED;
+    "POST"                 "/api/v1/invitations/accept" => Browser, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}" => WorkspaceMetadata, PLATFORM_READ;
+    "PATCH"                "/api/v1/workspaces/{ws}" => WorkspaceAdmin, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/access" => WorkspaceMetadata, PLATFORM_READ;
+    "GET"                  "/api/v1/workspaces/{ws}/catalog" => WorkspaceMetadata, PLATFORM_READ;
+    "GET"                  "/api/v1/workspaces/{ws}/available-models" => WorkspaceMetadata, PLATFORM_READ;
+    "GET"                  "/api/v1/workspaces/{ws}/models" => WorkspaceMetadata, PLATFORM_READ;
+    "POST"                 "/api/v1/workspaces/{ws}/models" => WorkspaceAdmin, DENIED;
+    "DELETE"               "/api/v1/workspaces/{ws}/models/{model}" => WorkspaceAdmin, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/models/compare" => WorkspaceMember, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/policy" => WorkspaceMetadata, PLATFORM_READ;
+    "PUT"                  "/api/v1/workspaces/{ws}/policy" => WorkspaceAdmin, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/members" => WorkspaceAdminOrReader, PLATFORM_READ;
+    "POST"                 "/api/v1/workspaces/{ws}/members" => WorkspaceAdmin, DENIED;
+    "DELETE"               "/api/v1/workspaces/{ws}/members/{user}" => WorkspaceAdmin, DENIED;
+    "GET POST"             "/api/v1/workspaces/{ws}/invitations" => WorkspaceAdmin, DENIED;
+    "DELETE"               "/api/v1/workspaces/{ws}/invitations/{id}" => WorkspaceAdmin, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/member-candidates" => WorkspaceAdmin, DENIED;
+    "GET POST"             "/api/v1/workspaces/{ws}/service-accounts" => WorkspaceAdmin, DENIED;
+    "PATCH"                "/api/v1/workspaces/{ws}/service-accounts/{id}" => WorkspaceAdmin, DENIED;
     // Key rows additionally require the holder or a workspace admin; rotation of
     // a human key requires its holder even for admins (service keys: admin).
-    route!(
-        "GET POST",
-        "/api/v1/workspaces/{ws}/keys",
-        WorkspaceMember,
-        DENIED
-    ),
-    route!(
-        "GET DELETE PATCH",
-        "/api/v1/workspaces/{ws}/keys/{key}",
-        WorkspaceKey,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/keys/{key}/stats",
-        WorkspaceKey,
-        DENIED
-    ),
-    route!(
-        "POST",
-        "/api/v1/workspaces/{ws}/keys/{key}/rotate",
-        WorkspaceKeyRotate,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/keys/{key}/access",
-        WorkspaceKey,
-        DENIED
-    ),
-    route!(
-        "GET PUT",
-        "/api/v1/workspaces/{ws}/keys/{key}/policy",
-        WorkspaceKey,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/key-issuance",
-        WorkspaceMember,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/key-safety",
-        WorkspaceMember,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/executions",
-        WorkspaceMember,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/usage",
-        WorkspaceMember,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/audit",
-        WorkspaceMember,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/requests",
-        WorkspaceMember,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/requests/{root}",
-        WorkspaceMember,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/generations",
-        WorkspaceMember,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/sessions",
-        WorkspaceMember,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/sessions/{session}",
-        WorkspaceMember,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/logs/metrics",
-        WorkspaceMember,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/usage/overview",
-        WorkspaceMetadata,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/usage/explore",
-        WorkspaceMetadata,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/usage/storage",
-        WorkspaceAdmin,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/cost-report",
-        WorkspaceMetadata,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/cost-summary",
-        WorkspaceMetadata,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/costs",
-        WorkspaceMetadata,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/holds",
-        WorkspaceMetadata,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/usage-export",
-        WorkspaceMetadata,
-        PLATFORM_READ
-    ),
-    route!(
-        "POST",
-        "/api/v1/workspaces/{ws}/costs/{execution}/reconcile",
-        WorkspacePlatformWrite,
-        GOVERNANCE_WRITE
-    ),
+    "GET POST"             "/api/v1/workspaces/{ws}/keys" => WorkspaceMember, DENIED;
+    "GET DELETE PATCH"     "/api/v1/workspaces/{ws}/keys/{key}" => WorkspaceKey, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/keys/{key}/stats" => WorkspaceKey, DENIED;
+    "POST"                 "/api/v1/workspaces/{ws}/keys/{key}/rotate" => WorkspaceKeyRotate, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/keys/{key}/access" => WorkspaceKey, DENIED;
+    "GET PUT"              "/api/v1/workspaces/{ws}/keys/{key}/policy" => WorkspaceKey, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/key-issuance" => WorkspaceMember, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/key-safety" => WorkspaceMember, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/executions" => WorkspaceMember, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/usage" => WorkspaceMember, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/audit" => WorkspaceMember, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/requests" => WorkspaceMember, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/requests/{root}" => WorkspaceMember, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/generations" => WorkspaceMember, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/sessions" => WorkspaceMember, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/sessions/{session}" => WorkspaceMember, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/logs/metrics" => WorkspaceMember, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/usage/overview" => WorkspaceMetadata, PLATFORM_READ;
+    "GET"                  "/api/v1/workspaces/{ws}/usage/explore" => WorkspaceMetadata, PLATFORM_READ;
+    "GET"                  "/api/v1/workspaces/{ws}/usage/storage" => WorkspaceAdmin, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/cost-report" => WorkspaceMetadata, PLATFORM_READ;
+    "GET"                  "/api/v1/workspaces/{ws}/cost-summary" => WorkspaceMetadata, PLATFORM_READ;
+    "GET"                  "/api/v1/workspaces/{ws}/costs" => WorkspaceMetadata, PLATFORM_READ;
+    "GET"                  "/api/v1/workspaces/{ws}/holds" => WorkspaceMetadata, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/usage-export" => WorkspaceMetadata, PLATFORM_READ;
+    "POST"                 "/api/v1/workspaces/{ws}/costs/{execution}/reconcile" => WorkspacePlatformWrite, GOVERNANCE_WRITE;
     // File/batch visibility is creator-only by default (or workspace-wide by
     // policy); delete/cancel additionally require creator or workspace admin.
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/files",
-        WorkspaceMember,
-        DENIED
-    ),
-    route!(
-        "DELETE",
-        "/api/v1/workspaces/{ws}/files/{id}",
-        WorkspaceMember,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/files/{id}/content",
-        WorkspaceMember,
-        DENIED
-    ),
-    route!(
-        "POST",
-        "/api/v1/workspaces/{ws}/files/upload",
-        WorkspaceMember,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/batches",
-        WorkspaceMember,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/batches/{id}",
-        WorkspaceMember,
-        DENIED
-    ),
-    route!(
-        "POST",
-        "/api/v1/workspaces/{ws}/batches/{id}/cancel",
-        WorkspaceMember,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/alerts/rules",
-        WorkspaceAdminOrReader,
-        PLATFORM_READ
-    ),
-    route!(
-        "POST",
-        "/api/v1/workspaces/{ws}/alerts/rules",
-        WorkspaceAdmin,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/alerts/rules/{id}",
-        WorkspaceAdminOrReader,
-        PLATFORM_READ
-    ),
-    route!(
-        "PUT DELETE",
-        "/api/v1/workspaces/{ws}/alerts/rules/{id}",
-        WorkspaceAdmin,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/workspaces/{ws}/alerts/events",
-        WorkspaceAdminOrReader,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/catalogs",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/catalogs",
-        PlatformWrite,
-        CATALOG_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/catalogs/{id}",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "PATCH DELETE",
-        "/api/v1/platform/catalogs/{id}",
-        PlatformWrite,
-        CATALOG_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/catalogs/{id}/models",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "PUT",
-        "/api/v1/platform/catalogs/{id}/models",
-        PlatformWrite,
-        CATALOG_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/models/{id}/catalogs",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "PUT",
-        "/api/v1/platform/models/{id}/catalogs",
-        PlatformWrite,
-        CATALOG_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/workspace-types/{kind}/catalogs",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "PUT",
-        "/api/v1/platform/workspace-types/{kind}/catalogs",
-        PlatformWrite,
-        CATALOG_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/catalog-defaults",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "PUT",
-        "/api/v1/platform/catalog-defaults",
-        PlatformWrite,
-        CATALOG_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/workspaces/{ws}/catalogs",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "PUT DELETE",
-        "/api/v1/platform/workspaces/{ws}/catalogs",
-        PlatformWrite,
-        CATALOG_WRITE
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/workspaces/{ws}/models",
-        PlatformWrite,
-        CATALOG_WRITE
-    ),
-    route!(
-        "DELETE",
-        "/api/v1/platform/workspaces/{ws}/models/{model}",
-        PlatformWrite,
-        CATALOG_WRITE
-    ),
-    route!(
-        "PUT DELETE",
-        "/api/v1/platform/settings/general/logo",
-        PlatformWrite,
-        SETTINGS_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/key-safety",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/alerts/webhooks",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/alerts/webhooks",
-        PlatformWrite,
-        SETTINGS_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/alerts/webhooks/{id}",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/alerts/webhooks/{id}/deliveries",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/alerts/webhooks/{id}/test",
-        PlatformWrite,
-        SETTINGS_WRITE
-    ),
-    route!(
-        "PATCH DELETE",
-        "/api/v1/platform/alerts/webhooks/{id}",
-        PlatformWrite,
-        SETTINGS_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/alerts/rules",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/alerts/rules",
-        PlatformWrite,
-        GOVERNANCE_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/alerts/rules/{id}",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "PUT DELETE",
-        "/api/v1/platform/alerts/rules/{id}",
-        PlatformWrite,
-        GOVERNANCE_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/alerts/events",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/users/{user}/sessions/revoke",
-        PlatformWrite,
-        ACCESS_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/models/compare",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/usage/overview",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/usage/storage",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/usage/explore",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/workspaces/{ws}/member-candidates",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/workspaces/{ws}/members",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/workspaces/{ws}/members",
-        PlatformWrite,
-        ACCESS_WRITE
-    ),
-    route!(
-        "DELETE",
-        "/api/v1/platform/workspaces/{ws}/members/{user}",
-        PlatformWrite,
-        ACCESS_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/users/{user}/export",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/workspaces",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/workspaces",
-        PlatformWrite,
-        ACCESS_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/workspaces/{ws}",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "PATCH",
-        "/api/v1/platform/workspaces/{ws}",
-        PlatformWrite,
-        ACCESS_WRITE
-    ),
-    route!("GET", "/api/v1/platform/users", PlatformRead, PLATFORM_READ),
-    route!(
-        "POST",
-        "/api/v1/platform/users",
-        PlatformWrite,
-        ACCESS_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/users/{user}",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "PATCH",
-        "/api/v1/platform/users/{user}",
-        PlatformWrite,
-        ACCESS_WRITE
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/users/{user}/roles",
-        PlatformWrite,
-        ACCESS_WRITE
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/users/{user}/remove-personal-data",
-        PlatformWrite,
-        ACCESS_WRITE
-    ),
-    route!(
-        "DELETE",
-        "/api/v1/platform/users/{user}/roles/{role}",
-        PlatformWrite,
-        ACCESS_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/oidc/group-mappings",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/oidc/group-mappings",
-        PlatformWrite,
-        ACCESS_WRITE
-    ),
-    route!(
-        "PATCH DELETE",
-        "/api/v1/platform/oidc/group-mappings/{id}",
-        PlatformWrite,
-        ACCESS_WRITE
-    ),
+    "GET"                  "/api/v1/workspaces/{ws}/files" => WorkspaceMember, DENIED;
+    "DELETE"               "/api/v1/workspaces/{ws}/files/{id}" => WorkspaceMember, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/files/{id}/content" => WorkspaceMember, DENIED;
+    "POST"                 "/api/v1/workspaces/{ws}/files/upload" => WorkspaceMember, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/batches" => WorkspaceMember, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/batches/{id}" => WorkspaceMember, DENIED;
+    "POST"                 "/api/v1/workspaces/{ws}/batches/{id}/cancel" => WorkspaceMember, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/alerts/rules" => WorkspaceAdminOrReader, PLATFORM_READ;
+    "POST"                 "/api/v1/workspaces/{ws}/alerts/rules" => WorkspaceAdmin, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/alerts/rules/{id}" => WorkspaceAdminOrReader, PLATFORM_READ;
+    "PUT DELETE"           "/api/v1/workspaces/{ws}/alerts/rules/{id}" => WorkspaceAdmin, DENIED;
+    "GET"                  "/api/v1/workspaces/{ws}/alerts/events" => WorkspaceAdminOrReader, PLATFORM_READ;
+    "GET"                  "/api/v1/platform/catalogs" => PlatformRead, PLATFORM_READ;
+    "POST"                 "/api/v1/platform/catalogs" => PlatformWrite, CATALOG_WRITE;
+    "GET"                  "/api/v1/platform/catalogs/{id}" => PlatformRead, PLATFORM_READ;
+    "PATCH DELETE"         "/api/v1/platform/catalogs/{id}" => PlatformWrite, CATALOG_WRITE;
+    "GET"                  "/api/v1/platform/catalogs/{id}/models" => PlatformRead, PLATFORM_READ;
+    "PUT"                  "/api/v1/platform/catalogs/{id}/models" => PlatformWrite, CATALOG_WRITE;
+    "GET"                  "/api/v1/platform/models/{id}/catalogs" => PlatformRead, PLATFORM_READ;
+    "PUT"                  "/api/v1/platform/models/{id}/catalogs" => PlatformWrite, CATALOG_WRITE;
+    "GET"                  "/api/v1/platform/workspace-types/{kind}/catalogs" => PlatformRead, PLATFORM_READ;
+    "PUT"                  "/api/v1/platform/workspace-types/{kind}/catalogs" => PlatformWrite, CATALOG_WRITE;
+    "GET"                  "/api/v1/platform/catalog-defaults" => PlatformRead, PLATFORM_READ;
+    "PUT"                  "/api/v1/platform/catalog-defaults" => PlatformWrite, CATALOG_WRITE;
+    "GET"                  "/api/v1/platform/workspaces/{ws}/catalogs" => PlatformRead, PLATFORM_READ;
+    "PUT DELETE"           "/api/v1/platform/workspaces/{ws}/catalogs" => PlatformWrite, CATALOG_WRITE;
+    "POST"                 "/api/v1/platform/workspaces/{ws}/models" => PlatformWrite, CATALOG_WRITE;
+    "DELETE"               "/api/v1/platform/workspaces/{ws}/models/{model}" => PlatformWrite, CATALOG_WRITE;
+    "PUT DELETE"           "/api/v1/platform/settings/general/logo" => PlatformWrite, SETTINGS_WRITE;
+    "GET"                  "/api/v1/platform/key-safety" => PlatformRead, PLATFORM_READ;
+    "GET"                  "/api/v1/platform/alerts/webhooks" => PlatformRead, PLATFORM_READ;
+    "POST"                 "/api/v1/platform/alerts/webhooks" => PlatformWrite, SETTINGS_WRITE;
+    "GET"                  "/api/v1/platform/alerts/webhooks/{id}" => PlatformRead, PLATFORM_READ;
+    "GET"                  "/api/v1/platform/alerts/webhooks/{id}/deliveries" => PlatformRead, PLATFORM_READ;
+    "POST"                 "/api/v1/platform/alerts/webhooks/{id}/test" => PlatformWrite, SETTINGS_WRITE;
+    "PATCH DELETE"         "/api/v1/platform/alerts/webhooks/{id}" => PlatformWrite, SETTINGS_WRITE;
+    "GET"                  "/api/v1/platform/alerts/rules" => PlatformRead, PLATFORM_READ;
+    "POST"                 "/api/v1/platform/alerts/rules" => PlatformWrite, GOVERNANCE_WRITE;
+    "GET"                  "/api/v1/platform/alerts/rules/{id}" => PlatformRead, PLATFORM_READ;
+    "PUT DELETE"           "/api/v1/platform/alerts/rules/{id}" => PlatformWrite, GOVERNANCE_WRITE;
+    "GET"                  "/api/v1/platform/alerts/events" => PlatformRead, PLATFORM_READ;
+    "POST"                 "/api/v1/platform/users/{user}/sessions/revoke" => PlatformWrite, ACCESS_WRITE;
+    "GET"                  "/api/v1/platform/models/compare" => PlatformRead, PLATFORM_READ;
+    "GET"                  "/api/v1/platform/usage/overview" => PlatformRead, PLATFORM_READ;
+    "GET"                  "/api/v1/platform/usage/storage" => PlatformRead, PLATFORM_READ;
+    "GET"                  "/api/v1/platform/usage/explore" => PlatformRead, PLATFORM_READ;
+    "GET"                  "/api/v1/platform/workspaces/{ws}/member-candidates" => PlatformRead, PLATFORM_READ;
+    "GET"                  "/api/v1/platform/workspaces/{ws}/members" => PlatformRead, PLATFORM_READ;
+    "POST"                 "/api/v1/platform/workspaces/{ws}/members" => PlatformWrite, ACCESS_WRITE;
+    "DELETE"               "/api/v1/platform/workspaces/{ws}/members/{user}" => PlatformWrite, ACCESS_WRITE;
+    "GET"                  "/api/v1/platform/users/{user}/export" => PlatformRead, PLATFORM_READ;
+    "GET"                  "/api/v1/platform/workspaces" => PlatformRead, PLATFORM_READ;
+    "POST"                 "/api/v1/platform/workspaces" => PlatformWrite, ACCESS_WRITE;
+    "GET"                  "/api/v1/platform/workspaces/{ws}" => PlatformRead, PLATFORM_READ;
+    "PATCH"                "/api/v1/platform/workspaces/{ws}" => PlatformWrite, ACCESS_WRITE;
+    "GET"                  "/api/v1/platform/users" => PlatformRead, PLATFORM_READ;
+    "POST"                 "/api/v1/platform/users" => PlatformWrite, ACCESS_WRITE;
+    "GET"                  "/api/v1/platform/users/{user}" => PlatformRead, PLATFORM_READ;
+    "PATCH"                "/api/v1/platform/users/{user}" => PlatformWrite, ACCESS_WRITE;
+    "POST"                 "/api/v1/platform/users/{user}/roles" => PlatformWrite, ACCESS_WRITE;
+    "POST"                 "/api/v1/platform/users/{user}/remove-personal-data" => PlatformWrite, ACCESS_WRITE;
+    "DELETE"               "/api/v1/platform/users/{user}/roles/{role}" => PlatformWrite, ACCESS_WRITE;
+    "GET"                  "/api/v1/platform/oidc/group-mappings" => PlatformRead, PLATFORM_READ;
+    "POST"                 "/api/v1/platform/oidc/group-mappings" => PlatformWrite, ACCESS_WRITE;
+    "PATCH DELETE"         "/api/v1/platform/oidc/group-mappings/{id}" => PlatformWrite, ACCESS_WRITE;
     // Dry-run diff only (#89): never writes, so an admin token -- whose only
     // purpose is unattended automation of real changes -- has no use for it.
     // Browser session only, like every other preview surface.
-    route!(
-        "POST",
-        "/api/v1/platform/oidc/group-mappings/preview",
-        PlatformWrite,
-        DENIED
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/oidc/group-mappings/{id}/preview",
-        PlatformWrite,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/cost-centers",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/cost-centers",
-        PlatformWrite,
-        GOVERNANCE_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/cost-centers/{id}",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "PATCH DELETE",
-        "/api/v1/platform/cost-centers/{id}",
-        PlatformWrite,
-        GOVERNANCE_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/deployments/{deployment}/batch-scheduling",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "PUT",
-        "/api/v1/platform/deployments/{deployment}/batch-scheduling",
-        PlatformWrite,
-        GOVERNANCE_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/batches",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/providers",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/providers",
-        PlatformWrite,
-        CATALOG_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/providers/{id}",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "PATCH DELETE",
-        "/api/v1/platform/providers/{id}",
-        PlatformWrite,
-        CATALOG_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/models",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/models",
-        PlatformWrite,
-        CATALOG_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/models/{id}",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "PATCH DELETE",
-        "/api/v1/platform/models/{id}",
-        PlatformWrite,
-        CATALOG_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/deployments",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/deployments",
-        PlatformWrite,
-        CATALOG_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/deployments/{id}",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "PATCH DELETE",
-        "/api/v1/platform/deployments/{id}",
-        PlatformWrite,
-        CATALOG_WRITE
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/deployments/{id}/configuration/preview",
-        PlatformWrite,
-        DENIED
-    ),
+    "POST"                 "/api/v1/platform/oidc/group-mappings/preview" => PlatformWrite, DENIED;
+    "POST"                 "/api/v1/platform/oidc/group-mappings/{id}/preview" => PlatformWrite, DENIED;
+    "GET"                  "/api/v1/platform/cost-centers" => PlatformRead, PLATFORM_READ;
+    "POST"                 "/api/v1/platform/cost-centers" => PlatformWrite, GOVERNANCE_WRITE;
+    "GET"                  "/api/v1/platform/cost-centers/{id}" => PlatformRead, PLATFORM_READ;
+    "PATCH DELETE"         "/api/v1/platform/cost-centers/{id}" => PlatformWrite, GOVERNANCE_WRITE;
+    "GET"                  "/api/v1/platform/deployments/{deployment}/batch-scheduling" => PlatformRead, PLATFORM_READ;
+    "PUT"                  "/api/v1/platform/deployments/{deployment}/batch-scheduling" => PlatformWrite, GOVERNANCE_WRITE;
+    "GET"                  "/api/v1/platform/batches" => PlatformRead, PLATFORM_READ;
+    "GET"                  "/api/v1/platform/providers" => PlatformRead, PLATFORM_READ;
+    "POST"                 "/api/v1/platform/providers" => PlatformWrite, CATALOG_WRITE;
+    "GET"                  "/api/v1/platform/providers/{id}" => PlatformRead, PLATFORM_READ;
+    "PATCH DELETE"         "/api/v1/platform/providers/{id}" => PlatformWrite, CATALOG_WRITE;
+    "GET"                  "/api/v1/platform/models" => PlatformRead, PLATFORM_READ;
+    "POST"                 "/api/v1/platform/models" => PlatformWrite, CATALOG_WRITE;
+    "GET"                  "/api/v1/platform/models/{id}" => PlatformRead, PLATFORM_READ;
+    "PATCH DELETE"         "/api/v1/platform/models/{id}" => PlatformWrite, CATALOG_WRITE;
+    "GET"                  "/api/v1/platform/deployments" => PlatformRead, PLATFORM_READ;
+    "POST"                 "/api/v1/platform/deployments" => PlatformWrite, CATALOG_WRITE;
+    "GET"                  "/api/v1/platform/deployments/{id}" => PlatformRead, PLATFORM_READ;
+    "PATCH DELETE"         "/api/v1/platform/deployments/{id}" => PlatformWrite, CATALOG_WRITE;
+    "POST"                 "/api/v1/platform/deployments/{id}/configuration/preview" => PlatformWrite, DENIED;
     // #88: explicit-target bulk disable; status is the actor's own operation.
-    route!(
-        "POST",
-        "/api/v1/platform/deployment-bulk-operations",
-        PlatformWrite,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/deployment-bulk-operations/{idempotency_key}",
-        PlatformWrite,
-        DENIED
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/deployments/{id}/configuration/apply",
-        PlatformWrite,
-        DENIED
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/deployments/{id}/configuration/restore-preview",
-        PlatformWrite,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/deployments/{id}/configuration/history",
-        PlatformRead,
-        DENIED
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/deployments/{id}/configuration/history/{change}",
-        PlatformRead,
-        DENIED
-    ),
-    route!("GET", "/api/v1/platform/holds", PlatformRead, PLATFORM_READ),
-    route!("GET", "/api/v1/platform/audit", PlatformRead, PLATFORM_READ),
-    route!(
-        "GET",
-        "/api/v1/platform/server-policy",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/settings/general",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "PUT",
-        "/api/v1/platform/settings/general",
-        PlatformWrite,
-        SETTINGS_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/settings/privacy",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "PUT",
-        "/api/v1/platform/settings/privacy",
-        PlatformWrite,
-        SETTINGS_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/settings/email",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "PUT",
-        "/api/v1/platform/settings/email",
-        PlatformWrite,
-        SETTINGS_WRITE
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/settings/email/test",
-        PlatformWrite,
-        SETTINGS_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/settings/sign-in",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/logs/requests",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/logs/requests/{root}",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/logs/generations",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/logs/sessions",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/logs/sessions/{ws}/{session}",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/logs/metrics",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/legal-holds",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/legal-holds",
-        PlatformWrite,
-        GOVERNANCE_WRITE
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/legal-holds/{hold}/release",
-        PlatformWrite,
-        GOVERNANCE_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/settings/audit-export",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/settings/audit-export/test",
-        PlatformWrite,
-        SETTINGS_WRITE
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/model-setup",
-        PlatformWrite,
-        CATALOG_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/overview",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/settings/storage",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "PUT",
-        "/api/v1/platform/settings/storage",
-        PlatformWrite,
-        SETTINGS_WRITE
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/settings/storage/test",
-        PlatformWrite,
-        SETTINGS_WRITE
-    ),
+    "POST"                 "/api/v1/platform/deployment-bulk-operations" => PlatformWrite, DENIED;
+    "GET"                  "/api/v1/platform/deployment-bulk-operations/{idempotency_key}" => PlatformWrite, DENIED;
+    "POST"                 "/api/v1/platform/deployments/{id}/configuration/apply" => PlatformWrite, DENIED;
+    "POST"                 "/api/v1/platform/deployments/{id}/configuration/restore-preview" => PlatformWrite, DENIED;
+    "GET"                  "/api/v1/platform/deployments/{id}/configuration/history" => PlatformRead, DENIED;
+    "GET"                  "/api/v1/platform/deployments/{id}/configuration/history/{change}" => PlatformRead, DENIED;
+    "GET"                  "/api/v1/platform/holds" => PlatformRead, PLATFORM_READ;
+    "GET"                  "/api/v1/platform/audit" => PlatformRead, PLATFORM_READ;
+    "GET"                  "/api/v1/platform/server-policy" => PlatformRead, PLATFORM_READ;
+    "GET"                  "/api/v1/platform/settings/general" => PlatformRead, PLATFORM_READ;
+    "PUT"                  "/api/v1/platform/settings/general" => PlatformWrite, SETTINGS_WRITE;
+    "GET"                  "/api/v1/platform/settings/privacy" => PlatformRead, PLATFORM_READ;
+    "PUT"                  "/api/v1/platform/settings/privacy" => PlatformWrite, SETTINGS_WRITE;
+    "GET"                  "/api/v1/platform/settings/email" => PlatformRead, PLATFORM_READ;
+    "PUT"                  "/api/v1/platform/settings/email" => PlatformWrite, SETTINGS_WRITE;
+    "POST"                 "/api/v1/platform/settings/email/test" => PlatformWrite, SETTINGS_WRITE;
+    "GET"                  "/api/v1/platform/settings/sign-in" => PlatformRead, PLATFORM_READ;
+    "GET"                  "/api/v1/platform/logs/requests" => PlatformRead, PLATFORM_READ;
+    "GET"                  "/api/v1/platform/logs/requests/{root}" => PlatformRead, PLATFORM_READ;
+    "GET"                  "/api/v1/platform/logs/generations" => PlatformRead, PLATFORM_READ;
+    "GET"                  "/api/v1/platform/logs/sessions" => PlatformRead, PLATFORM_READ;
+    "GET"                  "/api/v1/platform/logs/sessions/{ws}/{session}" => PlatformRead, PLATFORM_READ;
+    "GET"                  "/api/v1/platform/logs/metrics" => PlatformRead, PLATFORM_READ;
+    "GET"                  "/api/v1/platform/legal-holds" => PlatformRead, PLATFORM_READ;
+    "POST"                 "/api/v1/platform/legal-holds" => PlatformWrite, GOVERNANCE_WRITE;
+    "POST"                 "/api/v1/platform/legal-holds/{hold}/release" => PlatformWrite, GOVERNANCE_WRITE;
+    "GET"                  "/api/v1/platform/settings/audit-export" => PlatformRead, PLATFORM_READ;
+    "POST"                 "/api/v1/platform/settings/audit-export/test" => PlatformWrite, SETTINGS_WRITE;
+    "POST"                 "/api/v1/platform/model-setup" => PlatformWrite, CATALOG_WRITE;
+    "GET"                  "/api/v1/platform/overview" => PlatformRead, PLATFORM_READ;
+    "GET"                  "/api/v1/platform/settings/storage" => PlatformRead, PLATFORM_READ;
+    "PUT"                  "/api/v1/platform/settings/storage" => PlatformWrite, SETTINGS_WRITE;
+    "POST"                 "/api/v1/platform/settings/storage/test" => PlatformWrite, SETTINGS_WRITE;
     // Removed endpoint: authorized platform readers/writers still receive 410.
-    route!(
-        "GET",
-        "/api/v1/platform/installation/policy",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "PUT",
-        "/api/v1/platform/installation/policy",
-        PlatformWrite,
-        GOVERNANCE_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/workspace-types/{kind}/policy",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "PUT",
-        "/api/v1/platform/workspace-types/{kind}/policy",
-        PlatformWrite,
-        GOVERNANCE_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/workspaces/{ws}/policy",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "PUT DELETE",
-        "/api/v1/platform/workspaces/{ws}/policy",
-        PlatformWrite,
-        GOVERNANCE_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/deployments/{deployment}/prices",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "POST",
-        "/api/v1/platform/deployments/{deployment}/prices",
-        PlatformWrite,
-        CATALOG_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/deployments/{deployment}/price-suggestion",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/models/{model}/routing",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "PUT",
-        "/api/v1/platform/models/{model}/routing",
-        PlatformWrite,
-        CATALOG_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/deployments/{deployment}/routing",
-        PlatformRead,
-        PLATFORM_READ
-    ),
-    route!(
-        "PUT",
-        "/api/v1/platform/deployments/{deployment}/routing",
-        PlatformWrite,
-        CATALOG_WRITE
-    ),
-    route!(
-        "GET",
-        "/api/v1/platform/cost-report",
-        PlatformRead,
-        PLATFORM_READ
-    ),
+    "GET"                  "/api/v1/platform/installation/policy" => PlatformRead, PLATFORM_READ;
+    "PUT"                  "/api/v1/platform/installation/policy" => PlatformWrite, GOVERNANCE_WRITE;
+    "GET"                  "/api/v1/platform/workspace-types/{kind}/policy" => PlatformRead, PLATFORM_READ;
+    "PUT"                  "/api/v1/platform/workspace-types/{kind}/policy" => PlatformWrite, GOVERNANCE_WRITE;
+    "GET"                  "/api/v1/platform/workspaces/{ws}/policy" => PlatformRead, PLATFORM_READ;
+    "PUT DELETE"           "/api/v1/platform/workspaces/{ws}/policy" => PlatformWrite, GOVERNANCE_WRITE;
+    "GET"                  "/api/v1/platform/deployments/{deployment}/prices" => PlatformRead, PLATFORM_READ;
+    "POST"                 "/api/v1/platform/deployments/{deployment}/prices" => PlatformWrite, CATALOG_WRITE;
+    "GET"                  "/api/v1/platform/deployments/{deployment}/price-suggestion" => PlatformRead, PLATFORM_READ;
+    "GET"                  "/api/v1/platform/models/{model}/routing" => PlatformRead, PLATFORM_READ;
+    "PUT"                  "/api/v1/platform/models/{model}/routing" => PlatformWrite, CATALOG_WRITE;
+    "GET"                  "/api/v1/platform/deployments/{deployment}/routing" => PlatformRead, PLATFORM_READ;
+    "PUT"                  "/api/v1/platform/deployments/{deployment}/routing" => PlatformWrite, CATALOG_WRITE;
+    "GET"                  "/api/v1/platform/cost-report" => PlatformRead, PLATFORM_READ;
     // #37 PR2: admin API token CRUD. Browser session (Platform Admin) only,
     // never delegable to a token, regardless of any scope it holds.
-    route!(
-        "GET POST",
-        "/api/v1/platform/admin-tokens",
-        PlatformWrite,
-        BROWSER_ADMIN_ONLY
-    ),
-    route!(
-        "DELETE",
-        "/api/v1/platform/admin-tokens/{token}",
-        PlatformWrite,
-        BROWSER_ADMIN_ONLY
-    ),
-];
+    "GET POST"             "/api/v1/platform/admin-tokens" => PlatformWrite, BROWSER_ADMIN_ONLY;
+    "DELETE"               "/api/v1/platform/admin-tokens/{token}" => PlatformWrite, BROWSER_ADMIN_ONLY;
+};
 
 fn find(method: &str, path: &str) -> Option<&'static Route> {
     let exact = |method| {
