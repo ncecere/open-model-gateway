@@ -521,7 +521,7 @@ impl Store {
     ///
     /// Takes a parsed [`std::net::IpAddr`], not a string (coordinator
     /// review issue 5c): the caller has necessarily already resolved and
-    /// validated an address object (identity.rs/throttle.rs's job, per
+    /// validated an address object (the job of identity/session.rs and identity/throttle.rs, per
     /// this module's own doc comment) by the time it gets here, so this
     /// signature cannot accept an arbitrary unparsed string and defer
     /// that validation to PostgreSQL's `inet` cast.

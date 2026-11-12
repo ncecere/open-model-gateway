@@ -4,7 +4,7 @@
 //! Nothing here touches the database, so the limiter cannot itself be used to
 //! load it. Each replica counts on its own (the effective limit grows with the
 //! replica count); the installation-wide bound is the pending-attempt cap in
-//! `identity.rs` `login`. There is deliberately no per-account lockout: the IdP
+//! `identity/login.rs` `login`. There is deliberately no per-account lockout: the IdP
 //! owns credentials, and a lockout would let anyone lock a known user out and
 //! probe which accounts exist.
 
