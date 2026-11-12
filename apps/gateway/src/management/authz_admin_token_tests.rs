@@ -1065,7 +1065,7 @@ async fn head_on_a_get_only_ready_route_succeeds_with_a_correct_completion(pool:
 /// "denied". Only the table `access_inner`'s live boundary check
 /// additionally needs (`workspaces`) is dropped here, not
 /// `effective_platform_roles`: dropping that would instead fail
-/// *authentication* itself (identity.rs, before this layer ever runs),
+/// *authentication* itself (identity/session.rs, before this layer ever runs),
 /// which is a different fault than the one this test targets -- the
 /// authentication step below must still succeed.
 #[sqlx::test(migrations = "./enterprise_migrations")]

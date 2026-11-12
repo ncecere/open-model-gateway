@@ -10,7 +10,7 @@
 //!   period sign-in fails closed.
 //!
 //! Algorithm policy (no `none`, no shared-secret MACs) is enforced by the
-//! verifier in `identity.rs`, not here.
+//! verifier in `identity/oidc.rs`, not here.
 use std::{
     future::Future,
     pin::Pin,
