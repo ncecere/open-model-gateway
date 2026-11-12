@@ -24,6 +24,19 @@
 // `#[cfg(test)]` on anything other than a module (a function, an impl, a use)
 // is counted, and so is `#[cfg(any(test, ...))]`, which also builds without
 // `test`. The rule relies on rustfmt: top-level items start at column 0.
+//
+// Three checks keep a file from leaving the count by accident (`checkSources`,
+// `readSources`): a file skipped as a test file may not also be declared by
+// production code, a measured file may not switch rustfmt off, and nothing
+// under the sources may be a symbolic link. `duplicateKeys` reads the raw
+// allowance file, because JSON.parse keeps the last of two equal keys.
+//
+// The Clippy half of the ratchet (function length and complexity) is enforced
+// by Clippy itself. `checkLints` and `checkClippyConfig` only check that its
+// switches are still on: the two crate lines, no threshold setting, no mention
+// of either lint outside a `reason = "#499"` marker, and the marker count.
+//
+// docs/verification.md lists what none of this sees.
 import { readFileSync, readdirSync } from "node:fs";
 import { posix, join } from "node:path";
 
@@ -40,6 +53,8 @@ const TEST_CFG = /^#\[cfg\((?:test|all\(test\b.*\))\)\]\s*$/;
 const BETWEEN = /^(?:#\[|\/\/)/;
 const MOD_ITEM = /^(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*([;{])/;
 const PATH_ATTR = /^#\[path\s*=\s*"([^"]+)"\]/;
+// Either spelling, as an attribute or inside `cfg_attr`.
+const RUSTFMT_SKIP = /rustfmt::skip|rustfmt_skip/;
 
 export function isTestPath(path) {
   const parts = path.split("/");
@@ -85,32 +100,98 @@ export function productionLines(text) {
   return found.reduce((count, module) => count - (module.end - module.start + 1), lines.length);
 }
 
+// Where a `mod x;` declared at the top level of `path` points: the files that
+// can hold the module, and the directory that holds its children.
+function moduleTarget(path, module) {
+  const dir = posix.dirname(path);
+  if (module.path) {
+    const target = posix.join(dir, module.path);
+    // A `mod.rs` target keeps its children beside it, like any `mod.rs`.
+    const own = posix.basename(target) === "mod.rs" ? posix.dirname(target) : target.replace(/\.rs$/, "");
+    return { files: [target], dir: `${own}/` };
+  }
+  const name = posix.basename(path, ".rs");
+  // Where this file's child modules live.
+  const children = ["mod", "lib", "main"].includes(name) ? dir : posix.join(dir, name);
+  const base = posix.join(children, module.name);
+  return { files: [`${base}.rs`, `${base}/mod.rs`], dir: `${base}/` };
+}
+
 // Returns a predicate: is this path a module declared only for tests (rule 2
 // above), or inside one? `sources` is a Map of path -> file text.
 export function testOnlyModules(sources) {
   const files = new Set();
   const dirs = [];
   for (const [path, text] of sources) {
-    const dir = posix.dirname(path);
-    const name = posix.basename(path, ".rs");
-    // Where this file's child modules live.
-    const children = ["mod", "lib", "main"].includes(name) ? dir : posix.join(dir, name);
     for (const module of testModules(text).found) {
       if (module.inline) continue;
-      if (module.path) {
-        const target = posix.join(dir, module.path);
-        files.add(target);
-        // A `mod.rs` target keeps its children beside it, like any `mod.rs`.
-        const own = posix.basename(target) === "mod.rs" ? posix.dirname(target) : target.replace(/\.rs$/, "");
-        dirs.push(`${own}/`);
-      } else {
-        const base = posix.join(children, module.name);
-        files.add(`${base}.rs`);
-        dirs.push(`${base}/`);
-      }
+      const target = moduleTarget(path, module);
+      target.files.forEach((file) => files.add(file));
+      dirs.push(target.dir);
     }
   }
   return (path) => files.has(path) || dirs.some((prefix) => path.startsWith(prefix));
+}
+
+// Every top-level `mod x;` of a file that is not a test module:
+// {line, name, path}, `line` 0-based.
+function productionModules(text) {
+  const { lines, found } = testModules(text);
+  const inTest = new Set();
+  for (const module of found) {
+    for (let i = module.start; i <= module.end; i++) inTest.add(i);
+  }
+  const declared = [];
+  lines.forEach((line, i) => {
+    if (inTest.has(i)) return;
+    const item = line.match(MOD_ITEM);
+    if (!item || item[2] !== ";") return;
+    let path;
+    for (let j = i - 1; j >= 0 && !inTest.has(j) && BETWEEN.test(lines[j]); j--) {
+      path ??= lines[j].match(PATH_ATTR)?.[1];
+    }
+    declared.push({ line: i, name: item[1], path });
+  });
+  return declared;
+}
+
+// Problems in the sources themselves, as messages (empty when there are none):
+//   - a file that is skipped as a test file, by name or by declaration, is also
+//     declared by a measured file outside `#[cfg(test)]`, so it is built into
+//     the gateway and nothing counts it;
+//   - a measured file switches rustfmt off, and the counting relies on its layout.
+export function checkSources(sources) {
+  const errors = [];
+  const isTestOnly = testOnlyModules(sources);
+  const skipped = (path) => isTestPath(path) || isTestOnly(path);
+  for (const path of [...sources.keys()].sort()) {
+    if (skipped(path)) continue;
+    const text = sources.get(path);
+    splitLines(text).forEach((line, i) => {
+      if (!RUSTFMT_SKIP.test(line)) return;
+      errors.push(
+        `${path} line ${i + 1} switches rustfmt off.\n` +
+          `  Remove it: the line count relies on rustfmt's layout (top-level items at the start of a line).`,
+      );
+    });
+    let declared;
+    try {
+      declared = productionModules(text);
+    } catch (error) {
+      throw new Error(`${path}: ${error.message}`);
+    }
+    for (const module of declared) {
+      for (const file of moduleTarget(path, module).files) {
+        if (!sources.has(file) || !skipped(file)) continue;
+        errors.push(
+          `${file} is declared outside #[cfg(test)] (\`mod ${module.name};\` in ${path} line ${module.line + 1}), ` +
+            `so it is production code, but it is not measured.\n` +
+            `  Rename it or move it: test names (tests.rs, *_tests.rs, a tests/ directory) and test-only directories are not measured.`,
+        );
+      }
+    }
+  }
+  return errors;
 }
 
 // Map of path -> production lines for every file that is not a test file.
@@ -134,6 +215,12 @@ export function readSources(root, src) {
   const walk = (dir) => {
     for (const entry of readdirSync(join(root, dir), { withFileTypes: true })) {
       const path = `${dir}/${entry.name}`;
+      if (entry.isSymbolicLink()) {
+        throw new Error(
+          `${path} is a symbolic link. Links under ${src} are not followed, so what they point to would not be counted.\n` +
+            `  Replace it with a real file or a \`mod\` declaration.`,
+        );
+      }
       if (entry.isDirectory()) walk(path);
       else if (entry.isFile() && entry.name.endsWith(".rs")) {
         sources.set(path, readFileSync(join(root, path), "utf8"));
@@ -165,7 +252,7 @@ export function checkAllowance(allowance, sizes) {
       continue;
     }
     if (!isSorted(Object.keys(table))) {
-      errors.push(`${LIST}: "${section}" must be sorted by path, without duplicates.`);
+      errors.push(`${LIST}: "${section}" must be sorted by path.`);
     }
     for (const [path, ceiling] of Object.entries(table)) {
       if (!Number.isInteger(ceiling) || ceiling <= 0) {
@@ -247,5 +334,129 @@ export function checkAllowance(allowance, sizes) {
     );
   }
 
+  return errors;
+}
+
+// Keys written more than once in the same object of a JSON text, as
+// `"section": "key"` (or `top level: "key"`). JSON.parse keeps the last one
+// without complaint, so this reads the raw text. The text must be valid JSON.
+export function duplicateKeys(text) {
+  const repeats = [];
+  // One entry per open object or array: its own key in the parent, and the keys seen in it.
+  const open = [];
+  let last;
+  for (const [token] of text.matchAll(/"(?:[^"\\]|\\.)*"|[{}[\],:]/g)) {
+    if (token === "{" || token === "[") {
+      open.push({ name: last, keys: new Set(), wantsKey: token === "{", isObject: token === "{" });
+      continue;
+    }
+    const here = open.at(-1);
+    if (!here) continue;
+    if (token === "}" || token === "]") open.pop();
+    else if (token === ",") here.wantsKey = here.isObject;
+    else if (token === ":") here.wantsKey = false;
+    else if (here.wantsKey) {
+      last = JSON.parse(token);
+      if (here.keys.has(last)) {
+        const where = open.length === 1 ? "top level" : `"${here.name}"`;
+        repeats.push(`${where}: "${last}"`);
+      }
+      here.keys.add(last);
+    }
+  }
+  return repeats;
+}
+
+// --- the Clippy side ---------------------------------------------------------
+
+// The line that turns both lints on, in lib.rs and in main.rs.
+export const CRATE_LINTS =
+  "#![cfg_attr(not(test), warn(clippy::too_many_lines, clippy::cognitive_complexity))]";
+const CRATE_ROOTS = ["lib.rs", "main.rs"];
+const MARKER_REASON = 'reason = "#499"';
+// A lint is always named with its `clippy::` prefix. The bare words also occur
+// as data (the batch error code "too_many_lines").
+const LINT = "clippy::(?:too_many_lines|cognitive_complexity)";
+const NAMES_LINT = new RegExp(`${LINT}\\b`);
+const EXPECT = `expect\\(${LINT}(?:, ${LINT})?, reason = "#499"\\)`;
+// The two forms rustfmt writes for a marker: on one line, or over four.
+const MARKER_LINE = new RegExp(`^\\s*#\\[cfg_attr\\(not\\(test\\), ${EXPECT}\\)\\]$`);
+const MARKER_SPLIT = [/^\s*#\[cfg_attr\($/, /^\s*not\(test\),$/, new RegExp(`^\\s*${EXPECT}$`), /^\s*\)\]$/];
+
+const isCount = (value) => Number.isInteger(value) && value >= 0;
+
+// Checks that the Clippy half of the ratchet is still switched on. `sources` is
+// every .rs file of the crate (test files included); `allowance` is the parsed
+// allowance list. Returns messages; an empty array means it is.
+export function checkLints(sources, allowance) {
+  const errors = [];
+  const src = posix.dirname([...sources.keys()].find((path) => path.endsWith("/lib.rs")) ?? "apps/gateway/src/lib.rs");
+  const roots = CRATE_ROOTS.map((name) => `${src}/${name}`);
+  for (const path of roots) {
+    if (splitLines(sources.get(path) ?? "").includes(CRATE_LINTS)) continue;
+    errors.push(
+      `${path} must contain the line\n  ${CRATE_LINTS}\n` +
+        `  It turns on the function-length and complexity checks for the gateway (#499). Put it back as written.`,
+    );
+  }
+
+  let markers = 0;
+  const holders = new Map();
+  for (const path of [...sources.keys()].sort()) {
+    const lines = splitLines(sources.get(path));
+    lines.forEach((line, i) => {
+      if (!NAMES_LINT.test(line) && !line.includes(MARKER_REASON)) return;
+      if (line === CRATE_LINTS && roots.includes(path)) return;
+      const split = MARKER_SPLIT.every((part, k) => part.test(lines[i - 2 + k] ?? ""));
+      if (MARKER_LINE.test(line) || split) {
+        markers += 1;
+        holders.set(path, (holders.get(path) ?? 0) + 1);
+        return;
+      }
+      errors.push(
+        `${path} line ${i + 1} names clippy::too_many_lines, clippy::cognitive_complexity or ${MARKER_REASON} ` +
+          `outside the two crate lines and the existing markers:\n  ${line.trim()}\n` +
+          `  Remove it. The lints are never switched off for new code: never \`allow\`, no other level, ` +
+          `no other reason, no new marker. Shorten or split the function instead (#499).`,
+      );
+    });
+  }
+
+  if (!isTable(allowance) || !isCount(allowance.markers) || !isCount(allowance.markersBaseline)) {
+    errors.push(`${LIST}: "markers" and "markersBaseline" must be whole numbers.`);
+    return errors;
+  }
+  const where = [...holders].map(([path, count]) => `    ${count} ${path}`).join("\n");
+  if (markers > allowance.markers) {
+    errors.push(
+      `${markers} markers (${MARKER_REASON}) found under ${src}, but "markers" is ${allowance.markers} in ${LIST}.\n` +
+        `  Never add a marker: shorten or split the new function instead. Do not raise "markers".\n` +
+        `  Markers per file:\n${where}`,
+    );
+  } else if (markers < allowance.markers) {
+    errors.push(
+      `${markers} markers (${MARKER_REASON}) found under ${src}, but "markers" is ${allowance.markers} in ${LIST}.\n` +
+        `  Lower "markers" to ${markers} in the same commit that removed the marker. Leave "markersBaseline" alone.`,
+    );
+  } else if (allowance.markers > allowance.markersBaseline) {
+    errors.push(
+      `${LIST}: "markers" (${allowance.markers}) is above "markersBaseline" (${allowance.markersBaseline}).\n` +
+        `  The count only goes down. Never add a marker, and never raise either number: remove the new marker and shorten the function.`,
+    );
+  }
+  return errors;
+}
+
+// A threshold setting in a Clippy configuration file would move the limits of
+// both lints for every function at once.
+export function checkClippyConfig(path, text) {
+  const errors = [];
+  splitLines(text).forEach((line, i) => {
+    if (!/(?:too[-_]many[-_]lines|cognitive[-_]complexity)[-_]threshold/.test(line)) return;
+    errors.push(
+      `${path} line ${i + 1} sets a threshold for too_many_lines or cognitive_complexity.\n` +
+        `  Remove it: the ratchet uses Clippy's default limits (#499).`,
+    );
+  });
   return errors;
 }
