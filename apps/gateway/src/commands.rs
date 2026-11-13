@@ -18,8 +18,8 @@ use crate::{
 use serve::serve;
 
 /// Runs one subcommand after `run` has set up logging, configuration and the
-/// database pool. `wait-for-database`, `schema-version` and `healthcheck` are
-/// handled by `run` before this point.
+/// database pool. `schema-version`, `healthcheck` and `archive verify` are
+/// handled in `main`, and `wait-for-database` in `run`, before this point.
 pub(crate) async fn dispatch(
     command: Command,
     config: Config,
