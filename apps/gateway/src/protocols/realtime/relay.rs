@@ -131,11 +131,12 @@ type ClientRx = futures_util::stream::SplitStream<WebSocket>;
 
 /// The session loop's state, shared by the client and upstream branches.
 ///
-/// Fields drop in declaration order. If the session future is dropped
-/// mid-loop, the upstream connection closes before `session` drops, as it
-/// did when these were locals: `RealtimeSession`'s `Drop` detaches the
+/// Fields drop in declaration order, which is the order the old locals
+/// dropped in if the session future is dropped mid-loop: the client socket,
+/// then the upstream connection, then `session`, whose `Drop` detaches the
 /// cancelled accounting after the network work has stopped.
 struct Relay {
+    client_rx: ClientRx,
     first_output: bool,
     requested: Option<String>,
     bucket: Bucket,
@@ -186,7 +187,9 @@ impl Relay {
         }
     }
 
-    /// A validated `response.create`: reserve its window, then forward it.
+    /// A validated `response.create`: refused with an error event while a
+    /// response is active or requested; otherwise reserve its window, then
+    /// forward it.
     async fn response_create(
         &mut self,
         text: String,
@@ -321,10 +324,10 @@ impl Relay {
 
 /// How the session loop ended, with what `proxy` still needs to report it.
 pub(super) struct Ended {
-    pub end: End,
+    pub(super) end: End,
     /// A response was open or requested when the loop ended.
-    pub in_flight: bool,
-    pub closing: Closing,
+    pub(super) in_flight: bool,
+    pub(super) closing: Closing,
 }
 
 /// The client side and the session, kept until the end is reported.
@@ -369,9 +372,10 @@ pub(super) async fn relay(socket: WebSocket, mut session: RealtimeSession) -> Op
     let limits = session.limits();
     let window = session.window_output_tokens();
     let alias = session.model().to_owned();
-    let (client_tx, mut client_rx) = socket.split();
+    let (client_tx, client_rx) = socket.split();
     let deadline = Instant::now() + limits.max_session;
     let mut relay = Relay {
+        client_rx,
         session,
         upstream,
         client_tx,
@@ -388,7 +392,7 @@ pub(super) async fn relay(socket: WebSocket, mut session: RealtimeSession) -> Op
             biased;
             _ = sleep_until(deadline) => break End::MaxDuration,
             _ = sleep_until(relay.idle) => break End::Idle,
-            message = client_rx.next() => {
+            message = relay.client_rx.next() => {
                 if let Break(end) = relay.client(message).await {
                     break end;
                 }
@@ -400,10 +404,13 @@ pub(super) async fn relay(socket: WebSocket, mut session: RealtimeSession) -> Op
             }
         }
     };
+    // Bindings drop in reverse order, as the old locals did: the client
+    // socket, then the upstream, then `session`.
     let Relay {
         session,
         mut upstream,
         client_tx,
+        client_rx,
         requested,
         ..
     } = relay;
