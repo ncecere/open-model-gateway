@@ -6,7 +6,11 @@ The project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). 
 
 ## [Unreleased]
 
-Changes after v0.15.1: [unreleased notes](docs/releases/unreleased.md).
+Changes after v0.16.0: [unreleased notes](docs/releases/unreleased.md).
+
+## [0.16.0]
+
+A minor release: the cause of `503 accounting_unavailable` is recorded in the new counter `gateway_accounting_failures_total{stage,cause}` and an `accounting unavailable` WARN log line (#389); SCIM documents the set-up before the first push (#390); the largest gateway source files are split into child modules with no behaviour change, behind a structure ratchet (#500, #499), and route authorization is pinned by a snapshot (#522). Some log events now carry a child module as their target; prefix filters still match. No migration (schema stays **0080**), no runtime-grant change; the OpenAPI documents change only in description text and version. [Notes](docs/releases/v0.16.0.md).
 
 ## [0.15.1]
 
@@ -114,7 +118,8 @@ Alerts, key safety, model compare, SCIM, JWKS refresh, metrics and backup toolin
 
 The single-enterprise rebuild: Team, Project and personal workspaces, OIDC platform roles, catalogs, multimodal workloads across five provider families, immutable micro-USD accounting, logs and Admin settings. Migrations `0001` to `0010`. Notes: [`docs/releases/v0.1.0.md`](docs/releases/v0.1.0.md).
 
-[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.15.1...HEAD
+[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/ncecere/open-model-gateway/compare/v0.15.1...v0.16.0
 [0.15.1]: https://github.com/ncecere/open-model-gateway/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/ncecere/open-model-gateway/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/ncecere/open-model-gateway/compare/v0.14.0...v0.14.1
