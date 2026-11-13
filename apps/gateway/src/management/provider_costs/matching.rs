@@ -107,18 +107,13 @@ fn model_matches(binding: &Binding, model: &str, o: &Observation) -> bool {
             || o.reported_upstream_model == o.upstream_model)
 }
 
-#[cfg_attr(
-    not(test),
-    expect(clippy::too_many_lines, clippy::cognitive_complexity, reason = "#499")
-)]
-pub(super) async fn snapshot(
+/// Loads the frozen observation statement and enforces the comparison bound.
+async fn load_observations(
     tx: &mut Transaction<'_, Postgres>,
-    import_id: Uuid,
     mapping_id: Uuid,
     start: DateTime<Utc>,
     end: DateTime<Utc>,
-    bindings: &[Binding],
-) -> Result<Value, ApiError> {
+) -> Result<(Value, Vec<Observation>), ApiError> {
     // The evidence, observation timestamp, archive status and raw rows come
     // from ONE statement snapshot, so concurrent settlement/archive cannot
     // tear the comparison. Only attested historical account scopes qualify.
@@ -132,7 +127,14 @@ pub(super) async fn snapshot(
             "Raw history exceeds the 100000-attempt comparison bound; select a shorter import period",
         ));
     }
-    let archived = raw["archived"].as_bool().unwrap_or(true);
+    Ok((raw, observations))
+}
+
+/// Personal workspaces named by the mapping or seen in the observations.
+fn personal_workspace_set(
+    raw: &Value,
+    observations: &[Observation],
+) -> Result<BTreeSet<Uuid>, ApiError> {
     let mut personal_workspaces: BTreeSet<Uuid> =
         serde_json::from_value(raw["personal_workspaces"].clone()).map_err(|_| invalid())?;
     personal_workspaces.extend(
@@ -141,15 +143,14 @@ pub(super) async fn snapshot(
             .filter(|o| o.workspace_kind == "personal")
             .map(|o| o.workspace_id),
     );
-    // Resolve kind in the observation statement, then project before freezing.
-    // Never attach personal totals to a model, connection, day or workspace.
-    let public_bindings: Vec<_> = bindings
-        .iter()
-        .filter(|b| {
-            b.workspace_id
-                .is_none_or(|ws| !personal_workspaces.contains(&ws))
-        })
-        .collect();
+    Ok(personal_workspaces)
+}
+
+/// Imported provider actuals by bucket, and every supplied cost category.
+async fn load_actuals(
+    tx: &mut Transaction<'_, Postgres>,
+    import_id: Uuid,
+) -> Result<(BTreeMap<ActualKey, Actual>, BTreeSet<String>), ApiError> {
     let lines:Vec<(DateTime<Utc>,Value,String)>=sqlx::query_as("SELECT bucket_start,dimensions,amount_microusd::text FROM provider_cost_lines WHERE import_id=$1 ORDER BY line_number")
         .bind(import_id).fetch_all(&mut **tx).await?;
     let mut actuals: BTreeMap<ActualKey, Actual> = BTreeMap::new();
@@ -171,6 +172,14 @@ pub(super) async fn snapshot(
         // no guesses from free-text descriptions and no merged fee categories.
         a.dimensions.push(dimensions);
     }
+    Ok((actuals, supplied_categories))
+}
+
+/// Counts how many token actuals claim each historical aggregate.
+fn build_claims(
+    actuals: &BTreeMap<ActualKey, Actual>,
+    bindings: &[Binding],
+) -> BTreeMap<ClaimKey, usize> {
     // Two provider model names mapping to the same historical aggregate do
     // not make that aggregate allocatable. Leave BOTH unmatched, rather than
     // whichever row happened to sort second (or double-counting estimates).
@@ -203,13 +212,22 @@ pub(super) async fn snapshot(
                 .or_default() += 1;
         }
     }
-    let mut rows = Vec::new();
-    let mut used = BTreeSet::new();
-    let mut total_actual = 0_i128;
+    claims
+}
+
+struct ObservationSummary<'a> {
+    total_estimate: Estimate,
+    personal_estimate: Estimate,
+    personal_reasons: BTreeSet<&'static str>,
+    index: ObservationIndex<'a>,
+    workspaces: BTreeMap<ScopeKey, BTreeSet<Uuid>>,
+}
+
+/// Totals, the personal estimate, the observation index and the workspaces
+/// seen per connection/deployment scope.
+fn summarize(observations: &[Observation]) -> Result<ObservationSummary<'_>, ApiError> {
     let mut total_estimate = Estimate::default();
     let mut personal_estimate = Estimate::default();
-    let mut personal_actual = 0_i128;
-    let mut personal_actual_categories: BTreeMap<String, i128> = BTreeMap::new();
     let mut personal_reasons = BTreeSet::new();
     let mut index: ObservationIndex<'_> = BTreeMap::new();
     let mut workspaces: BTreeMap<ScopeKey, BTreeSet<Uuid>> = BTreeMap::new();
@@ -234,133 +252,261 @@ pub(super) async fn snapshot(
                 .insert(o.workspace_id);
         }
     }
-    for ((day, provider_workspace, model, tier, category), actual) in actuals {
-        add(&mut total_actual, actual.amount)?;
-        let candidates: Vec<_> = bindings
+    Ok(ObservationSummary {
+        total_estimate,
+        personal_estimate,
+        personal_reasons,
+        index,
+        workspaces,
+    })
+}
+
+/// Accumulated output of the actuals and estimate-only passes.
+#[derive(Default)]
+struct Reconciled {
+    rows: Vec<Value>,
+    used: BTreeSet<usize>,
+    total_actual: i128,
+    personal_actual: i128,
+    personal_actual_categories: BTreeMap<String, i128>,
+    personal_reasons: BTreeSet<&'static str>,
+}
+
+/// Per-actual-row matching state.
+struct RowMatch {
+    reasons: BTreeSet<&'static str>,
+    estimates: BTreeMap<Uuid, Estimate>,
+    unresolved_coverage: Estimate,
+    actual_workspace: Option<Uuid>,
+}
+
+/// Read-only inputs shared by every actual row.
+struct Matcher<'a> {
+    bindings: &'a [Binding],
+    archived: bool,
+    personal_workspaces: &'a BTreeSet<Uuid>,
+    claims: &'a BTreeMap<ClaimKey, usize>,
+    index: &'a ObservationIndex<'a>,
+    workspaces: &'a BTreeMap<ScopeKey, BTreeSet<Uuid>>,
+}
+
+fn supported(category: &str, tier: Option<&str>, actual: &Actual) -> bool {
+    category == "tokens"
+        && matches!(tier, Some("standard" | "batch"))
+        && actual.dimensions.iter().all(|d| {
+            matches!(
+                d["token_type"].as_str(),
+                Some(
+                    "uncached_input_tokens"
+                        | "output_tokens"
+                        | "cache_read_input_tokens"
+                        | "cache_creation.ephemeral_5m_input_tokens"
+                        | "cache_creation.ephemeral_1h_input_tokens"
+                )
+            ) && matches!(d["context_window"].as_str(), Some("0-200k" | "200k-1M"))
+                && matches!(d["speed"].as_str(), None | Some("standard"))
+                && matches!(
+                    d["inference_geo"].as_str(),
+                    None | Some("global" | "not_available")
+                )
+        })
+}
+
+impl Matcher<'_> {
+    fn reconcile(
+        &self,
+        key: ActualKey,
+        actual: Actual,
+        out: &mut Reconciled,
+    ) -> Result<(), ApiError> {
+        add(&mut out.total_actual, actual.amount)?;
+        let row = self.scope(&key, &actual, &mut out.used)?;
+        self.record(key, actual, row, out)
+    }
+
+    fn scope(
+        &self,
+        key: &ActualKey,
+        actual: &Actual,
+        used: &mut BTreeSet<usize>,
+    ) -> Result<RowMatch, ApiError> {
+        let (day, provider_workspace, _, _, _) = key;
+        let day = *day;
+        let candidates: Vec<_> = self
+            .bindings
             .iter()
             .filter(|b| {
-                b.provider_workspace_id == provider_workspace
+                b.provider_workspace_id == *provider_workspace
                     && b.effective_start <= day
                     && b.effective_end >= day + Duration::days(1)
             })
             .collect();
         let mut reasons = BTreeSet::from(["timing_basis"]);
-        if archived {
+        if self.archived {
             reasons.insert("incomplete_estimate");
         }
-        let mut estimates: BTreeMap<Uuid, Estimate> = BTreeMap::new();
-        let mut unresolved_coverage = Estimate::default();
-        let mut actual_workspace = None;
+        let mut row = RowMatch {
+            reasons,
+            estimates: BTreeMap::new(),
+            unresolved_coverage: Estimate::default(),
+            actual_workspace: None,
+        };
         if candidates.len() != 1 {
-            let partial = bindings.iter().any(|b| {
-                b.provider_workspace_id == provider_workspace
+            let partial = self.bindings.iter().any(|b| {
+                b.provider_workspace_id == *provider_workspace
                     && b.effective_start < day + Duration::days(1)
                     && b.effective_end > day
             });
-            reasons.insert(if partial {
+            row.reasons.insert(if partial {
                 "ambiguous_scope"
             } else {
                 "provider_only"
             });
         } else {
-            let binding = candidates[0];
-            let supported = category == "tokens"
-                && matches!(tier.as_deref(), Some("standard" | "batch"))
-                && actual.dimensions.iter().all(|d| {
-                    matches!(
-                        d["token_type"].as_str(),
-                        Some(
-                            "uncached_input_tokens"
-                                | "output_tokens"
-                                | "cache_read_input_tokens"
-                                | "cache_creation.ephemeral_5m_input_tokens"
-                                | "cache_creation.ephemeral_1h_input_tokens"
-                        )
-                    ) && matches!(d["context_window"].as_str(), Some("0-200k" | "200k-1M"))
-                        && matches!(d["speed"].as_str(), None | Some("standard"))
-                        && matches!(
-                            d["inference_geo"].as_str(),
-                            None | Some("global" | "not_available")
-                        )
-                });
-            if !supported {
-                reasons.insert("unsupported_category");
-            } else if let Some(model) = &model {
-                let expected = binding
-                    .model_mappings
-                    .iter()
-                    .find(|m| m.provider_model == *model)
-                    .map_or(model.as_str(), |m| m.upstream_model.as_str());
-                let key = (
-                    day,
-                    binding.connection_id,
-                    Some(expected.to_owned()),
-                    tier.clone(),
-                );
-                let claim = (
-                    day,
-                    binding.connection_id,
-                    binding.deployment_id,
-                    tier.clone(),
-                    expected.to_owned(),
-                );
-                let ambiguous = claims.get(&claim).is_some_and(|n| *n > 1);
-                if ambiguous {
-                    reasons.insert("ambiguous_scope");
-                }
-                for &(position, o) in index.get(&key).filter(|_| !ambiguous).into_iter().flatten() {
-                    if scoped(binding, o) && model_matches(binding, model, o) {
-                        if !used.insert(position) {
-                            return Err(ApiError(
-                                StatusCode::CONFLICT,
-                                "Ambiguous aggregate model mapping would count estimates twice",
-                            ));
-                        }
-                        estimates.entry(o.workspace_id).or_default().observe(o)?;
-                    }
-                }
-                // Missing model/tier detail cannot establish absence from a
-                // compatible bucket. Keep this overlapping coverage separate
-                // from allocated estimates/holds, and never consume it under
-                // one arbitrary model or tier (it may taint several buckets).
-                for key in [
-                    (day, binding.connection_id, Some(expected.to_owned()), None),
-                    (day, binding.connection_id, None, tier.clone()),
-                    (day, binding.connection_id, None, None),
-                ] {
-                    for &(_, o) in index.get(&key).into_iter().flatten() {
-                        if scoped(binding, o)
-                            && (key.2.is_none() || model_matches(binding, model, o))
-                        {
-                            reasons.insert("incomplete_estimate");
-                            if !personal_workspaces.contains(&o.workspace_id) {
-                                unresolved_coverage.observe(o)?;
-                                unresolved_coverage.unresolved = unresolved_coverage.attempts;
-                            }
-                        }
-                    }
-                }
-                if estimates.is_empty() {
-                    reasons.insert("unknown_model");
-                    reasons.insert("provider_only");
-                }
-            } else {
-                reasons.insert("unknown_model");
+            self.match_binding(candidates[0], key, actual, used, &mut row)?;
+        }
+        Ok(row)
+    }
+
+    fn match_binding(
+        &self,
+        binding: &Binding,
+        key: &ActualKey,
+        actual: &Actual,
+        used: &mut BTreeSet<usize>,
+        row: &mut RowMatch,
+    ) -> Result<(), ApiError> {
+        let (day, _, model, tier, category) = key;
+        if !supported(category, tier.as_deref(), actual) {
+            row.reasons.insert("unsupported_category");
+        } else if let Some(model) = model {
+            self.match_model(binding, key, model, used, row)?;
+        } else {
+            row.reasons.insert("unknown_model");
+        }
+        let scoped_workspaces =
+            self.workspaces
+                .get(&(*day, binding.connection_id, binding.deployment_id));
+        let conflicting_workspace = scoped_workspaces.is_some_and(|set| {
+            set.len() > 1 || binding.workspace_id.is_none_or(|ws| !set.contains(&ws))
+        });
+        if binding.exclusive && !binding.non_omg_traffic && !conflicting_workspace {
+            row.actual_workspace = binding.workspace_id;
+        } else {
+            row.reasons.insert("shared_unallocated");
+            if binding.exclusive {
+                row.reasons.insert("ambiguous_scope");
             }
-            let scoped_workspaces =
-                workspaces.get(&(day, binding.connection_id, binding.deployment_id));
-            let conflicting_workspace = scoped_workspaces.is_some_and(|set| {
-                set.len() > 1 || binding.workspace_id.is_none_or(|ws| !set.contains(&ws))
-            });
-            if binding.exclusive && !binding.non_omg_traffic && !conflicting_workspace {
-                actual_workspace = binding.workspace_id;
-            } else {
-                reasons.insert("shared_unallocated");
-                if binding.exclusive {
-                    reasons.insert("ambiguous_scope");
+        }
+        Ok(())
+    }
+
+    fn match_model(
+        &self,
+        binding: &Binding,
+        actual_key: &ActualKey,
+        model: &str,
+        used: &mut BTreeSet<usize>,
+        row: &mut RowMatch,
+    ) -> Result<(), ApiError> {
+        let (day, _, _, tier, _) = actual_key;
+        let day = *day;
+        let expected = binding
+            .model_mappings
+            .iter()
+            .find(|m| m.provider_model == *model)
+            .map_or(model, |m| m.upstream_model.as_str());
+        let key = (
+            day,
+            binding.connection_id,
+            Some(expected.to_owned()),
+            tier.clone(),
+        );
+        let claim = (
+            day,
+            binding.connection_id,
+            binding.deployment_id,
+            tier.clone(),
+            expected.to_owned(),
+        );
+        let ambiguous = self.claims.get(&claim).is_some_and(|n| *n > 1);
+        if ambiguous {
+            row.reasons.insert("ambiguous_scope");
+        }
+        for &(position, o) in self
+            .index
+            .get(&key)
+            .filter(|_| !ambiguous)
+            .into_iter()
+            .flatten()
+        {
+            if scoped(binding, o) && model_matches(binding, model, o) {
+                if !used.insert(position) {
+                    return Err(ApiError(
+                        StatusCode::CONFLICT,
+                        "Ambiguous aggregate model mapping would count estimates twice",
+                    ));
+                }
+                row.estimates
+                    .entry(o.workspace_id)
+                    .or_default()
+                    .observe(o)?;
+            }
+        }
+        self.observe_coverage(binding, actual_key, model, expected, row)?;
+        if row.estimates.is_empty() {
+            row.reasons.insert("unknown_model");
+            row.reasons.insert("provider_only");
+        }
+        Ok(())
+    }
+
+    fn observe_coverage(
+        &self,
+        binding: &Binding,
+        actual_key: &ActualKey,
+        model: &str,
+        expected: &str,
+        row: &mut RowMatch,
+    ) -> Result<(), ApiError> {
+        let (day, _, _, tier, _) = actual_key;
+        let day = *day;
+        // Missing model/tier detail cannot establish absence from a
+        // compatible bucket. Keep this overlapping coverage separate
+        // from allocated estimates/holds, and never consume it under
+        // one arbitrary model or tier (it may taint several buckets).
+        for key in [
+            (day, binding.connection_id, Some(expected.to_owned()), None),
+            (day, binding.connection_id, None, tier.clone()),
+            (day, binding.connection_id, None, None),
+        ] {
+            for &(_, o) in self.index.get(&key).into_iter().flatten() {
+                if scoped(binding, o) && (key.2.is_none() || model_matches(binding, model, o)) {
+                    row.reasons.insert("incomplete_estimate");
+                    if !self.personal_workspaces.contains(&o.workspace_id) {
+                        row.unresolved_coverage.observe(o)?;
+                        row.unresolved_coverage.unresolved = row.unresolved_coverage.attempts;
+                    }
                 }
             }
         }
+        Ok(())
+    }
+
+    fn record(
+        &self,
+        key: ActualKey,
+        actual: Actual,
+        row: RowMatch,
+        out: &mut Reconciled,
+    ) -> Result<(), ApiError> {
+        let (day, provider_workspace, model, tier, category) = key;
+        let RowMatch {
+            mut reasons,
+            estimates,
+            unresolved_coverage,
+            actual_workspace,
+        } = row;
         if actual_workspace.is_none() {
             reasons.insert("shared_unallocated");
         }
@@ -386,31 +532,41 @@ pub(super) async fn snapshot(
         } else {
             None
         };
-        if actual_workspace.is_some_and(|ws| personal_workspaces.contains(&ws)) {
-            add(&mut personal_actual, actual.amount)?;
+        if actual_workspace.is_some_and(|ws| self.personal_workspaces.contains(&ws)) {
+            add(&mut out.personal_actual, actual.amount)?;
             add(
-                personal_actual_categories.entry(category).or_default(),
+                out.personal_actual_categories.entry(category).or_default(),
                 actual.amount,
             )?;
-            personal_reasons.extend(reasons);
-            continue;
+            out.personal_reasons.extend(reasons);
+            return Ok(());
         }
         let incomplete = reasons.contains("incomplete_estimate");
         let workspace_estimates: Vec<Value> = estimates
             .into_iter()
-            .filter(|(ws, _)| !personal_workspaces.contains(ws))
+            .filter(|(ws, _)| !self.personal_workspaces.contains(ws))
             .map(|(ws, e)| json!({"workspace_id":ws,"totals":e.value(incomplete)}))
             .collect();
-        rows.push(json!({"day":day,"provider_workspace_id":provider_workspace,"model":model,"service_tier":tier,"category":category,
+        out.rows.push(json!({"day":day,"provider_workspace_id":provider_workspace,"model":model,"service_tier":tier,"category":category,
             "dimensions":actual.dimensions,"workspace_id":actual_workspace,"imported_microusd":actual.amount.to_string(),
             "variance_microusd":variance,"workspace_estimates":workspace_estimates,
-            "unresolved_coverage":unresolved_coverage.value(archived),"reasons":reasons}));
+            "unresolved_coverage":unresolved_coverage.value(self.archived),"reasons":reasons}));
+        Ok(())
     }
+}
+
+/// Unmatched observations, grouped per day/workspace/model/tier.
+fn add_estimate_only(
+    observations: &[Observation],
+    personal_workspaces: &BTreeSet<Uuid>,
+    archived: bool,
+    out: &mut Reconciled,
+) -> Result<(), ApiError> {
     let mut estimate_only: BTreeMap<EstimateKey, Estimate> = BTreeMap::new();
     for (index, o) in observations.iter().enumerate() {
-        if !used.contains(&index) {
+        if !out.used.contains(&index) {
             if personal_workspaces.contains(&o.workspace_id) {
-                personal_reasons.insert("estimate_only");
+                out.personal_reasons.insert("estimate_only");
                 continue;
             }
             let key = (
@@ -429,9 +585,73 @@ pub(super) async fn snapshot(
         if archived || estimate.unresolved > 0 {
             reasons.push("incomplete_estimate");
         }
-        rows.push(json!({"day":day,"workspace_id":workspace,"model":model,"service_tier":tier,
+        out.rows.push(json!({"day":day,"workspace_id":workspace,"model":model,"service_tier":tier,
             "imported_microusd":null,"variance_microusd":null,"estimate":estimate.value(archived),"reasons":reasons}));
     }
+    Ok(())
+}
+
+fn category_coverage(supplied_categories: &BTreeSet<String>) -> Vec<Value> {
+    [
+        ("usage", &["tokens"][..]), ("discounts", &["discount", "discounts"][..]),
+        ("credits", &["credit", "credits"][..]), ("taxes", &["tax", "taxes"][..]),
+        ("tools", &["web_search", "code_execution", "session_usage"][..]),
+    ].into_iter().map(|(category,names)| json!({"category":category,"status":if names.iter().any(|n|supplied_categories.contains(*n)) {"supplied"} else {"not_supplied"}})).collect()
+}
+
+pub(super) async fn snapshot(
+    tx: &mut Transaction<'_, Postgres>,
+    import_id: Uuid,
+    mapping_id: Uuid,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    bindings: &[Binding],
+) -> Result<Value, ApiError> {
+    let (raw, observations) = load_observations(tx, mapping_id, start, end).await?;
+    let archived = raw["archived"].as_bool().unwrap_or(true);
+    let personal_workspaces = personal_workspace_set(&raw, &observations)?;
+    // Resolve kind in the observation statement, then project before freezing.
+    // Never attach personal totals to a model, connection, day or workspace.
+    let public_bindings: Vec<_> = bindings
+        .iter()
+        .filter(|b| {
+            b.workspace_id
+                .is_none_or(|ws| !personal_workspaces.contains(&ws))
+        })
+        .collect();
+    let (actuals, supplied_categories) = load_actuals(tx, import_id).await?;
+    let claims = build_claims(&actuals, bindings);
+    let ObservationSummary {
+        total_estimate,
+        personal_estimate,
+        personal_reasons,
+        index,
+        workspaces,
+    } = summarize(&observations)?;
+    let matcher = Matcher {
+        bindings,
+        archived,
+        personal_workspaces: &personal_workspaces,
+        claims: &claims,
+        index: &index,
+        workspaces: &workspaces,
+    };
+    let mut out = Reconciled {
+        personal_reasons,
+        ..Reconciled::default()
+    };
+    for (key, actual) in actuals {
+        matcher.reconcile(key, actual, &mut out)?;
+    }
+    add_estimate_only(&observations, &personal_workspaces, archived, &mut out)?;
+    let Reconciled {
+        rows,
+        total_actual,
+        personal_actual,
+        personal_actual_categories,
+        mut personal_reasons,
+        ..
+    } = out;
     if archived || personal_estimate.unresolved > 0 {
         personal_reasons.insert("incomplete_estimate");
     }
@@ -439,11 +659,7 @@ pub(super) async fn snapshot(
         .into_iter()
         .map(|(category, amount)| (category, amount.to_string()))
         .collect();
-    let category_coverage: Vec<Value> = [
-        ("usage", &["tokens"][..]), ("discounts", &["discount", "discounts"][..]),
-        ("credits", &["credit", "credits"][..]), ("taxes", &["tax", "taxes"][..]),
-        ("tools", &["web_search", "code_execution", "session_usage"][..]),
-    ].into_iter().map(|(category,names)| json!({"category":category,"status":if names.iter().any(|n|supplied_categories.contains(*n)) {"supplied"} else {"not_supplied"}})).collect();
+    let category_coverage = category_coverage(&supplied_categories);
     Ok(
         json!({"name":"provider-reported cost reconciliation","verified_invoice":false,"complete":false,
         "import_id":import_id,"mapping_id":mapping_id,"query_version":"aggregate-attempt-start-v1",
