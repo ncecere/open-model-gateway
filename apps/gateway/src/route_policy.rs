@@ -463,6 +463,119 @@ mod tests {
         assert_eq!(lookup("GET", "/api/v1/platform/not-a-route"), None);
     }
 
+    /// Repository-relative, for the failure message.
+    const SNAPSHOT: &str = "apps/gateway/src/route_policy.snapshot";
+    const SNAPSHOT_HEADER: &str = "\
+# Authorization snapshot of route_policy::ROUTES, one entry per line in table order (first match wins):
+# METHODS<TAB>PATH<TAB>ACCESS<TAB>TOKEN. Any change to this file is an authorization change and needs
+# a security review (two independent reviews, one adversarial; see AGENTS.md). Regenerate with
+# OMG_REGENERATE_ROUTE_POLICY=1 cargo test -p open-model-gateway --lib route_policy_matches_snapshot
+";
+
+    fn snapshot_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/route_policy.snapshot")
+    }
+
+    fn snapshot_line(route: &Route) -> String {
+        // A character a reader cannot see would make a changed line look
+        // unchanged in the diff, so declarations are plain text.
+        for method in route.methods.split_whitespace() {
+            assert!(
+                matches!(
+                    method,
+                    "*" | "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS"
+                ),
+                "{}: unexpected method {method:?}",
+                route.path
+            );
+        }
+        assert!(
+            route.path.starts_with('/') && route.path.bytes().all(|b| b.is_ascii_graphic()),
+            "route path must be printable ASCII starting with '/': {:?}",
+            route.path
+        );
+        let token = match route.token_policy {
+            TokenPolicy::Denied => "denied".to_owned(),
+            TokenPolicy::BrowserAdminOnly => "browser-admin-only".to_owned(),
+            TokenPolicy::Scope(scope) => format!("scope:{}", scope.as_str()),
+        };
+        let methods = route
+            .methods
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!("{methods}\t{}\t{:?}\t{token}", route.path, route.access)
+    }
+
+    /// Ordered line diff (longest common subsequence): `-` only in the
+    /// snapshot, `+` only in `ROUTES`. A changed entry shows as both.
+    fn line_diff(old: &[&str], new: &[&str]) -> Vec<String> {
+        let (n, m) = (old.len(), new.len());
+        let mut lcs = vec![vec![0usize; m + 1]; n + 1];
+        for i in (0..n).rev() {
+            for j in (0..m).rev() {
+                lcs[i][j] = if old[i] == new[j] {
+                    lcs[i + 1][j + 1] + 1
+                } else {
+                    lcs[i + 1][j].max(lcs[i][j + 1])
+                };
+            }
+        }
+        let (mut i, mut j, mut out) = (0, 0, Vec::new());
+        while i < n || j < m {
+            if i < n && j < m && old[i] == new[j] {
+                (i, j) = (i + 1, j + 1);
+            } else if i < n && (j == m || lcs[i + 1][j] >= lcs[i][j + 1]) {
+                out.push(format!("- {}", old[i]));
+                i += 1;
+            } else {
+                out.push(format!("+ {}", new[j]));
+                j += 1;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn line_diff_reports_added_removed_changed_and_reordered_lines() {
+        assert!(line_diff(&["a", "b"], &["a", "b"]).is_empty());
+        assert_eq!(line_diff(&["a", "b"], &["a", "c"]), ["- b", "+ c"]);
+        assert_eq!(line_diff(&["a"], &["a", "b"]), ["+ b"]);
+        assert_eq!(line_diff(&["a", "b"], &["b"]), ["- a"]);
+        // Order matters: a swap moves one line.
+        assert_eq!(line_diff(&["a", "b"], &["b", "a"]), ["- a", "+ a"]);
+    }
+
+    /// Pins every declaration independently of the matrix tests, which derive
+    /// their expectations from `ROUTES` and so cannot see a weakened entry (#522).
+    #[test]
+    fn route_policy_matches_snapshot() {
+        let expected: Vec<String> = ROUTES.iter().map(snapshot_line).collect();
+        let rendered = format!("{SNAPSHOT_HEADER}{}\n", expected.join("\n"));
+        if std::env::var_os("OMG_REGENERATE_ROUTE_POLICY").is_some() {
+            assert_eq!(std::env::var("OMG_REGENERATE_ROUTE_POLICY").unwrap(), "1");
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "regeneration forbidden in CI"
+            );
+            std::fs::write(snapshot_path(), &rendered).unwrap();
+        }
+        let committed = std::fs::read_to_string(snapshot_path())
+            .unwrap_or_else(|error| panic!("cannot read {SNAPSHOT}: {error}"));
+        let committed: Vec<&str> = committed
+            .lines()
+            .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
+            .collect();
+        let expected: Vec<&str> = expected.iter().map(String::as_str).collect();
+        let diff = line_diff(&committed, &expected);
+        assert!(
+            diff.is_empty(),
+            "an authorization declaration changed; if intended, update {SNAPSHOT} in the same PR \
+             and have it security-reviewed\n(- snapshot, + ROUTES)\n{}",
+            diff.join("\n")
+        );
+    }
+
     #[test]
     fn scope_strings_match_admin_tokens_scopes() {
         for scope in [
