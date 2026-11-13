@@ -477,6 +477,23 @@ mod tests {
     }
 
     fn snapshot_line(route: &Route) -> String {
+        // A character a reader cannot see would make a changed line look
+        // unchanged in the diff, so declarations are plain text.
+        for method in route.methods.split_whitespace() {
+            assert!(
+                matches!(
+                    method,
+                    "*" | "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS"
+                ),
+                "{}: unexpected method {method:?}",
+                route.path
+            );
+        }
+        assert!(
+            route.path.starts_with('/') && route.path.bytes().all(|b| b.is_ascii_graphic()),
+            "route path must be printable ASCII starting with '/': {:?}",
+            route.path
+        );
         let token = match route.token_policy {
             TokenPolicy::Denied => "denied".to_owned(),
             TokenPolicy::BrowserAdminOnly => "browser-admin-only".to_owned(),
@@ -543,7 +560,8 @@ mod tests {
             );
             std::fs::write(snapshot_path(), &rendered).unwrap();
         }
-        let committed = std::fs::read_to_string(snapshot_path()).unwrap_or_default();
+        let committed = std::fs::read_to_string(snapshot_path())
+            .unwrap_or_else(|error| panic!("cannot read {SNAPSHOT}: {error}"));
         let committed: Vec<&str> = committed
             .lines()
             .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
