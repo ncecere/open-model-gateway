@@ -699,268 +699,24 @@ pub(crate) fn validate_measured(
 
 // --------------------------------------------------------------- Proxy ----
 
-fn error_text(
-    kind: &str,
-    code: &str,
-    message: &str,
-    param: Option<&str>,
-    event_id: Option<&str>,
-) -> String {
-    json!({
-        "type": "error",
-        "event_id": format!("event_gw_{}", Uuid::new_v4().simple()),
-        "error": {"type": kind, "code": code, "message": message, "param": param, "event_id": event_id}
-    })
-    .to_string()
-}
-fn inference_error_text(error: InferenceError) -> String {
-    let body = super::openai_error_body(error);
-    let e = &body["error"];
-    error_text(
-        e["type"].as_str().unwrap_or("api_error"),
-        error.code(),
-        error.message(),
-        None,
-        None,
-    )
-}
+mod relay;
+use relay::{End, Ended, inference_error_text, invalid_text, rejection_error, rejection_text};
 
-/// How a session ended (decides the close frame and the attempt outcome).
-enum End {
-    ClientClosed,
-    ClientGone,
-    Idle,
-    MaxDuration,
-    Rejected(Rejection),
-    Binary,
-    /// A client message above `GATEWAY_REALTIME_MAX_MESSAGE_BYTES`.
-    TooLarge,
-    RateLimited,
-    Denied(InferenceError),
-    Upstream(InferenceError),
-}
+// The `error` event messages for the gateway's own closes.
+const IDLE_MESSAGE: &str = "The session was idle for too long";
+const EXPIRED_MESSAGE: &str = "The session reached its maximum duration";
+const BINARY_MESSAGE: &str = "Binary frames are not supported; send JSON text events";
+const TOO_LARGE_MESSAGE: &str = "The event exceeds the gateway's message size limit";
 
-/// Token bucket over client events (burst = 2 × rate).
-struct Bucket {
-    tokens: f64,
-    rate: f64,
-    at: Instant,
-}
-impl Bucket {
-    fn new(rate: u32) -> Self {
-        Self {
-            tokens: f64::from(rate) * 2.0,
-            rate: f64::from(rate),
-            at: Instant::now(),
-        }
-    }
-    fn take(&mut self) -> bool {
-        let now = Instant::now();
-        self.tokens = (self.tokens + now.duration_since(self.at).as_secs_f64() * self.rate)
-            .min(self.rate * 2.0);
-        self.at = now;
-        if self.tokens >= 1.0 {
-            self.tokens -= 1.0;
-            true
-        } else {
-            false
-        }
-    }
-}
-
-/// The client sent a message or frame above the configured cap.
-/// Axum erases its browser parser's error type; use that exact pinned crate,
-/// never the independently upgraded upstream transport's `tungstenite` re-export.
-/// The loopback regression exercises Axum itself to detect any pin mismatch.
-fn too_large(error: &axum::Error) -> bool {
-    std::error::Error::source(error)
-        .and_then(|e| e.downcast_ref::<browser_tungstenite::Error>())
-        .is_some_and(|e| matches!(e, browser_tungstenite::Error::Capacity(_)))
-}
-async fn send_client(
-    client: &mut futures_util::stream::SplitSink<WebSocket, Message>,
-    text: String,
-) -> bool {
-    matches!(
-        timeout(SEND_TIMEOUT, client.send(Message::Text(text.into()))).await,
-        Ok(Ok(()))
-    )
-}
-async fn send_upstream(
-    upstream: &mut RealtimeUpstream,
-    text: String,
-) -> Result<(), InferenceError> {
-    timeout(SEND_TIMEOUT, upstream.sink.send(text))
-        .await
-        .map_err(|_| InferenceError::Timeout)?
-}
-
-/// Rewrite the upstream model id to the public alias.
-fn session_text(mut event: Value, alias: &str) -> String {
-    if let Some(session) = event.get_mut("session").and_then(Value::as_object_mut)
-        && session.contains_key("model")
-    {
-        session.insert("model".into(), json!(alias));
-    }
-    event.to_string()
-}
-fn is_output_delta(text: &str) -> bool {
-    #[derive(serde::Deserialize)]
-    struct Peek<'a> {
-        #[serde(rename = "type", borrow)]
-        kind: std::borrow::Cow<'a, str>,
-    }
-    serde_json::from_str::<Peek>(text).is_ok_and(|p| {
-        matches!(
-            p.kind.as_ref(),
-            "response.output_audio.delta"
-                | "response.output_text.delta"
-                | "response.output_audio_transcript.delta"
-        )
-    })
-}
-
-#[cfg_attr(
-    not(test),
-    expect(clippy::too_many_lines, clippy::cognitive_complexity, reason = "#499")
-)]
-async fn proxy(socket: WebSocket, mut session: RealtimeSession) {
-    let Some(mut upstream) = session.take_upstream() else {
-        let _ = session
-            .finish(Outcome::Failed, Some(InferenceError::Storage), None)
-            .await;
+async fn proxy(socket: WebSocket, session: RealtimeSession) {
+    let Some(Ended {
+        end,
+        in_flight,
+        closing,
+    }) = relay::relay(socket, session).await
+    else {
         return;
     };
-    let limits = session.limits();
-    let window = session.window_output_tokens();
-    let alias = session.model().to_owned();
-    let (mut client_tx, mut client_rx) = socket.split();
-    let deadline = Instant::now() + limits.max_session;
-    let mut idle = Instant::now() + limits.idle;
-    let mut bucket = Bucket::new(limits.max_events_per_second);
-    let mut requested: Option<String> = None;
-    let mut first_output = false;
-    let end = loop {
-        tokio::select! {
-            biased;
-            _ = sleep_until(deadline) => break End::MaxDuration,
-            _ = sleep_until(idle) => break End::Idle,
-            message = client_rx.next() => {
-                idle = Instant::now() + limits.idle;
-                let text = match message {
-                    Some(Err(error)) if too_large(&error) => break End::TooLarge,
-                    None | Some(Err(_)) => break End::ClientGone,
-                    Some(Ok(Message::Close(_))) => break End::ClientClosed,
-                    Some(Ok(Message::Binary(_))) => break End::Binary,
-                    Some(Ok(Message::Text(text))) => text,
-                    Some(Ok(_)) => continue,
-                };
-                if !bucket.take() {
-                    break End::RateLimited;
-                }
-                match validate_measured(text.as_str(), window) {
-                    Err(rejection) => break End::Rejected(rejection),
-                    Ok((ClientAction::Forward(text), size)) => {
-                        session.client_event(size);
-                        if let Err(error) = send_upstream(&mut upstream, text).await {
-                            break End::Upstream(error);
-                        }
-                    }
-                    Ok((ClientAction::ResponseCreate { text, event_id, max_output_tokens }, size)) => {
-                        if session.response_open() || requested.is_some() {
-                            // Upstream allows one active response; refuse
-                            // explicitly without forwarding.
-                            let error = error_text(
-                                "invalid_request_error",
-                                "conversation_already_has_active_response",
-                                "A response is already in progress",
-                                None,
-                                Some(&event_id),
-                            );
-                            if !send_client(&mut client_tx, error).await {
-                                break End::ClientGone;
-                            }
-                            continue;
-                        }
-                        session.client_event(size);
-                        if let Err(error) = session.reserve_window(max_output_tokens).await {
-                            break End::Denied(error);
-                        }
-                        requested = Some(event_id);
-                        if let Err(error) = send_upstream(&mut upstream, text).await {
-                            break End::Upstream(error);
-                        }
-                    }
-                }
-            }
-            event = upstream.events.next() => {
-                idle = Instant::now() + limits.idle;
-                let text = match event {
-                    None => break End::Upstream(InferenceError::UpstreamUnavailable),
-                    Some(Err(error)) => break End::Upstream(error),
-                    Some(Ok(UpstreamEvent::Forward(text))) => {
-                        if !first_output && is_output_delta(&text) {
-                            first_output = true;
-                            session.first_output();
-                        }
-                        text
-                    }
-                    Some(Ok(UpstreamEvent::Session { event, safe })) => {
-                        // `session.created` shows upstream defaults from before the
-                        // gateway's acknowledged configuration; every update is checked.
-                        if !safe && event["type"] == "session.updated" {
-                            break End::Upstream(InferenceError::InvalidUpstream);
-                        }
-                        session.session_config(session_config(&event["session"]));
-                        session_text(event, &alias)
-                    }
-                    Some(Ok(UpstreamEvent::ResponseCreated { text, response_id })) => {
-                        if let Err(error) = session.open_response(response_id).await {
-                            break End::Upstream(error);
-                        }
-                        requested = None;
-                        text
-                    }
-                    Some(Ok(UpstreamEvent::ResponseDone { text, response_id, status, usage })) => {
-                        if let Err(error) = session.settle_response(&response_id, status, usage).await {
-                            break End::Upstream(error);
-                        }
-                        text
-                    }
-                    Some(Ok(UpstreamEvent::Error { kind, code, param, event_id })) => {
-                        if event_id.is_some() && event_id == requested {
-                            requested = None;
-                            session.request_rejected();
-                        }
-                        error_text(
-                            kind.as_deref().unwrap_or("server_error"),
-                            code.as_deref().unwrap_or("upstream_error"),
-                            "The provider reported an error for this session",
-                            param.as_deref(),
-                            event_id.as_deref(),
-                        )
-                    }
-                    Some(Ok(UpstreamEvent::Filtered)) => continue,
-                    Some(Ok(UpstreamEvent::Unaccounted)) => {
-                        break End::Upstream(InferenceError::InvalidUpstream)
-                    }
-                };
-                if !send_client(&mut client_tx, text).await {
-                    break End::ClientGone;
-                }
-            }
-        }
-    };
-    // Upstream work stops first: dropping the socket closes it immediately.
-    // A best-effort close frame is sent only when the client is still there
-    // to be told why; it never waits on a slow upstream.
-    let in_flight = session.response_open() || requested.is_some();
-    let client_present = !matches!(end, End::ClientClosed | End::ClientGone);
-    let client_closed = matches!(end, End::ClientClosed);
-    if client_present {
-        let _ = timeout(Duration::from_millis(500), upstream.sink.close()).await;
-    }
-    drop(upstream);
     let (close, outcome, error, finish) = match end {
         End::ClientClosed | End::ClientGone if in_flight => (None, Outcome::Cancelled, None, None),
         End::ClientClosed | End::ClientGone => {
@@ -980,13 +736,7 @@ async fn proxy(socket: WebSocket, mut session: RealtimeSession) {
             Some((
                 1000,
                 "idle_timeout",
-                error_text(
-                    "invalid_request_error",
-                    "idle_timeout",
-                    "The session was idle for too long",
-                    None,
-                    None,
-                ),
+                invalid_text("idle_timeout", IDLE_MESSAGE),
             )),
             Outcome::Succeeded,
             None,
@@ -996,51 +746,23 @@ async fn proxy(socket: WebSocket, mut session: RealtimeSession) {
             Some((
                 1000,
                 "session_expired",
-                error_text(
-                    "invalid_request_error",
-                    "session_expired",
-                    "The session reached its maximum duration",
-                    None,
-                    None,
-                ),
+                invalid_text("session_expired", EXPIRED_MESSAGE),
             )),
             Outcome::Succeeded,
             None,
             Some(FinishLabel::Length),
         ),
         End::Rejected(r) => (
-            Some((
-                1008,
-                r.code,
-                error_text(
-                    r.kind,
-                    r.code,
-                    r.message,
-                    r.param.as_deref(),
-                    r.event_id.as_deref(),
-                ),
-            )),
+            Some((1008, r.code, rejection_text(&r))),
             Outcome::Failed,
-            Some(
-                if r.code == "unsupported_capability" || r.code == "unsupported_event" {
-                    InferenceError::Unsupported
-                } else {
-                    InferenceError::InvalidRequest
-                },
-            ),
+            Some(rejection_error(&r)),
             None,
         ),
         End::Binary => (
             Some((
                 1003,
                 "unsupported_data",
-                error_text(
-                    "invalid_request_error",
-                    "unsupported_event",
-                    "Binary frames are not supported; send JSON text events",
-                    None,
-                    None,
-                ),
+                invalid_text("unsupported_event", BINARY_MESSAGE),
             )),
             Outcome::Failed,
             Some(InferenceError::Unsupported),
@@ -1050,13 +772,7 @@ async fn proxy(socket: WebSocket, mut session: RealtimeSession) {
             Some((
                 1009,
                 "message_too_big",
-                error_text(
-                    "invalid_request_error",
-                    "message_too_big",
-                    "The event exceeds the gateway's message size limit",
-                    None,
-                    None,
-                ),
+                invalid_text("message_too_big", TOO_LARGE_MESSAGE),
             )),
             Outcome::Failed,
             Some(InferenceError::InvalidRequest),
@@ -1085,40 +801,7 @@ async fn proxy(socket: WebSocket, mut session: RealtimeSession) {
             None,
         ),
     };
-    if let Some((code, reason, text)) = close
-        && send_client(&mut client_tx, text).await
-        && matches!(
-            timeout(
-                Duration::from_secs(1),
-                client_tx.send(Message::Close(Some(CloseFrame {
-                    code,
-                    reason: reason.into(),
-                }))),
-            )
-            .await,
-            Ok(Ok(()))
-        )
-    {
-        // Wait (bounded) for the client's closing reply, discarding what it
-        // sent first. Dropping the socket with unread input (e.g. the events
-        // that tripped the rate limit) makes the kernel reset the connection,
-        // which can destroy the error event and close frame still in flight.
-        let _ = timeout(Duration::from_secs(1), async {
-            while let Some(Ok(message)) = client_rx.next().await {
-                if matches!(message, Message::Close(_)) {
-                    break;
-                }
-            }
-        })
-        .await;
-    }
-    if client_closed {
-        // Complete the closing handshake the client started.
-        let _ = timeout(Duration::from_millis(500), client_tx.close()).await;
-    }
-    drop(client_tx);
-    drop(client_rx);
-    let _ = session.finish(outcome, error, finish).await;
+    closing.finish(close, outcome, error, finish).await;
 }
 
 #[cfg(test)]
@@ -1126,3 +809,6 @@ mod tests;
 
 #[cfg(all(test, feature = "integration-tests"))]
 pub(crate) use tests::inference_openapi_handshake_fixtures;
+
+#[cfg(test)]
+use relay::{is_output_delta, session_text, too_large};
