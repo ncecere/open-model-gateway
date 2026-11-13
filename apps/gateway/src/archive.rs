@@ -245,10 +245,24 @@ async fn archive_at(
     result
 }
 
-#[cfg_attr(
-    not(test),
-    expect(clippy::too_many_lines, clippy::cognitive_complexity, reason = "#499")
-)]
+/// One archive run: the request, its id and directory, and the located
+/// partitions (in detach order).
+struct Run<'a> {
+    req: &'a Request,
+    id: Uuid,
+    dir: &'a Path,
+    month: String,
+    parts: Vec<Partition>,
+}
+impl Run<'_> {
+    fn disposition(&self) -> &'static str {
+        if self.req.drop { "dropped" } else { "detached" }
+    }
+    fn bounds(&self) -> (Option<DateTime<Utc>>, DateTime<Utc>) {
+        (self.parts[0].lower, self.parts[0].upper)
+    }
+}
+
 async fn archive_in(
     conn: &mut PgConnection,
     req: &Request,
@@ -259,6 +273,44 @@ async fn archive_in(
     let month = req.month.label();
     // Locate the partitions before the transaction: its snapshot must be
     // taken only after their writers are locked out.
+    let parts = locate_partitions(conn, req, &month).await?;
+    let run = Run {
+        req,
+        id,
+        dir,
+        month,
+        parts,
+    };
+    begin_and_lock(conn, &run).await?;
+    let now = check_retention(conn, &run, as_of).await?;
+    check_legal_holds(conn, req).await?;
+    let sums = history_sums(conn, req).await?;
+    // Export (same snapshot): one CSV per partition, checksummed.
+    let files = export(conn, dir, &run.parts).await?;
+    let manifest_sha256 = write_manifest(conn, &run, &files, &sums, now).await?;
+    // Record, then detach (the exclusive parent locks are the last step).
+    record(conn, &run, &files, &sums, &manifest_sha256).await?;
+    detach(conn, &run).await?;
+    sqlx::raw_sql("COMMIT").execute(&mut *conn).await?;
+    let disposition = run.disposition();
+    Ok(Report {
+        archive_id: id,
+        group: req.group,
+        month: run.month,
+        directory: dir.to_path_buf(),
+        manifest_sha256,
+        files,
+        disposition,
+    })
+}
+
+/// The month's partition of every parent in the group, with bounds matching
+/// the month exactly (`Refusal::Missing` otherwise).
+async fn locate_partitions(
+    conn: &mut PgConnection,
+    req: &Request,
+    month: &str,
+) -> anyhow::Result<Vec<Partition>> {
     let mut parts = Vec::new();
     for parent in req.group.parents() {
         let name = format!("{parent}_{}", req.month.suffix());
@@ -270,12 +322,12 @@ async fn archive_in(
         .fetch_optional(&mut *conn)
         .await?;
         let Some((lower, upper)) = bounds else {
-            return Err(Refusal::Missing((*parent).into(), month).into());
+            return Err(Refusal::Missing((*parent).into(), month.into()).into());
         };
         if let Month::Month(d) = req.month
             && (lower != Some(utc(d)) || upper != utc(d + Months::new(1)))
         {
-            return Err(Refusal::Missing((*parent).into(), month).into());
+            return Err(Refusal::Missing((*parent).into(), month.into()).into());
         }
         parts.push(Partition {
             parent,
@@ -284,9 +336,16 @@ async fn archive_in(
             upper,
         });
     }
+    Ok(parts)
+}
+
+/// Begin the transaction, SHARE lock the partitions (and legal holds), then
+/// refuse a month already archived or a partition no longer attached.
+async fn begin_and_lock(conn: &mut PgConnection, run: &Run<'_>) -> anyhow::Result<()> {
     // Writes to these partitions wait; everything else continues. LOCK
     // takes no snapshot, so the export below sees every committed row.
-    let list = parts
+    let list = run
+        .parts
         .iter()
         .rev()
         .map(|p| format!("public.{}", p.name))
@@ -302,14 +361,14 @@ async fn archive_in(
     let already: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM archived_partitions WHERE archive_group=$1 AND month=$2)",
     )
-    .bind(req.group.as_str())
-    .bind(&month)
+    .bind(run.req.group.as_str())
+    .bind(&run.month)
     .fetch_one(&mut *conn)
     .await?;
     if already {
-        return Err(Refusal::AlreadyArchived(month).into());
+        return Err(Refusal::AlreadyArchived(run.month.clone()).into());
     }
-    for p in &parts {
+    for p in &run.parts {
         let attached: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM omg_partition_bounds($1) WHERE partition=$2)",
         )
@@ -318,9 +377,18 @@ async fn archive_in(
         .fetch_one(&mut *conn)
         .await?;
         if !attached {
-            return Err(Refusal::Missing(p.parent.into(), month).into());
+            return Err(Refusal::Missing(p.parent.into(), run.month.clone()).into());
         }
     }
+    Ok(())
+}
+
+/// Refuse a month within the retention; returns the time judged against.
+async fn check_retention(
+    conn: &mut PgConnection,
+    run: &Run<'_>,
+    as_of: Option<DateTime<Utc>>,
+) -> anyhow::Result<DateTime<Utc>> {
     let now: DateTime<Utc> = match as_of {
         Some(at) => at,
         None => {
@@ -330,10 +398,14 @@ async fn archive_in(
         }
     };
     let current = NaiveDate::from_ymd_opt(now.year(), now.month(), 1).expect("month");
-    let limit = utc(current - Months::new(req.retention_months));
-    if parts.iter().any(|p| p.upper > limit) {
-        return Err(Refusal::WithinRetention(month, req.retention_months).into());
+    let limit = utc(current - Months::new(run.req.retention_months));
+    if run.parts.iter().any(|p| p.upper > limit) {
+        return Err(Refusal::WithinRetention(run.month.clone(), run.req.retention_months).into());
     }
+    Ok(now)
+}
+
+async fn check_legal_holds(conn: &mut PgConnection, req: &Request) -> anyhow::Result<()> {
     // Legal holds (#75): a month with held data stays in the database.
     let held_sql = match req.group {
         Group::History => Some(format!(
@@ -359,103 +431,135 @@ async fn archive_in(
             return Err(Refusal::Held(held).into());
         }
     }
-    let mut sums = serde_json::Value::Null;
-    if req.group == Group::History {
-        let open: i64 = sqlx::query_scalar(&format!(
-            "SELECT count(*) FROM public.governance_reservations_{} WHERE state IN ('pending','unknown')",
-            req.month.suffix()
-        ))
-        .fetch_one(&mut *conn)
-        .await?;
-        if open > 0 {
-            return Err(Refusal::OpenReservations(open).into());
-        }
-        let s = req.month.suffix();
-        let unreserved: i64 = sqlx::query_scalar(&format!(
-            "SELECT count(*) FROM public.inference_executions_{s} e WHERE e.state='started'
+    Ok(())
+}
+
+/// For `history`: refuse open reservations, unreserved or running executions
+/// and unrolled hours, then return the exact sums (`null` for other groups).
+async fn history_sums(conn: &mut PgConnection, req: &Request) -> anyhow::Result<serde_json::Value> {
+    if req.group != Group::History {
+        return Ok(serde_json::Value::Null);
+    }
+    let open: i64 = sqlx::query_scalar(&format!(
+        "SELECT count(*) FROM public.governance_reservations_{} WHERE state IN ('pending','unknown')",
+        req.month.suffix()
+    ))
+    .fetch_one(&mut *conn)
+    .await?;
+    if open > 0 {
+        return Err(Refusal::OpenReservations(open).into());
+    }
+    let s = req.month.suffix();
+    let unreserved: i64 = sqlx::query_scalar(&format!(
+        "SELECT count(*) FROM public.inference_executions_{s} e WHERE e.state='started'
               OR NOT EXISTS(SELECT 1 FROM public.governance_reservations_{s} r WHERE r.execution_id=e.id AND r.admitted_at=e.started_at)"
-        ))
-        .fetch_one(&mut *conn)
-        .await?;
-        if unreserved > 0 {
-            return Err(Refusal::OpenExecutions(unreserved).into());
-        }
-        let unrolled: i64 = sqlx::query_scalar(&format!(
-            "SELECT count(*) FROM (SELECT DISTINCT date_trunc('hour',started_at,'UTC') h FROM public.inference_executions_{s}) x
+    ))
+    .fetch_one(&mut *conn)
+    .await?;
+    if unreserved > 0 {
+        return Err(Refusal::OpenExecutions(unreserved).into());
+    }
+    let unrolled: i64 = sqlx::query_scalar(&format!(
+        "SELECT count(*) FROM (SELECT DISTINCT date_trunc('hour',started_at,'UTC') h FROM public.inference_executions_{s}) x
               WHERE NOT EXISTS(SELECT 1 FROM usage_rollup_hours u WHERE u.hour_start=x.h)
                  OR EXISTS(SELECT 1 FROM usage_rollup_dirty d WHERE d.hour_start=x.h)"
-        ))
-        .fetch_one(&mut *conn)
-        .await?;
-        if unrolled > 0 {
-            return Err(Refusal::RollupsIncomplete(unrolled).into());
-        }
-        let (settled, reservations, ledger_entries, ledger_microusd): (String, i64, i64, String) =
-            sqlx::query_as(&format!(
-                "SELECT (SELECT coalesce(sum(actual_microusd),0)::text FROM public.governance_reservations_{s}),
+    ))
+    .fetch_one(&mut *conn)
+    .await?;
+    if unrolled > 0 {
+        return Err(Refusal::RollupsIncomplete(unrolled).into());
+    }
+    let (settled, reservations, ledger_entries, ledger_microusd): (String, i64, i64, String) =
+        sqlx::query_as(&format!(
+            "SELECT (SELECT coalesce(sum(actual_microusd),0)::text FROM public.governance_reservations_{s}),
                         (SELECT count(*) FROM public.governance_reservations_{s}),
                         (SELECT count(*) FROM public.monetary_ledger_{s}),
                         (SELECT coalesce(sum(amount_microusd),0)::text FROM public.monetary_ledger_{s})"
-            ))
-            .fetch_one(&mut *conn)
-            .await?;
-        sums = serde_json::json!({
-            "settled_microusd": settled, "reservations": reservations,
-            "ledger_entries": ledger_entries, "ledger_microusd": ledger_microusd,
-        });
-    }
-    // Export (same snapshot): one CSV per partition, checksummed.
+        ))
+        .fetch_one(&mut *conn)
+        .await?;
+    Ok(serde_json::json!({
+        "settled_microusd": settled, "reservations": reservations,
+        "ledger_entries": ledger_entries, "ledger_microusd": ledger_microusd,
+    }))
+}
+
+async fn export(
+    conn: &mut PgConnection,
+    dir: &Path,
+    parts: &[Partition],
+) -> anyhow::Result<Vec<ArchivedFile>> {
     let mut files = Vec::new();
-    for p in &parts {
-        let file = format!("{}.csv", p.name);
-        let path = dir.join(&file);
-        let mut out = tokio::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .await
-            .context("creating an export file")?;
-        let mut digest = Sha256::new();
-        let mut bytes = 0u64;
-        let rows: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM public.{}", p.name))
-            .fetch_one(&mut *conn)
-            .await?;
-        {
-            let mut stream = conn
-                .copy_out_raw(&format!(
-                    "COPY (SELECT * FROM public.{} ORDER BY 1) TO STDOUT WITH (FORMAT csv, HEADER)",
-                    p.name
-                ))
-                .await?;
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk?;
-                digest.update(&chunk);
-                bytes += chunk.len() as u64;
-                out.write_all(&chunk).await?;
-            }
-        }
-        out.sync_all().await?;
-        files.push(ArchivedFile {
-            parent: p.parent.into(),
-            partition: p.name.clone(),
-            file,
-            rows,
-            bytes,
-            sha256: hex::encode(digest.finalize()),
-        });
+    for p in parts {
+        files.push(export_partition(conn, dir, p).await?);
     }
+    Ok(files)
+}
+
+async fn export_partition(
+    conn: &mut PgConnection,
+    dir: &Path,
+    p: &Partition,
+) -> anyhow::Result<ArchivedFile> {
+    let file = format!("{}.csv", p.name);
+    let path = dir.join(&file);
+    let mut out = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .await
+        .context("creating an export file")?;
+    let mut digest = Sha256::new();
+    let mut bytes = 0u64;
+    let rows: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM public.{}", p.name))
+        .fetch_one(&mut *conn)
+        .await?;
+    {
+        let mut stream = conn
+            .copy_out_raw(&format!(
+                "COPY (SELECT * FROM public.{} ORDER BY 1) TO STDOUT WITH (FORMAT csv, HEADER)",
+                p.name
+            ))
+            .await?;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            digest.update(&chunk);
+            bytes += chunk.len() as u64;
+            out.write_all(&chunk).await?;
+        }
+    }
+    out.sync_all().await?;
+    Ok(ArchivedFile {
+        parent: p.parent.into(),
+        partition: p.name.clone(),
+        file,
+        rows,
+        bytes,
+        sha256: hex::encode(digest.finalize()),
+    })
+}
+
+/// Write `manifest.json` (with the schema lineage) and its `.sha256`;
+/// returns the manifest's SHA-256.
+async fn write_manifest(
+    conn: &mut PgConnection,
+    run: &Run<'_>,
+    files: &[ArchivedFile],
+    sums: &serde_json::Value,
+    now: DateTime<Utc>,
+) -> anyhow::Result<String> {
     let lineage: Vec<(i64, Vec<u8>)> =
         sqlx::query_as("SELECT version,checksum FROM _sqlx_migrations ORDER BY version")
             .fetch_all(&mut *conn)
             .await?;
-    let (lower, upper) = (parts[0].lower, parts[0].upper);
-    let disposition = if req.drop { "dropped" } else { "detached" };
+    let (lower, upper) = run.bounds();
+    let disposition = run.disposition();
     let manifest = serde_json::json!({
         "format": MANIFEST_FORMAT,
-        "archive_id": id,
+        "archive_id": run.id,
         "schema_family": "enterprise_v1",
-        "group": req.group,
-        "month": month,
+        "group": run.req.group,
+        "month": run.month,
         "lower_bound": lower,
         "upper_bound": upper,
         "migrations": lineage.iter().map(|(v, c)| serde_json::json!({"version": v, "checksum": hex::encode(c)})).collect::<Vec<_>>(),
@@ -466,16 +570,29 @@ async fn archive_in(
     });
     let text = serde_json::to_string_pretty(&manifest)? + "\n";
     let manifest_sha256 = hex::encode(Sha256::digest(text.as_bytes()));
-    write_private(&dir.join("manifest.json"), text.as_bytes())?;
+    write_private(&run.dir.join("manifest.json"), text.as_bytes())?;
     write_private(
-        &dir.join("manifest.json.sha256"),
+        &run.dir.join("manifest.json.sha256"),
         format!("{manifest_sha256}  manifest.json\n").as_bytes(),
     )?;
-    // Record, then detach (the exclusive parent locks are the last step).
+    Ok(manifest_sha256)
+}
+
+/// Record `archived_partitions` and, for history, the archived reservations'
+/// budget contributions.
+async fn record(
+    conn: &mut PgConnection,
+    run: &Run<'_>,
+    files: &[ArchivedFile],
+    sums: &serde_json::Value,
+    manifest_sha256: &str,
+) -> anyhow::Result<()> {
+    let req = run.req;
+    let (lower, upper) = run.bounds();
     sqlx::query("INSERT INTO archived_partitions(id,archive_group,month,lower_bound,upper_bound,partitions,manifest_sha256,settled_microusd,reservations,ledger_entries,ledger_microusd,disposition) VALUES($1,$2,$3,coalesce($4,'-infinity'::timestamptz),$5,$6,$7,($8::jsonb->>'settled_microusd')::numeric,($8::jsonb->>'reservations')::bigint,($8::jsonb->>'ledger_entries')::bigint,($8::jsonb->>'ledger_microusd')::numeric,$9)")
-        .bind(id).bind(req.group.as_str()).bind(&month)
+        .bind(run.id).bind(req.group.as_str()).bind(&run.month)
         .bind(lower)
-        .bind(upper).bind(serde_json::to_value(&files)?).bind(&manifest_sha256).bind(&sums).bind(disposition)
+        .bind(upper).bind(serde_json::to_value(files)?).bind(manifest_sha256).bind(sums).bind(run.disposition())
         .execute(&mut *conn).await?;
     if req.group == Group::History {
         sqlx::query(&format!(
@@ -484,11 +601,18 @@ async fn archive_in(
              FROM public.governance_reservations_{} GROUP BY 2,3,4",
             req.month.suffix()
         ))
-        .bind(id)
+        .bind(run.id)
         .execute(&mut *conn)
         .await?;
     }
-    let parents = req
+    Ok(())
+}
+
+/// Take the parents' ACCESS EXCLUSIVE locks, then detach every partition,
+/// drop its foreign keys and drop it or move it to `omg_archive`.
+async fn detach(conn: &mut PgConnection, run: &Run<'_>) -> anyhow::Result<()> {
+    let parents = run
+        .req
         .group
         .parents()
         .iter()
@@ -499,7 +623,7 @@ async fn archive_in(
     sqlx::raw_sql(&format!("LOCK TABLE {parents} IN ACCESS EXCLUSIVE MODE"))
         .execute(&mut *conn)
         .await?;
-    for p in &parts {
+    for p in &run.parts {
         sqlx::raw_sql(&format!(
             "ALTER TABLE public.{} DETACH PARTITION public.{}",
             p.parent, p.name
@@ -522,7 +646,7 @@ async fn archive_in(
             .execute(&mut *conn)
             .await?;
         }
-        if req.drop {
+        if run.req.drop {
             sqlx::raw_sql(&format!("DROP TABLE public.{}", p.name))
                 .execute(&mut *conn)
                 .await?;
@@ -535,16 +659,7 @@ async fn archive_in(
             .await?;
         }
     }
-    sqlx::raw_sql("COMMIT").execute(&mut *conn).await?;
-    Ok(Report {
-        archive_id: id,
-        group: req.group,
-        month,
-        directory: dir.to_path_buf(),
-        manifest_sha256,
-        files,
-        disposition,
-    })
+    Ok(())
 }
 
 fn write_private(path: &Path, data: &[u8]) -> anyhow::Result<()> {
