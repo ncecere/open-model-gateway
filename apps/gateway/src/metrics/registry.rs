@@ -134,7 +134,8 @@ impl Metrics {
         }
     }
 
-    /// HTTP traffic, inference attempts, tokens, settlement, accounting failures and admission.
+    /// Build information, HTTP traffic, inference attempts, tokens, settlement,
+    /// accounting failures, admission and held reservations.
     fn register_requests(&self, registry: &mut Registry) {
         // A labelled gauge rather than an OpenMetrics `info` type, so the
         // exposition also parses as classic Prometheus text.
@@ -210,7 +211,8 @@ impl Metrics {
         );
     }
 
-    /// Alert evaluation and delivery, scoped locks and the database pool.
+    /// Alert evaluation and delivery, scoped locks, the database pool and metrics
+    /// collection errors.
     fn register_alerts_and_locks(&self, registry: &mut Registry) {
         registry.register(
             "alert_evaluations",
