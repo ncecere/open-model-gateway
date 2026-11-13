@@ -217,8 +217,9 @@ pub(super) async fn copy_line(
 }
 
 impl ScanState {
-    /// Whether the line can run natively and through the engine (the
-    /// coarse check). A legacy line must be encodable.
+    /// Whether the engine can run the line (the coarse check). Native
+    /// encodability is folded into `native_ok`; a legacy line must be
+    /// encodable.
     fn engine_checks(
         &mut self,
         endpoint: BatchEndpoint,

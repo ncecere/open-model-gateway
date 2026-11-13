@@ -131,7 +131,7 @@ struct ScanState {
     // line must not authorize a later cached line at an incompatible price.
     previews: HashMap<(Uuid, Option<u32>, u8), LinePreview>,
     prices: HashMap<Uuid, Uuid>,
-    // deployment id -> (group, first line number using it)
+    // One per deployment, in first-use order.
     groups: Vec<PendingGroup>,
     requests: u32,
     physical: u64,
