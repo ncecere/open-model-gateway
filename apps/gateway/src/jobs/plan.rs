@@ -17,6 +17,8 @@ use crate::{
     inference::types::ChatRequest,
 };
 
+mod scan;
+
 /// At most this many problems are reported (scanning stops there).
 pub const MAX_ISSUES: usize = 20;
 
@@ -92,6 +94,58 @@ struct RefusalMemo {
     /// line's body, so only this usable-route set is reused; the 400/501
     /// decision is still made per line from its own adapter verdicts.
     usable: HashMap<(String, Vec<Uuid>), Arc<Vec<Uuid>>>,
+}
+
+/// What [`Jobs::scan`] returns: the groups, the request count, the native
+/// route (when the batch runs natively) and the model label.
+type Scanned = (
+    Vec<LineGroup>,
+    u32,
+    Option<(Deployment, Arc<dyn ProviderAdapter>)>,
+    String,
+);
+
+/// The per-scan arguments every line step needs.
+#[derive(Clone, Copy)]
+struct ScanScope<'a> {
+    principal: &'a Principal,
+    request_id: Uuid,
+    endpoint: BatchEndpoint,
+}
+
+/// A deployment's group, built while scanning.
+struct PendingGroup {
+    group: LineGroup,
+    /// The first line number using the deployment.
+    first_line: u64,
+    adapter: Arc<dyn ProviderAdapter>,
+    legacy: bool,
+}
+
+/// The scan's mutable state.
+struct ScanState {
+    issues: Vec<Issue>,
+    ids: HashSet<String>,
+    models: HashMap<String, Result<Arc<Resolved>, LineError>>,
+    // Cache TTL requirements are part of the memoization key: a clean
+    // line must not authorize a later cached line at an incompatible price.
+    previews: HashMap<(Uuid, Option<u32>, u8), LinePreview>,
+    prices: HashMap<Uuid, Uuid>,
+    // One per deployment, in first-use order.
+    groups: Vec<PendingGroup>,
+    requests: u32,
+    physical: u64,
+    // Lines a native submission could not encode / the engine cannot run.
+    native_ok: bool,
+    gateway_unsupported: Option<u64>,
+    // Lines the coarse check passed but the adapter's own pure encoder
+    // (`ProviderAdapter::validate_chat_request`, #228) refuses
+    // deterministically: excluded from the parent envelope, not from the
+    // batch (see the end of the scan).
+    deterministic_rejects: Vec<(u64, InferenceError)>,
+    // Model-level memoization of `every_candidate_route_refuses`'s
+    // read-only lookups, scoped to this one scan (#238 follow-up).
+    refusal_memo: RefusalMemo,
 }
 
 impl Jobs {
@@ -317,11 +371,6 @@ impl Jobs {
         }
     }
 
-    #[allow(clippy::type_complexity)]
-    #[cfg_attr(
-        not(test),
-        expect(clippy::too_many_lines, clippy::cognitive_complexity, reason = "#499")
-    )]
     async fn scan(
         &self,
         principal: &Principal,
@@ -330,328 +379,165 @@ impl Jobs {
         force_gateway: bool,
         reader: &mut LineReader,
         work: &mut LazySink,
-    ) -> Result<
-        (
-            Vec<LineGroup>,
-            u32,
-            Option<(Deployment, Arc<dyn ProviderAdapter>)>,
-            String,
-        ),
-        PlanError,
-    > {
-        let mut issues: Vec<Issue> = Vec::new();
-        let mut ids: HashSet<String> = HashSet::new();
-        let mut models: HashMap<String, Result<Resolved, LineError>> = HashMap::new();
-        // Cache TTL requirements are part of the memoization key: a clean
-        // line must not authorize a later cached line at an incompatible price.
-        let mut previews: HashMap<(Uuid, Option<u32>, u8), LinePreview> = HashMap::new();
-        let mut prices: HashMap<Uuid, Uuid> = HashMap::new();
-        // deployment id -> (group, first line number using it)
-        let mut groups: Vec<(LineGroup, u64, Arc<dyn ProviderAdapter>, bool)> = Vec::new();
-        let mut requests: u32 = 0;
-        let mut physical: u64 = 0;
-        // Lines a native submission could not encode / the engine cannot run.
-        let mut native_ok = true;
-        let mut gateway_unsupported: Option<u64> = None;
-        // Lines the coarse check passed but the adapter's own pure encoder
-        // (`ProviderAdapter::validate_chat_request`, #228) refuses
-        // deterministically: excluded from the parent envelope, not from the
-        // batch (see the end of the scan).
-        let mut deterministic_rejects: Vec<(u64, InferenceError)> = Vec::new();
-        // Model-level memoization of `every_candidate_route_refuses`'s
-        // read-only lookups, scoped to this one scan (#238 follow-up).
-        let mut refusal_memo = RefusalMemo::default();
-        let issue = |issues: &mut Vec<Issue>, line: u64, error: LineError| {
-            issues.push(Issue { line, error });
-            issues.len() >= MAX_ISSUES
+    ) -> Result<Scanned, PlanError> {
+        let scope = ScanScope {
+            principal,
+            request_id,
+            endpoint,
         };
+        let mut state = ScanState::new();
         loop {
             let raw = match reader.next().await {
                 Ok(Some(raw)) => raw,
                 Ok(None) => break,
                 Err(InferenceError::InvalidUpstream) => {
-                    issue(&mut issues, physical + 1, LineError::LineTooLarge);
+                    state.issue(state.physical + 1, LineError::LineTooLarge);
                     break;
                 }
                 Err(e) => return Err(e.into()),
             };
-            physical += 1;
+            state.physical += 1;
             if lines::is_blank(&raw) {
                 continue;
             }
-            if requests >= BATCH_MAX_REQUESTS {
-                issue(&mut issues, physical, LineError::TooManyLines);
+            if state.requests >= BATCH_MAX_REQUESTS {
+                state.issue(state.physical, LineError::TooManyLines);
                 break;
             }
-            requests += 1;
-            let line = match parse_line(&raw, endpoint) {
-                Ok(l) => l,
+            state.requests += 1;
+            let line = match self.check_line(scope, &mut state, &raw).await? {
+                Ok(line) => line,
                 Err(e) => {
-                    if issue(&mut issues, physical, e) {
+                    if state.issue(state.physical, e) {
                         break;
                     }
                     continue;
                 }
             };
-            if !ids.insert(line.custom_id.clone()) {
-                if issue(&mut issues, physical, LineError::DuplicateCustomId) {
-                    break;
-                }
-                continue;
-            }
-            let model = line.request.model().to_owned();
-            if let std::collections::hash_map::Entry::Vacant(slot) = models.entry(model.clone()) {
-                slot.insert(
-                    self.resolve(principal, &model, endpoint, request_id)
-                        .await?,
-                );
-            }
-            let resolved = match &models[&model] {
-                Ok(r) => r,
-                Err(e) => {
-                    if issue(&mut issues, physical, *e) {
-                        break;
-                    }
-                    continue;
-                }
-            };
-            let requested = match &line.request {
-                BatchRequest::Chat(r) => r.max_output_tokens,
-                BatchRequest::Embeddings(_) => Some(0),
-            };
-            let cache_controls = match &line.request {
-                BatchRequest::Chat(r) if resolved.deployment.provider == "anthropic" => r
-                    .messages_options
-                    .as_ref()
-                    .map(|o| o.cache_controls.as_slice())
-                    .unwrap_or_default(),
-                _ => &[],
-            };
-            let cache_mask = cache_controls
-                .iter()
-                .fold(0_u8, |mask, c| mask | if c["ttl"] == "1h" { 2 } else { 1 });
-            let key = (resolved.deployment.id, requested, cache_mask);
-            if let std::collections::hash_map::Entry::Vacant(slot) = previews.entry(key) {
-                slot.insert(
-                    crate::governance::batch::preview_line(
-                        &self.store,
-                        resolved.deployment.id,
-                        endpoint.protocol(),
-                        requested,
-                        prices.get(&resolved.deployment.id).copied(),
-                        resolved.adapter.generation_output_limit(),
-                        cache_controls,
-                    )
-                    .await?,
-                );
-            }
-            let (price_id, max) = match previews[&key] {
-                LinePreview::Ok { price_id, output } => (price_id, output),
-                LinePreview::OutputLimit => {
-                    if issue(&mut issues, physical, LineError::OutputLimit) {
-                        break;
-                    }
-                    continue;
-                }
-                LinePreview::Unpriced | LinePreview::Unbounded => {
-                    if issue(&mut issues, physical, LineError::Unpriced) {
-                        break;
-                    }
-                    continue;
-                }
-            };
-            prices.insert(resolved.deployment.id, price_id);
-            // Encoding checks use the same bound as the parent hold; the
-            // uploaded body and private body retain the optional omission.
-            let mut execution_request = line.request.clone();
-            if let BatchRequest::Chat(r) = &mut execution_request {
-                r.max_output_tokens = Some(max);
-            }
-            // Can this line run natively, and can the engine run it?
-            let encodable = resolved
-                .adapter
-                .native_batch(&resolved.deployment, endpoint)
-                && resolved
-                    .adapter
-                    .encode_native_line(&resolved.deployment, endpoint, "l0", &execution_request)
-                    .is_ok();
-            if resolved.legacy && !encodable {
-                if issue(&mut issues, physical, LineError::UnsupportedFeature) {
-                    break;
-                }
-                continue;
-            }
-            native_ok &= encodable;
-            let coarse_ok = resolved.legacy
-                || match &line.request {
-                    BatchRequest::Chat(r) => resolved.adapter.supports_chat_request(r),
-                    BatchRequest::Embeddings(r) => resolved
-                        .adapter
-                        .supports_embedding_target(&resolved.deployment, r),
-                };
-            if !coarse_ok && gateway_unsupported.is_none() {
-                gateway_unsupported = Some(physical);
-            }
-            // The coarse bool can pass while an adapter's own pure encoder
-            // still refuses this exact body (a strict function tool, an
-            // out-of-range sampling parameter, a tool result with no
-            // matching call, ...): the same deterministic check
-            // `Engine::execute_protocol` runs before admission (#228). A
-            // model set up only for native batches (`resolved.legacy`) never
-            // reaches the generic engine, so it is exempt.
-            //
-            // An omitted maximum pins this line to `resolved.deployment` for
-            // both sizing and dispatch (`lines::LinePlan`, below): judge it
-            // on that route alone. An explicit maximum is copied with no pin;
-            // the runner may schedule it onto any authorized,
-            // protocol-capable candidate route for the model at dispatch
-            // (`jobs::runner::Runner::plan_route_inner`), so excluding it
-            // from the envelope here is correct only when *every* such
-            // candidate would refuse it too - the same per-adapter/provider
-            // enumeration `Engine::execute_protocol` runs, reused here
-            // read-only (no admission, no routing-health writes).
-            let deterministic_reject = if resolved.legacy {
-                None
-            } else {
-                match &execution_request {
-                    BatchRequest::Chat(r) => {
-                        if requested.is_none() {
-                            coarse_ok
-                                .then(|| resolved.adapter.validate_chat_request(r).err())
-                                .flatten()
-                        } else {
-                            self.every_candidate_route_refuses(
-                                principal,
-                                &model,
-                                endpoint.protocol(),
-                                request_id,
-                                r,
-                                &mut refusal_memo,
-                            )
-                            .await?
-                        }
-                    }
-                    BatchRequest::Embeddings(_) => None,
-                }
-            };
-            if !issues.is_empty() {
+            if !state.issues.is_empty() {
                 // Keep scanning for problems, but stop copying.
                 continue;
             }
-            if let Some(error) = deterministic_reject {
-                // The engine refuses this line before it ever admits or
-                // reserves anything for it (zero cost, #228): it must not
-                // size or reserve the parent envelope either. It is still
-                // copied below, so it still runs and is refused per line, at
-                // the same classification as an interactive request, when
-                // the batch dispatches (`jobs::runner`).
-                deterministic_rejects.push((physical, error));
-            } else {
-                match groups
-                    .iter_mut()
-                    .find(|g| g.0.deployment.id == resolved.deployment.id)
-                {
-                    Some(g) => {
-                        *g.0.outputs.entry(max).or_insert(0) += 1;
-                        if requested.is_none() {
-                            g.0.price_id = Some(price_id);
-                        }
-                    }
-                    None => groups.push((
-                        LineGroup {
-                            deployment: resolved.deployment.clone(),
-                            model: model.clone(),
-                            protocol: endpoint.protocol(),
-                            outputs: BTreeMap::from([(max, 1)]),
-                            price_id: requested.is_none().then_some(price_id),
-                        },
-                        physical,
-                        resolved.adapter.clone(),
-                        resolved.legacy,
-                    )),
-                }
-            }
-            let mut copy = if requested.is_none() {
-                lines::planned_copy(
-                    raw,
-                    lines::LinePlan {
-                        deployment: resolved.deployment.id,
-                        price: price_id,
-                        output: max,
-                    },
-                )?
-            } else {
-                raw
-            };
-            copy.push(b'\n');
-            work.raw(copy).await?;
+            state.record(endpoint, &line);
+            scan::copy_line(work, raw, &line).await?;
         }
-        if requests == 0 && issues.is_empty() {
-            issues.push(Issue {
+        state.finish(endpoint, force_gateway)
+    }
+}
+
+impl ScanState {
+    fn new() -> Self {
+        Self {
+            issues: Vec::new(),
+            ids: HashSet::new(),
+            models: HashMap::new(),
+            previews: HashMap::new(),
+            prices: HashMap::new(),
+            groups: Vec::new(),
+            requests: 0,
+            physical: 0,
+            native_ok: true,
+            gateway_unsupported: None,
+            deterministic_rejects: Vec::new(),
+            refusal_memo: RefusalMemo::default(),
+        }
+    }
+
+    /// Report a problem; `true` once [`MAX_ISSUES`] are reported.
+    fn issue(&mut self, line: u64, error: LineError) -> bool {
+        self.issues.push(Issue { line, error });
+        self.issues.len() >= MAX_ISSUES
+    }
+
+    /// The whole-file checks after the last line, then the result.
+    fn finish(
+        mut self,
+        endpoint: BatchEndpoint,
+        force_gateway: bool,
+    ) -> Result<Scanned, PlanError> {
+        if self.requests == 0 && self.issues.is_empty() {
+            self.issues.push(Issue {
                 line: 1,
                 error: LineError::EmptyFile,
             });
         }
         let native = !force_gateway
-            && native_ok
-            && deterministic_rejects.is_empty()
-            && groups.len() == 1
-            && groups[0].2.native_batch(&groups[0].0.deployment, endpoint);
-        if issues.is_empty() && !native {
-            // Lines only a native batch could run.
-            if let Some(g) = groups.iter().find(|g| g.3) {
-                issues.push(Issue {
-                    line: g.1,
-                    error: LineError::ModelUnsupported,
-                });
-            } else if let Some(line) = gateway_unsupported {
-                issues.push(Issue {
-                    line,
-                    error: LineError::UnsupportedFeature,
-                });
-            }
+            && self.native_ok
+            && self.deterministic_rejects.is_empty()
+            && self.groups.len() == 1
+            && self.groups[0]
+                .adapter
+                .native_batch(&self.groups[0].group.deployment, endpoint);
+        if self.issues.is_empty() && !native {
+            self.gateway_issue();
         }
-        if issues.is_empty() && groups.is_empty() {
-            // Every candidate line was a deterministic adapter rejection:
-            // there is nothing to reserve or dispatch. Refuse the upload
-            // with a line-numbered report, like any other invalid line,
-            // instead of admitting an empty batch.
-            for (line, error) in deterministic_rejects.iter().copied() {
-                let error = match error {
-                    InferenceError::InvalidRequest | InferenceError::InvalidField(_) => {
-                        LineError::InvalidBody
-                    }
-                    InferenceError::Unsupported => LineError::UnsupportedFeature,
-                    other => {
-                        tracing::warn!(error = ?other, "adapter request validation returned an error outside its contract");
-                        LineError::UnsupportedFeature
-                    }
-                };
-                if issue(&mut issues, line, error) {
-                    break;
-                }
-            }
-            if issues.is_empty() {
-                issues.push(Issue {
-                    line: 1,
-                    error: LineError::EmptyFile,
-                });
-            }
+        if self.issues.is_empty() && self.groups.is_empty() {
+            self.report_rejects();
         }
-        if !issues.is_empty() {
-            return Err(PlanError::Invalid(issues));
+        if !self.issues.is_empty() {
+            return Err(PlanError::Invalid(self.issues));
         }
-        let model = if groups.len() == 1 {
-            groups[0].0.model.clone()
+        let model = if self.groups.len() == 1 {
+            self.groups[0].group.model.clone()
         } else {
             "mixed".to_owned()
         };
-        let native = native.then(|| (groups[0].0.deployment.clone(), groups[0].2.clone()));
+        let native = native.then(|| {
+            (
+                self.groups[0].group.deployment.clone(),
+                self.groups[0].adapter.clone(),
+            )
+        });
         Ok((
-            groups.into_iter().map(|g| g.0).collect(),
-            requests,
+            self.groups.into_iter().map(|g| g.group).collect(),
+            self.requests,
             native,
             model,
         ))
+    }
+
+    /// A batch that runs through the gateway cannot hold lines the engine
+    /// cannot run.
+    fn gateway_issue(&mut self) {
+        // Lines only a native batch could run.
+        if let Some(g) = self.groups.iter().find(|g| g.legacy) {
+            self.issues.push(Issue {
+                line: g.first_line,
+                error: LineError::ModelUnsupported,
+            });
+        } else if let Some(line) = self.gateway_unsupported {
+            self.issues.push(Issue {
+                line,
+                error: LineError::UnsupportedFeature,
+            });
+        }
+    }
+
+    fn report_rejects(&mut self) {
+        // Every candidate line was a deterministic adapter rejection:
+        // there is nothing to reserve or dispatch. Refuse the upload
+        // with a line-numbered report, like any other invalid line,
+        // instead of admitting an empty batch.
+        for (line, error) in std::mem::take(&mut self.deterministic_rejects) {
+            let error = match error {
+                InferenceError::InvalidRequest | InferenceError::InvalidField(_) => {
+                    LineError::InvalidBody
+                }
+                InferenceError::Unsupported => LineError::UnsupportedFeature,
+                other => {
+                    tracing::warn!(error = ?other, "adapter request validation returned an error outside its contract");
+                    LineError::UnsupportedFeature
+                }
+            };
+            if self.issue(line, error) {
+                break;
+            }
+        }
+        if self.issues.is_empty() {
+            self.issues.push(Issue {
+                line: 1,
+                error: LineError::EmptyFile,
+            });
+        }
     }
 }
