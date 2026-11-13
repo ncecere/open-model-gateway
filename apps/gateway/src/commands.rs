@@ -8,9 +8,82 @@ use anyhow::{Context, Result};
 use open_model_gateway::{bootstrap, config::Config, store::Store};
 use sqlx::PgPool;
 
-use crate::{ArchiveCommand, FilesCommand, GrantsCommand, PartitionsCommand};
+use open_model_gateway::providers::{local::endpoints::ApprovedEndpoints, secrets::EnvSecrets};
 
-pub(crate) use serve::serve;
+use crate::{
+    AlertsCommand, ArchiveCommand, BudgetCommand, Command, FilesCommand, GrantsCommand,
+    HistoryCommand, PartitionsCommand, RollupsCommand,
+};
+
+use serve::serve;
+
+/// Runs one subcommand after `run` has set up logging, configuration and the
+/// database pool. `wait-for-database`, `schema-version` and `healthcheck` are
+/// handled by `run` before this point.
+pub(crate) async fn dispatch(
+    command: Command,
+    config: Config,
+    store: Store,
+    pool: &PgPool,
+    provider_secrets: EnvSecrets,
+    local_approvals: &mut Option<ApprovedEndpoints>,
+    process_start_unix_nano: u64,
+) -> Result<()> {
+    match command {
+        Command::WaitForDatabase { .. } => unreachable!("handled before connecting"),
+        Command::Migrate => migrate(&store).await?,
+        Command::Grants { action } => grants(&store, action).await?,
+        Command::BootstrapDev => bootstrap_dev(&store, &config).await?,
+        Command::BootstrapDemo {
+            add_missing_personas,
+        } => bootstrap_demo(&store, &config, add_missing_personas).await?,
+        Command::ReconcileExecutions { limit } => {
+            reconcile_executions(&store, limit).await?;
+        }
+        Command::CompactHistory {
+            older_than_days,
+            limit,
+        } => compact_history(&store, older_than_days, limit).await?,
+        Command::Alerts {
+            action: AlertsCommand::Evaluate { once },
+        } => alerts_evaluate(&store, once).await?,
+        Command::Budget {
+            action: BudgetCommand::Verify,
+        } => budget_verify(&store).await?,
+        Command::History {
+            action: HistoryCommand::Verify { since },
+        } => history_verify(&store, since).await?,
+        Command::Partitions { action } => partitions(&store, pool, action).await?,
+        Command::Archive { action } => archive(&store, pool, action).await?,
+        Command::Rollups {
+            action:
+                RollupsCommand::Run {
+                    once,
+                    budget_seconds,
+                },
+        } => rollups_run(&store, once, budget_seconds).await?,
+        Command::Files { action } => files(&store, action).await?,
+        Command::SchemaVersion | Command::Healthcheck { .. } => {
+            unreachable!("handled before configuration")
+        }
+        Command::ProvisionUser {
+            email,
+            platform_admin,
+        } => provision_user(&store, email, platform_admin).await?,
+        Command::Serve => {
+            serve(
+                config,
+                store,
+                pool,
+                provider_secrets,
+                local_approvals,
+                process_start_unix_nano,
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
 
 /// `migrate`: apply the embedded migrations.
 pub(crate) async fn migrate(store: &Store) -> Result<()> {

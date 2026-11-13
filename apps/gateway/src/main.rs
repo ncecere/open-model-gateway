@@ -392,59 +392,16 @@ async fn run(cli: Cli, process_start_unix_nano: u64) -> Result<()> {
         .with_alert_webhooks(config.alert_webhooks.clone())
         .with_reporting(config.connect_reporting()?, config.reporting_max_lag)
         .with_admission_mode(config.admission_mode);
-    match cli.command.unwrap_or(Command::Serve) {
-        Command::WaitForDatabase { .. } => unreachable!("handled before connecting"),
-        Command::Migrate => commands::migrate(&store).await?,
-        Command::Grants { action } => commands::grants(&store, action).await?,
-        Command::BootstrapDev => commands::bootstrap_dev(&store, &config).await?,
-        Command::BootstrapDemo {
-            add_missing_personas,
-        } => commands::bootstrap_demo(&store, &config, add_missing_personas).await?,
-        Command::ReconcileExecutions { limit } => {
-            commands::reconcile_executions(&store, limit).await?;
-        }
-        Command::CompactHistory {
-            older_than_days,
-            limit,
-        } => commands::compact_history(&store, older_than_days, limit).await?,
-        Command::Alerts {
-            action: AlertsCommand::Evaluate { once },
-        } => commands::alerts_evaluate(&store, once).await?,
-        Command::Budget {
-            action: BudgetCommand::Verify,
-        } => commands::budget_verify(&store).await?,
-        Command::History {
-            action: HistoryCommand::Verify { since },
-        } => commands::history_verify(&store, since).await?,
-        Command::Partitions { action } => commands::partitions(&store, &pool, action).await?,
-        Command::Archive { action } => commands::archive(&store, &pool, action).await?,
-        Command::Rollups {
-            action:
-                RollupsCommand::Run {
-                    once,
-                    budget_seconds,
-                },
-        } => commands::rollups_run(&store, once, budget_seconds).await?,
-        Command::Files { action } => commands::files(&store, action).await?,
-        Command::SchemaVersion | Command::Healthcheck { .. } => {
-            unreachable!("handled before configuration")
-        }
-        Command::ProvisionUser {
-            email,
-            platform_admin,
-        } => commands::provision_user(&store, email, platform_admin).await?,
-        Command::Serve => {
-            commands::serve(
-                config,
-                store,
-                &pool,
-                provider_secrets,
-                &mut local_approvals,
-                process_start_unix_nano,
-            )
-            .await?;
-        }
-    }
+    commands::dispatch(
+        cli.command.unwrap_or(Command::Serve),
+        config,
+        store,
+        &pool,
+        provider_secrets,
+        &mut local_approvals,
+        process_start_unix_nano,
+    )
+    .await?;
     pool.close().await;
     Ok(())
 }
