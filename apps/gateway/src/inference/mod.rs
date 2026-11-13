@@ -1,3 +1,4 @@
+mod attempt;
 pub mod audio;
 pub mod client;
 mod deadline_stream;
@@ -26,9 +27,10 @@ use tokio::{
 use uuid::Uuid;
 
 use crate::{auth::Principal, providers::ProviderRegistry, telemetry};
+use attempt::{AttemptEnd, RequestScope, record_routing_span};
 use error::InferenceError;
 use repository::{AttemptTelemetry, ExecutionFinish, ExecutionStart, InferenceRepository, Outcome};
-use types::{ApiProtocol, ChatEvent, ChatRequest, ProviderOutput, Usage};
+use types::{ApiProtocol, ChatEvent, ChatRequest, Deployment, ProviderOutput, Usage};
 
 /// Opaque proof that a trace id came from this module's own
 /// shared-admission-proven `log_trace_id` provenance (#98, #294): computed
@@ -207,7 +209,7 @@ impl RequestTelemetry {
         self.context.as_ref().map(telemetry::Context::trace_id)
     }
     /// Finishes exactly once: the first call (explicit, at a terminal return
-    /// in `execute_protocol`, or `Drop` for every other path) wins.
+    /// of the request or an attempt, or `Drop` for every other path) wins.
     fn finish(&mut self, outcome: telemetry::Outcome, error: Option<InferenceError>) {
         if self.finished {
             return;
@@ -483,7 +485,6 @@ impl Engine {
             .await
     }
 
-    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     pub async fn execute_protocol(
         &self,
         principal: Principal,
@@ -520,88 +521,14 @@ impl Engine {
         if deployments.is_empty() {
             return Err(InferenceError::ModelUnavailable);
         }
-        // Coarse protocol/capability gate (unchanged), then a pure,
-        // deterministic per-candidate check (`ProviderAdapter::validate_chat_request`)
-        // against the client's own request: a route that would refuse this
-        // exact request deterministically is never durably admitted or
-        // reserved for it. This is eligibility, not failover - a refusal here
-        // consumes no attempt slot and produces no routing health
-        // observation, and another authorized route may still accept the
-        // same request.
-        //
-        // Validation depends only on the adapter and the client request, so it
-        // runs once per adapter (provider id), not once per deployment: a model
-        // with many routes on one provider must not multiply this unmetered,
-        // pre-admission work.
-        let mut candidates = Vec::new();
-        let mut refused = Vec::new();
-        let mut verdicts: std::collections::HashMap<String, Result<(), InferenceError>> =
-            std::collections::HashMap::new();
-        for deployment in deployments {
-            if !deployment
-                .supported_protocols
-                .iter()
-                .any(|p| p == protocol.as_str())
-            {
-                continue;
-            }
-            let Some(adapter) = self.registry.get(&deployment.provider) else {
-                continue;
-            };
-            if !(adapter.supports_protocol(protocol) && adapter.supports_chat_request(&request)) {
-                continue;
-            }
-            let verdict = *verdicts
-                .entry(deployment.provider.clone())
-                .or_insert_with(|| match adapter.validate_chat_request(&request) {
-                    Ok(()) => Ok(()),
-                    Err(e @ (InferenceError::InvalidRequest | InferenceError::InvalidField(_))) => {
-                        Err(e)
-                    }
-                    Err(InferenceError::Unsupported) => Err(InferenceError::Unsupported),
-                    // The contract allows only InvalidRequest/InvalidField/Unsupported. A
-                    // nonconforming adapter is treated as a capability refusal,
-                    // never silently admitted, and reported for the operator.
-                    Err(other) => {
-                        tracing::warn!(provider = %deployment.provider, error = ?other,
-                            "adapter request validation returned an error outside its contract");
-                        Err(InferenceError::Unsupported)
-                    }
-                });
-            match verdict {
-                Ok(()) => candidates.push(deployment),
-                Err(error) => refused.push((deployment, error)),
-            }
-        }
+        let (candidates, refused) = self.eligible_candidates(deployments, &request, protocol);
         if candidates.is_empty() {
             if refused.is_empty() {
                 return Err(InferenceError::Unsupported);
             }
-            // Every capable route refused the request. Report the refusal kind
-            // only from routes the routing policy would actually use (residency,
-            // operator-disabled routes and cooldown applied by the ordinary,
-            // read-only planner), so an unusable route cannot change the
-            // caller's error. Planning errors (nothing routable) surface as they
-            // would for a valid request. Nothing is admitted or recorded here.
-            let refused_deployments: Vec<_> = refused.iter().map(|(d, _)| d.clone()).collect();
-            let usable = timeout_at(
-                deadline,
-                self.repository.route_plan(
-                    &principal,
-                    &request.model,
-                    &refused_deployments,
-                    request_id,
-                ),
-            )
-            .await
-            .map_err(|_| InferenceError::Timeout)??;
-            let invalid = refused.iter().find(|(d, error)| {
-                matches!(
-                    error,
-                    InferenceError::InvalidRequest | InferenceError::InvalidField(_)
-                ) && usable.deployment_ids.contains(&d.id)
-            });
-            return Err(invalid.map_or(InferenceError::Unsupported, |(_, error)| *error));
+            return self
+                .refuse(&principal, &request, &refused, request_id, deadline)
+                .await;
         }
         let plan = timeout_at(
             deadline,
@@ -613,26 +540,19 @@ impl Engine {
         if !(1..=3).contains(&plan.max_attempts) {
             return Err(InferenceError::Configuration);
         }
-        if let Some(start) = routing_start
-            && let Some(trace) = telemetry.trace()
-        {
-            match telemetry::Span::new(
-                telemetry::SpanName::Routing,
-                trace,
-                telemetry.root(),
-                start,
-                telemetry::now_unix_nanos(),
-            ) {
-                Some(mut span) => {
-                    span.attribute(telemetry::Attribute::Route(route_of(protocol)));
-                    telemetry.record(span);
-                }
-                // #98 PR 2 review item 5: counted, never a silent,
-                // uncounted loss.
-                None => telemetry.drop_invalid(),
-            }
-        }
+        record_routing_span(&mut telemetry, routing_start, protocol);
         let streamed = request.stream;
+        let scope = RequestScope {
+            principal,
+            request: &request,
+            request_id,
+            deadline,
+            labels: &labels,
+            permit: &permit,
+            plan: &plan,
+            protocol,
+            streamed,
+        };
         for (attempt, id) in plan
             .deployment_ids
             .iter()
@@ -644,7 +564,7 @@ impl Engine {
                 None => {
                     // #98 PR 2 review item 2: an early return must still
                     // finish telemetry explicitly, exactly like every other
-                    // terminal path below, so Drop never mislabels a real
+                    // terminal path of an attempt (`Engine::attempt`), so Drop never mislabels a real
                     // denial `cancelled` with no `error.type`.
                     telemetry.finish(
                         telemetry::Outcome::Error,
@@ -663,266 +583,13 @@ impl Engine {
                     return Err(InferenceError::Configuration);
                 }
             };
-            let execution_id = if attempt == 0 {
-                request_id
-            } else {
-                Uuid::now_v7()
+            telemetry = match self
+                .attempt(&scope, telemetry, attempt, deployment, adapter)
+                .await
+            {
+                AttemptEnd::Failover(telemetry) => telemetry,
+                AttemptEnd::Return(result) => return result,
             };
-            let attempt_started = Instant::now();
-            let attempt_wall_start = telemetry.active().then(telemetry::now_unix_nanos);
-            let admission_group = begin_phase_group(&telemetry);
-            let execution_start = ExecutionStart {
-                id: execution_id,
-                root_request_id: request_id,
-                attempt_number: (attempt + 1) as i32,
-                principal,
-                deployment_id: deployment.id,
-                provider: deployment.provider.clone(),
-                model: request.model.clone(),
-                streamed,
-                upstream_model: upstream_snapshot(&deployment.upstream_model),
-                client: labels.clone(),
-            };
-            let admission_future = timeout_at(
-                deadline,
-                self.repository.admit(
-                    &execution_start,
-                    &request,
-                    self.limits
-                        .request_timeout
-                        .as_secs()
-                        .min(i64::MAX as u64 - 5) as i64
-                        + 5,
-                    deployment,
-                    adapter.generation_output_limit(),
-                ),
-            );
-            let admission_result = match admission_group.as_ref().map(|(b, _, _)| b.clone()) {
-                Some(buffer) => telemetry::with_phases(buffer, admission_future).await,
-                None => admission_future.await,
-            };
-            end_phase_group(
-                &mut telemetry,
-                admission_group,
-                telemetry::SpanName::Admission,
-                attempt + 1,
-            );
-            let admission = match admission_result.map_err(|_| InferenceError::Timeout) {
-                Err(error) => {
-                    // #98 PR 2 review item 2: the timeout and the admission's
-                    // own error (e.g. a team-workspace rate or budget
-                    // denial) both return here, before any
-                    // `ExecutionGuard`/settlement path exists for this
-                    // attempt - so, like every other terminal return in this
-                    // function, telemetry must be finished explicitly here
-                    // rather than left for Drop to mislabel `cancelled`.
-                    telemetry.finish(telemetry::Outcome::Error, Some(error));
-                    return Err(error);
-                }
-                Ok(Err(error)) => {
-                    telemetry.finish(telemetry::Outcome::Error, Some(error));
-                    return Err(error);
-                }
-                Ok(Ok(admission)) => admission,
-            };
-            // Logging-only correlation (#98): known only once a
-            // shared-workspace admission has already committed for this
-            // request; never for personal workspaces.
-            let log_trace_id = telemetry
-                .trace_from_eligibility()
-                .map(hex::encode)
-                .map(LogTraceId::from_provenance);
-            let mut guard = ExecutionGuard::new(
-                self.repository.clone(),
-                execution_id,
-                deployment.id,
-                attempt_started,
-                permit.clone(),
-                log_trace_id,
-            );
-            // This clone belongs only to this attempt. A failover resolves its
-            // own default from its own immutable price, never from this cap.
-            let mut attempt_request = request.clone();
-            attempt_request.max_output_tokens = admission.max_output_tokens;
-            let (output, invalid_body_usage) = evidence::capture(timeout_at(
-                deadline,
-                adapter.execute_protocol(deployment, attempt_request, protocol),
-            ))
-            .await;
-            // A body that failed validation still fails, but its valid usage
-            // object is retained as observed evidence (the hold is kept).
-            if let Some(observed) = invalid_body_usage.filter(|u| valid_usage(*u)) {
-                guard.usage = observed;
-            }
-            let output = match output {
-                Ok(result) => result,
-                Err(_) => {
-                    guard.health_observation = false;
-                    Err(InferenceError::Timeout)
-                }
-            };
-            match output {
-                Err(error) => {
-                    let settled = settle_attempt(
-                        &mut telemetry,
-                        &mut guard,
-                        Outcome::Failed,
-                        Some(error),
-                        attempt + 1,
-                        attempt_wall_start,
-                        execution_id,
-                        &deployment.provider,
-                        streamed,
-                    )
-                    .await;
-                    let failing_over = settled.is_ok()
-                        && attempt + 1 < plan.max_attempts
-                        && attempt + 1 < plan.deployment_ids.len()
-                        && crate::routing::may_failover(&plan, error);
-                    if failing_over {
-                        continue;
-                    }
-                    if let Err(settlement_error) = settled {
-                        telemetry.finish(telemetry::Outcome::Error, Some(settlement_error));
-                        return Err(settlement_error);
-                    }
-                    telemetry.finish(telemetry::Outcome::Error, Some(error));
-                    return Err(error);
-                }
-                Ok(ProviderOutput::Complete(response)) if !streamed => {
-                    if !valid_usage(response.usage) {
-                        let settled = settle_attempt(
-                            &mut telemetry,
-                            &mut guard,
-                            Outcome::Failed,
-                            Some(InferenceError::InvalidUpstream),
-                            attempt + 1,
-                            attempt_wall_start,
-                            execution_id,
-                            &deployment.provider,
-                            streamed,
-                        )
-                        .await;
-                        let returned = settled.err().unwrap_or(InferenceError::InvalidUpstream);
-                        telemetry.finish(telemetry::Outcome::Error, Some(returned));
-                        return Err(returned);
-                    }
-                    guard.usage = response.usage;
-                    guard.telemetry.finish_reason = Some(response.finish_reason.into());
-                    let settled = settle_attempt(
-                        &mut telemetry,
-                        &mut guard,
-                        Outcome::Succeeded,
-                        None,
-                        attempt + 1,
-                        attempt_wall_start,
-                        execution_id,
-                        &deployment.provider,
-                        streamed,
-                    )
-                    .await;
-                    match settled {
-                        Ok(()) => {
-                            telemetry.finish(telemetry::Outcome::Completed, None);
-                            return Ok(ProviderOutput::Complete(response));
-                        }
-                        Err(error) => {
-                            telemetry.finish(telemetry::Outcome::Error, Some(error));
-                            return Err(error);
-                        }
-                    }
-                }
-                Ok(ProviderOutput::Stream(upstream)) if streamed => {
-                    // The watchdog drops transport at the deadline even if a slow
-                    // downstream never polls the returned stream again.
-                    let mut upstream = deadline_stream::DeadlineStream::new(
-                        upstream,
-                        deadline,
-                        Some(permit.clone()),
-                    );
-                    let streaming_provider = deployment.provider.clone();
-                    let tracked = async_stream::stream! {
-                        // Capturing guard and telemetry outside the generator
-                        // accounts for drops even before the first poll: both
-                        // finish/export or drop-count exactly once via their
-                        // own Drop.
-                        let mut guard = guard;
-                        let mut telemetry = telemetry;
-                        let mut finished_choice = false;
-                        let mut reported_usage = false;
-                        loop {
-                            let (polled, invalid_body_usage) = evidence::capture(timeout_at(deadline, upstream.next())).await;
-                            if let Some(observed) = invalid_body_usage.filter(|u| !reported_usage && valid_usage(*u)) {
-                                guard.usage = observed;
-                            }
-                            let next = match polled {
-                                Ok(Some(item)) => item,
-                                Ok(None) => Err(InferenceError::InvalidUpstream),
-                                Err(_) => Err(InferenceError::Timeout),
-                            };
-                            if matches!(next,Err(InferenceError::Timeout)) && Instant::now()>=deadline {guard.health_observation=false;}
-                            let item = match next {
-                                Ok(ChatEvent::MessagesBlock(_)) if finished_choice => Err(InferenceError::InvalidUpstream),
-                                Ok(ChatEvent::MessagesBlock(value)) => {
-                                    let text = value["delta"]["thinking"].as_str().or_else(|| value["content_block"]["thinking"].as_str());
-                                    guard.first_token(text, &[]);
-                                    Ok(ChatEvent::MessagesBlock(value))
-                                }
-                                Ok(ChatEvent::Delta { .. }) if finished_choice => Err(InferenceError::InvalidUpstream),
-                                Ok(ChatEvent::Delta { text, tool_calls }) => { guard.first_token(text.as_deref(), &tool_calls); Ok(ChatEvent::Delta { text, tool_calls }) }
-                                Ok(ChatEvent::Finish(_)) if finished_choice => Err(InferenceError::InvalidUpstream),
-                                Ok(ChatEvent::Finish(reason)) => { finished_choice = true; guard.telemetry.finish_reason = Some(reason.into()); Ok(ChatEvent::Finish(reason)) }
-                                Ok(ChatEvent::Usage(usage)) if reported_usage || !valid_usage(usage) => Err(InferenceError::InvalidUpstream),
-                                Ok(ChatEvent::Usage(usage)) => { reported_usage = true; guard.usage = usage; Ok(ChatEvent::Usage(usage)) }
-                                Ok(ChatEvent::Done) if !finished_choice => Err(InferenceError::InvalidUpstream),
-                                other => other,
-                            };
-                            match item {
-                                Ok(ChatEvent::Done) => {
-                                    let settled = settle_attempt(&mut telemetry, &mut guard, Outcome::Succeeded, None, attempt + 1, attempt_wall_start, execution_id, &streaming_provider, streamed).await;
-                                    match settled {
-                                        Ok(()) => {
-                                            telemetry.finish(telemetry::Outcome::Completed, None);
-                                            yield Ok(ChatEvent::Done);
-                                        }
-                                        Err(error) => {
-                                            telemetry.finish(telemetry::Outcome::Error, Some(error));
-                                            yield Err(error);
-                                        }
-                                    }
-                                    break;
-                                }
-                                Ok(event) => yield Ok(event),
-                                Err(error) => {
-                                    let settled = settle_attempt(&mut telemetry, &mut guard, Outcome::Failed, Some(error), attempt + 1, attempt_wall_start, execution_id, &streaming_provider, streamed).await;
-                                    let error = settled.err().unwrap_or(error);
-                                    telemetry.finish(telemetry::Outcome::Error, Some(error));
-                                    yield Err(error);
-                                    break;
-                                }
-                            }
-                        }
-                    };
-                    return Ok(ProviderOutput::Stream(Box::pin(tracked)));
-                }
-                Ok(_) => {
-                    let settled = settle_attempt(
-                        &mut telemetry,
-                        &mut guard,
-                        Outcome::Failed,
-                        Some(InferenceError::InvalidUpstream),
-                        attempt + 1,
-                        attempt_wall_start,
-                        execution_id,
-                        &deployment.provider,
-                        streamed,
-                    )
-                    .await;
-                    let returned = settled.err().unwrap_or(InferenceError::InvalidUpstream);
-                    telemetry.finish(telemetry::Outcome::Error, Some(returned));
-                    return Err(returned);
-                }
-            }
         }
         telemetry.finish(telemetry::Outcome::Error, Some(InferenceError::Busy));
         Err(InferenceError::Busy)
