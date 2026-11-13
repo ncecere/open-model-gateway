@@ -243,6 +243,276 @@ fn context(value: &Value) -> Result<()> {
     }
     Ok(())
 }
+/// Sampling, limit and option bounds, in the order `normalize` has always
+/// checked them; nothing is consumed here.
+fn check_bounds(
+    request: &Request,
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    top_k: Option<u32>,
+) -> Result<()> {
+    if request.messages.is_empty()
+        || request.messages.len() > 4096
+        || request.max_tokens == 0
+        || temperature.is_some_and(|v| !(0.0..=1.0).contains(&v))
+    {
+        return Err(InferenceError::InvalidRequest);
+    }
+    if top_p.is_some_and(|v| !(0.0..=1.0).contains(&v)) {
+        return Err(invalid("top_p"));
+    }
+    if top_k == Some(0) {
+        return Err(invalid("top_k"));
+    }
+    if request
+        .stop_sequences
+        .as_ref()
+        .is_some_and(|v| v.len() > 64 || v.iter().any(String::is_empty))
+    {
+        return Err(invalid("stop_sequences"));
+    }
+    if let Some(v) = &request.thinking {
+        thinking(v, request.max_tokens)?;
+    }
+    if let Some(v) = &request.output_config {
+        output(v)?;
+    }
+    if let Some(v) = &request.context_management {
+        context(v)?;
+    }
+    Ok(())
+}
+fn check_metadata(metadata: Option<WireMetadata>) -> Result<()> {
+    // `metadata.user_id` is a client label only (recorded as the session
+    // label by the protocol layer); it is validated, never forwarded.
+    let user_id = metadata.and_then(|m| m.user_id);
+    if user_id.as_ref().is_some_and(|u| u.chars().count() > 256) {
+        return Err(invalid("metadata.user_id"));
+    }
+    Ok(())
+}
+fn native_messages(wire: &[WireMessage]) -> Vec<Value> {
+    wire.iter()
+        .map(|m| {
+            let mut content = match &m.content {
+                Value::String(text) => json!([{"type":"text","text":text}]),
+                other => other.clone(),
+            };
+            if let Some(blocks) = content.as_array_mut() {
+                for block in blocks {
+                    if block["type"] == "tool_result" && block.get("content").is_none() {
+                        block["content"] = json!("");
+                    }
+                }
+            }
+            json!({"role":m.role,"content":content})
+        })
+        .collect()
+}
+fn system_messages(
+    system: Option<Value>,
+    options: &mut MessagesOptions,
+    messages: &mut Vec<Message>,
+) -> Result<()> {
+    if let Some(system) = system {
+        for text in text_blocks(&system, options, false)? {
+            messages.push(message(Role::System, text));
+        }
+    }
+    Ok(())
+}
+/// One wire message; may append several canonical messages.
+fn wire_message(
+    wire: WireMessage,
+    options: &mut MessagesOptions,
+    messages: &mut Vec<Message>,
+) -> Result<()> {
+    let role = match wire.role.as_str() {
+        "user" => Role::User,
+        "assistant" => Role::Assistant,
+        _ => return Err(invalid("messages.role")),
+    };
+    if let Value::String(s) = wire.content {
+        messages.push(message(role, s));
+        return Ok(());
+    }
+    let blocks = wire
+        .content
+        .as_array()
+        .ok_or_else(|| invalid("messages.content"))?;
+    if blocks.is_empty() || blocks.len() > 256 {
+        return Err(invalid("messages.content"));
+    }
+    // One wire assistant turn must remain one canonical turn: all
+    // parallel calls need to precede their correlated tool results.
+    // Text is consolidated within this wire message, never across it.
+    let mut turn = Message {
+        role,
+        content: None,
+        tool_calls: vec![],
+        tool_call_id: None,
+    };
+    for block in blocks {
+        content_block(block, &mut turn, options, messages)?;
+    }
+    if turn.content.is_some() || !turn.tool_calls.is_empty() {
+        messages.push(turn);
+    }
+    Ok(())
+}
+fn content_block(
+    block: &Value,
+    turn: &mut Message,
+    options: &mut MessagesOptions,
+    messages: &mut Vec<Message>,
+) -> Result<()> {
+    let role = turn.role;
+    match block["type"].as_str() {
+        Some("text") => {
+            object(block, &["type", "text", "cache_control"], "text")?;
+            cache(block, options)?;
+            turn.content
+                .get_or_insert_with(String::new)
+                .push_str(&string(&block["text"])?);
+        }
+        Some("image") => image(block, options)?,
+        Some("thinking") if role == Role::Assistant => {
+            object(block, &["type", "thinking", "signature"], "thinking")?;
+            string(&block["thinking"])?;
+            string(&block["signature"])?;
+            options.history_thinking.push(block.clone());
+        }
+        Some("redacted_thinking") if role == Role::Assistant => {
+            object(block, &["type", "data"], "redacted_thinking")?;
+            string(&block["data"])?;
+            options.history_thinking.push(block.clone());
+        }
+        Some("tool_use") if role == Role::Assistant => {
+            turn.tool_calls.push(tool_use(block, options)?);
+        }
+        Some("tool_result") if role == Role::User => tool_result(block, turn, options, messages)?,
+        Some("server_tool_use" | "web_search_tool_result" | "code_execution_tool_result") => {
+            return Err(invalid("tools.type"));
+        }
+        _ => return Err(invalid("messages.content.type")),
+    }
+    Ok(())
+}
+fn tool_use(block: &Value, options: &mut MessagesOptions) -> Result<ToolCall> {
+    object(
+        block,
+        &["type", "id", "name", "input", "cache_control"],
+        "tool_use",
+    )?;
+    cache(block, options)?;
+    let id = string(&block["id"])?;
+    let n = string(&block["name"])?;
+    if id.is_empty() || !name(&n) || !block["input"].is_object() {
+        return Err(invalid("tool_use"));
+    }
+    Ok(ToolCall {
+        id,
+        name: n,
+        arguments: block["input"].to_string(),
+    })
+}
+fn tool_result(
+    block: &Value,
+    turn: &mut Message,
+    options: &mut MessagesOptions,
+    messages: &mut Vec<Message>,
+) -> Result<()> {
+    object(
+        block,
+        &[
+            "type",
+            "tool_use_id",
+            "content",
+            "is_error",
+            "cache_control",
+        ],
+        "tool_result",
+    )?;
+    cache(block, options)?;
+    let id = string(&block["tool_use_id"])?;
+    if id.is_empty() {
+        return Err(invalid("tool_result.tool_use_id"));
+    }
+    if let Some(flag) = block.get("is_error") {
+        options.error_results |= flag.as_bool().ok_or(InferenceError::InvalidRequest)?;
+    }
+    let content = block
+        .get("content")
+        .map(|v| text_blocks(v, options, true).map(|v| v.concat()))
+        .transpose()?
+        .unwrap_or_default();
+    // Canonical tool results each carry one correlation id.
+    // Keep any preceding user text in its original order;
+    // adapters retain their normal correlation validation.
+    if let Some(text) = turn.content.take() {
+        messages.push(message(turn.role, text));
+    }
+    messages.push(Message {
+        role: Role::Tool,
+        content: Some(content),
+        tool_call_id: Some(id),
+        tool_calls: vec![],
+    });
+    Ok(())
+}
+fn function_tool(t: &Value, options: &mut MessagesOptions) -> Result<FunctionTool> {
+    if t.get("type").is_some_and(|v| v != "custom") {
+        return Err(invalid("tools.type"));
+    }
+    object(
+        t,
+        &[
+            "type",
+            "name",
+            "description",
+            "input_schema",
+            "strict",
+            "defer_loading",
+            "cache_control",
+        ],
+        "tools",
+    )?;
+    cache(t, options)?;
+    options.strict_tools |= t.get("strict").is_some();
+    if let Some(v) = t.get("defer_loading") {
+        v.as_bool().ok_or_else(|| invalid("defer_loading"))?;
+        options.defer_loading.push(v.clone());
+    }
+    Ok(FunctionTool {
+        name: string(&t["name"])?,
+        description: t.get("description").map(string).transpose()?,
+        parameters: t["input_schema"].clone(),
+        strict: t
+            .get("strict")
+            .map(|v| v.as_bool().ok_or_else(|| invalid("strict")))
+            .transpose()?,
+    })
+}
+fn tool_choice(v: &Value) -> Result<ToolChoice> {
+    object(
+        v,
+        &["type", "name", "disable_parallel_tool_use"],
+        "tool_choice",
+    )?;
+    if let Some(flag) = v.get("disable_parallel_tool_use") {
+        flag.as_bool()
+            .ok_or_else(|| invalid("tool_choice.disable_parallel_tool_use"))?;
+        // No shared parallel-tool control yet; refuse, never discard.
+        return Err(invalid("tool_choice.disable_parallel_tool_use"));
+    }
+    Ok(match v["type"].as_str() {
+        Some("auto") if v.get("name").is_none() => ToolChoice::Auto,
+        Some("none") if v.get("name").is_none() => ToolChoice::None,
+        Some("any") if v.get("name").is_none() => ToolChoice::Required,
+        Some("tool") => ToolChoice::Function(string(&v["name"])?),
+        _ => return Err(invalid("tool_choice")),
+    })
+}
 impl Request {
     /// Version-specific request rules, checked before the shared grammar.
     /// `2026-10-21` removes the sampling parameters: any occurrence, even a
@@ -266,51 +536,17 @@ impl Request {
         }
         Ok(())
     }
-    #[cfg_attr(not(test), expect(clippy::too_many_lines, reason = "#499"))]
     pub(super) fn normalize(self) -> Result<ChatRequest> {
         let temperature = self.temperature.flatten();
         let top_p = self.top_p.flatten();
         let top_k = self.top_k.flatten();
-        if self.messages.is_empty()
-            || self.messages.len() > 4096
-            || self.max_tokens == 0
-            || temperature.is_some_and(|v| !(0.0..=1.0).contains(&v))
-        {
-            return Err(InferenceError::InvalidRequest);
-        }
-        if top_p.is_some_and(|v| !(0.0..=1.0).contains(&v)) {
-            return Err(invalid("top_p"));
-        }
-        if top_k == Some(0) {
-            return Err(invalid("top_k"));
-        }
-        if self
-            .stop_sequences
-            .as_ref()
-            .is_some_and(|v| v.len() > 64 || v.iter().any(String::is_empty))
-        {
-            return Err(invalid("stop_sequences"));
-        }
-        if let Some(v) = &self.thinking {
-            thinking(v, self.max_tokens)?;
-        }
-        if let Some(v) = &self.output_config {
-            output(v)?;
-        }
-        if let Some(v) = &self.context_management {
-            context(v)?;
-        }
+        check_bounds(&self, temperature, top_p, top_k)?;
         let task_budget = self
             .output_config
             .as_ref()
             .and_then(|v| v.get("task_budget"))
             .cloned();
-        // `metadata.user_id` is a client label only (recorded as the session
-        // label by the protocol layer); it is validated, never forwarded.
-        let user_id = self.metadata.and_then(|m| m.user_id);
-        if user_id.as_ref().is_some_and(|u| u.chars().count() > 256) {
-            return Err(invalid("metadata.user_id"));
-        }
+        check_metadata(self.metadata)?;
         let mut options = MessagesOptions {
             top_p,
             top_k,
@@ -322,146 +558,14 @@ impl Request {
             task_budget,
             // These envelopes are used only after every nested field below has
             // passed the explicit grammar. Never retain top-level caller JSON.
-            native_messages: self
-                .messages
-                .iter()
-                .map(|m| {
-                    let mut content = match &m.content {
-                        Value::String(text) => json!([{"type":"text","text":text}]),
-                        other => other.clone(),
-                    };
-                    if let Some(blocks) = content.as_array_mut() {
-                        for block in blocks {
-                            if block["type"] == "tool_result" && block.get("content").is_none() {
-                                block["content"] = json!("");
-                            }
-                        }
-                    }
-                    json!({"role":m.role,"content":content})
-                })
-                .collect(),
+            native_messages: native_messages(&self.messages),
             native_tools: self.tools.clone(),
             ..Default::default()
         };
         let mut messages = vec![];
-        if let Some(system) = self.system {
-            for text in text_blocks(&system, &mut options, false)? {
-                messages.push(message(Role::System, text));
-            }
-        }
+        system_messages(self.system, &mut options, &mut messages)?;
         for wire in self.messages {
-            let role = match wire.role.as_str() {
-                "user" => Role::User,
-                "assistant" => Role::Assistant,
-                _ => return Err(invalid("messages.role")),
-            };
-            if let Value::String(s) = wire.content {
-                messages.push(message(role, s));
-                continue;
-            }
-            let blocks = wire
-                .content
-                .as_array()
-                .ok_or_else(|| invalid("messages.content"))?;
-            if blocks.is_empty() || blocks.len() > 256 {
-                return Err(invalid("messages.content"));
-            }
-            // One wire assistant turn must remain one canonical turn: all
-            // parallel calls need to precede their correlated tool results.
-            // Text is consolidated within this wire message, never across it.
-            let mut turn = Message {
-                role,
-                content: None,
-                tool_calls: vec![],
-                tool_call_id: None,
-            };
-            for block in blocks {
-                match block["type"].as_str() {
-                    Some("text") => {
-                        object(block, &["type", "text", "cache_control"], "text")?;
-                        cache(block, &mut options)?;
-                        turn.content
-                            .get_or_insert_with(String::new)
-                            .push_str(&string(&block["text"])?);
-                    }
-                    Some("image") => image(block, &mut options)?,
-                    Some("thinking") if role == Role::Assistant => {
-                        object(block, &["type", "thinking", "signature"], "thinking")?;
-                        string(&block["thinking"])?;
-                        string(&block["signature"])?;
-                        options.history_thinking.push(block.clone());
-                    }
-                    Some("redacted_thinking") if role == Role::Assistant => {
-                        object(block, &["type", "data"], "redacted_thinking")?;
-                        string(&block["data"])?;
-                        options.history_thinking.push(block.clone());
-                    }
-                    Some("tool_use") if role == Role::Assistant => {
-                        object(
-                            block,
-                            &["type", "id", "name", "input", "cache_control"],
-                            "tool_use",
-                        )?;
-                        cache(block, &mut options)?;
-                        let id = string(&block["id"])?;
-                        let n = string(&block["name"])?;
-                        if id.is_empty() || !name(&n) || !block["input"].is_object() {
-                            return Err(invalid("tool_use"));
-                        }
-                        turn.tool_calls.push(ToolCall {
-                            id,
-                            name: n,
-                            arguments: block["input"].to_string(),
-                        });
-                    }
-                    Some("tool_result") if role == Role::User => {
-                        object(
-                            block,
-                            &[
-                                "type",
-                                "tool_use_id",
-                                "content",
-                                "is_error",
-                                "cache_control",
-                            ],
-                            "tool_result",
-                        )?;
-                        cache(block, &mut options)?;
-                        let id = string(&block["tool_use_id"])?;
-                        if id.is_empty() {
-                            return Err(invalid("tool_result.tool_use_id"));
-                        }
-                        if let Some(flag) = block.get("is_error") {
-                            options.error_results |=
-                                flag.as_bool().ok_or(InferenceError::InvalidRequest)?;
-                        }
-                        let content = block
-                            .get("content")
-                            .map(|v| text_blocks(v, &mut options, true).map(|v| v.concat()))
-                            .transpose()?
-                            .unwrap_or_default();
-                        // Canonical tool results each carry one correlation id.
-                        // Keep any preceding user text in its original order;
-                        // adapters retain their normal correlation validation.
-                        if let Some(text) = turn.content.take() {
-                            messages.push(message(role, text));
-                        }
-                        messages.push(Message {
-                            role: Role::Tool,
-                            content: Some(content),
-                            tool_call_id: Some(id),
-                            tool_calls: vec![],
-                        });
-                    }
-                    Some(
-                        "server_tool_use" | "web_search_tool_result" | "code_execution_tool_result",
-                    ) => return Err(invalid("tools.type")),
-                    _ => return Err(invalid("messages.content.type")),
-                }
-            }
-            if turn.content.is_some() || !turn.tool_calls.is_empty() {
-                messages.push(turn);
-            }
+            wire_message(wire, &mut options, &mut messages)?;
         }
         // Native image/thinking-only turns have no text representation, but
         // still need a canonical envelope for capability/admission validation.
@@ -475,63 +579,12 @@ impl Request {
                 tool_call_id: None,
             });
         }
-        let mut tools = vec![];
-        for t in self.tools {
-            if t.get("type").is_some_and(|v| v != "custom") {
-                return Err(invalid("tools.type"));
-            }
-            object(
-                &t,
-                &[
-                    "type",
-                    "name",
-                    "description",
-                    "input_schema",
-                    "strict",
-                    "defer_loading",
-                    "cache_control",
-                ],
-                "tools",
-            )?;
-            cache(&t, &mut options)?;
-            options.strict_tools |= t.get("strict").is_some();
-            if let Some(v) = t.get("defer_loading") {
-                v.as_bool().ok_or_else(|| invalid("defer_loading"))?;
-                options.defer_loading.push(v.clone());
-            }
-            tools.push(FunctionTool {
-                name: string(&t["name"])?,
-                description: t.get("description").map(string).transpose()?,
-                parameters: t["input_schema"].clone(),
-                strict: t
-                    .get("strict")
-                    .map(|v| v.as_bool().ok_or_else(|| invalid("strict")))
-                    .transpose()?,
-            });
-        }
-        let tool_choice = self
-            .tool_choice
-            .map(|v| {
-                object(
-                    &v,
-                    &["type", "name", "disable_parallel_tool_use"],
-                    "tool_choice",
-                )?;
-                if let Some(flag) = v.get("disable_parallel_tool_use") {
-                    flag.as_bool()
-                        .ok_or_else(|| invalid("tool_choice.disable_parallel_tool_use"))?;
-                    // No shared parallel-tool control yet; refuse, never discard.
-                    return Err(invalid("tool_choice.disable_parallel_tool_use"));
-                }
-                Ok(match v["type"].as_str() {
-                    Some("auto") if v.get("name").is_none() => ToolChoice::Auto,
-                    Some("none") if v.get("name").is_none() => ToolChoice::None,
-                    Some("any") if v.get("name").is_none() => ToolChoice::Required,
-                    Some("tool") => ToolChoice::Function(string(&v["name"])?),
-                    _ => return Err(invalid("tool_choice")),
-                })
-            })
-            .transpose()?;
+        let tools = self
+            .tools
+            .iter()
+            .map(|t| function_tool(t, &mut options))
+            .collect::<Result<Vec<_>>>()?;
+        let tool_choice = self.tool_choice.as_ref().map(tool_choice).transpose()?;
         validate(ChatRequest {
             model: self.model,
             messages,
