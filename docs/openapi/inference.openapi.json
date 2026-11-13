@@ -7264,7 +7264,7 @@
   "info": {
     "description": "Complete contract (#82): every operation (models, embeddings, rerank, System One, images, Chat Completions, Responses, Messages, audio, files, batches, videos and realtime) documents its real HTTP, streaming and media contract and is wire-validated against the real handlers; no placeholder remains. Every operation authenticates with an inference key only (Bearer; /v1/messages also accepts x-api-key, GET /v1/realtime also the openai-insecure-api-key.<key> WebSocket subprotocol, never both); inference keys never authorize management and admin tokens never authorize inference. Live key, workspace, catalog and budget checks remain authoritative. The OpenAI-shaped, Anthropic-shaped, job and file error envelopes are distinct schemas and never the management ErrorEnvelope; /v1/messages errors carry no gateway machine code. x-omg-* extensions state what OpenAPI 3.1 cannot express (see docs/openapi/inference/README.md). Request integers must be JSON integer literals without a fraction, exponent or -0. Spec-following JSON Schema validators are more permissive than the server for these encodings.",
     "title": "Open Model Gateway inference API",
-    "version": "0.15.1"
+    "version": "0.16.0"
   },
   "jsonSchemaDialect": "https://spec.openapis.org/oas/3.1/dialect/base",
   "openapi": "3.1.0",
