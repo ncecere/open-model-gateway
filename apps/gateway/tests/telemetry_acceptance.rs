@@ -161,7 +161,7 @@ async fn seed(pool: &PgPool) -> DevelopmentKeys {
 /// A real gateway and a real, separate metrics listener, both served on
 /// loopback TCP, wired to the same optional trace `Recorder` the real
 /// `serve` command builds (`Runtime::start` -> `Recorder` on both
-/// `Store::with_traces` and `Engine::with_telemetry`, main.rs).
+/// `Store::with_traces` and `Engine::with_telemetry`, commands/serve.rs).
 struct Gateway {
     app_addr: std::net::SocketAddr,
     metrics_addr: std::net::SocketAddr,

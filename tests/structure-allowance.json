@@ -1,7 +1,7 @@
 {
   "comment": "Structure ratchet (#500, docs/verification.md). \"files\": production-line ceilings for gateway files over \"limit\"; lower or remove entries as files shrink. \"baseline\": the list as it landed; never edit it except to delete an entry when the same entry leaves \"files\". \"markers\": the number of reason = \"#499\" attributes under apps/gateway/src; lower it when you remove one, never add one. \"markersBaseline\": that number as it landed; never edit it.",
   "limit": 800,
-  "markers": 58,
+  "markers": 57,
   "markersBaseline": 58,
   "files": {
     "apps/gateway/src/audit_export.rs": 1342,
@@ -9,7 +9,6 @@
     "apps/gateway/src/filestore/files.rs": 1012,
     "apps/gateway/src/inference/mod.rs": 1208,
     "apps/gateway/src/jobs/schedule.rs": 1003,
-    "apps/gateway/src/main.rs": 1112,
     "apps/gateway/src/management/access_reviews.rs": 954,
     "apps/gateway/src/management/alerts.rs": 1006,
     "apps/gateway/src/management/catalogs.rs": 983,
@@ -28,7 +27,6 @@
     "apps/gateway/src/filestore/files.rs": 1012,
     "apps/gateway/src/inference/mod.rs": 1208,
     "apps/gateway/src/jobs/schedule.rs": 1003,
-    "apps/gateway/src/main.rs": 1112,
     "apps/gateway/src/management/access_reviews.rs": 954,
     "apps/gateway/src/management/alerts.rs": 1006,
     "apps/gateway/src/management/catalogs.rs": 983,
