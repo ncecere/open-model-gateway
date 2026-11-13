@@ -130,17 +130,22 @@ type ClientTx = futures_util::stream::SplitSink<WebSocket, Message>;
 type ClientRx = futures_util::stream::SplitStream<WebSocket>;
 
 /// The session loop's state, shared by the client and upstream branches.
+///
+/// Fields drop in declaration order. If the session future is dropped
+/// mid-loop, the upstream connection closes before `session` drops, as it
+/// did when these were locals: `RealtimeSession`'s `Drop` detaches the
+/// cancelled accounting after the network work has stopped.
 struct Relay {
-    session: RealtimeSession,
-    upstream: RealtimeUpstream,
-    client_tx: ClientTx,
-    limits: RealtimeLimits,
-    window: u32,
-    alias: String,
-    idle: Instant,
-    bucket: Bucket,
-    requested: Option<String>,
     first_output: bool,
+    requested: Option<String>,
+    bucket: Bucket,
+    idle: Instant,
+    alias: String,
+    window: u32,
+    limits: RealtimeLimits,
+    client_tx: ClientTx,
+    upstream: RealtimeUpstream,
+    session: RealtimeSession,
 }
 
 impl Relay {
