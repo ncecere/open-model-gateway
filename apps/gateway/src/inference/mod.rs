@@ -209,7 +209,7 @@ impl RequestTelemetry {
         self.context.as_ref().map(telemetry::Context::trace_id)
     }
     /// Finishes exactly once: the first call (explicit, at a terminal return
-    /// in `execute_protocol`, or `Drop` for every other path) wins.
+    /// of the request or an attempt, or `Drop` for every other path) wins.
     fn finish(&mut self, outcome: telemetry::Outcome, error: Option<InferenceError>) {
         if self.finished {
             return;
@@ -564,7 +564,7 @@ impl Engine {
                 None => {
                     // #98 PR 2 review item 2: an early return must still
                     // finish telemetry explicitly, exactly like every other
-                    // terminal path below, so Drop never mislabels a real
+                    // terminal path of an attempt (`Engine::attempt`), so Drop never mislabels a real
                     // denial `cancelled` with no `error.type`.
                     telemetry.finish(
                         telemetry::Outcome::Error,

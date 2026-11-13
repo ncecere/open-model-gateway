@@ -67,7 +67,8 @@ impl Engine {
 
     /// One attempt on `deployment`: admission, the upstream call and the
     /// settlement of its outcome. Gives the request's telemetry back when the
-    /// attempt failed and the plan allows a failover; otherwise the result.
+    /// upstream call failed, its settlement succeeded and the plan allows a
+    /// failover; otherwise the request's result.
     pub(super) async fn attempt(
         &self,
         scope: &RequestScope<'_>,
@@ -184,7 +185,8 @@ impl Engine {
         }
     }
 
-    /// Eligibility, before any admission:
+    /// Splits `deployments` into eligible candidates and refused routes.
+    ///
     // Coarse protocol/capability gate (unchanged), then a pure,
     // deterministic per-candidate check (`ProviderAdapter::validate_chat_request`)
     // against the client's own request: a route that would refuse this
@@ -247,8 +249,7 @@ impl Engine {
         (candidates, refused)
     }
 
-    /// The error for a request every capable route refused.
-    /// Every capable route refused the request. Report the refusal kind
+    /// The error for a request every capable route refused. Report the refusal kind
     /// only from routes the routing policy would actually use (residency,
     /// operator-disabled routes and cooldown applied by the ordinary,
     /// read-only planner), so an unusable route cannot change the
