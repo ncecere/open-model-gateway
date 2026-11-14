@@ -42,6 +42,47 @@ groups:
 
   - name: open-model-gateway.accounting
     rules:
+      # Accounting failures (#389, docs/operations.md#accounting-failures): each
+      # one is a `503 accounting_unavailable` or a settlement that did not finish.
+      # A series exists only after a failure and starts at 1, so increase() and
+      # rate() never see the first failure on an instance; the `unless ... offset
+      # 10m` term adds series that did not exist 10 minutes ago, which is always a
+      # real failure. Missing data yields nothing, so neither rule can fire
+      # before the first failure. A scrape gap longer than 10 minutes makes every
+      # existing series look new and can fire them once.
+      # Settlement stages are critical with no pending period: the reservation
+      # stays held until reconciliation and can block budgeted admission, so the
+      # first failure pages (GatewaySettlementHeld, a warning, sees the same
+      # events through gateway_settlements_total{outcome="held"}). The other
+      # stages refuse requests but hold no money: a warning after 5 minutes
+      # pending. A failure stays in the 10-minute window for 10 minutes, so any
+      # failure, the first on a new series included, fires it 5 minutes later
+      # and it clears 10 minutes after the last failure.
+      - alert: GatewayAccountingFailures
+        expr: |
+          sum by (stage, cause) (
+              increase(gateway_accounting_failures_total{stage!~"explicit_settlement|cancellation_settlement"}[10m])
+            or
+              (gateway_accounting_failures_total{stage!~"explicit_settlement|cancellation_settlement"} unless gateway_accounting_failures_total{stage!~"explicit_settlement|cancellation_settlement"} offset 10m)
+          ) > 0
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Accounting failing at {{ $labels.stage }} ({{ $labels.cause }}); requests get 503 accounting_unavailable"
+          description: "A failure in the last 10 minutes, pending for 5. Check database health, pool saturation (gateway_db_pool_connections) and lock waits; the WARN log line `accounting unavailable` carries the same stage and cause."
+          runbook_url: docs/operations.md#accounting-failures
+      - alert: GatewaySettlementAccountingFailures
+        expr: |
+          sum by (stage, cause) (
+              increase(gateway_accounting_failures_total{stage=~"explicit_settlement|cancellation_settlement"}[10m])
+            or
+              (gateway_accounting_failures_total{stage=~"explicit_settlement|cancellation_settlement"} unless gateway_accounting_failures_total{stage=~"explicit_settlement|cancellation_settlement"} offset 10m)
+          ) > 0
+        labels: {severity: critical}
+        annotations:
+          summary: "Settlement missed its deadline at {{ $labels.stage }} ({{ $labels.cause }}); reservations stay held"
+          description: "A settlement failure in the last 10 minutes. Holds are retained, never refunded as zero, and can block budgeted admission. deadline_in_queue or deadline_acquiring_connection point to a starved pool, deadline_in_database to lock or statement waits."
+          runbook_url: docs/operations.md#accounting-failures
       - alert: GatewaySettlementHeld
         expr: increase(gateway_settlements_total{outcome="held"}[15m]) > 0
         labels: {severity: warning}
