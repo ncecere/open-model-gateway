@@ -13,6 +13,33 @@
 //! transitively and used by tungstenite only for WebSocket masking and
 //! handshake keys; no gateway secret is drawn from it. `StdRng` is used only
 //! by routing for its seeded, non-secret weighted choice.
+//!
+//! Two guards keep secrets here. The source scan in this module's tests
+//! refuses generators by name (`rand`, `OsRng`, `RandomState`, `HasherRng`,
+//! `/dev/urandom`, SQL `gen_random_bytes`, ...) outside this file. Library
+//! calls that draw randomness without such a name (tungstenite's
+//! `generate_key` and `IntoClientRequest`, `aead::Generate`, oauth2's
+//! `CsrfToken::new_random*` and `PkceCodeChallenge::new_random*` (re-exported
+//! by openidconnect), openidconnect's `Nonce::new_random*`, rustls's
+//! `SecureRandom::fill`, key exchange and ticketers, tower's `HasherRng`,
+//! `RandomState::new`) are `disallowed-methods` in `clippy.toml`, resolved by
+//! path (#511). OAuth state, the OIDC nonce and the PKCE verifier are drawn
+//! here and passed to the `new` constructors (`identity/login.rs`). The one
+//! sanctioned call is the upstream realtime handshake request
+//! (`providers/openai/realtime.rs` `handshake_request`), whose
+//! `Sec-WebSocket-Key` is a protocol nonce, not a secret.
+//!
+//! UUIDs are identifiers, never secrets: `Uuid::new_v4()`, `Uuid::now_v7()`
+//! and `Uuid::new_v7()` (with any `ContextV7`), and SQL `gen_random_uuid()`,
+//! are allowed for row ids, the public id half of a key token, lease and
+//! claim fencing tokens compared in SQL, multipart boundaries and event ids.
+//! A value that must be unguessable to protect anything (a credential, a
+//! token that authorizes on its own, a key or a nonce) is drawn here, never
+//! from a UUID. This is policy, reviewed by hand; nothing enforces it.
+//!
+//! The scan reads source text. A path assembled at run time is not seen:
+//! `Path::join`, `format!`, slices joined with `join("/")`, text read with
+//! `include_str!`, and crate-local macros wrapping `concat!`.
 use std::fmt;
 
 use rand::{TryRng, rngs::SysRng};
@@ -144,9 +171,16 @@ mod tests {
     /// crates under and beside it, other generator crates, and generators by
     /// name (`thread_rng_n` is tokio's, public as
     /// `tokio::macros::support::thread_rng_n`). A name is matched whole, so
-    /// each one is listed. An API that draws without one of these names
-    /// (`Uuid::new_v4()`) is outside this scan (#511).
-    const NEEDLES: [&str; 17] = [
+    /// each one is listed. The last five name what Clippy cannot refuse by
+    /// path (#511): rustls's `CryptoProvider::secure_random` field, any
+    /// `RandomState` (std's through `Default`, `ahash`, `foldhash`),
+    /// `/dev/urandom`, tower's `HasherRng` (through `Default`) and
+    /// pgcrypto's `gen_random_bytes` in SQL strings. `/dev/random` and
+    /// `/proc/sys/kernel/random` are matched as paths ([`DEVICES`]). Library
+    /// calls that draw without any of these names are on the `clippy.toml`
+    /// list ([`CLIPPY_LIST`]). `Uuid::new_v4()`/`now_v7()`/`new_v7()` and SQL
+    /// `gen_random_uuid()` are allowed for identifiers only (module docs).
+    const NEEDLES: [&str; 22] = [
         "rand",
         "rand_core",
         "rand_chacha",
@@ -164,6 +198,11 @@ mod tests {
         "thread_rng_n",
         "StdRng",
         "SmallRng",
+        "secure_random",
+        "RandomState",
+        "urandom",
+        "HasherRng",
+        "gen_random_bytes",
     ];
 
     /// The length in tokens of the test module that starts at `trees[0]`:
@@ -232,7 +271,10 @@ mod tests {
                 );
                 raw
             }
-            // Numbers, characters and booleans: one character names nothing.
+            // By value, so `concat!("/dev/ran", 'd', "om")` joins to a path.
+            syn::Lit::Char(c) => c.value().to_string(),
+            syn::Lit::Byte(b) => char::from(b.value()).to_string(),
+            // Numbers and booleans.
             _ => literal.to_string(),
         }
     }
@@ -241,6 +283,100 @@ mod tests {
         for word in text.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
             found.extend(NEEDLES.iter().filter(|needle| **needle == word));
         }
+        devices(text, found);
+    }
+
+    /// Device and kernel paths that hand out randomness, as path segments.
+    /// `random` alone is an ordinary word; only these paths count.
+    const DEVICES: [(&[&str], &str); 3] = [
+        (&["dev", "random"], "/dev/random"),
+        (&["dev", "urandom"], "urandom"),
+        (
+            &["proc", "sys", "kernel", "random"],
+            "/proc/sys/kernel/random",
+        ),
+    ];
+
+    /// The [`DEVICES`] in `text`, after normalising each path: empty and
+    /// `.` segments are dropped and `..` removes the segment before it, so
+    /// `/dev//random`, `/dev/./random` and `/tmp/../dev/random` all count.
+    fn devices(text: &str, found: &mut BTreeSet<&'static str>) {
+        let separator =
+            |c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '(' | ')' | ',' | ';');
+        for run in text.split(separator).filter(|run| run.contains('/')) {
+            let mut segments: Vec<&str> = Vec::new();
+            for segment in run.split('/') {
+                match segment {
+                    "" | "." => {}
+                    ".." => {
+                        segments.pop();
+                    }
+                    other => segments.push(other.trim_end_matches(['.', ':'])),
+                }
+            }
+            for (path, name) in DEVICES {
+                if segments.windows(path.len()).any(|window| window == path) {
+                    found.insert(name);
+                }
+            }
+        }
+    }
+
+    /// The text `concat!` would produce from `stream`: its literals joined,
+    /// nested `concat!` calls and `stringify!(tokens)` included, so a path
+    /// split across literals is read whole (#511). `env!`, `option_env!`,
+    /// `include_str!` and any other macro are a part this scan does not know:
+    /// they break the text (a space), so the pieces on either side are not
+    /// glued together. Other tokens (the commas) add nothing.
+    fn concat_text(stream: TokenStream) -> String {
+        let trees: Vec<TokenTree> = stream.into_iter().collect();
+        let mut out = String::new();
+        let mut at = 0;
+        while at < trees.len() {
+            match &trees[at..] {
+                [
+                    TokenTree::Ident(word),
+                    TokenTree::Punct(bang),
+                    TokenTree::Group(group),
+                    ..,
+                ] if word == "concat" && bang.as_char() == '!' => {
+                    out.push_str(&concat_text(group.stream()));
+                    at += 3;
+                    continue;
+                }
+                [
+                    TokenTree::Ident(word),
+                    TokenTree::Punct(bang),
+                    TokenTree::Group(group),
+                    ..,
+                ] if word == "stringify" && bang.as_char() == '!' => {
+                    // rustc prints the tokens without the spaces
+                    // proc_macro2 puts between them; the tokens are also
+                    // scanned as tokens.
+                    let text = group.stream().to_string();
+                    out.extend(text.chars().filter(|c| !c.is_whitespace()));
+                    at += 3;
+                    continue;
+                }
+                [
+                    TokenTree::Ident(_),
+                    TokenTree::Punct(bang),
+                    TokenTree::Group(_),
+                    ..,
+                ] if bang.as_char() == '!' => {
+                    out.push(' ');
+                    at += 3;
+                    continue;
+                }
+                [TokenTree::Literal(literal), ..] => out.push_str(&literal_text(literal)),
+                [TokenTree::Group(group), ..] if group.delimiter() == Delimiter::None => {
+                    out.push_str(&concat_text(group.stream()));
+                }
+                _ => {}
+            }
+            at += 1;
+        }
+        out
     }
 
     /// `module`: the tokens are the items of a module, that is the top of a
@@ -269,7 +405,15 @@ mod tests {
                     scan(group.stream(), items, found);
                 }
                 TokenTree::Punct(_) => {}
-                TokenTree::Ident(word) => names(&word.to_string(), found),
+                TokenTree::Ident(word) => {
+                    names(&word.to_string(), found);
+                    if let [TokenTree::Punct(bang), TokenTree::Group(group), ..] = &trees[at + 1..]
+                        && word == "concat"
+                        && bang.as_char() == '!'
+                    {
+                        names(&concat_text(group.stream()), found);
+                    }
+                }
                 // A name inside a literal: a path in an attribute string
                 // such as `#[serde(default = "...")]`.
                 TokenTree::Literal(literal) => names(&literal_text(literal), found),
@@ -476,6 +620,229 @@ mod tests {
             ("tests/payload.rs", false),
         ] {
             assert_eq!(read(name, &production), expected, "{name}");
+        }
+    }
+
+    /// Library calls that draw randomness without naming a generator
+    /// (#511). Clippy resolves these paths through aliases, re-exports and
+    /// renamed imports, so `tokio_tungstenite::tungstenite::...` and
+    /// `aes_gcm::aead::Generate` are covered by the defining crate's path.
+    const CLIPPY_LIST: [&str; 30] = [
+        "tungstenite::handshake::client::generate_key",
+        "rustls::crypto::SecureRandom::fill",
+        "crypto_common::Generate::generate",
+        "crypto_common::Generate::try_generate",
+        "crypto_common::Generate::generate_from_rng",
+        "crypto_common::Generate::try_generate_from_rng",
+        "crypto_common::KeyInit::generate_key",
+        "crypto_common::KeyIvInit::generate_key",
+        "crypto_common::KeyIvInit::generate_iv",
+        "crypto_common::KeyIvInit::generate_key_iv",
+        "oauth2::CsrfToken::new_random",
+        "oauth2::CsrfToken::new_random_len",
+        "oauth2::PkceCodeChallenge::new_random_sha256",
+        "oauth2::PkceCodeChallenge::new_random_sha256_len",
+        "oauth2::PkceCodeChallenge::new_random_plain",
+        "openidconnect::Nonce::new_random",
+        "openidconnect::Nonce::new_random_len",
+        "std::hash::RandomState::new",
+        "std::collections::HashMap::hasher",
+        "std::collections::HashSet::hasher",
+        "tower::util::rng::HasherRng::new",
+        "tower::util::rng::Rng::next_u64",
+        "tower::util::rng::Rng::next_f64",
+        "tower::util::rng::Rng::next_range",
+        "tungstenite::client::IntoClientRequest::into_client_request",
+        "rustls::crypto::SupportedKxGroup::start",
+        "rustls::crypto::SupportedKxGroup::start_and_complete",
+        "rustls::crypto::ring::Ticketer::new",
+        "rustls::crypto::aws_lc_rs::Ticketer::new",
+        "rustls::server::ProducesTickets::encrypt",
+    ];
+
+    /// Every call on [`CLIPPY_LIST`] is a `disallowed-methods` entry in
+    /// `clippy.toml` whose reason names this module (#511).
+    #[test]
+    fn clippy_disallows_randomness_that_names_no_generator() {
+        let config = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("clippy.toml"),
+        )
+        .unwrap();
+        for path in CLIPPY_LIST {
+            let entry = format!("{{ path = \"{path}\", reason = \"");
+            let line = config
+                .lines()
+                .find(|line| line.trim_start().starts_with(&entry))
+                .unwrap_or_else(|| panic!("clippy.toml must disallow {path} (#511)"));
+            assert!(
+                line.contains("crate::entropy"),
+                "clippy.toml: the reason for {path} must name crate::entropy (#511)"
+            );
+        }
+    }
+
+    /// What Clippy cannot name (a field, a type used through `Default`, a
+    /// device path) is named here instead (#511).
+    /// The crates whose paths `clippy.toml` names (#509, #511), at the
+    /// versions the paths were written and probed for. Clippy reports a
+    /// path it cannot resolve only as a warning, and not at all under
+    /// `allow-invalid`, so a version change must bring the entries up for
+    /// review: update the paths, re-run a planted probe, then this table.
+    const REVIEWED_CRATES: [(&str, &[&str]); 8] = [
+        ("crypto-common", &["0.1", "0.2"]),
+        ("oauth2", &["5"]),
+        ("openidconnect", &["4"]),
+        ("reqwest", &["0.12"]),
+        ("rustls", &["0.23"]),
+        ("sqlx", &["0.8"]),
+        ("tower", &["0.5"]),
+        ("tungstenite", &["0.29", "0.30"]),
+    ];
+
+    /// `major.minor` for `0.x` versions, `major` otherwise (the semver
+    /// compatibility line).
+    fn line(version: &str) -> String {
+        let mut parts = version.split('.');
+        let major = parts.next().unwrap_or_default();
+        if major == "0" {
+            format!("0.{}", parts.next().unwrap_or_default())
+        } else {
+            major.to_owned()
+        }
+    }
+
+    #[test]
+    fn the_crates_clippy_toml_names_are_at_their_reviewed_versions() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let lock = std::fs::read_to_string(root.join("../../Cargo.lock")).unwrap();
+        let mut versions: std::collections::BTreeMap<&str, BTreeSet<String>> = Default::default();
+        let mut name = None;
+        for text in lock.lines() {
+            if let Some(value) = text.strip_prefix("name = ") {
+                name = Some(value.trim_matches('"'));
+            } else if let (Some(crate_name), Some(value)) =
+                (name.take(), text.strip_prefix("version = "))
+            {
+                versions
+                    .entry(crate_name)
+                    .or_default()
+                    .insert(line(value.trim_matches('"')));
+            }
+        }
+        for (crate_name, reviewed) in REVIEWED_CRATES {
+            let reviewed: BTreeSet<String> = reviewed.iter().map(|v| (*v).to_owned()).collect();
+            assert_eq!(
+                versions.get(crate_name),
+                Some(&reviewed),
+                "Cargo.lock: {crate_name} moved; review its clippy.toml entries (#511)"
+            );
+        }
+        // Every crate an entry names is in the table.
+        let config = std::fs::read_to_string(root.join("clippy.toml")).unwrap();
+        for entry in config
+            .lines()
+            .filter_map(|l| l.trim_start().strip_prefix("{ path = \""))
+        {
+            let first = entry.split("::").next().unwrap().replace('_', "-");
+            assert!(
+                first == "std" || REVIEWED_CRATES.iter().any(|(c, _)| *c == first),
+                "clippy.toml names {first}; add it to REVIEWED_CRATES (#511)"
+            );
+        }
+    }
+
+    #[test]
+    fn sources_clippy_cannot_name_are_named() {
+        for (source, expected) in [
+            (
+                "fn a() { let _ = std::fs::read(\"/dev/urandom\"); }",
+                vec!["urandom"],
+            ),
+            ("const P: &[u8] = b\"/dev/urandom\";", vec!["urandom"]),
+            (
+                "fn a() { let _ = std::fs::File::open(\"/dev/random\"); }",
+                vec!["/dev/random"],
+            ),
+            (
+                "fn a(p: &rustls::crypto::CryptoProvider) { let _ = p.secure_random; }",
+                vec!["secure_random"],
+            ),
+            (
+                "use std::collections::hash_map::RandomState;",
+                vec!["RandomState"],
+            ),
+            (
+                "fn a() { let _ = <ahash::RandomState as Default>::default(); }",
+                vec!["RandomState"],
+            ),
+            (
+                "fn a() { let _ = tower::util::rng::HasherRng::default(); }",
+                vec!["HasherRng"],
+            ),
+            // A path assembled by `concat!` or spelled with `.` and `//`.
+            (
+                "fn a() { let _ = std::fs::read(concat!(\"/dev/ur\", \"andom\")); }",
+                vec!["urandom"],
+            ),
+            (
+                "const P: &str = std::concat!(\"/dev\", concat!(\"/ran\", \"dom\"));",
+                vec!["/dev/random"],
+            ),
+            (
+                "fn a() { let _ = std::fs::read(\"/dev/./random\"); }",
+                vec!["/dev/random"],
+            ),
+            (
+                "fn a() { let _ = std::fs::read(\"/dev//random\"); }",
+                vec!["/dev/random"],
+            ),
+            (
+                "fn a() { let _ = std::fs::read(\"/tmp/../dev/random\"); }",
+                vec!["/dev/random"],
+            ),
+            (
+                "const P: &str = concat!(\"/dev/ran\", 'd', \"om\");",
+                vec!["/dev/random"],
+            ),
+            (
+                "const P: &str = concat!(\"/dev/\", stringify!(random));",
+                vec!["/dev/random"],
+            ),
+            (
+                "const P: &str = concat!(\"/dev/ur\", stringify!(and), \"om\");",
+                vec!["urandom"],
+            ),
+            (
+                "fn a() { let _ = std::fs::read(\"/proc/sys/kernel/random/uuid\"); }",
+                vec!["/proc/sys/kernel/random"],
+            ),
+            (
+                "fn a() { let _ = std::fs::read(\"/proc//sys/./kernel/random/boot_id\"); }",
+                vec!["/proc/sys/kernel/random"],
+            ),
+            // pgcrypto's CSPRNG, in SQL.
+            (
+                "const Q: &str = \"SELECT encode(gen_random_bytes(32),'hex')\";",
+                vec!["gen_random_bytes"],
+            ),
+        ] {
+            assert_eq!(draws(source), expected, "{source}");
+        }
+        for source in [
+            "fn a() { let _ = std::fs::read(\"/dev/null\"); }",
+            "/// A random, opaque value.\nfn a() {}",
+            "fn a() { let _ = \"/dev/randomness\"; }",
+            "fn a() { let _ = concat!(\"/dev/\", \"null\"); }",
+            // A part only known at build time breaks the joined text.
+            "const V: &str = concat!(\"omg/\", env!(\"CARGO_PKG_VERSION\"));",
+            "const P: &str = concat!(\"/dev/\", env!(\"X\"), \"random\");",
+            "const P: &str = concat!(\"/dev/\", option_env!(\"X\"), \"random\");",
+            "const P: &str = concat!(\"/dev/\", include_str!(\"x\"), \"random\");",
+            "/// Ids come from `/proc`-free sources.\nfn a() {}",
+            // Row ids: identifiers only, by policy.
+            "const Q: &str = \"INSERT INTO t(id) VALUES(gen_random_uuid())\";",
+        ] {
+            assert!(draws(source).is_empty(), "{source}");
         }
     }
 

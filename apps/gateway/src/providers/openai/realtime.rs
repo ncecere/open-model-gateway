@@ -123,6 +123,19 @@ pub(crate) fn init_event(setup: &RealtimeSetup) -> Value {
     })
 }
 
+/// The upstream WebSocket handshake request. tungstenite fills
+/// `Sec-WebSocket-Key` from its own generator; that is a per-connection
+/// protocol nonce sent to the provider, not a gateway secret, so this is the
+/// one sanctioned call (#511). Secrets come from `crate::entropy`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "tungstenite's Sec-WebSocket-Key is a handshake nonce, not a secret (#511)"
+)]
+fn handshake_request(url: String) -> Result<tungstenite::handshake::client::Request> {
+    url.into_client_request()
+        .map_err(|_| InferenceError::Configuration)
+}
+
 pub(super) async fn connect(
     adapter: &OpenAiAdapter,
     target: &Deployment,
@@ -157,9 +170,7 @@ pub(super) async fn connect(
     stream
         .set_nodelay(true)
         .map_err(|_| InferenceError::UpstreamUnavailable)?;
-    let mut request = url
-        .into_client_request()
-        .map_err(|_| InferenceError::Configuration)?;
+    let mut request = handshake_request(url)?;
     request
         .headers_mut()
         .insert(reqwest::header::AUTHORIZATION, auth);

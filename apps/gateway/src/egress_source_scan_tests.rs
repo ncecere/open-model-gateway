@@ -5,7 +5,10 @@
 //! aliases, re-exports and renamed imports. These tests only keep that rule
 //! switched on: the list stays complete, nothing under `src/` turns the lint
 //! off except the sanctioned sites, no file outside `src/` is pulled in as
-//! code, and no Cargo or Clippy configuration switches it off.
+//! code, and no Cargo or Clippy configuration switches it off. The same lint
+//! carries the entropy entries (#511: randomness drawn without a generator's
+//! name, see `crate::entropy`) and the transaction entries (`crate::db`), so
+//! these sanctioned sites are the only switch-offs for all of them.
 //!
 //! Attributes are parsed with `syn` and lint paths compared token by token,
 //! so comments inside an attribute and raw identifiers (`r#style`) read the
@@ -359,6 +362,15 @@ fn sanctioned(name: &str) -> Vec<Finding> {
             guarded("fn add_root_certificates"),
         ],
         "db.rs" => vec![level("allow", false, &[], None, "let in start")],
+        // tungstenite fills the upstream handshake's Sec-WebSocket-Key from
+        // its own generator: a protocol nonce, not a gateway secret (#511).
+        "providers/openai/realtime.rs" => vec![level(
+            "expect",
+            false,
+            &[],
+            Some("tungstenite's Sec-WebSocket-Key is a handshake nonce, not a secret (#511)"),
+            "fn handshake_request",
+        )],
         "lib.rs" => vec![level("allow", true, &["test"], None, "crate")],
         _ => Vec::new(),
     }
@@ -392,7 +404,7 @@ fn only_the_sanctioned_sites_turn_off_disallowed_methods() {
             sanctioned(&name),
             "{name}: a lint switch for clippy::disallowed_methods outside its sanctioned \
              sites, or code from outside src/. Production code builds HTTP clients with \
-             crate::egress::client_builder (#509)."
+             crate::egress::client_builder (#509) and draws secrets with crate::entropy (#511)."
         );
     }
 }
